@@ -1,0 +1,240 @@
+import { useCallback, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
+import { useAtom } from 'jotai';
+import type { SupportedLanguage } from '@lody/shared';
+import { Check, ChevronDown, Moon, Sun } from 'lucide-react';
+import { motion } from 'framer-motion';
+
+import { conversationFontSizeAtom, languageAtom, type ConversationFontSize } from '@/atoms';
+import {
+  MobileInlineMenu,
+  MobileInlinePickerCoordinator,
+  MobileInlinePickerRowSlot,
+  type MobileInlinePickerOption,
+} from '@/components/mobile/mobile-inline-picker';
+import { MobileSettingsPickerTrigger } from '@/components/mobile/mobile-settings-picker-trigger';
+import { MobileSettingsRow, MobileSettingsSection } from '@/components/mobile/mobile-settings-row';
+import { currentSupportedLanguages, languageCodeToName } from '../../i18n';
+import { cn } from '@/lib/utils';
+import { withOneSignal } from '@/lib/onesignal';
+import { useTheme } from '../../theme-provider';
+
+export function MobileAppearanceSettings() {
+  const { t, i18n } = useTranslation();
+  const { theme, resolvedTheme, setTheme, previewTheme } = useTheme();
+  const [language, setLanguage] = useAtom(languageAtom);
+  const [conversationFontSize, setConversationFontSize] = useAtom(conversationFontSizeAtom);
+  const themeValue: 'light' | 'dark' = theme === 'system' ? resolvedTheme : theme;
+  const selectedThemeLabel =
+    themeValue === 'light' ? t('settings.theme.light') : t('settings.theme.dark');
+
+  const handleThemeChange = useCallback(
+    (value: 'light' | 'dark') => {
+      previewTheme(value);
+      setTheme(value);
+    },
+    [previewTheme, setTheme]
+  );
+
+  const languageOptions: MobileInlinePickerOption<SupportedLanguage>[] =
+    currentSupportedLanguages.map((lang) => ({
+      value: lang as SupportedLanguage,
+      label: languageCodeToName[lang],
+      searchText: languageCodeToName[lang],
+    }));
+  const selectedLanguageLabel = languageCodeToName[language] ?? language;
+  const handleLanguageChange = useCallback(
+    (next: SupportedLanguage) => {
+      setLanguage(next);
+      void i18n.changeLanguage(next);
+      if (typeof window === 'undefined' || window.__LODY_ELECTRON__ === true) {
+        return;
+      }
+      void withOneSignal((oneSignal) => {
+        void oneSignal.User.setLanguage(next === 'en' ? 'en' : 'zh');
+      }).catch((error: unknown) => {
+        console.error('Failed to sync OneSignal language', error);
+      });
+    },
+    [i18n, setLanguage]
+  );
+
+  const conversationFontSizeOptions: MobileInlinePickerOption<ConversationFontSize>[] = [
+    {
+      value: 'small',
+      label: t('settings.conversationFontSize.small', 'Small'),
+      searchText: String(t('settings.conversationFontSize.small', 'Small')),
+    },
+    {
+      value: 'default',
+      label: t('settings.conversationFontSize.default', 'Default'),
+      searchText: String(t('settings.conversationFontSize.default', 'Default')),
+    },
+    {
+      value: 'large',
+      label: t('settings.conversationFontSize.large', 'Large'),
+      searchText: String(t('settings.conversationFontSize.large', 'Large')),
+    },
+  ];
+  const selectedConversationFontSizeLabel =
+    conversationFontSizeOptions.find((option) => option.value === conversationFontSize)?.label ??
+    t('settings.conversationFontSize.default', 'Default');
+
+  return (
+    <MobileInlinePickerCoordinator>
+      <MobileSettingsSection>
+        <MobileInlinePickerRowSlot>
+          <MobileSettingsRow label={t('settings.theme.label')}>
+            <ThemeModeMenuTrigger
+              value={themeValue}
+              onChange={handleThemeChange}
+              selectedLabel={selectedThemeLabel}
+              selectedIcon={themeIconFor(themeValue)}
+            />
+          </MobileSettingsRow>
+        </MobileInlinePickerRowSlot>
+        <MobileInlinePickerRowSlot>
+          <MobileSettingsRow label={t('settings.language.label')} hasDivider>
+            <MobileSettingsPickerTrigger
+              id="settings-language"
+              ariaLabel={String(t('settings.language.label'))}
+              value={language}
+              options={languageOptions}
+              onChange={handleLanguageChange}
+              triggerLabel={selectedLanguageLabel}
+            />
+          </MobileSettingsRow>
+        </MobileInlinePickerRowSlot>
+      </MobileSettingsSection>
+
+      <MobileSettingsSection>
+        <MobileInlinePickerRowSlot>
+          <MobileSettingsRow
+            label={t('settings.conversationFontSize.label', 'Conversation font size')}
+            helper={t(
+              'settings.conversationFontSize.helper',
+              'Adjusts message body text in conversations.'
+            )}
+          >
+            <MobileSettingsPickerTrigger
+              id="settings-conversation-font-size"
+              ariaLabel={String(t('settings.conversationFontSize.label', 'Conversation font size'))}
+              value={conversationFontSize}
+              options={conversationFontSizeOptions}
+              onChange={setConversationFontSize}
+              triggerLabel={selectedConversationFontSizeLabel}
+            />
+          </MobileSettingsRow>
+        </MobileInlinePickerRowSlot>
+      </MobileSettingsSection>
+    </MobileInlinePickerCoordinator>
+  );
+}
+
+function themeIconFor(value: 'light' | 'dark') {
+  return value === 'light' ? (
+    <Sun className="h-4 w-4" aria-hidden="true" />
+  ) : (
+    <Moon className="h-4 w-4" aria-hidden="true" />
+  );
+}
+
+function ThemeModeMenuTrigger({
+  value,
+  onChange,
+  selectedLabel,
+  selectedIcon,
+}: {
+  value: 'light' | 'dark';
+  onChange: (next: 'light' | 'dark') => void;
+  selectedLabel: ReactNode;
+  selectedIcon?: ReactNode;
+}) {
+  const { t } = useTranslation();
+  const modeTiles: Array<{
+    value: 'light' | 'dark';
+    label: string;
+    icon: ReactNode;
+  }> = [
+    {
+      value: 'light',
+      label: String(t('settings.theme.light')),
+      icon: <Sun className="h-4 w-4" aria-hidden="true" />,
+    },
+    {
+      value: 'dark',
+      label: String(t('settings.theme.dark')),
+      icon: <Moon className="h-4 w-4" aria-hidden="true" />,
+    },
+  ];
+
+  return (
+    <div className="inline-block max-w-[60vw]">
+      <MobileInlineMenu
+        id="settings-theme"
+        ariaLabel={String(t('settings.theme.label'))}
+        triggerClassName={cn(
+          'group/picker-trigger inline-flex w-auto items-center gap-2 rounded-md px-3 py-1.5',
+          'text-sm font-medium text-left transition-all',
+          'bg-input/40 text-foreground/85',
+          'hover:bg-muted/60 hover:text-foreground',
+          'active:scale-[0.985]',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40'
+        )}
+        triggerContent={
+          <>
+            {selectedIcon ? <span className="shrink-0">{selectedIcon}</span> : null}
+            <span className="min-w-0 truncate text-right">{selectedLabel}</span>
+            <ChevronDown
+              className="h-3.5 w-3.5 shrink-0 opacity-60"
+              strokeWidth={2}
+              aria-hidden="true"
+            />
+          </>
+        }
+        expansionPanelClassName="p-0"
+      >
+        {() => (
+          <div role="radiogroup" className="grid grid-cols-2 gap-2 p-2">
+            {modeTiles.map((tile) => {
+              const selected = tile.value === value;
+              return (
+                <motion.button
+                  key={tile.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  whileTap={{ scale: 0.97 }}
+                  onClick={() => onChange(tile.value)}
+                  className={cn(
+                    'relative flex flex-col items-center justify-center gap-1 rounded-xl border px-3 py-3',
+                    'text-xs font-medium transition-all',
+                    'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring',
+                    selected
+                      ? 'border-primary/60 bg-primary/[0.06] text-foreground shadow-[0_0_0_3px_hsl(var(--primary)/0.08)]'
+                      : 'border-border/60 bg-card/40 text-muted-foreground hover:bg-card/70 hover:text-foreground'
+                  )}
+                >
+                  <span
+                    className={cn(
+                      'transition-colors',
+                      selected ? 'text-primary' : 'text-muted-foreground'
+                    )}
+                  >
+                    {tile.icon}
+                  </span>
+                  <span>{tile.label}</span>
+                  {selected ? (
+                    <span className="absolute right-1.5 top-1.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                      <Check className="h-2.5 w-2.5" strokeWidth={3} aria-hidden="true" />
+                    </span>
+                  ) : null}
+                </motion.button>
+              );
+            })}
+          </div>
+        )}
+      </MobileInlineMenu>
+    </div>
+  );
+}

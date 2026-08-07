@@ -1,0 +1,76 @@
+import { useMemo } from 'react';
+import { useAtomValue } from 'jotai';
+import { cloudOperations } from '@/lib/cloud-api-operations';
+import { userAtom } from '@/atoms';
+import { currentWorkspaceIdAtom } from '@/atoms/workspace-context';
+import {
+  canRunAuthedWorkspaceQuery,
+  isAuthedWorkspaceQueryLoading,
+} from '@/lib/authed-convex-query';
+import {
+  buildVisibleLocalProjectIndex,
+  type LocalProjectVisibilityAccess,
+  type VisibleLocalProjectIndex,
+} from '@/lib/visible-local-project-index';
+import { useVisibleMachineMetas } from './use-visible-machine-metas';
+import type { VisibleMachineIndex } from '@/lib/visible-machine-index';
+import { useAuthenticatedConvex } from './use-authenticated-convex';
+import { useCloudQuery } from '@lody/platform/react';
+
+export type { LocalProjectVisibilityAccess };
+
+const EMPTY_ACCESS_ROWS: LocalProjectVisibilityAccess[] = [];
+
+type UseVisibleLocalProjectsOptions = {
+  includeMachineFlock?: boolean;
+  syncMachineFlock?: boolean;
+};
+
+export function useVisibleLocalProjects(
+  options: UseVisibleLocalProjectsOptions = {}
+): VisibleLocalProjectIndex {
+  const visibleMachineIndex = useVisibleMachineMetas({
+    includeMachineFlock: options.includeMachineFlock,
+    syncMachineFlock: options.syncMachineFlock,
+  });
+  return useVisibleLocalProjectsFromMachineIndex(visibleMachineIndex);
+}
+
+export function useVisibleLocalProjectsFromMachineIndex(
+  visibleMachineIndex: Pick<VisibleMachineIndex, 'machines' | 'accessByMachineId' | 'isLoading'>
+): VisibleLocalProjectIndex {
+  const workspaceId = useAtomValue(currentWorkspaceIdAtom);
+  const { isAuthenticated, isLoading: isConvexAuthLoading } = useAuthenticatedConvex();
+  const canQuery = canRunAuthedWorkspaceQuery(workspaceId, isAuthenticated);
+  const currentUserId = useAtomValue(userAtom)?.id ?? null;
+  const {
+    machines: visibleMachines,
+    accessByMachineId,
+    isLoading: machineVisibilityLoading,
+  } = visibleMachineIndex;
+  const queriedAccessRows = useCloudQuery(
+    cloudOperations.localProjects.listVisibleLocalProjects,
+    workspaceId ? { workspaceId } : 'skip'
+  );
+  const rawAccessRows = queriedAccessRows ?? EMPTY_ACCESS_ROWS;
+  const isLoading =
+    machineVisibilityLoading ||
+    isAuthedWorkspaceQueryLoading({
+      workspaceId,
+      isConvexAuthLoading,
+      canQuery,
+      queryResult: queriedAccessRows,
+    });
+
+  return useMemo(
+    () =>
+      buildVisibleLocalProjectIndex({
+        rawMachines: visibleMachines,
+        machineAccessByMachineId: accessByMachineId,
+        convexAccessRows: rawAccessRows,
+        currentUserId,
+        isLoading,
+      }),
+    [accessByMachineId, currentUserId, isLoading, rawAccessRows, visibleMachines]
+  );
+}

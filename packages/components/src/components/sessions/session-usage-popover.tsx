@@ -1,0 +1,255 @@
+import { memo, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
+import { formatDistance, type Locale } from 'date-fns';
+import { enUS, zhCN } from 'date-fns/locale';
+import { getServerNow, type SessionContextWindowUsage } from '@lody/shared';
+import { Loader2 } from 'lucide-react';
+
+import { Button } from '@/ui/button';
+import { Popover, PopoverContent, PopoverTrigger } from '@/ui/popover';
+import { Progress } from '@/ui/progress';
+import { Separator } from '@/ui/separator';
+import { cn } from '@/lib/utils';
+import { normalizeEpochMs } from '@/lib/normalize-epoch';
+import {
+  FIVE_HOUR_WINDOW_MINS,
+  SEVEN_DAY_WINDOW_MINS,
+  formatRateLimitWindowShortLabel,
+  getAgentRateLimitWindows,
+  getContextWindowUsageData,
+  resolveAgentRateLimitForModel,
+  type MachineRateLimits,
+} from '@/lib/session-usage';
+
+export type SessionUsagePopoverProps = {
+  contextWindowUsage?: SessionContextWindowUsage | null;
+  rateLimits?: MachineRateLimits | null;
+  agentType: string;
+  modelId?: string | null;
+  modelLabel?: string | null;
+  isContextCompacting?: boolean;
+  showRateLimitWithoutContext?: boolean;
+  className?: string;
+};
+
+const formatTokensCompact = (value: number): string => {
+  const formatter = (maximumFractionDigits: number) =>
+    new Intl.NumberFormat(undefined, {
+      notation: 'compact',
+      maximumFractionDigits,
+    }).format(value);
+
+  return formatter(Math.abs(value) >= 100_000 ? 0 : 1);
+};
+
+export const SessionUsagePopover = memo(function SessionUsagePopover({
+  contextWindowUsage,
+  rateLimits,
+  agentType,
+  modelId,
+  modelLabel,
+  isContextCompacting = false,
+  showRateLimitWithoutContext = false,
+  className,
+}: SessionUsagePopoverProps) {
+  const { t, i18n } = useTranslation();
+  const locale: Locale = i18n.language?.startsWith('zh') ? zhCN : enUS;
+  const context = getContextWindowUsageData(contextWindowUsage);
+  const rateLimit = resolveAgentRateLimitForModel({ rateLimits, agentType, modelId });
+  const rateLimitWindows = rateLimit
+    ? getAgentRateLimitWindows(rateLimit.limits, rateLimit.cliType).sort(
+        (left, right) => (right.windowDurationMins ?? 0) - (left.windowDurationMins ?? 0)
+      )
+    : [];
+  const hasRateLimit = rateLimitWindows.length > 0;
+  const triggerValue =
+    context?.usedPercentage ??
+    (showRateLimitWithoutContext ? rateLimitWindows[0]?.usedPercent : undefined);
+  const resolvedModelLabel =
+    modelLabel?.trim() ||
+    rateLimit?.limits.limitName?.trim() ||
+    modelId?.trim() ||
+    t('sessions.usage.modelFallback', 'Model usage');
+
+  const formatReset = useCallback(
+    (resetAt: number | null | undefined): string | null => {
+      const epochMs = normalizeEpochMs(resetAt);
+      if (!epochMs) return null;
+      const distance = formatDistance(new Date(epochMs), new Date(getServerNow()), {
+        addSuffix: true,
+        locale,
+      });
+      return t('machines.rateLimits.resetsAt', 'Resets {{time}}', { time: distance });
+    },
+    [locale, t]
+  );
+
+  const formatWindowLabel = useCallback(
+    (windowDurationMins: number | null): string => {
+      if (windowDurationMins === SEVEN_DAY_WINDOW_MINS) {
+        return t('sessions.usage.weekly', 'Weekly');
+      }
+      if (windowDurationMins === FIVE_HOUR_WINDOW_MINS) {
+        return t('sessions.usage.fiveHour', '5 hours');
+      }
+      if (windowDurationMins === null) {
+        return t('sessions.usage.limit', 'Usage');
+      }
+      return formatRateLimitWindowShortLabel(windowDurationMins);
+    },
+    [t]
+  );
+
+  if (!isContextCompacting && triggerValue === undefined) return null;
+
+  const roundedTriggerValue = Math.round(triggerValue ?? 0);
+  const triggerLabel = isContextCompacting
+    ? t('sessions.usage.compactingContext', 'Compacting context')
+    : t('sessions.usage.openWithUsed', 'Open usage details, {{percent}}% used', {
+        percent: roundedTriggerValue,
+      });
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className={cn(
+            'h-7 select-none gap-1 rounded-md px-1.5 font-normal text-muted-foreground hover:bg-muted/60 hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring',
+            className
+          )}
+          aria-label={triggerLabel}
+          title={triggerLabel}
+        >
+          {isContextCompacting ? (
+            <>
+              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden="true" />
+              <span className="text-[11px]">{t('sessions.usage.compacting', 'Compacting')}</span>
+            </>
+          ) : (
+            <>
+              <UsageRing value={triggerValue ?? 0} />
+              <span className="font-mono text-[11px] tabular-nums">{roundedTriggerValue}%</span>
+            </>
+          )}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        side="top"
+        align="start"
+        sideOffset={8}
+        aria-label={t('sessions.usage.title', 'Usage')}
+        className="w-[min(17rem,calc(100vw-1rem))] rounded-xl p-3 shadow-lg"
+      >
+        {isContextCompacting ? (
+          <div className="space-y-2">
+            <div className="text-[11px] font-medium text-muted-foreground">
+              {t('sessions.usage.context', 'Context')}
+            </div>
+            <div className="flex items-center gap-2 text-xs text-foreground">
+              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
+              <span>{t('sessions.usage.compactingContext', 'Compacting context')}</span>
+            </div>
+          </div>
+        ) : context ? (
+          <UsageMeter
+            label={t('sessions.usage.context', 'Context')}
+            value={context.usedPercentage}
+            detail={`${formatTokensCompact(context.usedTokens)} / ${formatTokensCompact(
+              context.contextWindow
+            )}`}
+          />
+        ) : null}
+
+        {(context || isContextCompacting) && hasRateLimit ? (
+          <Separator className="my-2.5 bg-border/60" />
+        ) : null}
+
+        {hasRateLimit ? (
+          <div className="space-y-2.5">
+            <div className="truncate text-[11px] font-medium text-muted-foreground">
+              {resolvedModelLabel}
+            </div>
+            {rateLimitWindows.map((window, index) => (
+              <UsageMeter
+                key={`${window.windowDurationMins ?? 'unknown'}-${index}`}
+                label={formatWindowLabel(window.windowDurationMins)}
+                value={window.usedPercent}
+                detail={formatReset(window.resetsAt)}
+              />
+            ))}
+          </div>
+        ) : null}
+      </PopoverContent>
+    </Popover>
+  );
+});
+
+function UsageRing({ value }: { value: number }) {
+  const percentage = Math.min(100, Math.max(0, value));
+  const radius = 5;
+  const circumference = 2 * Math.PI * radius;
+
+  return (
+    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 14 14" className="shrink-0">
+      <circle
+        cx="7"
+        cy="7"
+        r={radius}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        className="opacity-20"
+      />
+      <circle
+        cx="7"
+        cy="7"
+        r={radius}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeDasharray={circumference}
+        strokeDashoffset={circumference * (1 - percentage / 100)}
+        transform="rotate(-90 7 7)"
+      />
+    </svg>
+  );
+}
+
+function UsageMeter({
+  label,
+  value,
+  detail,
+}: {
+  label: string;
+  value: number;
+  detail?: string | null;
+}) {
+  const { t } = useTranslation();
+  const roundedValue = Math.round(value);
+  const valueLabel = t('sessions.usage.usedPercent', '{{percent}}% used', {
+    percent: roundedValue,
+  });
+
+  return (
+    <div className="min-w-0">
+      <div className="flex items-baseline justify-between gap-3 text-[11px] leading-4">
+        <span className="font-medium text-foreground/85">{label}</span>
+        <span className="shrink-0 font-mono tabular-nums text-muted-foreground">{valueLabel}</span>
+      </div>
+      <Progress
+        value={value}
+        aria-label={`${label}: ${valueLabel}`}
+        className="mt-1 h-1 bg-foreground/10 [&>div]:bg-foreground/55"
+      />
+      {detail ? (
+        <div className="mt-1 truncate text-[10px] leading-3.5 text-muted-foreground/75">
+          {detail}
+        </div>
+      ) : null}
+    </div>
+  );
+}

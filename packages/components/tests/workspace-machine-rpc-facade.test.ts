@@ -1,0 +1,91 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { MachineId, SessionId, WorkspaceId } from '@lody/shared';
+import { createWorkspaceMachineRpcFacade } from '../src/providers/workspace-machine-rpc-facade';
+
+const workspaceId = 'workspace-1' as WorkspaceId;
+const localMachineId = 'machine-local' as MachineId;
+const remoteMachineId = 'machine-remote' as MachineId;
+const sessionId = 'session-1' as SessionId;
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe('createWorkspaceMachineRpcFacade', () => {
+  it('uses the local bridge without creating a cloud client for the local machine', async () => {
+    const sendLocalMachineRpc = vi.fn(async () => ({
+      ok: true as const,
+      result: {
+        type: 'session/cancel_response' as const,
+        sessionId,
+        success: true,
+      },
+    }));
+    vi.stubGlobal('window', {
+      __LODY_ELECTRON__: true,
+      api: { sendLocalMachineRpc },
+    });
+    const getMachineRpcClient = vi.fn();
+    const facade = createWorkspaceMachineRpcFacade({
+      workspaceId,
+      targetRouter: {
+        getPlaneForMachine: () => 'local',
+        resolvePlaneForMachine: vi.fn(async () => 'local'),
+      },
+      getMachineRpcClient,
+    });
+
+    await expect(facade.requestSessionCancel(localMachineId, sessionId, 'turn-1')).resolves.toEqual(
+      {
+        type: 'session/cancel_response',
+        sessionId,
+        success: true,
+      }
+    );
+    expect(sendLocalMachineRpc).toHaveBeenCalledWith(
+      expect.objectContaining({
+        machineId: localMachineId,
+        workspaceId,
+        method: 'session/cancel',
+      })
+    );
+    expect(getMachineRpcClient).not.toHaveBeenCalled();
+  });
+
+  it('uses the cloud Machine RPC client for a remote machine', async () => {
+    const sendLocalMachineRpc = vi.fn();
+    vi.stubGlobal('window', {
+      __LODY_ELECTRON__: true,
+      api: { sendLocalMachineRpc },
+    });
+    const requestSessionCancel = vi.fn(async () => ({
+      type: 'session/cancel_response' as const,
+      sessionId,
+      success: true,
+    }));
+    const getMachineRpcClient = vi.fn(async () => ({ requestSessionCancel }) as never);
+    const facade = createWorkspaceMachineRpcFacade({
+      workspaceId,
+      targetRouter: {
+        getPlaneForMachine: () => 'cloud',
+        resolvePlaneForMachine: vi.fn(async () => 'cloud'),
+      },
+      getMachineRpcClient,
+    });
+
+    await expect(
+      facade.requestSessionCancel(remoteMachineId, sessionId, 'turn-1')
+    ).resolves.toEqual({
+      type: 'session/cancel_response',
+      sessionId,
+      success: true,
+    });
+    expect(getMachineRpcClient).toHaveBeenCalledWith(remoteMachineId);
+    expect(requestSessionCancel).toHaveBeenCalledWith({
+      sessionId,
+      turnId: 'turn-1',
+      timeoutMs: 2_000,
+    });
+    expect(sendLocalMachineRpc).not.toHaveBeenCalled();
+  });
+});

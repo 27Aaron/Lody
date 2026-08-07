@@ -1,0 +1,961 @@
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { useAtomValue, useSetAtom } from 'jotai';
+import { motion, AnimatePresence } from 'framer-motion';
+import { CheckCircle2, ChevronDown, ChevronUp, Loader2, Plus, Trash2, XCircle } from 'lucide-react';
+import {
+  REGISTRY_ACP_AGENTS,
+  type AgentBrandId,
+  type BuiltinAgentType,
+  type AgentConfigCliType,
+  type AgentConfigId,
+  type AgentConfigMeta,
+  type CustomAcpLaunchSpec,
+  type MachineId,
+  type MachineViewMeta,
+  type ProviderSetupTask,
+} from '@lody/shared';
+import { toast } from 'sonner';
+import { Button } from '@/ui/button';
+import { Badge } from '@/ui/badge';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/ui/alert-dialog';
+import { cn } from '@/lib/utils';
+import {
+  cmdCreateAgentConfigAtom,
+  cmdCreateProviderSetupAtom,
+  cmdRetryProviderSetupAtom,
+  cmdUpdateAgentConfigAtom,
+  deleteAgentConfigAtom,
+  deleteProviderSetupAtom,
+  getAllAgentConfigAtom,
+  getAllProviderSetupsAtom,
+} from '@/atoms/agents';
+import { activeWorkspaceRuntimeAtom } from '@/atoms/runtime';
+import { currentWorkspaceIdAtom } from '@/atoms/workspace-context';
+import { localMachineIdAtom, localProbeAttemptedAtom } from '@/atoms/local-probe';
+import { useVisibleMachineMetas } from '@/hooks/use-visible-machine-metas';
+import { useMachineFlockAgentConfigsForMachineIds } from '@/hooks/use-machine-flock-agent-configs';
+import { resyncMachineFlockRows } from '@/hooks/use-machine-flock-rows';
+import { useMachineAcpBinaryActions } from '@/hooks/use-machine-acp-binary-actions';
+import { useProviderSetupRuntimeProgress } from '@/hooks/use-provider-setup-runtime-progress';
+import { AgentIcon } from '@/components/icons/agent-icon';
+import { REGISTRY_AGENT_ICON_SVGS } from '@/components/icons/registry-agent-icons';
+import {
+  AgentConfigDialog,
+  buildPresetCreateForm,
+  DEEPSEEK_CLAUDE_PRESET_ID,
+  GLM_CLAUDE_PRESET_ID,
+  MIMO_CLAUDE_PRESET_ID,
+  MINIMAX_CLAUDE_PRESET_ID,
+  type AgentConfigDialogMode,
+  type AgentConfigSubmitPayload,
+} from '@/components/settings/agent-config-dialog';
+import { labelForAgent } from '@/components/settings/provider-row';
+import { ProviderSetupRow } from '@/components/settings/provider-setup-row';
+import { AcpAuthenticationPanel } from '@/components/settings/acp-authentication-panel';
+import { OnboardingShell, OnboardingBackButton, OnboardingNextButton } from '../onboarding-shell';
+import {
+  resolveInitialOnboardingProviderStatus,
+  type OnboardingProviderStatus,
+} from '../provider-status';
+
+export type ProviderTestStatus = OnboardingProviderStatus | 'needs-auth';
+
+const PROVIDERS_SCREEN_MACHINE_TIMEOUT_MS = 15_000;
+
+/**
+ * One brand on the onboarding "logo wall". `pick` is handed back to `onAdd` so
+ * the container opens the create dialog pre-selected to the right provider;
+ * `icon` carries just enough for {@link AgentIcon} to render the glyph (registry
+ * agents resolve from REGISTRY_AGENT_ICON_SVGS, presets from their brand icon).
+ */
+type ShowcasePick =
+  | { kind: 'builtin'; agentType: 'kimi' }
+  | { kind: 'registry'; id: string }
+  | { kind: 'preset'; presetId: string };
+
+type ShowcaseAgent = {
+  pick: ShowcasePick;
+  /** Short display name (registry `name` can be verbose, e.g. "Codebuddy Code"). */
+  label: string;
+  icon:
+    | { cliType: 'registry'; agentType: string }
+    | { cliType: 'builtin'; agentType: string; brandId?: AgentBrandId };
+};
+
+function showcasePickKey(pick: ShowcasePick): string {
+  return pick.kind === 'builtin'
+    ? `builtin:${pick.agentType}`
+    : pick.kind === 'registry'
+      ? `registry:${pick.id}`
+      : `preset:${pick.presetId}`;
+}
+
+function builtinShowcase(agentType: 'kimi', label: string): ShowcaseAgent {
+  return { pick: { kind: 'builtin', agentType }, label, icon: { cliType: 'builtin', agentType } };
+}
+
+function registryShowcase(id: string, label: string): ShowcaseAgent {
+  return { pick: { kind: 'registry', id }, label, icon: { cliType: 'registry', agentType: id } };
+}
+
+function presetShowcase(presetId: string, label: string, brandId: AgentBrandId): ShowcaseAgent {
+  return {
+    pick: { kind: 'preset', presetId },
+    label,
+    icon: { cliType: 'builtin', agentType: 'claude', brandId },
+  };
+}
+
+/**
+ * Always-visible brands beneath the Add button — makes it obvious Lody runs far
+ * more than the two built-ins. Curated to ~two rows; the DeepSeek preset shows
+ * here, the other presets live under "其他". Each maps to a
+ * {@link REGISTRY_ACP_AGENTS} entry or a preset, so the icon and the quick-add
+ * prefill share one source of truth.
+ */
+const FEATURED_SHOWCASE_AGENTS: ShowcaseAgent[] = [
+  builtinShowcase('kimi', 'Kimi'),
+  registryShowcase('amp-acp', 'Amp'),
+  registryShowcase('cursor', 'Cursor'),
+  registryShowcase('opencode', 'OpenCode'),
+  registryShowcase('devin', 'Devin'),
+  registryShowcase('dimcode', 'DimCode'),
+  registryShowcase('pi-acp', 'Pi'),
+  registryShowcase('factory-droid', 'Factory Droid'),
+  registryShowcase('github-copilot-cli', 'GitHub Copilot'),
+  registryShowcase('grok-build', 'Grok'),
+  presetShowcase(DEEPSEEK_CLAUDE_PRESET_ID, 'DeepSeek', 'deepseek'),
+];
+
+const FEATURED_SHOWCASE_REGISTRY_IDS = new Set(
+  FEATURED_SHOWCASE_AGENTS.flatMap((a) => (a.pick.kind === 'registry' ? [a.pick.id] : []))
+);
+
+/**
+ * The rest, revealed by the "其他" chip: the MiMo / MiniMax presets followed by
+ * every other registry agent that ships a brand icon. The registry tail is
+ * derived so it stays correct as the generated list grows. `claude-p` (built-in
+ * Claude) and `kimi-code` (a Kimi alias) are dropped as redundant.
+ */
+const MORE_SHOWCASE_AGENTS: ShowcaseAgent[] = [
+  presetShowcase(MIMO_CLAUDE_PRESET_ID, 'MiMo', 'mimo'),
+  presetShowcase(MINIMAX_CLAUDE_PRESET_ID, 'MiniMax', 'minimax'),
+  presetShowcase(GLM_CLAUDE_PRESET_ID, 'GLM', 'glm'),
+  ...REGISTRY_ACP_AGENTS.filter(
+    (a) =>
+      a.id !== 'claude-p' &&
+      a.id !== 'kimi' &&
+      a.id !== 'kimi-code' &&
+      !FEATURED_SHOWCASE_REGISTRY_IDS.has(a.id) &&
+      Boolean(REGISTRY_AGENT_ICON_SVGS[a.id])
+  ).map((a) => registryShowcase(a.id, a.name)),
+];
+
+export interface ProvidersScreenViewProps {
+  /** Local-machine providers to render in the list. */
+  configs: AgentConfigMeta[];
+  /** Durable providers still being prepared on the target machine. */
+  setups?: ProviderSetupTask[];
+  /** Per-config test status, keyed by config id. */
+  testStatuses: Record<string, ProviderTestStatus>;
+  /** True when the local machine record has not yet arrived. */
+  noLocalMachine: boolean;
+  localMachineId?: MachineId | null;
+  /** Open the edit dialog for an existing provider. */
+  onEdit: (config: AgentConfigMeta) => void;
+  /** Run the connectivity test (or re-test) for a row. */
+  onTest: (config: AgentConfigMeta) => void;
+  onAuthenticated?: (config: AgentConfigMeta) => void | Promise<void>;
+  /** Delete a row (the confirm step is also handled here). */
+  onDelete: (config: AgentConfigMeta) => void;
+  onRetrySetup?: (setup: ProviderSetupTask) => Promise<void>;
+  onDeleteSetup?: (setup: ProviderSetupTask) => Promise<void>;
+  /**
+   * Open the create dialog. Pass a showcase `pick` to pre-select that provider;
+   * omit it for a blank create flow.
+   */
+  onAdd: (pick?: ShowcasePick) => void;
+  onBack: () => void;
+  /** Defer provider setup and jump to the next step. */
+  onSkip: () => void;
+  onNext: () => void;
+}
+
+export function ProvidersScreenView({
+  configs,
+  setups = [],
+  testStatuses,
+  noLocalMachine,
+  localMachineId = null,
+  onEdit,
+  onTest,
+  onAuthenticated,
+  onDelete,
+  onRetrySetup,
+  onDeleteSetup,
+  onAdd,
+  onBack,
+  onSkip,
+  onNext,
+}: ProvidersScreenViewProps) {
+  const { t } = useTranslation();
+  const canProceed = !noLocalMachine && configs.length + setups.length > 0;
+
+  return (
+    <OnboardingShell
+      stepKey="providers"
+      size="wide"
+      title={t('onboarding.providers.title', 'Connect a coding agent')}
+      description={t(
+        'onboarding.providers.description',
+        'Add a provider now. Runtime downloads continue in the background, and Lody asks you to sign in when ready.'
+      )}
+      secondaryAction={<OnboardingBackButton onClick={onBack} />}
+      primaryAction={
+        <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="lg"
+            onClick={onSkip}
+            className="text-muted-foreground hover:text-foreground"
+          >
+            {t('onboarding.providers.skip', 'Skip for now')}
+          </Button>
+          <OnboardingNextButton onClick={onNext} disabled={!canProceed} />
+        </div>
+      }
+    >
+      <div className="flex flex-col gap-3">
+        {noLocalMachine ? (
+          <div className="flex items-center gap-3 rounded-lg border border-dashed border-border/60 bg-muted/30 p-4 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            {t('onboarding.providers.waitingMachine', 'Waiting for the local agent to connect…')}
+          </div>
+        ) : null}
+
+        {configs.length > 0 || setups.length > 0 ? (
+          // Cap at ~4 rows; longer lists scroll. -mx-1/px-1 keeps focus rings
+          // visible without clipping at the scroll edge.
+          <div className="scrollbar-pro -mx-1 max-h-[calc(4*4.25rem+0.75rem*3)] overflow-y-auto overscroll-contain px-1">
+            <div className="flex flex-col gap-3">
+              {setups.map((setup) => (
+                <ProviderSetupRow
+                  key={setup.id}
+                  setup={setup}
+                  onRetry={onRetrySetup ?? (async () => undefined)}
+                  onDelete={onDeleteSetup ?? (async () => undefined)}
+                />
+              ))}
+              <AnimatePresence initial={false}>
+                {configs.map((config) => {
+                  const status: ProviderTestStatus = testStatuses[config.id] ?? 'untested';
+                  return (
+                    <motion.div
+                      key={config.id}
+                      layout
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -8 }}
+                      transition={{ duration: 0.25 }}
+                      className={cn(
+                        // Hover lives on the row, not the inner edit button,
+                        // so highlighting feels like one unit even though
+                        // Test/Delete are separate click targets.
+                        'group flex flex-wrap items-center gap-3 rounded-xl border transition-colors',
+                        status === 'passed'
+                          ? 'border-primary/40 bg-primary/[0.04] hover:bg-primary/[0.07]'
+                          : 'border-border/60 bg-card/40 hover:border-border hover:bg-hover/40'
+                      )}
+                    >
+                      <button
+                        type="button"
+                        disabled={noLocalMachine}
+                        className={cn(
+                          'flex min-w-0 flex-1 items-center gap-3 rounded-l-xl py-3 pl-3 text-left',
+                          'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
+                          'disabled:cursor-not-allowed disabled:opacity-60'
+                        )}
+                        aria-label={t('agents.editConfig', 'Edit config')}
+                        onClick={() => onEdit(config)}
+                      >
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted/40">
+                          <AgentIcon
+                            cliType={config.cliType}
+                            agentType={config.agentType}
+                            brandId={config.brandId}
+                            env={config.env}
+                            className="h-5 w-5"
+                          />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                              {config.name}
+                            </span>
+                            <ProviderStatusBadge status={status} />
+                          </div>
+                          <div className="truncate text-xs text-muted-foreground">
+                            {labelForAgent(config.cliType, config.agentType)}
+                          </div>
+                        </div>
+                      </button>
+                      <div className="flex shrink-0 items-center gap-1 pr-3">
+                        {status !== 'needs-auth' ? (
+                          <Button
+                            variant={status === 'passed' ? 'ghost' : 'outline'}
+                            size="sm"
+                            disabled={status === 'testing' || noLocalMachine}
+                            onClick={() => onTest(config)}
+                          >
+                            {status === 'testing' ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : status === 'passed' ? (
+                              t('onboarding.providers.retest', 'Re-test')
+                            ) : (
+                              t('onboarding.providers.test', 'Test')
+                            )}
+                          </Button>
+                        ) : null}
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                          aria-label={t('common.delete', 'Delete')}
+                          onClick={() => onDelete(config)}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                      {status === 'needs-auth' ? (
+                        <div className="basis-full px-3 pb-3">
+                          <AcpAuthenticationPanel
+                            machineId={localMachineId}
+                            configId={config.id}
+                            cliType={config.cliType}
+                            agentType={config.agentType}
+                            customAcp={config.customAcp}
+                            runtimeOverrides={config.runtimeOverrides}
+                            env={config.env}
+                            compact
+                            onAuthenticated={() => onAuthenticated?.(config)}
+                          />
+                        </div>
+                      ) : null}
+                    </motion.div>
+                  );
+                })}
+              </AnimatePresence>
+            </div>
+          </div>
+        ) : null}
+
+        <button
+          type="button"
+          disabled={noLocalMachine}
+          onClick={() => onAdd()}
+          className={cn(
+            'group flex items-center justify-center gap-2 rounded-xl border-2 border-dashed py-4 text-sm font-medium transition-all',
+            'border-border/60 text-muted-foreground hover:border-primary/60 hover:bg-primary/[0.04] hover:text-foreground',
+            'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring',
+            'disabled:opacity-50 disabled:hover:border-border/60 disabled:hover:bg-transparent disabled:hover:text-muted-foreground'
+          )}
+        >
+          <Plus className="h-4 w-4 transition-transform group-hover:rotate-90" />
+          {configs.length + setups.length === 0
+            ? t('onboarding.providers.addFirst', 'Add your first provider')
+            : t('onboarding.providers.addAnother', 'Add another provider')}
+        </button>
+
+        {!noLocalMachine && !canProceed ? (
+          <p className="text-center text-xs text-muted-foreground/80">
+            {t(
+              'onboarding.providers.needTested',
+              'Add a provider to continue, or skip and configure later.'
+            )}
+          </p>
+        ) : null}
+
+        <AgentShowcase disabled={noLocalMachine} onPick={onAdd} />
+      </div>
+    </OnboardingShell>
+  );
+}
+
+/**
+ * "Logo wall" of supported ACP agents. Communicates that Lody runs far more
+ * than the two built-ins; clicking a brand opens the create dialog pre-selected
+ * to that agent. Icons inherit `currentColor` for a cohesive monochrome look
+ * that brightens to full brand contrast on hover.
+ */
+function AgentShowcase({
+  disabled,
+  onPick,
+}: {
+  disabled: boolean;
+  onPick: (pick: ShowcasePick) => void;
+}) {
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
+  const moreCount = MORE_SHOWCASE_AGENTS.length;
+  const visible = expanded
+    ? [...FEATURED_SHOWCASE_AGENTS, ...MORE_SHOWCASE_AGENTS]
+    : FEATURED_SHOWCASE_AGENTS;
+
+  return (
+    <div className="flex flex-col gap-3 pt-2">
+      <div className="flex items-center gap-3" aria-hidden>
+        <div className="h-px flex-1 bg-gradient-to-r from-transparent to-border/70" />
+        <span className="shrink-0 text-[11px] font-medium tracking-wide text-muted-foreground/70">
+          {t('onboarding.providers.moreLabel', 'Plus many more coding agents')}
+        </span>
+        <div className="h-px flex-1 bg-gradient-to-l from-transparent to-border/70" />
+      </div>
+      <div className="flex flex-wrap justify-center gap-2">
+        {visible.map((agent) => (
+          <button
+            key={showcasePickKey(agent.pick)}
+            type="button"
+            disabled={disabled}
+            title={agent.label}
+            onClick={() => onPick(agent.pick)}
+            className={cn(
+              'group/chip inline-flex items-center gap-1.5 rounded-full border py-1 pl-1 pr-3',
+              'border-border/50 bg-card/30 text-xs font-medium text-muted-foreground',
+              'transition-all hover:border-primary/40 hover:bg-primary/[0.06] hover:text-foreground',
+              'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring',
+              'disabled:pointer-events-none disabled:opacity-50'
+            )}
+          >
+            <span className="flex h-6 w-6 items-center justify-center rounded-full bg-muted/50 text-foreground/70 transition-colors group-hover/chip:bg-background group-hover/chip:text-foreground">
+              <AgentIcon
+                cliType={agent.icon.cliType}
+                agentType={agent.icon.agentType}
+                brandId={agent.icon.cliType === 'builtin' ? agent.icon.brandId : undefined}
+                className="h-3.5 w-3.5"
+              />
+            </span>
+            {agent.label}
+          </button>
+        ))}
+
+        {moreCount > 0 ? (
+          <button
+            type="button"
+            aria-expanded={expanded}
+            onClick={() => setExpanded((v) => !v)}
+            className={cn(
+              'inline-flex items-center gap-1 rounded-full border border-dashed py-1 pl-3 pr-2.5',
+              'border-border/70 bg-transparent text-xs font-medium text-muted-foreground',
+              'transition-all hover:border-primary/50 hover:text-foreground',
+              'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring'
+            )}
+          >
+            {expanded ? (
+              <>
+                {t('onboarding.providers.showLess', 'Show less')}
+                <ChevronUp className="h-3.5 w-3.5" />
+              </>
+            ) : (
+              <>
+                {t('onboarding.providers.showMore', '+{{count}} more', { count: moreCount })}
+                <ChevronDown className="h-3.5 w-3.5" />
+              </>
+            )}
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+interface ProvidersScreenProps {
+  onBack: () => void;
+  onSkip: () => void;
+  onNext: () => void;
+  onManagedRuntimeSelected: (agentType: BuiltinAgentType) => void;
+}
+
+export function ProvidersScreen({
+  onBack,
+  onSkip,
+  onNext,
+  onManagedRuntimeSelected,
+}: ProvidersScreenProps) {
+  const { t } = useTranslation();
+  const runtime = useAtomValue(activeWorkspaceRuntimeAtom);
+  const workspaceId = useAtomValue(currentWorkspaceIdAtom);
+  const localMachineId = useAtomValue(localMachineIdAtom);
+  const localProbeAttempted = useAtomValue(localProbeAttemptedAtom);
+  const { machines } = useVisibleMachineMetas();
+  const localMachineIdsForAgentConfigs = useMemo(
+    () => (localMachineId === null ? [] : [localMachineId]),
+    [localMachineId]
+  );
+  useMachineFlockAgentConfigsForMachineIds(localMachineIdsForAgentConfigs);
+  const allConfigs = useAtomValue(getAllAgentConfigAtom);
+  const allSetups = useAtomValue(getAllProviderSetupsAtom);
+  const createConfig = useSetAtom(cmdCreateAgentConfigAtom);
+  const createSetup = useSetAtom(cmdCreateProviderSetupAtom);
+  const retrySetup = useSetAtom(cmdRetryProviderSetupAtom);
+  const updateConfig = useSetAtom(cmdUpdateAgentConfigAtom);
+  const deleteConfig = useSetAtom(deleteAgentConfigAtom);
+  const deleteSetup = useSetAtom(deleteProviderSetupAtom);
+
+  const localMachine: MachineViewMeta | undefined = useMemo(() => {
+    if (localMachineId === null) return undefined;
+    return machines.get(localMachineId);
+  }, [localMachineId, machines]);
+
+  const localConfigs = useMemo(
+    () =>
+      allConfigs
+        .filter((c) => localMachineId !== null && c.machineId === localMachineId)
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [allConfigs, localMachineId]
+  );
+  const localSetups = useMemo(
+    () =>
+      allSetups
+        .filter((setup) => localMachineId !== null && setup.machineId === localMachineId)
+        .sort((left, right) => left.createdAt - right.createdAt),
+    [allSetups, localMachineId]
+  );
+  useProviderSetupRuntimeProgress(runtime, workspaceId, localSetups);
+
+  const [dialogMode, setDialogMode] = useState<AgentConfigDialogMode | null>(null);
+  const dialogOpen = dialogMode !== null;
+
+  const [testStatuses, setTestStatuses] = useState<Record<string, ProviderTestStatus>>({});
+  const [pendingDelete, setPendingDelete] = useState<AgentConfigMeta | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const setStatus = (id: AgentConfigId, status: ProviderTestStatus) =>
+    setTestStatuses((prev) => ({ ...prev, [id]: status }));
+
+  // Seed configs only from a past authoritative Test/Refresh. Static built-in
+  // capabilities describe expected UI options, not a successful runtime probe,
+  // so they must never produce a Verified badge. Don't downgrade an explicit
+  // 'failed' / 'testing' / 'passed'.
+  // Depend on the cache map directly: `localMachine` identity rebuilds whenever
+  // the visible-machine index recomputes, which would re-fire this effect for
+  // unrelated reasons.
+  const acpCapabilities = localMachine?.acpCapabilities;
+  useEffect(() => {
+    setTestStatuses((prev) => {
+      let next = prev;
+      for (const config of localConfigs) {
+        const existing = prev[config.id];
+        if (existing === 'failed' || existing === 'testing' || existing === 'passed') continue;
+        if (resolveInitialOnboardingProviderStatus(config, acpCapabilities) === 'passed') {
+          if (next === prev) next = { ...prev };
+          next[config.id] = 'passed';
+        }
+      }
+      return next;
+    });
+  }, [localConfigs, acpCapabilities]);
+
+  // If the local machine never arrives, silently restart the CLI once and
+  // give it another window to reconnect. If it still doesn't show up, surface
+  // a single toast and let the user retry/refresh manually — we don't want a
+  // verbose recovery panel in the onboarding flow.
+  useEffect(() => {
+    let cancelled = false;
+    let firstTimeoutId: number | null = null;
+    let secondTimeoutId: number | null = null;
+
+    if (!localMachine && localProbeAttempted) {
+      firstTimeoutId = window.setTimeout(() => {
+        if (cancelled) return;
+        const restart = window.api?.cliState?.restart;
+        if (!restart) {
+          toast.error(
+            t(
+              'onboarding.providers.localAgentUnreachable',
+              'Could not reach the local agent. Please restart Lody and try again.'
+            )
+          );
+          return;
+        }
+
+        void restart()
+          .then((result) => {
+            if (cancelled) return;
+            if (!result.ok) {
+              throw new Error(result.error || 'restart_failed');
+            }
+            secondTimeoutId = window.setTimeout(() => {
+              if (cancelled) return;
+              toast.error(
+                t(
+                  'onboarding.providers.localAgentUnreachable',
+                  'Could not reach the local agent. Please restart Lody and try again.'
+                )
+              );
+            }, PROVIDERS_SCREEN_MACHINE_TIMEOUT_MS);
+          })
+          .catch((error) => {
+            if (cancelled) return;
+            toast.error(
+              t(
+                'onboarding.providers.localAgentUnreachable',
+                'Could not reach the local agent. Please restart Lody and try again.'
+              ),
+              { description: error instanceof Error ? error.message : String(error) }
+            );
+          });
+      }, PROVIDERS_SCREEN_MACHINE_TIMEOUT_MS);
+    }
+
+    return () => {
+      cancelled = true;
+      if (firstTimeoutId !== null) window.clearTimeout(firstTimeoutId);
+      if (secondTimeoutId !== null) window.clearTimeout(secondTimeoutId);
+    };
+  }, [localMachine, localProbeAttempted, t]);
+
+  const refreshCapabilities = useCallback(
+    async (args: {
+      configId: AgentConfigId;
+      cliType: AgentConfigCliType;
+      agentType: string;
+      customAcp?: CustomAcpLaunchSpec;
+      runtimeOverrides?: AgentConfigMeta['runtimeOverrides'];
+      env?: Record<string, string>;
+    }) => {
+      if (!runtime || workspaceId === null || localMachineId === null) {
+        throw new Error(t('chat.validation.missingContext', 'Missing workspace context'));
+      }
+      const response = await runtime.requestMachineAcpCapabilitiesRefresh({
+        type: 'machine/acp-capabilities-refresh',
+        machineId: localMachineId,
+        workspaceId,
+        configId: args.configId,
+        cliType: args.cliType,
+        agentType: args.agentType,
+        customAcp: args.customAcp,
+        runtimeOverrides: args.runtimeOverrides,
+        env: args.env,
+      });
+      if (!response) {
+        throw new Error(
+          t('agents.acpCapabilities.refreshTimeout', 'Refresh timed out, please try again')
+        );
+      }
+      if (!response.success) {
+        if (response.authRequired) {
+          return response;
+        }
+        throw new Error(
+          response.error || t('agents.acpCapabilities.refreshError', 'Refresh failed')
+        );
+      }
+      // The machine flock doc only syncs once per session; force a re-sync so
+      // the freshly probed capabilities surface without a reload.
+      await resyncMachineFlockRows(runtime, localMachineId);
+      return response;
+    },
+    [localMachineId, runtime, t, workspaceId]
+  );
+
+  const { checkBinaryStatus, installBinary } = useMachineAcpBinaryActions(runtime, workspaceId);
+
+  // New built-in configs are live-probed by AgentConfigDialog when Create is
+  // pressed. This explicit Test action remains for already-created provider rows.
+  const handleTest = useCallback(
+    (config: AgentConfigMeta) => {
+      setStatus(config.id, 'testing');
+      void (async () => {
+        try {
+          const response = await refreshCapabilities({
+            configId: config.id,
+            cliType: config.cliType,
+            agentType: config.agentType,
+            customAcp: config.customAcp,
+            runtimeOverrides: config.runtimeOverrides,
+            env: config.env,
+          });
+          setStatus(config.id, response.authRequired ? 'needs-auth' : 'passed');
+        } catch (error) {
+          setStatus(config.id, 'failed');
+          toast.error(
+            t('settings.agent.provider.refreshFailed', 'Failed to refresh {{agent}}', {
+              agent: config.name,
+            }),
+            { description: error instanceof Error ? error.message : String(error) }
+          );
+        }
+      })();
+    },
+    [refreshCapabilities, t]
+  );
+
+  const handleDialogSubmit = useCallback(
+    async (payload: AgentConfigSubmitPayload) => {
+      if (!localMachineId || !dialogMode) return;
+      try {
+        if (dialogMode.kind === 'create') {
+          const config: AgentConfigMeta = {
+            id: payload.id,
+            name: payload.name,
+            description: payload.description,
+            cliType: payload.cliType,
+            agentType: payload.agentType,
+            customAcp: payload.customAcp,
+            runtimeOverrides: payload.runtimeOverrides,
+            env: payload.env,
+            prompt: payload.prompt,
+            titleGeneration: payload.titleGeneration,
+            brandId: payload.brandId,
+            machineId: localMachineId,
+          };
+          if (payload.backgroundSetup) {
+            await createSetup(config);
+          } else {
+            await createConfig(config);
+          }
+        } else {
+          await updateConfig({
+            id: dialogMode.config.id,
+            machineId: dialogMode.config.machineId,
+            name: payload.name,
+            description: payload.description,
+            cliType: payload.cliType,
+            agentType: payload.agentType,
+            customAcp: payload.customAcp,
+            runtimeOverrides: payload.runtimeOverrides,
+            env: payload.env,
+            prompt: payload.prompt,
+            titleGeneration: payload.titleGeneration,
+            brandId: payload.brandId,
+          });
+          // Editing can change credentials or the launch command; keep Test as
+          // an explicit optional action instead of treating save as verification.
+          setStatus(dialogMode.config.id, 'untested');
+        }
+      } catch (error) {
+        toast.error(
+          dialogMode.kind === 'create'
+            ? t('agents.createConfigError', 'Failed to create configuration')
+            : t('agents.updateConfigError', 'Failed to update configuration')
+        );
+        throw error;
+      }
+    },
+    [createConfig, createSetup, dialogMode, localMachineId, t, updateConfig]
+  );
+
+  const handleRetrySetup = useCallback(
+    async (setup: ProviderSetupTask) => {
+      try {
+        await retrySetup(setup.id);
+      } catch (error) {
+        toast.error(t('settings.agent.setup.retryFailed', 'Could not retry provider setup'), {
+          description: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+    },
+    [retrySetup, t]
+  );
+
+  const handleDeleteSetup = useCallback(
+    async (setup: ProviderSetupTask) => {
+      try {
+        await deleteSetup(setup.id);
+      } catch (error) {
+        toast.error(t('settings.agent.setup.deleteFailed', 'Could not cancel provider setup'), {
+          description: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+    },
+    [deleteSetup, t]
+  );
+
+  const handleConfirmDelete = async () => {
+    if (!pendingDelete) return;
+    try {
+      setDeleting(true);
+      await deleteConfig(pendingDelete.id);
+      setTestStatuses((prev) => {
+        const { [pendingDelete.id]: _, ...rest } = prev;
+        return rest;
+      });
+      setPendingDelete(null);
+    } catch (error) {
+      toast.error(t('agents.deleteConfigError', 'Failed to delete configuration'), {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  return (
+    <>
+      <ProvidersScreenView
+        configs={localConfigs}
+        setups={localSetups}
+        testStatuses={testStatuses}
+        noLocalMachine={!localMachine}
+        localMachineId={localMachineId}
+        onEdit={(config) => setDialogMode({ kind: 'edit', config })}
+        onTest={handleTest}
+        onAuthenticated={(config) => setStatus(config.id, 'passed')}
+        onDelete={(config) => setPendingDelete(config)}
+        onRetrySetup={handleRetrySetup}
+        onDeleteSetup={handleDeleteSetup}
+        onAdd={(pick) => {
+          if (!pick) {
+            setDialogMode({ kind: 'create' });
+            return;
+          }
+          // Quick-add from the showcase: pre-select the provider so the dialog
+          // opens straight on its config form (registry agents probe; presets go
+          // straight to a token field). Names seed from the registry/preset and
+          // stay editable in the dialog.
+          if (pick.kind === 'preset') {
+            setDialogMode({ kind: 'create', initialForm: buildPresetCreateForm(pick.presetId) });
+            return;
+          }
+          if (pick.kind === 'builtin') {
+            setDialogMode({
+              kind: 'create',
+              initialForm: {
+                cliType: 'builtin',
+                agentType: pick.agentType,
+                name: 'Kimi Code',
+              },
+            });
+            return;
+          }
+          const agent = REGISTRY_ACP_AGENTS.find((a) => a.id === pick.id);
+          setDialogMode({
+            kind: 'create',
+            initialForm: {
+              cliType: 'registry',
+              agentType: pick.id,
+              name: agent?.name ?? pick.id,
+            },
+          });
+        }}
+        onBack={onBack}
+        onSkip={onSkip}
+        onNext={onNext}
+      />
+
+      {dialogMode && localMachine ? (
+        <AgentConfigDialog
+          open={dialogOpen}
+          onOpenChange={(open) => {
+            if (!open) setDialogMode(null);
+          }}
+          mode={dialogMode}
+          machine={localMachine}
+          onSubmit={handleDialogSubmit}
+          onRefreshCapabilities={refreshCapabilities}
+          onCheckBinaryStatus={checkBinaryStatus}
+          onInstallBinary={installBinary}
+          onManagedRuntimeSelected={onManagedRuntimeSelected}
+          deferManagedBuiltinCreation
+        />
+      ) : null}
+
+      <AlertDialog
+        open={pendingDelete !== null}
+        onOpenChange={(open) => !open && setPendingDelete(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {t('agents.deleteConfigConfirm', 'Delete Configuration')}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('agents.deleteConfigConfirmDescription', {
+                name: pendingDelete?.name ?? '',
+                defaultValue:
+                  'Are you sure you want to delete "{{name}}"? This action cannot be undone.',
+              })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>
+              {t('common.cancel', 'Cancel')}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deleting}
+              onClick={(event) => {
+                event.preventDefault();
+                void handleConfirmDelete();
+              }}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deleting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {t('common.delete', 'Delete')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}
+
+function ProviderStatusBadge({ status }: { status: ProviderTestStatus }) {
+  const { t } = useTranslation();
+  if (status === 'testing') {
+    return (
+      <Badge variant="outline" className="gap-1 whitespace-nowrap text-[10px]">
+        <Loader2 className="h-2.5 w-2.5 animate-spin" />
+        {t('onboarding.providers.statusTesting', 'Testing')}
+      </Badge>
+    );
+  }
+  if (status === 'passed') {
+    return (
+      <Badge
+        variant="outline"
+        className="gap-1 whitespace-nowrap border-primary/40 bg-primary/10 text-[10px] text-primary"
+      >
+        <CheckCircle2 className="h-2.5 w-2.5" />
+        {t('onboarding.providers.statusPassed', 'Verified')}
+      </Badge>
+    );
+  }
+  if (status === 'failed') {
+    return (
+      <Badge
+        variant="outline"
+        className="gap-1 whitespace-nowrap border-destructive/40 text-[10px] text-destructive"
+      >
+        <XCircle className="h-2.5 w-2.5" />
+        {t('onboarding.providers.statusFailed', 'Failed')}
+      </Badge>
+    );
+  }
+  if (status === 'needs-auth') {
+    return (
+      <Badge
+        variant="outline"
+        className="whitespace-nowrap text-[10px] text-amber-600 dark:text-amber-400"
+      >
+        {t('onboarding.providers.statusNeedsAuth', 'Sign in')}
+      </Badge>
+    );
+  }
+  return (
+    <Badge variant="outline" className="whitespace-nowrap text-[10px] text-muted-foreground">
+      {t('onboarding.providers.statusUntested', 'Untested')}
+    </Badge>
+  );
+}

@@ -1,0 +1,7 @@
+.next
+.source
+out
+src/routeTree.gen.ts
+public/sitemap.xml
+public/llms.txt
+public/llms-full.txt

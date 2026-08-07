@@ -1,0 +1,15 @@
+import { blogIndexHead, BlogIndexRoutePage } from '@site/src/site-pages';
+import { loadBlogIndexRoute } from '@site/src/blog-loader';
+import { createFileRoute } from '@tanstack/react-router';
+
+export const Route = createFileRoute('/zh/blog/')({
+  loader: () => loadBlogIndexRoute({ data: { locale: 'zh' } }),
+  head: () => blogIndexHead('zh'),
+  component: BlogIndex,
+});
+
+function BlogIndex() {
+  const entries = Route.useLoaderData();
+
+  return <BlogIndexRoutePage entries={entries} locale="zh" />;
+}

@@ -1,0 +1,1292 @@
+import {
+  type ComponentPropsWithoutRef,
+  type ReactNode,
+  useState,
+  useCallback,
+  useMemo,
+  useLayoutEffect,
+  useRef,
+  memo,
+} from 'react';
+import { createMathPlugin } from '@streamdown/math';
+import type { MermaidConfig } from 'mermaid';
+import rehypeRaw from 'rehype-raw';
+import rehypeSanitize from 'rehype-sanitize';
+import remarkGfm from 'remark-gfm';
+import {
+  Streamdown,
+  defaultUrlTransform,
+  type CodeHighlighterPlugin,
+  type Components,
+  type ControlsConfig,
+  type DiagramPlugin,
+  type HighlightOptions,
+  type MermaidOptions,
+  type PluginConfig,
+  type StreamdownTranslations,
+  type ThemeInput,
+  type UrlTransform,
+} from 'streamdown';
+import type { BundledLanguage } from 'shiki';
+import { Check, Copy } from 'lucide-react';
+import { useAtomValue } from 'jotai';
+import { useTranslation } from 'react-i18next';
+import { parseTaskImageMarkdownUrl } from '@lody/shared';
+import { tasksFeatureEnabledAtom } from '@/atoms/settings';
+import { FileIcon } from '@/components/icons/file-icons';
+import {
+  isMarkdownAgentFileHref,
+  parseMarkdownAgentFileHref,
+} from '@/lib/markdown-agent-file-link';
+import { matchWholeFilePath, splitTextIntoFilePathSegments } from '@/lib/linkify-file-paths';
+import { remarkSingleDollarTextMath } from '@/lib/markdown-single-dollar-math';
+import { cn } from '@/lib/utils';
+import { usePrLinkInterceptor } from './pr-link-context';
+import {
+  SEARCH_HIGHLIGHT_ACTIVE_MARK_CLASS_NAME,
+  SEARCH_HIGHLIGHT_MARK_CLASS_NAME,
+  useSessionSearch,
+  useSessionSearchBlock,
+} from '@/components/sessions/session-search-context';
+import { findSessionSearchOccurrences } from '@/lib/session-chat-search';
+import { useResolvedTheme, type ResolvedTheme } from '../../theme-provider';
+import type { ConversationFontSize } from '@/atoms/settings';
+import { useTaskImageUrl } from '@/hooks/use-task-image';
+
+type MarkdownCodeProps = ComponentPropsWithoutRef<'code'> & {
+  inline?: boolean;
+  className?: string;
+  node?: unknown;
+};
+
+type MarkdownLinkProps = ComponentPropsWithoutRef<'a'> & {
+  node?: unknown;
+};
+
+type MarkdownPictureProps = ComponentPropsWithoutRef<'picture'> & {
+  node?: unknown;
+};
+
+type MarkdownImageProps = ComponentPropsWithoutRef<'img'> & {
+  node?: unknown;
+};
+
+type MdastNode = {
+  type: string;
+  value?: string;
+  children?: MdastNode[];
+  url?: string;
+  title?: string | null;
+};
+
+// `!` prefixes are load-bearing: Streamdown wraps its output in a div with
+// `space-y-4` (which our `className="space-y-0"` swap below replaces). Either
+// way that compiles to `.space-y-N > :not([hidden]) ~ :not([hidden])` which
+// has specificity (0,5,0) per Chromium DevTools and wins against plain
+// `[&_h1]:mt-5` arbitrary variants — zeroing margin-top AND margin-bottom on
+// every block. `!` flips on `!important` so per-element margins survive.
+const MARKDOWN_BASE_CLASSNAME =
+  'markdown-renderer max-w-none text-foreground leading-[1.75] ' +
+  '[&_p]:!mt-0 [&_p]:!mb-3 [&_p:has(+ul)]:!mb-2 [&_p:last-child]:!mb-0 [&_p:first-child]:!mt-0 ' +
+  '[&_ul]:!my-2 [&_ul]:pl-3 [&_ul]:list-disc ' +
+  '[&_ul:not(.contains-task-list)]:pl-0 [&_ul:not(.contains-task-list)]:list-none ' +
+  '[&_ul:not(.contains-task-list)>li]:relative [&_ul:not(.contains-task-list)>li]:pl-6 ' +
+  "[&_ul:not(.contains-task-list)>li]:before:absolute [&_ul:not(.contains-task-list)>li]:before:left-[10px] [&_ul:not(.contains-task-list)>li]:before:top-[0.75em] [&_ul:not(.contains-task-list)>li]:before:size-1 [&_ul:not(.contains-task-list)>li]:before:-translate-y-1/2 [&_ul:not(.contains-task-list)>li]:before:rounded-full [&_ul:not(.contains-task-list)>li]:before:bg-current [&_ul:not(.contains-task-list)>li]:before:content-[''] " +
+  // Ordered lists mirror the unordered custom-marker layout above so both list
+  // types share the same text indent and marker lane. `counter(list-item)` is
+  // the UA built-in: `display: list-item` keeps incrementing it under
+  // `list-none`, and it honors <ol start> / <li value> (mdast emits `start`).
+  '[&_ol]:!my-2 [&_ol]:pl-0 [&_ol]:list-none ' +
+  '[&_ol>li]:relative [&_ol>li]:pl-6 ' +
+  "[&_ol>li]:before:absolute [&_ol>li]:before:left-0 [&_ol>li]:before:w-[18px] [&_ol>li]:before:text-right [&_ol>li]:before:content-[counter(list-item)'.'] " +
+  // Streamdown sets `[&>p]:inline` on every <li>, collapsing loose lists into
+  // single inline runs — so between-item spacing must come from the <li> box
+  // itself, not the inner <p>. `mt-2` on non-first items keeps list edges
+  // flush with the `ul`/`ol` margins.
+  '[&_li]:!my-0 [&_li]:!py-0 [&_li:not(:first-child)]:!mt-2 [&_ul>li:not(:first-child)]:!mt-1 [&_ol>li:not(:first-child)]:!mt-1 [&_li>ul]:!my-1 [&_li>ol]:!my-1 ' +
+  // Streamdown's default blockquote class adds `italic`; override it so quoted
+  // body text stays upright (explicit `*emphasis*` inside still renders italic
+  // via the descendant <em>'s own font-style). The `[&_blockquote]` descendant
+  // selector outranks Streamdown's plain `.italic` utility, so no `!` is needed.
+  '[&_blockquote]:!my-3 [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_blockquote]:not-italic [&_blockquote]:text-muted-foreground ' +
+  '[&_hr]:!my-4 [&_hr]:border-0 [&_hr]:border-t [&_hr]:border-border ' +
+  '[&_h1]:!mt-6 [&_h1]:!mb-2 [&_h1]:font-semibold [&_h1]:tracking-tight ' +
+  '[&_h2]:!mt-5 [&_h2]:!mb-2 [&_h2]:font-semibold [&_h2]:tracking-tight ' +
+  '[&_h3]:!mt-4 [&_h3]:!mb-2 [&_h3]:font-semibold ' +
+  '[&_h4]:!mt-4 [&_h4]:!mb-1.5 [&_h4]:font-semibold ' +
+  '[&_h5]:!mt-3 [&_h5]:!mb-1.5 [&_h5]:font-semibold [&_h5]:uppercase [&_h5]:tracking-wide ' +
+  '[&_h6]:!mt-3 [&_h6]:!mb-1.5 [&_h6]:font-semibold [&_h6]:uppercase [&_h6]:tracking-wide [&_h6]:text-muted-foreground ' +
+  '[&_:is(h1,h2,h3,h4,h5,h6):first-child]:!mt-0 ' +
+  '[&_a]:underline [&_a]:underline-offset-2 [&_a]:decoration-muted-foreground/40 [&_a:hover]:decoration-muted-foreground ' +
+  '[&_.katex-display]:!my-5 [&_.katex-display]:overflow-x-auto [&_.katex-display]:overflow-y-hidden [&_.katex-display]:py-1 ' +
+  '[&_[data-streamdown="mermaid-block"]]:!my-5 ' +
+  '[&_[data-streamdown="code-block"]]:!my-4 ' +
+  '[&_table]:!my-0 [&_table]:w-full [&_table]:border-collapse [&_table]:text-[0.92em] [&_table]:leading-[1.5] ' +
+  '[&_th]:border-b [&_th]:border-border/70 [&_th]:bg-muted/45 [&_th]:px-2.5 [&_th]:py-1.5 [&_th]:text-left [&_th]:font-semibold [&_th]:text-foreground/80 ' +
+  '[&_td]:border-b [&_td]:border-border/45 [&_td]:px-2.5 [&_td]:py-1.5 [&_td]:align-top ' +
+  '[&_tbody_tr:nth-child(even)]:bg-muted/15 [&_tbody_tr:last-child_td]:border-b-0 ' +
+  '[&_:is(th,td):first-child]:w-px [&_:is(th,td):first-child]:whitespace-nowrap ' +
+  '[&_tbody_td:first-child]:font-medium [&_tbody_td:first-child]:text-foreground/75 ' +
+  '[&_table_code]:!bg-muted/55 [&_table_code]:!ring-0';
+
+const MARKDOWN_SIZE_CLASSNAMES: Record<ConversationFontSize, string> = {
+  small:
+    'text-xs [&_h1]:text-base [&_h2]:text-sm [&_h3]:text-xs [&_h4]:text-xs [&_h5]:text-[11px] [&_h6]:text-[11px]',
+  default:
+    'text-sm [&_h1]:text-lg [&_h2]:text-base [&_h3]:text-sm [&_h4]:text-sm [&_h5]:text-xs [&_h6]:text-xs',
+  large:
+    'text-base [&_h1]:text-xl [&_h2]:text-lg [&_h3]:text-base [&_h4]:text-base [&_h5]:text-sm [&_h6]:text-sm',
+};
+
+const ensureLinkRel = (rel?: string) => {
+  const parts = new Set((rel ?? '').split(/\s+/).filter(Boolean));
+  parts.add('noopener');
+  parts.add('noreferrer');
+  return Array.from(parts).join(' ');
+};
+
+type MarkdownExternalLinkProps = ComponentPropsWithoutRef<'a'> & {
+  href?: string;
+};
+
+/**
+ * Renders an `<a>` for markdown output, with an escape hatch: if the href
+ * matches the currently-active session's Pull Request URL, clicking the link
+ * opens the in-app PR tab instead of navigating away. Falls back to the
+ * default new-tab external link when no interceptor matches.
+ */
+function MarkdownExternalLink({
+  href,
+  rel,
+  children,
+  onClick,
+  ...rest
+}: MarkdownExternalLinkProps) {
+  const prHandler = usePrLinkInterceptor(href);
+  const handleClick = useCallback(
+    (event: React.MouseEvent<HTMLAnchorElement>) => {
+      onClick?.(event);
+      if (event.defaultPrevented) return;
+      if (!prHandler) return;
+      // Respect modifier-click / non-primary clicks — let the browser do its thing.
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      if (event.button !== 0) return;
+      event.preventDefault();
+      prHandler();
+    },
+    [onClick, prHandler]
+  );
+  return (
+    <a {...rest} href={href} target="_blank" rel={ensureLinkRel(rel)} onClick={handleClick}>
+      {children}
+    </a>
+  );
+}
+
+const AUTOLINK_PATTERN = /(https?:\/\/[^\s<]+|www\.[^\s<]+)/giu;
+
+const countChar = (value: string, char: string) =>
+  Array.from(value).reduce((count, current) => count + (current === char ? 1 : 0), 0);
+
+const splitAutolinkTrailing = (value: string) => {
+  let url = value;
+  let trailing = '';
+
+  while (url.length > 0) {
+    const last = url[url.length - 1];
+    if (!last) break;
+
+    if (last === ')' && countChar(url, ')') <= countChar(url, '(')) break;
+    if (last === ']' && countChar(url, ']') <= countChar(url, '[')) break;
+    if (last === '}' && countChar(url, '}') <= countChar(url, '{')) break;
+
+    if (!/[\]})"'.,:;!?，。！？；：”’»›]+/u.test(last)) break;
+
+    trailing = `${last}${trailing}`;
+    url = url.slice(0, -1);
+  }
+
+  return { url, trailing };
+};
+
+const linkifyTextValue = (value: string): MdastNode[] => {
+  const result: MdastNode[] = [];
+  AUTOLINK_PATTERN.lastIndex = 0;
+
+  let cursor = 0;
+  let match = AUTOLINK_PATTERN.exec(value);
+  if (!match) {
+    return [{ type: 'text', value }];
+  }
+
+  while (match) {
+    const rawUrl = match[0];
+    const matchStart = match.index;
+    const matchEnd = matchStart + rawUrl.length;
+
+    if (matchStart > cursor) {
+      result.push({ type: 'text', value: value.slice(cursor, matchStart) });
+    }
+
+    const { url, trailing } = splitAutolinkTrailing(rawUrl);
+    if (url.length === 0) {
+      result.push({ type: 'text', value: rawUrl });
+    } else {
+      const href = url.startsWith('www.') ? `https://${url}` : url;
+      result.push({
+        type: 'link',
+        url: href,
+        title: null,
+        children: [{ type: 'text', value: url }],
+      });
+
+      if (trailing.length > 0) {
+        result.push({ type: 'text', value: trailing });
+      }
+    }
+
+    cursor = matchEnd;
+    match = AUTOLINK_PATTERN.exec(value);
+  }
+
+  if (cursor < value.length) {
+    result.push({ type: 'text', value: value.slice(cursor) });
+  }
+
+  return result;
+};
+
+const remarkLinkifyPlainUrls = () => {
+  const walk = (node: MdastNode) => {
+    if (node.type === 'link' || node.type === 'linkReference') return;
+    if (node.type === 'code') return;
+
+    const children = node.children;
+    if (!Array.isArray(children) || children.length === 0) return;
+
+    const nextChildren: MdastNode[] = [];
+    for (const child of children) {
+      if (child.type === 'text' && typeof child.value === 'string') {
+        const linkified = linkifyTextValue(child.value);
+        nextChildren.push(...linkified);
+        continue;
+      }
+
+      if (child.type === 'inlineCode' && typeof child.value === 'string') {
+        const value = child.value;
+        AUTOLINK_PATTERN.lastIndex = 0;
+        if (AUTOLINK_PATTERN.test(value)) {
+          const linkified = linkifyTextValue(value);
+          const wrappedChildren: MdastNode[] = linkified.map((n) => {
+            if (n.type === 'link') {
+              return {
+                ...n,
+                children: [{ type: 'inlineCode', value: (n.children?.[0] as MdastNode)?.value }],
+              };
+            }
+            return { type: 'inlineCode', value: n.value };
+          });
+          nextChildren.push(...wrappedChildren);
+        } else {
+          nextChildren.push(child);
+        }
+        continue;
+      }
+
+      nextChildren.push(child);
+      walk(child);
+    }
+
+    node.children = nextChildren;
+  };
+
+  return (tree: unknown) => {
+    if (typeof tree !== 'object' || tree === null) return;
+    const root = tree as MdastNode;
+    if (typeof root.type !== 'string') return;
+    walk(root);
+  };
+};
+
+// Auto-link bare file paths (text + whole-content inline code) into the same
+// `link` nodes that explicit markdown file links use, so they flow through the
+// `a` -> AgentFileLink renderer. Runs AFTER URL linkify so URLs are already
+// `link` nodes (which this walk skips) and can't be re-grabbed as paths.
+const buildFilePathLinkNode = (path: string): MdastNode => ({
+  type: 'link',
+  url: path,
+  title: null,
+  children: [{ type: 'text', value: path }],
+});
+
+const remarkLinkifyFilePaths = () => {
+  const walk = (node: MdastNode) => {
+    if (node.type === 'link' || node.type === 'linkReference') return;
+    if (node.type === 'code') return;
+
+    const children = node.children;
+    if (!Array.isArray(children) || children.length === 0) return;
+
+    const nextChildren: MdastNode[] = [];
+    for (const child of children) {
+      if (child.type === 'text' && typeof child.value === 'string') {
+        const segments = splitTextIntoFilePathSegments(child.value);
+        if (segments.length === 1 && segments[0]?.type === 'text') {
+          nextChildren.push(child);
+          continue;
+        }
+        for (const segment of segments) {
+          nextChildren.push(
+            segment.type === 'path'
+              ? buildFilePathLinkNode(segment.value)
+              : { type: 'text', value: segment.value }
+          );
+        }
+        continue;
+      }
+
+      if (child.type === 'inlineCode' && typeof child.value === 'string') {
+        const path = matchWholeFilePath(child.value);
+        nextChildren.push(path ? buildFilePathLinkNode(path) : child);
+        continue;
+      }
+
+      nextChildren.push(child);
+      walk(child);
+    }
+
+    node.children = nextChildren;
+  };
+
+  return (tree: unknown) => {
+    if (typeof tree !== 'object' || tree === null) return;
+    const root = tree as MdastNode;
+    if (typeof root.type !== 'string') return;
+    walk(root);
+  };
+};
+
+const MARKDOWN_REMARK_PLUGINS = [
+  remarkGfm,
+  remarkLinkifyPlainUrls,
+  remarkLinkifyFilePaths,
+  remarkSingleDollarTextMath,
+];
+
+const MARKDOWN_MATH_PLUGIN = createMathPlugin();
+
+type ShikiHighlighter = Awaited<ReturnType<(typeof import('shiki/core'))['createHighlighterCore']>>;
+type MarkdownHighlightResult = NonNullable<ReturnType<CodeHighlighterPlugin['highlight']>>;
+
+const MARKDOWN_CODE_THEME_NAME = 'lody-css-variables';
+// Streamdown's type does not model registered custom theme names, but Shiki accepts
+// them after createHighlighterCore() registers the matching theme object.
+const MARKDOWN_CODE_THEME_INPUT = MARKDOWN_CODE_THEME_NAME as unknown as ThemeInput;
+const MARKDOWN_CODE_THEMES = [MARKDOWN_CODE_THEME_INPUT, MARKDOWN_CODE_THEME_INPUT] as const;
+
+const MARKDOWN_CODE_LANGUAGES = [
+  'typescript',
+  'tsx',
+  'javascript',
+  'jsx',
+  'json',
+  'bash',
+  'shellscript',
+  'markdown',
+  'diff',
+  'python',
+  'rust',
+  'go',
+  'yaml',
+  'html',
+  'css',
+] as const satisfies readonly BundledLanguage[];
+
+const MARKDOWN_CODE_LANGUAGE_ALIASES: Partial<Record<string, BundledLanguage>> = {
+  js: 'javascript',
+  ts: 'typescript',
+  md: 'markdown',
+  py: 'python',
+  rs: 'rust',
+  sh: 'shellscript',
+  shell: 'shellscript',
+  yml: 'yaml',
+};
+
+const MARKDOWN_CODE_LANGUAGE_SET = new Set<string>([
+  ...MARKDOWN_CODE_LANGUAGES,
+  ...Object.keys(MARKDOWN_CODE_LANGUAGE_ALIASES),
+]);
+
+const normalizeCodeLanguage = (language: BundledLanguage): BundledLanguage | null => {
+  const normalized = String(language).trim().toLowerCase();
+  if (!normalized) return null;
+
+  const alias = MARKDOWN_CODE_LANGUAGE_ALIASES[normalized];
+  if (alias) return alias;
+
+  return MARKDOWN_CODE_LANGUAGE_SET.has(normalized) ? (normalized as BundledLanguage) : null;
+};
+
+const createPlainHighlightResult = (code: string): MarkdownHighlightResult => ({
+  bg: 'transparent',
+  fg: 'inherit',
+  tokens: code.split('\n').map((line) => [
+    {
+      color: 'inherit',
+      content: line,
+    },
+  ]),
+});
+
+// Tokenizing is pure over (language, code): the registered theme is Shiki's
+// CSS-variables theme, so the tokens carry `var(--shiki-*)` colors and do not
+// change with the app theme. Re-rendering a conversation therefore re-derived
+// identical tokens — a measurable cost on session switch, where every code
+// block in the newly mounted transcript is highlighted from scratch.
+//
+// Bounded twice over: by entry count and by total cached source length, because
+// a streaming turn feeds a new prefix of the same block on every chunk and
+// would otherwise fill the cache with strings nobody reads again. Insertion
+// order gives LRU: a hit is re-inserted at the end, eviction takes the front.
+const HIGHLIGHT_CACHE_MAX_ENTRIES = 256;
+const HIGHLIGHT_CACHE_MAX_TOTAL_CHARS = 1_000_000;
+/** Skip blocks large enough that caching them costs more than re-tokenizing. */
+const HIGHLIGHT_CACHE_MAX_CODE_CHARS = 20_000;
+
+const highlightCache = new Map<string, MarkdownHighlightResult>();
+let highlightCacheChars = 0;
+
+const readHighlightCache = (key: string): MarkdownHighlightResult | undefined => {
+  const cached = highlightCache.get(key);
+  if (cached === undefined) return undefined;
+  highlightCache.delete(key);
+  highlightCache.set(key, cached);
+  return cached;
+};
+
+const writeHighlightCache = (
+  key: string,
+  codeLength: number,
+  result: MarkdownHighlightResult
+): void => {
+  highlightCache.set(key, result);
+  highlightCacheChars += codeLength;
+  while (
+    highlightCache.size > HIGHLIGHT_CACHE_MAX_ENTRIES ||
+    highlightCacheChars > HIGHLIGHT_CACHE_MAX_TOTAL_CHARS
+  ) {
+    const oldestKey = highlightCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    highlightCache.delete(oldestKey);
+    // The key is `${language}\0${code}`, so its length bounds the code length
+    // it contributed; close enough to keep the budget from drifting upward.
+    highlightCacheChars = Math.max(0, highlightCacheChars - oldestKey.length);
+  }
+};
+
+const highlightCode = (
+  highlighter: ShikiHighlighter,
+  options: HighlightOptions
+): MarkdownHighlightResult => {
+  const language = normalizeCodeLanguage(options.language);
+  if (!language) {
+    return createPlainHighlightResult(options.code);
+  }
+
+  const cacheable = options.code.length <= HIGHLIGHT_CACHE_MAX_CODE_CHARS;
+  const cacheKey = `${language}\0${options.code}`;
+  if (cacheable) {
+    const cached = readHighlightCache(cacheKey);
+    if (cached !== undefined) return cached;
+  }
+
+  try {
+    const result = highlighter.codeToTokens(options.code, {
+      lang: language,
+      themes: {
+        light: MARKDOWN_CODE_THEMES[0],
+        dark: MARKDOWN_CODE_THEMES[1],
+      },
+    });
+    if (cacheable) {
+      writeHighlightCache(cacheKey, options.code.length, result);
+    }
+    return result;
+  } catch {
+    return createPlainHighlightResult(options.code);
+  }
+};
+
+const createLazyShikiCodePlugin = (): CodeHighlighterPlugin => {
+  let highlighter: ShikiHighlighter | null = null;
+  let highlighterPromise: Promise<ShikiHighlighter> | null = null;
+
+  const loadHighlighter = async () => {
+    // Use core + explicit grammar imports instead of import('shiki');
+    // the bundled entry exposes every Shiki language/theme to Vite chunking.
+    highlighterPromise ??= Promise.all([
+      import('shiki/core'),
+      import('shiki/engine/javascript'),
+      import('shiki/langs/typescript.mjs'),
+      import('shiki/langs/tsx.mjs'),
+      import('shiki/langs/javascript.mjs'),
+      import('shiki/langs/jsx.mjs'),
+      import('shiki/langs/json.mjs'),
+      import('shiki/langs/shellscript.mjs'),
+      import('shiki/langs/markdown.mjs'),
+      import('shiki/langs/diff.mjs'),
+      import('shiki/langs/python.mjs'),
+      import('shiki/langs/rust.mjs'),
+      import('shiki/langs/go.mjs'),
+      import('shiki/langs/yaml.mjs'),
+      import('shiki/langs/html.mjs'),
+      import('shiki/langs/css.mjs'),
+    ]).then(
+      ([
+        { createCssVariablesTheme, createHighlighterCore },
+        { createJavaScriptRegexEngine },
+        typescript,
+        tsx,
+        javascript,
+        jsx,
+        json,
+        shellscript,
+        markdown,
+        diff,
+        python,
+        rust,
+        go,
+        yaml,
+        html,
+        css,
+      ]) =>
+        createHighlighterCore({
+          engine: createJavaScriptRegexEngine(),
+          langs: [
+            typescript.default,
+            tsx.default,
+            javascript.default,
+            jsx.default,
+            json.default,
+            shellscript.default,
+            markdown.default,
+            diff.default,
+            python.default,
+            rust.default,
+            go.default,
+            yaml.default,
+            html.default,
+            css.default,
+          ],
+          themes: [
+            createCssVariablesTheme({
+              name: MARKDOWN_CODE_THEME_NAME,
+              variablePrefix: '--lody-shiki-',
+            }),
+          ],
+        }).then((loadedHighlighter) => {
+          highlighter = loadedHighlighter;
+          return loadedHighlighter;
+        })
+    );
+
+    return highlighterPromise;
+  };
+
+  return {
+    name: 'shiki',
+    type: 'code-highlighter',
+    getSupportedLanguages: () => [...MARKDOWN_CODE_LANGUAGES],
+    getThemes: () => [...MARKDOWN_CODE_THEMES],
+    highlight: (options, callback) => {
+      if (highlighter) {
+        return highlightCode(highlighter, options);
+      }
+
+      void loadHighlighter()
+        .then((loadedHighlighter) => {
+          callback?.(highlightCode(loadedHighlighter, options));
+        })
+        .catch(() => {
+          callback?.(createPlainHighlightResult(options.code));
+        });
+
+      return null;
+    },
+    supportsLanguage: (language) => normalizeCodeLanguage(language) !== null,
+  };
+};
+
+const MARKDOWN_CODE_PLUGIN = createLazyShikiCodePlugin();
+
+type MermaidRuntime = (typeof import('mermaid'))['default'];
+
+const MERMAID_FONT_FAMILY =
+  'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+
+const MERMAID_NATURAL_WIDTH_CONFIG = {
+  architecture: { useMaxWidth: false },
+  block: { useMaxWidth: false },
+  c4: { useMaxWidth: false },
+  class: { useMaxWidth: false },
+  er: { useMaxWidth: false },
+  flowchart: { useMaxWidth: false },
+  gantt: { useMaxWidth: false },
+  gitGraph: { useMaxWidth: false },
+  journey: { useMaxWidth: false },
+  kanban: { useMaxWidth: false },
+  mindmap: { useMaxWidth: false },
+  packet: { useMaxWidth: false },
+  pie: { useMaxWidth: false },
+  quadrantChart: { useMaxWidth: false },
+  requirement: { useMaxWidth: false },
+  sequence: { useMaxWidth: false },
+  state: { useMaxWidth: false },
+  timeline: { useMaxWidth: false },
+  xyChart: { useMaxWidth: false },
+} satisfies Partial<MermaidConfig>;
+
+const MERMAID_BASE_CONFIG = {
+  ...MERMAID_NATURAL_WIDTH_CONFIG,
+  fontFamily: MERMAID_FONT_FAMILY,
+  securityLevel: 'strict',
+  startOnLoad: false,
+  suppressErrorRendering: true,
+  theme: 'base',
+} satisfies MermaidConfig;
+
+const MERMAID_LIGHT_THEME_VARIABLES = {
+  background: '#ffffff',
+  mainBkg: '#f8fafc',
+  secondaryColor: '#eef6ff',
+  tertiaryColor: '#f1f5f9',
+  primaryColor: '#eef6ff',
+  primaryBorderColor: '#60a5fa',
+  primaryTextColor: '#0f172a',
+  secondaryTextColor: '#0f172a',
+  tertiaryTextColor: '#0f172a',
+  lineColor: '#64748b',
+  textColor: '#0f172a',
+  titleColor: '#0f172a',
+  defaultLinkColor: '#64748b',
+  edgeLabelBackground: '#ffffff',
+  nodeBorder: '#60a5fa',
+  clusterBkg: '#f8fafc',
+  clusterBorder: '#cbd5e1',
+  actorBkg: '#f8fafc',
+  actorBorder: '#60a5fa',
+  actorTextColor: '#0f172a',
+  signalColor: '#64748b',
+  signalTextColor: '#0f172a',
+  labelBoxBkgColor: '#ffffff',
+  labelBoxBorderColor: '#cbd5e1',
+  labelTextColor: '#0f172a',
+  loopTextColor: '#0f172a',
+  noteBkgColor: '#fffbeb',
+  noteTextColor: '#78350f',
+  noteBorderColor: '#f59e0b',
+  activationBkgColor: '#dbeafe',
+  activationBorderColor: '#60a5fa',
+  sequenceNumberColor: '#475569',
+};
+
+const MERMAID_DARK_THEME_VARIABLES = {
+  background: '#0b1120',
+  mainBkg: '#111827',
+  secondaryColor: '#172033',
+  tertiaryColor: '#1e293b',
+  primaryColor: '#172033',
+  primaryBorderColor: '#60a5fa',
+  primaryTextColor: '#f8fafc',
+  secondaryTextColor: '#f8fafc',
+  tertiaryTextColor: '#f8fafc',
+  lineColor: '#cbd5e1',
+  textColor: '#e2e8f0',
+  titleColor: '#f8fafc',
+  defaultLinkColor: '#cbd5e1',
+  edgeLabelBackground: '#0b1120',
+  nodeBorder: '#60a5fa',
+  clusterBkg: '#0f172a',
+  clusterBorder: '#475569',
+  actorBkg: '#111827',
+  actorBorder: '#60a5fa',
+  actorTextColor: '#f8fafc',
+  signalColor: '#cbd5e1',
+  signalTextColor: '#f8fafc',
+  labelBoxBkgColor: '#111827',
+  labelBoxBorderColor: '#475569',
+  labelTextColor: '#f8fafc',
+  loopTextColor: '#f8fafc',
+  noteBkgColor: '#422006',
+  noteTextColor: '#fffbeb',
+  noteBorderColor: '#f59e0b',
+  activationBkgColor: '#1e3a5f',
+  activationBorderColor: '#60a5fa',
+  sequenceNumberColor: '#cbd5e1',
+};
+
+export const createMarkdownMermaidConfig = (theme: ResolvedTheme): MermaidConfig => ({
+  ...MERMAID_BASE_CONFIG,
+  darkMode: theme === 'dark',
+  themeVariables:
+    theme === 'dark' ? { ...MERMAID_DARK_THEME_VARIABLES } : { ...MERMAID_LIGHT_THEME_VARIABLES },
+});
+
+const escapeXml = (value: string): string =>
+  value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+
+// Mermaid's runtime ships regex constructs (e.g. lookbehind) that older Safari
+// (iOS < 16.4) cannot parse, throwing SyntaxError at chunk load time. If we let
+// that propagate, the whole app boot can die because mermaid's chunk sits next
+// to code paths the router reaches. Render a static SVG fallback instead so
+// the rest of the UI keeps working.
+const renderMermaidLoadFallback = (source: string): { svg: string } => {
+  const lines = source.split('\n').slice(0, 12);
+  const truncated = source.split('\n').length > lines.length;
+  const text = lines.map((line) => escapeXml(line)).join('\n');
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="${
+    24 + lines.length * 16 + (truncated ? 16 : 0)
+  }" viewBox="0 0 480 ${24 + lines.length * 16 + (truncated ? 16 : 0)}">
+  <rect width="100%" height="100%" fill="#fef3c7" rx="6" />
+  <text x="12" y="18" font-family="ui-monospace,monospace" font-size="11" fill="#92400e">Diagram unavailable in this browser</text>
+  <text x="12" y="40" font-family="ui-monospace,monospace" font-size="11" fill="#78350f"><tspan>${text}</tspan>${
+    truncated ? '<tspan x="12" dy="16">…</tspan>' : ''
+  }</text>
+</svg>`;
+  return { svg };
+};
+
+const createLazyMermaidPlugin = (): DiagramPlugin => {
+  let runtimePromise: Promise<MermaidRuntime> | null = null;
+  let runtimeUnavailable = false;
+  let currentConfig: MermaidConfig = createMarkdownMermaidConfig('light');
+
+  const loadRuntime = async (): Promise<MermaidRuntime | null> => {
+    if (runtimeUnavailable) return null;
+    runtimePromise ??= import('mermaid').then((module) => module.default);
+    try {
+      const runtime = await runtimePromise;
+      runtime.initialize(currentConfig);
+      return runtime;
+    } catch (error) {
+      runtimeUnavailable = true;
+      runtimePromise = null;
+      console.warn(
+        '[Lody] Mermaid runtime failed to load; falling back to static text. ' +
+          'This usually means the browser is older than Safari 16.4 or Chrome 88.',
+        error
+      );
+      return null;
+    }
+  };
+
+  const instance = {
+    initialize: (config: MermaidConfig) => {
+      currentConfig = { ...MERMAID_BASE_CONFIG, ...config };
+      if (runtimePromise) {
+        void runtimePromise
+          .then((runtime) => {
+            runtime.initialize(currentConfig);
+          })
+          .catch(() => {
+            // Already handled in loadRuntime; nothing to do here.
+          });
+      }
+    },
+    render: async (id: string, source: string) => {
+      const runtime = await loadRuntime();
+      if (!runtime) {
+        return renderMermaidLoadFallback(source);
+      }
+      try {
+        return await runtime.render(id, source);
+      } catch (error) {
+        console.warn('[Lody] Mermaid render failed; using fallback.', error);
+        return renderMermaidLoadFallback(source);
+      }
+    },
+  };
+
+  return {
+    name: 'mermaid',
+    type: 'diagram',
+    language: 'mermaid',
+    getMermaid: (config?: MermaidConfig) => {
+      if (config) {
+        instance.initialize(config);
+      }
+      return instance;
+    },
+  };
+};
+
+const MARKDOWN_MERMAID_PLUGIN = createLazyMermaidPlugin();
+
+const STREAMDOWN_PLUGINS = {
+  code: MARKDOWN_CODE_PLUGIN,
+  math: MARKDOWN_MATH_PLUGIN,
+  mermaid: MARKDOWN_MERMAID_PLUGIN,
+} satisfies PluginConfig;
+
+const STREAMDOWN_CONTROLS = {
+  code: {
+    copy: true,
+    download: false,
+  },
+  mermaid: {
+    copy: true,
+    download: true,
+    fullscreen: true,
+    panZoom: false,
+  },
+  table: false,
+} satisfies ControlsConfig;
+
+const writeTextToClipboard = async (text: string): Promise<boolean> => {
+  if (!text.trim()) return false;
+
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    try {
+      const el = document.createElement('textarea');
+      el.value = text;
+      el.style.position = 'fixed';
+      el.style.top = '0';
+      el.style.left = '0';
+      el.style.width = '1px';
+      el.style.height = '1px';
+      el.style.opacity = '0';
+      document.body.appendChild(el);
+      el.focus();
+      el.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(el);
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+};
+
+const markdownUrlTransform: UrlTransform = (value, key, node) =>
+  isMarkdownAgentFileHref(value) || (key === 'src' && parseTaskImageMarkdownUrl(value))
+    ? value
+    : defaultUrlTransform(value, key, node);
+
+type MarkdownTableProps = ComponentPropsWithoutRef<'table'> & {
+  node?: unknown;
+};
+
+const normalizeAgentFilePathKey = (path: string): string =>
+  path.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
+
+const pathKeyMatchesCovered = (
+  path: string,
+  coveredFilePaths: ReadonlySet<string> | undefined
+): boolean => {
+  if (!coveredFilePaths || coveredFilePaths.size === 0) return false;
+  const key = normalizeAgentFilePathKey(path);
+  if (coveredFilePaths.has(key)) return true;
+  const base = key.split('/').pop();
+  return Boolean(base && coveredFilePaths.has(base));
+};
+
+const AgentFileLink = ({
+  href,
+  children,
+  onFilePathClick,
+  copyAgentFileLabel,
+  openAgentFileLabel,
+  coveredFilePaths,
+}: {
+  href: string;
+  children: ReactNode;
+  onFilePathClick?: (href: string) => void;
+  copyAgentFileLabel: string;
+  openAgentFileLabel: string;
+  /** Paths already shown in the turn's edited-files card — skip chip chrome. */
+  coveredFilePaths?: ReadonlySet<string>;
+}) => {
+  const [didCopy, setDidCopy] = useState(false);
+  const hasOpenAction = Boolean(onFilePathClick);
+  const iconPath = parseMarkdownAgentFileHref(href)?.filePath ?? href;
+  const coveredByEditedFiles = pathKeyMatchesCovered(iconPath, coveredFilePaths);
+
+  const handleClick = useCallback(async () => {
+    if (onFilePathClick) {
+      onFilePathClick(href);
+      return;
+    }
+
+    const ok = await writeTextToClipboard(href);
+    if (!ok) return;
+
+    setDidCopy(true);
+    window.setTimeout(() => setDidCopy(false), 1200);
+  }, [href, onFilePathClick]);
+
+  /* Turn footer already lists this path with +/− stats — omit the duplicate
+     chip (common when agents end with a bare `README.md` link). */
+  if (coveredByEditedFiles) {
+    return null;
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        void handleClick();
+      }}
+      title={href}
+      aria-label={`${hasOpenAction ? openAgentFileLabel : copyAgentFileLabel}: ${href}`}
+      className={cn(
+        'inline-flex max-w-full items-center gap-1 rounded-md border border-border/60 bg-muted/40 px-1.5 py-px align-[-0.15em] font-mono text-[0.92em] leading-tight text-foreground no-underline shadow-none transition-colors',
+        'hover:border-border hover:bg-muted focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2'
+      )}
+    >
+      <FileIcon filePath={iconPath} className="h-3.5 w-3.5 shrink-0" />
+      <span className="min-w-0 truncate">{children}</span>
+      {!hasOpenAction ? (
+        didCopy ? (
+          <Check className="h-3 w-3 shrink-0 text-emerald-600" />
+        ) : (
+          <Copy className="h-3 w-3 shrink-0 text-muted-foreground" />
+        )
+      ) : null}
+    </button>
+  );
+};
+
+const createMarkdownComponents = ({
+  copyAgentFileLabel,
+  openAgentFileLabel,
+  onAgentFileLinkClick,
+  coveredFilePaths,
+}: {
+  copyAgentFileLabel: string;
+  openAgentFileLabel: string;
+  onAgentFileLinkClick?: (href: string) => void;
+  coveredFilePaths?: ReadonlySet<string>;
+}): Components => ({
+  inlineCode: (props: MarkdownCodeProps) => {
+    const { className, children, style: _style, node: _node, inline: _inline, ...rest } = props;
+    return (
+      <code
+        className={cn(
+          'rounded-sm bg-code px-1 py-px font-mono text-[0.85em] text-code-foreground ring-1 ring-inset ring-border/50',
+          className
+        )}
+        {...rest}
+      >
+        {children}
+      </code>
+    );
+  },
+  table: (props: MarkdownTableProps) => {
+    const { node: _node, ...rest } = props;
+    return (
+      <div
+        data-markdown-table
+        className="scrollbar-pro my-3 overflow-x-auto rounded-lg border border-border/70 bg-background"
+      >
+        <table {...rest} />
+      </div>
+    );
+  },
+  a: (props: MarkdownLinkProps) => {
+    const { children, href, node: _node, rel, ...rest } = props;
+
+    if (isMarkdownAgentFileHref(href)) {
+      return (
+        <AgentFileLink
+          href={href}
+          onFilePathClick={onAgentFileLinkClick}
+          copyAgentFileLabel={copyAgentFileLabel}
+          openAgentFileLabel={openAgentFileLabel}
+          coveredFilePaths={coveredFilePaths}
+        >
+          {children}
+        </AgentFileLink>
+      );
+    }
+
+    return (
+      <MarkdownExternalLink href={href} rel={rel} {...rest}>
+        {children}
+      </MarkdownExternalLink>
+    );
+  },
+  img: TaskMarkdownImage,
+  // <picture> just passes through its children (the <img> fallback);
+  // <source> is suppressed since it's only meaningful inside a real browser <picture>.
+  source: () => null,
+  picture: (props: MarkdownPictureProps) => <>{props.children}</>,
+});
+
+function TaskMarkdownImage(props: MarkdownImageProps) {
+  const { node: _node, src, alt, ...rest } = props;
+  const taskImageId = src ? parseTaskImageMarkdownUrl(src) : null;
+  const tasksEnabled = useAtomValue(tasksFeatureEnabledAtom);
+  const resolvedUrl = useTaskImageUrl(taskImageId && tasksEnabled ? src : undefined);
+
+  if (taskImageId && !tasksEnabled) return null;
+
+  if (taskImageId && !resolvedUrl) {
+    return (
+      <span
+        role="img"
+        aria-label={alt || 'Task image'}
+        className="my-2 block h-24 w-full max-w-sm animate-pulse rounded-md bg-muted"
+      />
+    );
+  }
+
+  return (
+    <img
+      {...rest}
+      src={taskImageId ? resolvedUrl : src}
+      alt={alt ?? ''}
+      className={cn('my-2 max-h-[32rem] max-w-full rounded-md object-contain', rest.className)}
+    />
+  );
+}
+
+export type MarkdownRendererSize = ConversationFontSize | 'sm' | 'base';
+
+function normalizeMarkdownRendererSize(size: MarkdownRendererSize): ConversationFontSize {
+  if (size === 'sm') return 'default';
+  if (size === 'base') return 'large';
+  return size;
+}
+
+export const MarkdownRenderer = memo(function MarkdownRenderer({
+  text,
+  size = 'default',
+  className,
+  allowHtml = false,
+  isStreaming = false,
+  onAgentFileLinkClick,
+  coveredFilePaths,
+  searchBlockId,
+}: {
+  text: string;
+  size?: MarkdownRendererSize;
+  className?: string;
+  /** Enable raw HTML rendering (sanitized). Use for GitHub comment bodies. */
+  allowHtml?: boolean;
+  /** Enables Streamdown's incremental animation while a turn is still streaming. */
+  isStreaming?: boolean;
+  onAgentFileLinkClick?: (href: string) => void;
+  /**
+   * Paths already listed in the turn's edited-files footer. Matching agent
+   * file links render as plain mono text instead of a second bordered chip.
+   */
+  coveredFilePaths?: ReadonlySet<string>;
+  searchBlockId?: string;
+}) {
+  const { t } = useTranslation();
+  const resolvedTheme = useResolvedTheme();
+  const containerRef = useRef<HTMLDivElement>(null);
+  const search = useSessionSearch();
+  const searchMatch = useSessionSearchBlock(searchBlockId ?? '');
+  const copyCodeLabel = t('common.copyCode', 'Copy code');
+  const copyAgentFileLabel = t('sessions.copyAgentFilePath', 'Copy agent file path');
+  const openAgentFileLabel = t('sessions.openAgentFile', 'Open agent file');
+  const components = useMemo(
+    () =>
+      createMarkdownComponents({
+        copyAgentFileLabel,
+        openAgentFileLabel,
+        onAgentFileLinkClick,
+        coveredFilePaths,
+      }),
+    [copyAgentFileLabel, coveredFilePaths, onAgentFileLinkClick, openAgentFileLabel]
+  );
+
+  const rehypePlugins = useMemo(() => (allowHtml ? [rehypeRaw, rehypeSanitize] : []), [allowHtml]);
+  const streamdownTranslations = useMemo(
+    () =>
+      ({
+        copied: t('common.copied', 'Copied'),
+        copyCode: copyCodeLabel,
+      }) satisfies Partial<StreamdownTranslations>,
+    [copyCodeLabel, t]
+  );
+  const mermaidOptions = useMemo(
+    () =>
+      ({
+        config: createMarkdownMermaidConfig(resolvedTheme),
+      }) satisfies MermaidOptions,
+    [resolvedTheme]
+  );
+  const normalizedSize = normalizeMarkdownRendererSize(size);
+  const streamdownKey = `${allowHtml ? 'html' : 'markdown'}-${resolvedTheme}`;
+
+  useLayoutEffect(() => {
+    const root = containerRef.current;
+    if (!root) {
+      return undefined;
+    }
+
+    root
+      .querySelectorAll<HTMLButtonElement>('[data-streamdown="code-block-copy-button"]')
+      .forEach((button) => button.setAttribute('aria-label', copyCodeLabel));
+
+    const clearSearchHighlights = () => {
+      const existingMarks = root.querySelectorAll('mark[data-session-search-mark="true"]');
+      existingMarks.forEach((mark) => {
+        const parent = mark.parentNode;
+        if (!parent) {
+          return;
+        }
+        while (mark.firstChild) {
+          parent.insertBefore(mark.firstChild, mark);
+        }
+        parent.removeChild(mark);
+        parent.normalize();
+      });
+    };
+
+    clearSearchHighlights();
+
+    const query = search?.isOpen ? search.query : '';
+    if (!query || !searchBlockId || !searchMatch) {
+      return clearSearchHighlights;
+    }
+
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode: (node) => {
+        if (!(node instanceof Text)) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        const value = node.nodeValue ?? '';
+        if (!value) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        const parentElement = node.parentElement;
+        if (!parentElement) {
+          return NodeFilter.FILTER_ACCEPT;
+        }
+        if (parentElement.closest('mark[data-session-search-mark="true"]')) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    });
+
+    const textNodes: Array<{ node: Text; start: number; end: number }> = [];
+    let cursor = 0;
+    let nextNode = walker.nextNode();
+    while (nextNode) {
+      const textNode = nextNode as Text;
+      const value = textNode.nodeValue ?? '';
+      textNodes.push({
+        node: textNode,
+        start: cursor,
+        end: cursor + value.length,
+      });
+      cursor += value.length;
+      nextNode = walker.nextNode();
+    }
+
+    if (!textNodes.length) {
+      return clearSearchHighlights;
+    }
+
+    const rawMatches = findSessionSearchOccurrences(
+      textNodes.map(({ node }) => node.nodeValue ?? '').join(''),
+      query
+    );
+    const hasAlignedMatches = rawMatches.length === searchMatch.resultIds.length;
+    const matches = rawMatches.map((match, index) => ({
+      ...match,
+      resultId: hasAlignedMatches ? (searchMatch.resultIds[index] ?? null) : null,
+      isActive: hasAlignedMatches && searchMatch.activeOccurrenceIndex === index,
+    }));
+
+    if (!matches.length) {
+      return clearSearchHighlights;
+    }
+
+    textNodes.forEach(({ node, start, end }) => {
+      const value = node.nodeValue ?? '';
+      const overlaps = matches.filter((match) => match.start < end && match.end > start);
+      if (!overlaps.length) {
+        return;
+      }
+
+      const fragment = document.createDocumentFragment();
+      let localCursor = 0;
+
+      overlaps.forEach((match) => {
+        const localStart = Math.max(0, match.start - start);
+        const localEnd = Math.min(value.length, match.end - start);
+        if (localStart > localCursor) {
+          fragment.appendChild(document.createTextNode(value.slice(localCursor, localStart)));
+        }
+        const mark = document.createElement('mark');
+        mark.dataset.sessionSearchMark = 'true';
+        if (match.resultId) {
+          mark.dataset.searchResultId = match.resultId;
+        }
+        mark.className = cn(
+          SEARCH_HIGHLIGHT_MARK_CLASS_NAME,
+          match.isActive && SEARCH_HIGHLIGHT_ACTIVE_MARK_CLASS_NAME
+        );
+        mark.textContent = value.slice(localStart, localEnd);
+        fragment.appendChild(mark);
+        localCursor = localEnd;
+      });
+
+      if (localCursor < value.length) {
+        fragment.appendChild(document.createTextNode(value.slice(localCursor)));
+      }
+
+      const parent = node.parentNode;
+      if (!parent) {
+        return;
+      }
+      parent.insertBefore(fragment, node);
+      parent.removeChild(node);
+    });
+
+    return clearSearchHighlights;
+  }, [copyCodeLabel, search?.isOpen, search?.query, searchBlockId, searchMatch, text]);
+
+  return (
+    <div
+      ref={containerRef}
+      data-search-block-id={searchBlockId}
+      className={cn(MARKDOWN_BASE_CLASSNAME, MARKDOWN_SIZE_CLASSNAMES[normalizedSize], className)}
+    >
+      <Streamdown
+        // Streamdown's memo comparator does not include every rendering prop;
+        // remount when raw-HTML mode or Mermaid theme changes so sanitized
+        // rendering and diagram colors update correctly.
+        key={streamdownKey}
+        mode="streaming"
+        className="space-y-0"
+        controls={STREAMDOWN_CONTROLS}
+        isAnimating={isStreaming}
+        lineNumbers={false}
+        mermaid={mermaidOptions}
+        plugins={STREAMDOWN_PLUGINS}
+        remarkPlugins={MARKDOWN_REMARK_PLUGINS}
+        rehypePlugins={rehypePlugins}
+        components={components}
+        translations={streamdownTranslations}
+        urlTransform={markdownUrlTransform}
+      >
+        {text}
+      </Streamdown>
+    </div>
+  );
+});

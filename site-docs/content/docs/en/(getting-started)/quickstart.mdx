@@ -1,0 +1,92 @@
+---
+title: Quick Start
+description: Install the prerequisites for Lody, start the CLI, connect GitHub, and finish the initial setup.
+---
+
+# Quick Start
+
+## Sign In
+
+Lody supports the following sign-in methods on the sign-in page:
+
+- **GitHub**
+- **Google**
+- **Apple**
+- **Discord**
+- **Email + Password**
+
+Pick whichever account you want to use. You can always link GitHub separately from
+**Settings → GitHub** even if you signed in another way.
+
+For headless machines (CI runners, remote servers, containers) use a CLI token with
+`lody login --auth <token>` or `lody start --auth <token>`. See
+[Non-Interactive Login with `--auth`](/docs/cli#non-interactive-login-with-auth).
+
+## Prerequisites
+
+- Node.js 18 or later
+- Git installed and configured
+- Install the [GitHub CLI](https://cli.github.com/)
+  - macOS: `brew install gh`
+  - Linux: [Installation instructions](https://github.com/cli/cli/blob/trunk/docs/install_linux.md)
+
+### Network Requirements
+
+The CLI needs access to the following services:
+
+- Your Coding Agent (Claude Code / Codex)
+- GitHub (for cloning repositories)
+- npm registry
+
+## Start
+
+```bash
+# Recommended: run in the background
+npx lody daemon start
+
+# Temporary foreground mode for debugging
+npx lody start
+```
+
+`npx lody daemon start` starts the Lody CLI in the background and brings it back if it exits
+unexpectedly. The CLI detects Claude Code and Codex installed on your current machine, then creates
+a default [Agent Config](/docs/agents) so you can pick the corresponding CLI type in the chat UI.
+
+Use `npx lody start` when you want foreground logs in the current terminal or need to debug startup.
+
+## Use the Desktop App as a Remote Control
+
+The desktop app starts its bundled local CLI by default so it can run agents on this computer. If
+you only want to control agents on another machine, open **Settings** -> **General** -> **Startup**
+and turn off **Run local agent**.
+
+Turning it off stops the automatically managed CLI and keeps it disabled on the next launch. It
+does not disconnect agents running on other machines.
+
+## Connect Your GitHub Repository
+
+In the web app, click **Settings** -> **GitHub** -> **Manage** to authorize GitHub access. After
+the redirect back to Lody, add the repositories you need to your workspace.
+[Learn more](/docs/github)
+
+## File Locations
+
+| Content      | Path            |
+| ------------ | --------------- |
+| Repositories | `~/.lody/repos` |
+| Log files    | `~/.lody/logs`  |
+
+## Reset the Local Cache
+
+If the app shows stale data or fails to load after a version update, open **Settings** ->
+**Cache & storage** and use **Clear local cache**. It deletes Lody's local cache for all workspaces
+(offline copies, synced-data caches, and image caches) and reloads the app. Your account and synced
+data are safe and re-download automatically, and you stay signed in. On mobile, the same option is
+on the Settings page.
+
+## Next Steps
+
+- [CLI Commands](/docs/cli) - See all `lody` commands and options
+- [Learn about Worktrees](/docs/worktrees) - Understand how Lody isolates tasks
+- [Configure Agents](/docs/agents) - Set up Claude Code, Codex, or Claude-compatible endpoints
+- [Mobile Access](/docs/mobile) - Review and approve changes from your phone

@@ -1,0 +1,13 @@
+diff --git a/dist/flock.js b/dist/flock.js
+index 4858b7b87ee3c0de0b272c764689ba25c80b26fe..3f62b8d718e64038cd27a582327efb344adf4040 100644
+--- a/dist/flock.js
++++ b/dist/flock.js
+@@ -100,7 +100,7 @@ function createFlockAdapter(flock) {
+ 		emptyVersion: () => ({}),
+ 		mergeVersions,
+ 		flushLocalExports: () => localExportQueue,
+-		exportSnapshot: () => flock.exportFile(),
++		exportSnapshot: () => flock.exportFileDeprecatedV1(),
+ 		applySnapshot: (snapshot) => {
+ 			flock.importFile(snapshot);
+ 			return flock.version();

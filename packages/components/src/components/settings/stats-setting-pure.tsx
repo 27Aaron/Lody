@@ -1,0 +1,298 @@
+import { lazy, Suspense, type ReactNode } from 'react';
+import NumberFlow from '@number-flow/react';
+import { useTranslation } from 'react-i18next';
+import { Coins, DollarSign } from 'lucide-react';
+import { cn } from '@/lib/utils';
+import {
+  UsageStackedAreaChart,
+  type StackedAreaBucket,
+  type StackedAreaSeriesMarkerRender,
+} from './usage-stacked-area-chart';
+import type {
+  SettingsUsageCalendarData,
+  SettingsUsageDayData,
+  SettingsUsageRange,
+} from './settings-data-cache';
+
+export type StatsSettingsViewProps = {
+  workspaceName?: string;
+  range: SettingsUsageRange;
+  onRangeChange: (range: SettingsUsageRange) => void;
+  /** True once the timeline for the active range has loaded. */
+  ready: boolean;
+  totals: { tokens: number; costUSD: number } | null;
+  byModelBuckets: StackedAreaBucket[];
+  byMemberBuckets: StackedAreaBucket[];
+  usageCalendar?: SettingsUsageCalendarData;
+  /** Breakdown for the day selected in the calendar, when one is open. */
+  usageDay?: SettingsUsageDayData;
+  usageDayLoading?: boolean;
+  onSelectedUsageDayChange?: (dayStartMs: number | null) => void;
+  /** null when no workspace is selected. */
+  workspaceId: string | null;
+  /** True while the active-range timeline is still resolving. */
+  loading: boolean;
+  /** Optional legend/tooltip markers for the by-model chart. */
+  renderModelSeriesMarker?: StackedAreaSeriesMarkerRender;
+  /** Optional legend/tooltip markers for the by-member chart. */
+  renderMemberSeriesMarker?: StackedAreaSeriesMarkerRender;
+  /** Color series names with chart stroke colors (model chart). */
+  tintModelSeriesLabel?: boolean;
+  /** Color series names with chart stroke colors (member chart). */
+  tintMemberSeriesLabel?: boolean;
+  /**
+   * USD fraction digits for the cost KPI. Defaults to 2. Landing demos pass 0
+   * so large totals ($23,740) fit the tile without clipping.
+   */
+  costFractionDigits?: number;
+};
+
+const RANGE_ORDER: SettingsUsageRange[] = ['day', 'week', 'month', 'total'];
+
+// The calendar's optional skyline view uses React Three Fiber. Keep it out of
+// consumers that only render the summary charts (including the public landing)
+// so it cannot pull a second React renderer into their initial hydration path.
+const UsageCalendarVisualization = lazy(async () => {
+  const module = await import('./usage-calendar-visualization');
+  return { default: module.UsageCalendarVisualization };
+});
+
+export function formatTokens(value: number): string {
+  return new Intl.NumberFormat().format(Math.round(value));
+}
+
+export function formatTokensCompact(value: number): string {
+  const abs = Math.abs(value);
+  const sign = value < 0 ? '-' : '';
+  const trim = (input: string) =>
+    input.includes('.') ? input.replace(/0+$/, '').replace(/\.$/, '') : input;
+  if (abs >= 1_000_000) {
+    const scaled = abs / 1_000_000;
+    const digits = scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2;
+    return `${sign}${trim(scaled.toFixed(digits))}M`;
+  }
+  if (abs >= 1_000) {
+    const scaled = abs / 1_000;
+    const digits = scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2;
+    return `${sign}${trim(scaled.toFixed(digits))}K`;
+  }
+  return `${sign}${formatTokens(abs)}`;
+}
+
+export function formatUSD(value: number): string {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
+type NumberFlowFormat = {
+  notation?: 'standard' | 'compact';
+  compactDisplay?: 'short' | 'long';
+  style?: 'decimal' | 'currency' | 'percent' | 'unit';
+  currency?: string;
+  currencyDisplay?: 'code' | 'symbol' | 'narrowSymbol' | 'name';
+  minimumFractionDigits?: number;
+  maximumFractionDigits?: number;
+};
+
+function CountUpValue({
+  value,
+  ready,
+  format,
+  suffix,
+}: {
+  value: number;
+  ready: boolean;
+  format: NumberFlowFormat;
+  suffix?: string;
+}) {
+  if (!ready) return <>—</>;
+  return <NumberFlow value={value} locales="en-US" format={format} suffix={suffix} />;
+}
+
+function StatTile({
+  label,
+  className,
+  children,
+  footer,
+}: {
+  label: string;
+  className?: string;
+  children: ReactNode;
+  footer?: ReactNode;
+}) {
+  return (
+    <div
+      className={cn(
+        '@container relative flex min-w-0 flex-col gap-3 overflow-hidden rounded-lg border border-border/70 bg-card/60 p-4',
+        className
+      )}
+    >
+      <p className="text-[0.8rem] font-medium text-muted-foreground">{label}</p>
+      <div className="mt-auto">
+        <div className="min-w-0 whitespace-nowrap text-3xl font-bold leading-none tracking-tight tabular-nums text-foreground text-[clamp(1.5rem,16cqw,2.75rem)]">
+          {children}
+        </div>
+        {footer ? <div className="mt-2">{footer}</div> : null}
+      </div>
+    </div>
+  );
+}
+
+function RangeSelector({
+  range,
+  onRangeChange,
+}: {
+  range: SettingsUsageRange;
+  onRangeChange: (range: SettingsUsageRange) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div
+      role="tablist"
+      aria-label={t('workspace.usage.range')}
+      className="inline-flex items-center gap-0.5 rounded-lg border border-border/60 bg-muted/40 p-0.5"
+    >
+      {RANGE_ORDER.map((value) => {
+        const active = value === range;
+        return (
+          <button
+            key={value}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onRangeChange(value)}
+            className={cn(
+              'rounded-md px-3 py-1 text-xs font-medium transition-colors',
+              active
+                ? 'bg-background text-foreground shadow-xs'
+                : 'text-muted-foreground hover:text-foreground'
+            )}
+          >
+            {t(`workspace.usage.window.${value}.short`)}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+export function StatsSettingsView({
+  workspaceName,
+  range,
+  onRangeChange,
+  ready,
+  totals,
+  byModelBuckets,
+  byMemberBuckets,
+  usageCalendar,
+  usageDay,
+  usageDayLoading,
+  onSelectedUsageDayChange,
+  workspaceId,
+  loading,
+  renderModelSeriesMarker,
+  renderMemberSeriesMarker,
+  tintModelSeriesLabel,
+  tintMemberSeriesLabel,
+  costFractionDigits = 2,
+}: StatsSettingsViewProps) {
+  const { t } = useTranslation();
+  const windowCaption = t(`workspace.usage.window.${range}.long`);
+  const costDigits = Math.max(0, Math.min(2, costFractionDigits));
+  return (
+    <div className="space-y-4">
+      {/* Page header — no redundant "Usage" title (the settings tab already
+         says Usage). Workspace name + the time-window selector. */}
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="truncate text-lg font-semibold leading-tight text-foreground">
+            {workspaceName || t('workspace.usage.title')}
+          </h2>
+          <p className="mt-0.5 text-xs text-muted-foreground">{windowCaption}</p>
+        </div>
+        <RangeSelector range={range} onRangeChange={onRangeChange} />
+      </div>
+
+      {/* KPI overview band — 2 cards with icon watermarks. */}
+      <div className="grid grid-cols-2 gap-3">
+        <StatTile
+          label={t('workspace.usage.tokens')}
+          footer={
+            <Coins className="absolute -bottom-8 -right-8 h-60 w-60 text-muted-foreground/10 dark:text-muted-foreground/5" />
+          }
+        >
+          <CountUpValue
+            value={(totals?.tokens ?? 0) / 1_000_000}
+            ready={ready}
+            format={{ maximumFractionDigits: 1 }}
+            suffix="M"
+          />
+        </StatTile>
+        <StatTile
+          label={t('workspace.usage.cost')}
+          footer={
+            <DollarSign className="absolute -bottom-5 -right-10 h-50 w-50 text-muted-foreground/10 dark:text-muted-foreground/5 rotate-[-25deg]" />
+          }
+        >
+          <CountUpValue
+            value={totals?.costUSD ?? 0}
+            ready={ready}
+            format={{
+              style: 'currency',
+              currency: 'USD',
+              currencyDisplay: 'narrowSymbol',
+              minimumFractionDigits: costDigits,
+              maximumFractionDigits: costDigits,
+            }}
+          />
+        </StatTile>
+      </div>
+
+      {usageCalendar ? (
+        <Suspense fallback={null}>
+          <UsageCalendarVisualization
+            calendar={usageCalendar}
+            workspaceName={workspaceName}
+            dayDetail={usageDay}
+            dayDetailLoading={usageDayLoading}
+            onSelectedDayChange={onSelectedUsageDayChange}
+          />
+        </Suspense>
+      ) : null}
+
+      <UsageStackedAreaChart
+        title={t('workspace.usage.byModel')}
+        buckets={byModelBuckets}
+        emptyText={t('workspace.usage.empty', 'No usage data in this range')}
+        valueFormatter={formatTokensCompact}
+        tooltipValueFormatter={formatTokensCompact}
+        renderSeriesMarker={renderModelSeriesMarker}
+        tintSeriesLabel={tintModelSeriesLabel}
+      />
+      <UsageStackedAreaChart
+        title={t('workspace.usage.byUser')}
+        buckets={byMemberBuckets}
+        emptyText={t('workspace.usage.empty', 'No usage data in this range')}
+        valueFormatter={formatTokensCompact}
+        tooltipValueFormatter={formatTokensCompact}
+        renderSeriesMarker={renderMemberSeriesMarker}
+        tintSeriesLabel={tintMemberSeriesLabel}
+      />
+
+      {!workspaceId && (
+        <div className="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">
+          {t('workspace.usage.workspaceRequired', 'Select a workspace to view usage')}
+        </div>
+      )}
+      {workspaceId && loading && (
+        <div className="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">
+          {t('workspace.usage.loading', 'Loading usage data...')}
+        </div>
+      )}
+    </div>
+  );
+}

@@ -1,0 +1,273 @@
+import { app, BrowserWindow, safeStorage } from 'electron'
+import { electronApp, optimizer } from '@electron-toolkit/utils'
+import dns from 'node:dns'
+import icon from '../../resources/icon.png?asset'
+import { acquireSingleInstanceLock, registerOpenUrlHandler } from './deep-link'
+import { registerLodyProtocolClient } from './protocol-client'
+import { registerIpcHandlers } from './ipc/register-handlers'
+import { registerPublicBrowserHandlers } from './ipc/public-browser-handlers'
+import { openMainWindow, openOrFocusMainWindow } from './window'
+import { getMainWindow, setAppQuitting, setWindowsTrayAvailable } from './window-state'
+import { CliService } from './services/cli-service'
+import { TerminalRelay } from './services/terminal-relay'
+import { LoroDataPlaneRelay } from './services/loro-data-plane-relay'
+import { NotificationService } from './services/notification-service'
+import { AuthService } from './services/auth-service'
+import { authClient } from './auth'
+import { AppUpdaterService } from './services/app-updater-service'
+import { GlobalShortcutsService } from './services/global-shortcuts-service'
+import { WindowsTrayService } from './services/windows-tray-service'
+import {
+  WindowBadgeService,
+  bindWindowBadgeToBrowserWindows
+} from './services/window-badge-service'
+import { setupApplicationMenu } from './menu'
+import { isRendererReloadShortcut } from './reload-shortcut'
+import {
+  flushElectronMainErrorReporting,
+  installElectronMainErrorReporting
+} from './posthog-error-reporting'
+import { GLOBAL_SHORTCUT_TRIGGERED_CHANNEL } from '@lody/shared/electron-ipc'
+import { PublicBrowserService } from './services/public-browser-service'
+import { desktopInstallationProfile, isLocalPlatform } from './platform'
+import { mainPlatformKind } from './platform'
+import { getLocalLoroDataPlaneSocketPath } from '@lody/shared/node/local-ipc'
+import { getLocalTerminalSocketPath } from '@lody/shared/node/local-terminal'
+
+// On Linux, Electron/Chromium auto-detects the keyring backend for GNOME and KDE
+// desktops, but falls back to basic-text (unencrypted) on other desktops like
+// Sway, Hyprland, Niri, etc. — even when gnome-keyring-daemon is running and the
+// org.freedesktop.secrets D-Bus service is available.
+// Default to gnome-libsecret only when no --password-store flag was explicitly
+// provided AND the desktop is not one Chromium already handles.
+// Chromium auto-selects gnome-libsecret for: GNOME, Unity, Cinnamon, XFCE,
+// Pantheon, Deepin, UKUI; and kwallet for KDE.
+if (
+  process.platform === 'linux' &&
+  !process.argv.some((arg) => arg.startsWith('--password-store'))
+) {
+  const desktop = (process.env.XDG_CURRENT_DESKTOP ?? '').toUpperCase()
+  const chromiumHandled = [
+    'GNOME',
+    'KDE',
+    'UNITY',
+    'CINNAMON',
+    'XFCE',
+    'PANTHEON',
+    'DEEPIN',
+    'UKUI'
+  ]
+  const isAutoDetected = chromiumHandled.some((d) => desktop.includes(d))
+  if (!isAutoDetected) {
+    app.commandLine.appendSwitch('password-store', 'gnome-libsecret')
+  }
+}
+
+const LODY_PROTOCOL = desktopInstallationProfile.desktopProtocol
+const PRODUCT_NAME = desktopInstallationProfile.desktopProductName
+const DEEP_LINK_DEBUG_PREFIX = '[electron-auth-debug]'
+
+function logDeepLinkDebug(message: string, meta?: Record<string, unknown>): void {
+  if (meta) {
+    console.info(DEEP_LINK_DEBUG_PREFIX, message, meta)
+    return
+  }
+  console.info(DEEP_LINK_DEBUG_PREFIX, message)
+}
+
+app.setName(PRODUCT_NAME)
+if (!isLocalPlatform()) {
+  installElectronMainErrorReporting()
+}
+
+try {
+  dns.setDefaultResultOrder('ipv4first')
+} catch (error) {
+  console.warn('[Auth] Failed to set DNS result order to ipv4first', error)
+}
+
+if (!isLocalPlatform()) {
+  authClient.setupMain({
+    csp: false,
+    bridges: true,
+    scheme: false,
+    // Pin the target to the main window so Better Auth events always reach the
+    // visible renderer that owns login state and CLI restart.
+    getWindow: () => getMainWindow()
+  })
+  logDeepLinkDebug('authClient.setupMain initialized', {
+    csp: false,
+    bridges: true,
+    scheme: false
+  })
+}
+
+function createGlobalShortcutsService(iconPath: string): GlobalShortcutsService {
+  return new GlobalShortcutsService(
+    [
+      {
+        id: 'app.focus',
+        handler: () => {
+          openOrFocusMainWindow({ icon: iconPath })
+        }
+      }
+    ],
+    {
+      onTriggered: (payload) => {
+        const target =
+          getMainWindow() ?? BrowserWindow.getAllWindows().find((window) => !window.isDestroyed())
+        target?.webContents.send(GLOBAL_SHORTCUT_TRIGGERED_CHANNEL, payload)
+      }
+    }
+  )
+}
+
+registerLodyProtocolClient({
+  protocol: LODY_PROTOCOL,
+  productName: PRODUCT_NAME,
+  log: logDeepLinkDebug
+})
+
+const hasSingleInstanceLock = acquireSingleInstanceLock()
+logDeepLinkDebug('single instance lock status evaluated', { hasSingleInstanceLock })
+if (hasSingleInstanceLock) {
+  registerOpenUrlHandler()
+}
+
+if (hasSingleInstanceLock) {
+  void app.whenReady().then(() => {
+    logDeepLinkDebug('app.whenReady resolved', {
+      isDefaultProtocolClient: app.isDefaultProtocolClient(LODY_PROTOCOL),
+      protocol: LODY_PROTOCOL
+    })
+    const authService = new AuthService()
+    const cliService = new CliService({
+      resolveBootstrapSession: async () => {
+        return await authService.getBootstrapSession()
+      }
+    })
+    const terminalRelay = new TerminalRelay(getLocalTerminalSocketPath(mainPlatformKind))
+    const loroDataPlaneRelay = new LoroDataPlaneRelay(
+      getLocalLoroDataPlaneSocketPath(mainPlatformKind)
+    )
+
+    const appUpdaterService = new AppUpdaterService({ enabled: !isLocalPlatform() })
+    const notificationService = new NotificationService(() => getMainWindow())
+    const windowsTrayService = new WindowsTrayService({
+      iconPath: icon,
+      productName: PRODUCT_NAME,
+      openOrFocusMainWindow: () => openOrFocusMainWindow({ icon })
+    })
+    const windowBadgeService = new WindowBadgeService()
+    const publicBrowserService = new PublicBrowserService(() => getMainWindow())
+    bindWindowBadgeToBrowserWindows(windowBadgeService)
+
+    if (!isLocalPlatform() && !safeStorage.isEncryptionAvailable()) {
+      const isLinux = process.platform === 'linux'
+      const hint = isLinux
+        ? 'gnome-libsecret was already configured automatically. ' +
+          'Ensure gnome-keyring-daemon is running, or try launching with ' +
+          '--password-store=kwallet5 or --password-store=basic'
+        : 'Check that your OS keychain is configured and accessible.'
+      console.warn(
+        `[Auth] safeStorage encryption is not available. Authentication may fail. ${hint}`
+      )
+    }
+
+    electronApp.setAppUserModelId(desktopInstallationProfile.desktopAppId)
+    const globalShortcutsService = createGlobalShortcutsService(icon)
+    globalShortcutsService.registerAll()
+    app.once('will-quit', () => globalShortcutsService.dispose())
+    app.on('browser-window-created', (_, window) => {
+      optimizer.watchWindowShortcuts(window)
+      // electron-toolkit deliberately blocks the production reload shortcut.
+      // Restore the normal desktop-app behavior requested by the user while
+      // leaving Cmd/Ctrl+Shift+R and DevTools handling unchanged.
+      window.webContents.on('before-input-event', (event, input) => {
+        if (isRendererReloadShortcut(input, process.platform)) {
+          event.preventDefault()
+          window.webContents.reload()
+        }
+      })
+    })
+
+    registerIpcHandlers({
+      cliService,
+      terminalRelay,
+      loroDataPlaneRelay,
+      appUpdaterService,
+      notificationService,
+      authService,
+      windowBadgeService,
+      globalShortcutsService,
+      getMainWindow
+    })
+    registerPublicBrowserHandlers({ service: publicBrowserService, getMainWindow })
+
+    setupApplicationMenu({
+      appUpdaterService,
+      getMainWindow,
+      openOrFocusMainWindow: () => openOrFocusMainWindow({ icon })
+    })
+    openMainWindow({ icon })
+    setWindowsTrayAvailable(windowsTrayService.start())
+    cliService.autoStart(getMainWindow()?.webContents ?? undefined)
+    appUpdaterService.start()
+
+    app.on('activate', () => {
+      const windows = BrowserWindow.getAllWindows()
+      if (windows.length === 0) {
+        openMainWindow({ icon })
+        return
+      }
+      openOrFocusMainWindow({ icon })
+    })
+
+    let cliShutdownComplete = false
+    app.on('before-quit', (event) => {
+      setAppQuitting(true)
+      setWindowsTrayAvailable(false)
+      windowsTrayService.stop()
+      windowBadgeService.reset()
+      terminalRelay.destroy()
+      loroDataPlaneRelay.destroy()
+      appUpdaterService.stop()
+      publicBrowserService.destroyAll()
+
+      if (cliShutdownComplete) {
+        // Cleanup already ran on the first pass; let this quit proceed.
+        cliService.killAllProcesses()
+        return
+      }
+
+      // Defer the quit until the embedded CLI has actually exited. Killing it
+      // fire-and-forget would let the app exit while the CLI is still shutting
+      // down, orphaning it holding the local ports + terminal socket and breaking
+      // the next launch. shutdownForQuit() SIGTERMs, waits briefly, then SIGKILLs.
+      event.preventDefault()
+      void Promise.allSettled([
+        cliService.shutdownForQuit(),
+        flushElectronMainErrorReporting()
+      ]).finally(() => {
+        cliShutdownComplete = true
+        app.quit()
+      })
+    })
+
+    process.on('exit', () => {
+      setWindowsTrayAvailable(false)
+      windowsTrayService.stop()
+      terminalRelay.destroy()
+      loroDataPlaneRelay.destroy()
+      cliService.killAllProcesses()
+      appUpdaterService.stop()
+      publicBrowserService.destroyAll()
+    })
+  })
+}
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') {
+    app.quit()
+  }
+})

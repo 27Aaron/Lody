@@ -1,0 +1,6 @@
+diff --git a/dist/flock.js b/dist/flock.js
+--- a/dist/flock.js
++++ b/dist/flock.js
+@@ -103,1 +103,1 @@ function createFlockAdapter(flock) {
+-		exportSnapshot: () => flock.exportFile(),
++		exportSnapshot: () => flock.exportFileDeprecatedV1(),

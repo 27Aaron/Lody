@@ -1,0 +1,2287 @@
+import { describe, expect, it, vi } from 'vitest';
+import { Effect } from 'effect';
+import type { Logger } from '../src/utils/logger';
+import { SessionDispatchWatcher } from '../src/session/session-dispatch-watcher';
+import type { SessionExecutionService } from '../src/session/session-execution-service';
+import type { LoroDocumentManager } from '../src/lib/loro/doc';
+import {
+  buildMissingEmail,
+  type MessageContent,
+  type SessionHistoryInput,
+  type SessionId,
+  type SessionMeta,
+  type WorkspaceId,
+} from '@lody/shared';
+
+const createSilentLogger = (): Logger => ({
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+  success: () => {},
+  debug: () => {},
+  setLevel: () => {},
+  child: () => createSilentLogger(),
+  close: async () => {},
+});
+
+const createAllowMachineAccess = () => vi.fn(async () => ({ outcome: 'allowed' as const }));
+
+type WatcherDeps = ConstructorParameters<typeof SessionDispatchWatcher>[0];
+
+const createTestUserResolver = () => ({
+  resolve: vi.fn(async (userId: string) => ({
+    id: userId,
+    name: `${userId}@lody.test`,
+    email: `${userId}@lody.test`,
+  })),
+  clear: vi.fn(),
+});
+
+const addPreparedDispatchShim = (
+  executionService: SessionExecutionService
+): SessionExecutionService => {
+  const service = executionService as SessionExecutionService & {
+    dispatchPreparedSessionTurn?: (options: {
+      dispatchSource: string;
+      accessPromise: Promise<{ outcome: string }>;
+      requestPromise: Promise<{ mode: 'create' | 'continue'; request: unknown }>;
+      onAccessAllowed: () => void | Promise<void>;
+      onAccessDenied: (access: { outcome: 'denied'; reason: unknown }) => void | Promise<void>;
+      onAccessIndeterminate: (access: {
+        outcome: 'indeterminate';
+        error?: unknown;
+      }) => void | Promise<void>;
+    }) => Promise<void>;
+    startSession?: (request: unknown, options?: unknown) => Promise<void>;
+    continueSession?: (request: unknown, options?: unknown) => Promise<void>;
+    tryAcquireSessionRewriteConflictLease?: () => (() => void) | null;
+  };
+  service.tryAcquireSessionRewriteConflictLease ??= () => () => {};
+  if (service.dispatchPreparedSessionTurn) {
+    return executionService;
+  }
+  service.dispatchPreparedSessionTurn = vi.fn(async (options) => {
+    const access = await options.accessPromise;
+    if (access.outcome === 'denied') {
+      await options.onAccessDenied(access as { outcome: 'denied'; reason: unknown });
+      return;
+    }
+    if (access.outcome === 'indeterminate') {
+      await options.onAccessIndeterminate(access as { outcome: 'indeterminate'; error?: unknown });
+      return;
+    }
+    await options.onAccessAllowed();
+    const builtRequest = await options.requestPromise;
+    if (builtRequest.mode === 'create') {
+      await service.startSession?.(builtRequest.request, {
+        dispatchSource: options.dispatchSource,
+      });
+      return;
+    }
+    await service.continueSession?.(builtRequest.request, {
+      dispatchSource: options.dispatchSource,
+    });
+  });
+  return service;
+};
+
+const createWatcher = (deps: WatcherDeps): SessionDispatchWatcher =>
+  new SessionDispatchWatcher({
+    userResolver: createTestUserResolver(),
+    ...deps,
+    executionService: addPreparedDispatchShim(deps.executionService),
+  });
+
+const runMaybeHandleSession = (watcher: SessionDispatchWatcher, sessionId: SessionId) =>
+  (
+    watcher as unknown as {
+      maybeHandleSession: (sessionId: SessionId) => Promise<void>;
+    }
+  ).maybeHandleSession(sessionId);
+
+const flushMicrotasks = async (count = 8) => {
+  for (let i = 0; i < count; i++) {
+    await Promise.resolve();
+  }
+};
+
+const createDeferred = () => {
+  let resolve!: () => void;
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+};
+
+describe('SessionDispatchWatcher', () => {
+  const createPendingUserTurn = (id: string, text: string): SessionHistoryInput => ({
+    id,
+    role: 'user',
+    items: [{ type: 'text', text }] satisfies MessageContent[],
+    timestamp: new Date().toISOString(),
+    status: 'pending',
+    read: false,
+    userId: 'user-1',
+  });
+
+  it('processes pending user turns for an idle owned session', async () => {
+    const continueSession = vi.fn(async () => {});
+    const startSession = vi.fn(async () => {});
+    const cancelSession = vi.fn(async () => ({ success: true }));
+    const sessionId = 'session-1' as SessionId;
+    const roomId = `session-${sessionId}`;
+
+    const sessionDoc = {
+      mirror: {
+        subscribe: vi.fn(() => vi.fn()),
+      },
+      getMetaState: vi.fn(async () => ({
+        id: sessionId,
+        machineId: 'machine-1',
+        userId: 'user-1',
+        createdAt: new Date().toISOString(),
+        cliType: 'builtin',
+        agentType: 'codex',
+        status: { type: 'idle' },
+        parentSessionId: 'parent-session-1',
+      })),
+      getHistory: vi.fn(async () => [createPendingUserTurn('turn-1', 'hello')]),
+      updateHistory: vi.fn(async () => {}),
+      setStatus: vi.fn(async () => {}),
+      waitForRemoteSync: vi.fn(async () => {}),
+    };
+
+    const workspaceDocument = {
+      repo: {
+        getMeta: () => ({
+          scan: vi.fn(async () => [{ key: ['e', roomId], value: true }]),
+        }),
+        getDocMeta: vi.fn(async () => ({
+          meta: {
+            id: sessionId,
+            machineId: 'machine-1',
+            userId: 'user-1',
+            createdAt: new Date().toISOString(),
+            cliType: 'builtin',
+            agentType: 'codex',
+            status: { type: 'idle' },
+            parentSessionId: 'parent-session-1',
+          },
+        })),
+        watch: vi.fn(() => ({ unsubscribe: vi.fn() })),
+      },
+      getOrCreateSessionDoc: vi.fn(async () => sessionDoc),
+      onMetaRoomSynced: vi.fn(() => vi.fn()),
+    } as unknown as LoroDocumentManager;
+
+    const watcher = createWatcher({
+      logger: createSilentLogger(),
+      machineId: 'machine-1',
+      workspaceId: 'workspace-1' as WorkspaceId,
+      workspaceDocument,
+      executionService: {
+        getExecutionSnapshot: vi.fn(() => ({
+          hasActiveTurn: false,
+          hasBlockingPendingCreate: false,
+          hasReusableSession: false,
+        })),
+        continueSession,
+        startSession,
+        cancelSession,
+      } as unknown as SessionExecutionService,
+      canUseMachine: createAllowMachineAccess(),
+    });
+
+    await watcher.start();
+
+    await vi.waitFor(
+      () => {
+        expect(startSession).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 3_000 }
+    );
+    expect(startSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'session/create',
+        sessionId,
+        userTurnId: 'turn-1',
+        parentSessionId: 'parent-session-1',
+      }),
+      { dispatchSource: 'crdt' }
+    );
+  });
+
+  it('does not block pure chat dispatch on remote user profile lookup', async () => {
+    const continueSession = vi.fn(async () => {});
+    const startSession = vi.fn(async () => {});
+    const cancelSession = vi.fn(async () => ({ success: true }));
+    const sessionId = 'session-pure-chat-user-lookup' as SessionId;
+    const userId = 'user-1';
+    const sessionMeta: SessionMeta = {
+      id: sessionId,
+      machineId: 'machine-1',
+      userId,
+      createdAt: new Date().toISOString(),
+      cliType: 'builtin',
+      agentType: 'codex',
+      status: { type: 'idle' },
+      acpSessionId: 'acp-existing',
+    };
+
+    const sessionDoc = {
+      mirror: {
+        subscribe: vi.fn(() => vi.fn()),
+      },
+      getMetaState: vi.fn(async () => sessionMeta),
+      getHistory: vi.fn(async () => [createPendingUserTurn('turn-chat-1', 'hello')]),
+      updateHistory: vi.fn(async () => {}),
+      setStatus: vi.fn(async () => {}),
+      waitForRemoteSync: vi.fn(async () => {}),
+    };
+
+    const workspaceDocument = {
+      repo: {
+        getDocMeta: vi.fn(async () => ({ meta: sessionMeta })),
+        upsertDocMeta: vi.fn(async () => {}),
+        openFlockDoc: vi.fn(async () => ({
+          flock: { scan: () => [] },
+        })),
+      },
+      getOrCreateSessionDoc: vi.fn(async () => sessionDoc),
+      onMetaRoomSynced: vi.fn(() => vi.fn()),
+    } as unknown as LoroDocumentManager;
+    const userResolver = {
+      resolve: vi.fn(() => new Promise<never>(() => {})),
+      clear: vi.fn(),
+    };
+
+    const watcher = createWatcher({
+      logger: createSilentLogger(),
+      machineId: 'machine-1',
+      workspaceId: 'workspace-1' as WorkspaceId,
+      workspaceDocument,
+      executionService: {
+        getExecutionSnapshot: vi.fn(() => ({
+          hasActiveTurn: false,
+          hasBlockingPendingCreate: false,
+          hasReusableSession: true,
+        })),
+        continueSession,
+        startSession,
+        cancelSession,
+      } as unknown as SessionExecutionService,
+      canUseMachine: createAllowMachineAccess(),
+      userResolver,
+    });
+
+    await runMaybeHandleSession(watcher, sessionId);
+
+    expect(userResolver.resolve).toHaveBeenCalledWith(userId);
+    expect(continueSession).toHaveBeenCalledTimes(1);
+    expect(continueSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'session/chat',
+        sessionId,
+        userTurnId: 'turn-chat-1',
+        userName: buildMissingEmail('lody', userId),
+        userEmail: buildMissingEmail('lody', userId),
+      }),
+      { dispatchSource: 'crdt' }
+    );
+    expect(startSession).not.toHaveBeenCalled();
+  });
+
+  it('dispatches a stashed RPC turn before its history entry syncs', async () => {
+    const continueSession = vi.fn(async () => {});
+    const startSession = vi.fn(async () => {});
+    const cancelSession = vi.fn(async () => ({ success: true }));
+    const sessionId = 'session-rpc-push' as SessionId;
+    const sessionMeta = {
+      id: sessionId,
+      machineId: 'machine-1',
+      userId: 'user-1',
+      createdAt: new Date().toISOString(),
+      cliType: 'builtin',
+      agentType: 'codex',
+      status: { type: 'idle' as const },
+    };
+
+    const sessionDoc = {
+      mirror: {
+        subscribe: vi.fn(() => vi.fn()),
+      },
+      getMetaState: vi.fn(async () => sessionMeta),
+      getHistory: vi.fn(async () => []),
+      updateHistory: vi.fn(async () => {}),
+      setStatus: vi.fn(async () => {}),
+      waitForRemoteSync: vi.fn(async () => {}),
+    };
+
+    const workspaceDocument = {
+      repo: {
+        getDocMeta: vi.fn(async () => ({ meta: sessionMeta })),
+        upsertDocMeta: vi.fn(async () => {}),
+        watch: vi.fn(() => ({ unsubscribe: vi.fn() })),
+      },
+      getOrCreateSessionDoc: vi.fn(async () => sessionDoc),
+      onMetaRoomSynced: vi.fn(() => vi.fn()),
+    } as unknown as LoroDocumentManager;
+
+    const watcher = createWatcher({
+      logger: createSilentLogger(),
+      machineId: 'machine-1',
+      workspaceId: 'workspace-1' as WorkspaceId,
+      workspaceDocument,
+      executionService: {
+        getExecutionSnapshot: vi.fn(() => ({
+          hasActiveTurn: false,
+          hasBlockingPendingCreate: false,
+          hasReusableSession: false,
+        })),
+        continueSession,
+        startSession,
+        cancelSession,
+      } as unknown as SessionExecutionService,
+      canUseMachine: createAllowMachineAccess(),
+    });
+
+    const disposition = await watcher.offerRpcTurn({
+      sessionId,
+      userTurnId: 'rpc-turn-1',
+      userId: 'user-1',
+      timestamp: new Date().toISOString(),
+      inputConfig: { prompt: 'hello from rpc' },
+    });
+    expect(disposition).toBe('accepted');
+
+    await vi.waitFor(
+      () => {
+        expect(startSession).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 3_000 }
+    );
+    expect(startSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'session/create',
+        sessionId,
+        userTurnId: 'rpc-turn-1',
+        acpSessionConfig: expect.objectContaining({ prompt: 'hello from rpc' }),
+      }),
+      { dispatchSource: 'rpc' }
+    );
+    // Offering the same turn again after dispatch is idempotent.
+    const again = await watcher.offerRpcTurn({
+      sessionId,
+      userTurnId: 'rpc-turn-1',
+      userId: 'user-1',
+      timestamp: new Date().toISOString(),
+      inputConfig: { prompt: 'hello from rpc' },
+    });
+    expect(again === 'accepted' || again === 'duplicate' || again === 'already-terminal').toBe(
+      true
+    );
+  });
+
+  it('preempts an in-flight Doc Room join when an RPC turn arrives', async () => {
+    const sessionId = 'session-rpc-during-doc-join' as SessionId;
+    const userTurnId = 'rpc-turn-during-doc-join';
+    const sessionMeta = {
+      id: sessionId,
+      machineId: 'machine-1',
+      userId: 'user-1',
+      createdAt: new Date().toISOString(),
+      cliType: 'builtin',
+      agentType: 'codex',
+      status: { type: 'idle' as const },
+      latestUserMsgId: userTurnId,
+    } satisfies SessionMeta;
+    let hasActiveTurn = false;
+    const startSession = vi.fn(async () => {
+      hasActiveTurn = true;
+    });
+    const waitUntilSynced = vi.fn(async () => true);
+    const ensureDocRoomJoined = vi.fn(() => new Promise<void>(() => {}));
+    const sessionDoc = {
+      mirror: {
+        subscribe: vi.fn(() => vi.fn()),
+      },
+      getMetaState: vi.fn(async () => sessionMeta),
+      getHistory: vi.fn(async () => []),
+      updateHistory: vi.fn(async () => {}),
+      setStatus: vi.fn(async () => {}),
+      waitForRemoteSync: vi.fn(async () => {}),
+      waitUntilSynced,
+      ensureDocRoomJoined,
+      getDocRoomStatus: vi.fn(() => 'joined' as const),
+      onDocRoomStatusChange: vi.fn(() => vi.fn()),
+      rejoinDocRoom: vi.fn(async () => {}),
+    };
+    const workspaceDocument = {
+      repo: {
+        getDocMeta: vi.fn(async () => ({ meta: sessionMeta })),
+        upsertDocMeta: vi.fn(async () => {}),
+      },
+      getOrCreateSessionDoc: vi.fn(async () => sessionDoc),
+    } as unknown as LoroDocumentManager;
+    const watcher = createWatcher({
+      logger: createSilentLogger(),
+      machineId: 'machine-1',
+      workspaceId: 'workspace-1' as WorkspaceId,
+      workspaceDocument,
+      executionService: {
+        getExecutionSnapshot: vi.fn(() => ({
+          hasActiveTurn,
+          hasBlockingPendingCreate: false,
+          hasReusableSession: false,
+        })),
+        continueSession: vi.fn(async () => {}),
+        startSession,
+        cancelSession: vi.fn(async () => ({ success: true })),
+      } as unknown as SessionExecutionService,
+      canUseMachine: createAllowMachineAccess(),
+    });
+
+    watcher.enqueueSessionCheck(sessionId);
+    await vi.waitFor(() => expect(ensureDocRoomJoined).toHaveBeenCalledTimes(1));
+
+    await expect(
+      watcher.offerRpcTurn({
+        sessionId,
+        userTurnId,
+        userId: 'user-1',
+        timestamp: new Date().toISOString(),
+        inputConfig: { prompt: 'arrived while joining' },
+      })
+    ).resolves.toBe('accepted');
+
+    await vi.waitFor(() => expect(startSession).toHaveBeenCalledTimes(1));
+    expect(startSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId,
+        userTurnId,
+        acpSessionConfig: expect.objectContaining({ prompt: 'arrived while joining' }),
+      }),
+      { dispatchSource: 'rpc' }
+    );
+    expect(waitUntilSynced).not.toHaveBeenCalled();
+    watcher.stop();
+  });
+
+  it('drops expired RPC stashes without touching session presence', async () => {
+    const sessionId = 'session-rpc-expired' as SessionId;
+    const otherSessionId = 'session-rpc-other' as SessionId;
+    const publishSessionPresence = vi.fn();
+    const clearSessionPresence = vi.fn();
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(0);
+    const workspaceDocument = {
+      repo: {
+        getDocMeta: vi.fn(async () => undefined),
+        watch: vi.fn(() => ({ unsubscribe: vi.fn() })),
+      },
+      getOrCreateSessionDoc: vi.fn(async () => ({
+        getMetaState: vi.fn(async () => undefined),
+      })),
+      onMetaRoomSynced: vi.fn(() => vi.fn()),
+      publishSessionPresence,
+      clearSessionPresence,
+    } as unknown as LoroDocumentManager;
+    const executionService = {
+      getExecutionSnapshot: vi.fn(() => ({
+        hasActiveTurn: false,
+        hasBlockingPendingCreate: false,
+        hasReusableSession: false,
+      })),
+      continueSession: vi.fn(async () => {}),
+      startSession: vi.fn(async () => {}),
+      cancelSession: vi.fn(async () => ({ success: true })),
+    } as unknown as SessionExecutionService;
+
+    const watcher = createWatcher({
+      logger: createSilentLogger(),
+      machineId: 'machine-1',
+      workspaceId: 'workspace-1' as WorkspaceId,
+      workspaceDocument,
+      executionService,
+      canUseMachine: createAllowMachineAccess(),
+    });
+
+    try {
+      await expect(
+        watcher.offerRpcTurn({
+          sessionId,
+          userTurnId: 'rpc-turn-expired',
+          userId: 'user-1',
+          timestamp: new Date().toISOString(),
+          inputConfig: { prompt: 'expired before meta sync' },
+        })
+      ).resolves.toBe('accepted');
+      expect(watcher.hasPendingDispatch(sessionId)).toBe(true);
+
+      const stashTtlMs =
+        (SessionDispatchWatcher as unknown as { RPC_TURN_STASH_TTL_MS: number })
+          .RPC_TURN_STASH_TTL_MS ?? 10 * 60_000;
+      nowSpy.mockReturnValue(stashTtlMs + 1);
+      expect(watcher.hasPendingDispatch(sessionId)).toBe(false);
+
+      await expect(
+        watcher.offerRpcTurn({
+          sessionId: otherSessionId,
+          userTurnId: 'rpc-turn-other',
+          userId: 'user-1',
+          timestamp: new Date().toISOString(),
+          inputConfig: { prompt: 'trigger sweep' },
+        })
+      ).resolves.toBe('accepted');
+
+      expect(publishSessionPresence).not.toHaveBeenCalled();
+      expect(clearSessionPresence).not.toHaveBeenCalled();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('repairs a late-arriving entry for an already-handled fast-path turn instead of re-dispatching', async () => {
+    const continueSession = vi.fn(async () => {});
+    const startSession = vi.fn(async () => {});
+    const cancelSession = vi.fn(async () => ({ success: true }));
+    const sessionId = 'session-rpc-repair' as SessionId;
+    const sessionMeta = {
+      id: sessionId,
+      machineId: 'machine-1',
+      userId: 'user-1',
+      createdAt: new Date().toISOString(),
+      cliType: 'builtin',
+      agentType: 'codex',
+      status: { type: 'idle' as const },
+      latestUserMsgId: 'turn-late',
+      lastHandledUserMsgId: 'turn-late',
+    };
+    let history: SessionHistoryInput[] = [createPendingUserTurn('turn-late', 'late entry')];
+
+    const sessionDoc = {
+      // No mirror: after the repair there is no dispatchable turn, and the
+      // legacy realtime wait resolves immediately without one.
+      mirror: undefined,
+      getMetaState: vi.fn(async () => sessionMeta),
+      getHistory: vi.fn(async () => history),
+      updateHistory: vi.fn(async (updater: (prev: typeof history) => typeof history) => {
+        history = updater(history);
+      }),
+      setStatus: vi.fn(async () => {}),
+      waitForRemoteSync: vi.fn(async () => {}),
+    };
+
+    const workspaceDocument = {
+      repo: {
+        getDocMeta: vi.fn(async () => ({ meta: sessionMeta })),
+        upsertDocMeta: vi.fn(async () => {}),
+      },
+      getOrCreateSessionDoc: vi.fn(async () => sessionDoc),
+    } as unknown as LoroDocumentManager;
+
+    const watcher = createWatcher({
+      logger: createSilentLogger(),
+      machineId: 'machine-1',
+      workspaceId: 'workspace-1' as WorkspaceId,
+      workspaceDocument,
+      executionService: {
+        getExecutionSnapshot: vi.fn(() => ({
+          hasActiveTurn: false,
+          hasBlockingPendingCreate: false,
+          hasReusableSession: false,
+        })),
+        getTerminalUserTurnStatusWithoutEntry: vi.fn(() => 'handled' as const),
+        clearTerminalUserTurnStatusWithoutEntry: vi.fn(),
+        continueSession,
+        startSession,
+        cancelSession,
+      } as unknown as SessionExecutionService,
+      canUseMachine: createAllowMachineAccess(),
+    });
+
+    await runMaybeHandleSession(watcher, sessionId);
+    await flushMicrotasks();
+
+    expect(startSession).not.toHaveBeenCalled();
+    expect(continueSession).not.toHaveBeenCalled();
+    expect(history[0]?.status).toBe('handled');
+  });
+
+  it('repairs a late entry to failed (not handled) when the handled pointer advanced but no completed assistant entry exists', async () => {
+    // Restart scenario: a denied/canceled fast-path turn advanced
+    // lastHandledUserMsgId, then the CLI restarted (in-memory terminal record
+    // lost) before the pending user entry synced. Without a completed assistant
+    // entry, the turn did NOT succeed, so the late entry must become 'failed',
+    // never 'handled', and must not re-dispatch.
+    const continueSession = vi.fn(async () => {});
+    const startSession = vi.fn(async () => {});
+    const cancelSession = vi.fn(async () => ({ success: true }));
+    const sessionId = 'session-restart-denied' as SessionId;
+    const sessionMeta = {
+      id: sessionId,
+      machineId: 'machine-1',
+      userId: 'user-1',
+      createdAt: new Date().toISOString(),
+      cliType: 'builtin',
+      agentType: 'codex',
+      status: { type: 'idle' as const },
+      latestUserMsgId: 'turn-denied',
+      lastHandledUserMsgId: 'turn-denied',
+    };
+    let history: SessionHistoryInput[] = [createPendingUserTurn('turn-denied', 'denied entry')];
+
+    const sessionDoc = {
+      mirror: undefined,
+      getMetaState: vi.fn(async () => sessionMeta),
+      getHistory: vi.fn(async () => history),
+      updateHistory: vi.fn(async (updater: (prev: typeof history) => typeof history) => {
+        history = updater(history);
+      }),
+      setStatus: vi.fn(async () => {}),
+      waitForRemoteSync: vi.fn(async () => {}),
+    };
+
+    const workspaceDocument = {
+      repo: {
+        getDocMeta: vi.fn(async () => ({ meta: sessionMeta })),
+        upsertDocMeta: vi.fn(async () => {}),
+      },
+      getOrCreateSessionDoc: vi.fn(async () => sessionDoc),
+    } as unknown as LoroDocumentManager;
+
+    const watcher = createWatcher({
+      logger: createSilentLogger(),
+      machineId: 'machine-1',
+      workspaceId: 'workspace-1' as WorkspaceId,
+      workspaceDocument,
+      executionService: {
+        getExecutionSnapshot: vi.fn(() => ({
+          hasActiveTurn: false,
+          hasBlockingPendingCreate: false,
+          hasReusableSession: false,
+        })),
+        // In-memory record lost across the restart.
+        getTerminalUserTurnStatusWithoutEntry: vi.fn(() => undefined),
+        clearTerminalUserTurnStatusWithoutEntry: vi.fn(),
+        continueSession,
+        startSession,
+        cancelSession,
+      } as unknown as SessionExecutionService,
+      canUseMachine: createAllowMachineAccess(),
+    });
+
+    await runMaybeHandleSession(watcher, sessionId);
+    await flushMicrotasks();
+
+    expect(startSession).not.toHaveBeenCalled();
+    expect(continueSession).not.toHaveBeenCalled();
+    expect(history[0]?.status).toBe('failed');
+  });
+
+  it('marks a pending turn failed when backend machine access denies it', async () => {
+    const continueSession = vi.fn(async () => {});
+    const startSession = vi.fn(async () => {});
+    const cancelSession = vi.fn(async () => ({ success: true }));
+    const sessionId = 'session-denied' as SessionId;
+    const roomId = `session-${sessionId}`;
+    let history = [createPendingUserTurn('turn-denied', 'hello')];
+    const upsertDocMeta = vi.fn(async () => {});
+
+    const sessionDoc = {
+      mirror: {
+        subscribe: vi.fn(() => vi.fn()),
+      },
+      getMetaState: vi.fn(async () => ({
+        id: sessionId,
+        machineId: 'machine-1',
+        userId: 'user-2',
+        createdAt: new Date().toISOString(),
+        cliType: 'builtin',
+        agentType: 'codex',
+        status: { type: 'idle' },
+      })),
+      getHistory: vi.fn(async () => history),
+      updateHistory: vi.fn(
+        async (updateFn: (items: SessionHistoryInput[]) => SessionHistoryInput[]) => {
+          history = updateFn(history);
+        }
+      ),
+      setStatus: vi.fn(async () => {}),
+      waitForRemoteSync: vi.fn(async () => {}),
+    };
+
+    const workspaceDocument = {
+      repo: {
+        getMeta: () => ({
+          scan: vi.fn(async () => [{ key: ['e', roomId], value: true }]),
+        }),
+        getDocMeta: vi.fn(async () => ({
+          meta: {
+            id: sessionId,
+            machineId: 'machine-1',
+            userId: 'user-2',
+            createdAt: new Date().toISOString(),
+            cliType: 'builtin',
+            agentType: 'codex',
+            status: { type: 'idle' },
+          },
+        })),
+        upsertDocMeta,
+        watch: vi.fn(() => ({ unsubscribe: vi.fn() })),
+      },
+      getOrCreateSessionDoc: vi.fn(async () => sessionDoc),
+      onMetaRoomSynced: vi.fn(() => vi.fn()),
+    } as unknown as LoroDocumentManager;
+
+    const canUseMachine = vi.fn(async () => ({
+      outcome: 'denied' as const,
+      reason: 'not_visible' as const,
+    }));
+    const recordChatFailure = vi.fn(async () => {});
+
+    const watcher = createWatcher({
+      logger: createSilentLogger(),
+      machineId: 'machine-1',
+      workspaceId: 'workspace-1' as WorkspaceId,
+      workspaceDocument,
+      executionService: {
+        getExecutionSnapshot: vi.fn(() => ({
+          hasActiveTurn: false,
+          hasBlockingPendingCreate: false,
+          hasReusableSession: false,
+        })),
+        continueSession,
+        startSession,
+        cancelSession,
+      } as unknown as SessionExecutionService,
+      canUseMachine,
+      recordChatFailure,
+    });
+
+    await watcher.start();
+
+    await vi.waitFor(() => {
+      expect(upsertDocMeta).toHaveBeenCalledTimes(1);
+    });
+
+    expect(startSession).not.toHaveBeenCalled();
+    expect(continueSession).not.toHaveBeenCalled();
+    expect(canUseMachine).toHaveBeenCalledWith({
+      sessionId,
+      requesterUserId: 'user-1',
+    });
+    expect(history[0]).toEqual(
+      expect.objectContaining({
+        id: 'turn-denied',
+        status: 'failed',
+        read: true,
+      })
+    );
+    expect(upsertDocMeta).toHaveBeenCalledWith(
+      roomId,
+      expect.objectContaining({
+        lastHandledUserMsgId: 'turn-denied',
+      })
+    );
+    // A definitive denial must be surfaced to the user, not silently marked
+    // "Delivered". The watcher emits a chat_failed notice for it.
+    expect(recordChatFailure).toHaveBeenCalledWith(
+      sessionDoc,
+      'machine_access_denied',
+      expect.any(String)
+    );
+  });
+
+  // Minimal harness for the access-verification paths. The pending turn is already
+  // in history, so dispatch reaches the canUseMachine gate without the 5-min wait.
+  const createAccessHarness = (opts: {
+    canUseMachine: WatcherDeps['canUseMachine'];
+    accessPolicy?: WatcherDeps['accessPolicy'];
+    currentUserId?: WatcherDeps['currentUserId'];
+    recordOwnerAccessSnapshot?: WatcherDeps['recordOwnerAccessSnapshot'];
+    recordChatFailure?: WatcherDeps['recordChatFailure'];
+    onFatalAuthFailure?: WatcherDeps['onFatalAuthFailure'];
+  }) => {
+    const startSession = vi.fn(async () => {});
+    const continueSession = vi.fn(async () => {});
+    const cancelSession = vi.fn(async () => ({ success: true }));
+    const sessionId = 'session-access' as SessionId;
+    const roomId = `session-${sessionId}`;
+    let history = [createPendingUserTurn('turn-x', 'hello')];
+    const upsertDocMeta = vi.fn(async () => {});
+    const meta = {
+      id: sessionId,
+      machineId: 'machine-1',
+      userId: 'user-1',
+      createdAt: new Date().toISOString(),
+      cliType: 'builtin',
+      agentType: 'codex',
+      status: { type: 'idle' },
+    };
+
+    const sessionDoc = {
+      mirror: { subscribe: vi.fn(() => vi.fn()) },
+      getMetaState: vi.fn(async () => meta),
+      getHistory: vi.fn(async () => history),
+      updateHistory: vi.fn(
+        async (updateFn: (items: SessionHistoryInput[]) => SessionHistoryInput[]) => {
+          history = updateFn(history);
+        }
+      ),
+      setStatus: vi.fn(async () => {}),
+      waitForRemoteSync: vi.fn(async () => {}),
+    };
+
+    const workspaceDocument = {
+      repo: {
+        getMeta: () => ({
+          scan: vi.fn(async () => [{ key: ['e', roomId], value: true }]),
+        }),
+        getDocMeta: vi.fn(async () => ({ meta })),
+        upsertDocMeta,
+        watch: vi.fn(() => ({ unsubscribe: vi.fn() })),
+      },
+      getOrCreateSessionDoc: vi.fn(async () => sessionDoc),
+      onMetaRoomSynced: vi.fn(() => vi.fn()),
+    } as unknown as LoroDocumentManager;
+
+    const watcher = createWatcher({
+      logger: createSilentLogger(),
+      machineId: 'machine-1',
+      workspaceId: 'workspace-1' as WorkspaceId,
+      ...(opts.currentUserId ? { currentUserId: opts.currentUserId } : {}),
+      workspaceDocument,
+      executionService: {
+        getExecutionSnapshot: vi.fn(() => ({
+          hasActiveTurn: false,
+          hasBlockingPendingCreate: false,
+          hasReusableSession: false,
+        })),
+        continueSession,
+        startSession,
+        cancelSession,
+      } as unknown as SessionExecutionService,
+      ...(opts.accessPolicy ? { accessPolicy: opts.accessPolicy } : {}),
+      ...(opts.recordOwnerAccessSnapshot
+        ? { recordOwnerAccessSnapshot: opts.recordOwnerAccessSnapshot }
+        : {}),
+      canUseMachine: opts.canUseMachine,
+      recordChatFailure: opts.recordChatFailure,
+      onFatalAuthFailure: opts.onFatalAuthFailure,
+    });
+
+    return {
+      watcher,
+      sessionId,
+      roomId,
+      startSession,
+      continueSession,
+      upsertDocMeta,
+      getHistory: () => history,
+    };
+  };
+
+  // NOTE: backoff/cap/escalation/timeout timing is covered deterministically by
+  // the TestClock unit tests in session-access-retry.test.ts. These watcher tests
+  // only verify the wiring: indeterminate forks a fiber (and doesn't drop the
+  // turn), and the fiber's outcome routes back to dispatch or a visible failure.
+  // The fiber's FIRST verify attempt is immediate (no backoff), so recover/deny
+  // flows complete without waiting on timers.
+
+  it('does not fail or retire a pending turn when access verification is indeterminate', async () => {
+    const canUseMachine = vi.fn(async () => ({
+      outcome: 'indeterminate' as const,
+      cause: 'network' as const,
+      error: 'fetch failed',
+    }));
+    const h = createAccessHarness({ canUseMachine });
+
+    await runMaybeHandleSession(h.watcher, h.sessionId);
+
+    // The user's message must NOT be dispatched, NOR dropped.
+    expect(h.startSession).not.toHaveBeenCalled();
+    expect(h.continueSession).not.toHaveBeenCalled();
+    // Turn stays `pending` → still dispatchable (the bug used to mark it `failed`).
+    expect(h.getHistory()[0]).toEqual(
+      expect.objectContaining({ id: 'turn-x', status: 'pending', read: false })
+    );
+    // Dispatch bookkeeping must NOT advance, or the turn would be retired forever.
+    expect(h.upsertDocMeta).not.toHaveBeenCalledWith(
+      h.roomId,
+      expect.objectContaining({ lastHandledUserMsgId: 'turn-x' })
+    );
+
+    h.watcher.stop(); // interrupt the background retry fiber
+  });
+
+  it('recovers and dispatches once access verification becomes available', async () => {
+    let calls = 0;
+    const canUseMachine = vi.fn(async () => {
+      calls += 1;
+      return calls === 1
+        ? { outcome: 'indeterminate' as const, cause: 'network' as const, error: 'fetch failed' }
+        : { outcome: 'allowed' as const };
+    });
+    const h = createAccessHarness({ canUseMachine });
+
+    // Inline verify #1 → indeterminate → forks a retry fiber whose first
+    // (immediate) attempt verifies allowed → re-enqueues → inline path dispatches.
+    await runMaybeHandleSession(h.watcher, h.sessionId);
+    await vi.waitFor(() => expect(h.startSession).toHaveBeenCalledTimes(1), { timeout: 3_000 });
+    expect(h.continueSession).not.toHaveBeenCalled();
+
+    h.watcher.stop();
+  });
+
+  it('dispatches owner-cached turns without blocking on remote access', async () => {
+    const canUseMachine = vi.fn(async () => ({
+      outcome: 'indeterminate' as const,
+      cause: 'network' as const,
+      error: 'fetch failed',
+    }));
+    const accessPolicy = {
+      decide: vi.fn(() => Effect.succeed({ outcome: 'allow' as const, source: 'owner-cached' })),
+    };
+    const h = createAccessHarness({
+      canUseMachine,
+      accessPolicy,
+      currentUserId: 'user-1',
+    });
+
+    await runMaybeHandleSession(h.watcher, h.sessionId);
+
+    expect(h.startSession).toHaveBeenCalledTimes(1);
+    expect(h.continueSession).not.toHaveBeenCalled();
+    // Dispatch itself must not wait on the remote check, but a background
+    // re-verification fires so online revocations still refresh the snapshot.
+    await vi.waitFor(() => expect(canUseMachine).toHaveBeenCalledTimes(1));
+
+    h.watcher.stop();
+  });
+
+  it('re-verifies an owner-cached dispatch against the real backend and clears the snapshot on deny (F1)', async () => {
+    // The dispatch-path call hits the owner fast-path (structural allow); the
+    // background recheck must set `forceBackendVerification` so the REAL
+    // backend verdict is observed — here a definitive deny, which must clear
+    // the optimistic-allow snapshot (D11) without failing the dispatched turn.
+    const canUseMachine = vi.fn(async (args: { forceBackendVerification?: boolean }) =>
+      args.forceBackendVerification
+        ? { outcome: 'denied' as const, reason: 'not_visible' as const }
+        : { outcome: 'allowed' as const }
+    );
+    const recordOwnerAccessSnapshot = vi.fn(async () => {});
+    const accessPolicy = {
+      decide: vi.fn(() => Effect.succeed({ outcome: 'allow' as const, source: 'owner-cached' })),
+    };
+    const h = createAccessHarness({
+      canUseMachine,
+      accessPolicy,
+      currentUserId: 'user-1',
+      recordOwnerAccessSnapshot,
+    });
+
+    await runMaybeHandleSession(h.watcher, h.sessionId);
+
+    // The owner-cached dispatch itself is never blocked by the recheck.
+    expect(h.startSession).toHaveBeenCalledTimes(1);
+    // The injected backend IS consulted (owner fast-path bypassed)...
+    await vi.waitFor(() =>
+      expect(canUseMachine).toHaveBeenCalledWith(
+        expect.objectContaining({ forceBackendVerification: true })
+      )
+    );
+    // ...and its definitive deny clears the cached allow.
+    await vi.waitFor(() => expect(recordOwnerAccessSnapshot).toHaveBeenCalledWith('denied'));
+    expect(recordOwnerAccessSnapshot).not.toHaveBeenCalledWith('allowed');
+
+    h.watcher.stop();
+  });
+
+  it('does not touch the snapshot when the owner recheck is indeterminate (offline)', async () => {
+    // Snapshot write discipline: only confirmed online verdicts may change the
+    // snapshot. Offline (indeterminate) rechecks must write nothing — the
+    // cached allow stays valid until a real backend verdict replaces it.
+    const canUseMachine = vi.fn(async () => ({
+      outcome: 'indeterminate' as const,
+      cause: 'network' as const,
+      error: 'fetch failed',
+    }));
+    const recordOwnerAccessSnapshot = vi.fn(async () => {});
+    const accessPolicy = {
+      decide: vi.fn(() => Effect.succeed({ outcome: 'allow' as const, source: 'owner-cached' })),
+    };
+    const h = createAccessHarness({
+      canUseMachine,
+      accessPolicy,
+      currentUserId: 'user-1',
+      recordOwnerAccessSnapshot,
+    });
+
+    await runMaybeHandleSession(h.watcher, h.sessionId);
+
+    expect(h.startSession).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() =>
+      expect(canUseMachine).toHaveBeenCalledWith(
+        expect.objectContaining({ forceBackendVerification: true })
+      )
+    );
+    await flushMicrotasks();
+    expect(recordOwnerAccessSnapshot).not.toHaveBeenCalled();
+
+    h.watcher.stop();
+  });
+
+  it('seeds the snapshot from a real backend verdict after an inline owner fast-path allow', async () => {
+    // First-ever dispatch: no snapshot yet, so the policy falls through to the
+    // inline check (owner fast-path allow). The background recheck must still
+    // consult the real backend and record the confirmed allow so future
+    // dispatches can use the owner-cached policy path.
+    const canUseMachine = vi.fn(async () => ({ outcome: 'allowed' as const }));
+    const recordOwnerAccessSnapshot = vi.fn(async () => {});
+    const accessPolicy = {
+      decide: vi.fn(() => Effect.succeed({ outcome: 'remote' as const })),
+    };
+    const h = createAccessHarness({
+      canUseMachine,
+      accessPolicy,
+      currentUserId: 'user-1',
+      recordOwnerAccessSnapshot,
+    });
+
+    await runMaybeHandleSession(h.watcher, h.sessionId);
+
+    expect(h.startSession).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() =>
+      expect(canUseMachine).toHaveBeenCalledWith(
+        expect.objectContaining({ forceBackendVerification: true })
+      )
+    );
+    await vi.waitFor(() => expect(recordOwnerAccessSnapshot).toHaveBeenCalledWith('allowed'));
+
+    h.watcher.stop();
+  });
+
+  it('fails the turn visibly when the background retry reaches a definitive denial', async () => {
+    let calls = 0;
+    const canUseMachine = vi.fn(async () => {
+      calls += 1;
+      return calls === 1
+        ? { outcome: 'indeterminate' as const, cause: 'network' as const, error: 'fetch failed' }
+        : { outcome: 'denied' as const, reason: 'not_visible' as const };
+    });
+    const recordChatFailure = vi.fn(async () => {});
+    const h = createAccessHarness({ canUseMachine, recordChatFailure });
+
+    await runMaybeHandleSession(h.watcher, h.sessionId);
+    await vi.waitFor(
+      () =>
+        expect(h.getHistory()[0]).toEqual(
+          expect.objectContaining({ id: 'turn-x', status: 'failed', read: true })
+        ),
+      { timeout: 3_000 }
+    );
+    expect(h.startSession).not.toHaveBeenCalled();
+    expect(recordChatFailure).toHaveBeenCalledWith(
+      expect.anything(),
+      'machine_access_denied',
+      expect.any(String)
+    );
+
+    h.watcher.stop();
+  });
+
+  it('hydrates queued mq items into pending turns before dispatching', async () => {
+    const continueSession = vi.fn(async () => {});
+    const startSession = vi.fn(async () => {});
+    const cancelSession = vi.fn(async () => ({ success: true }));
+    const sessionId = 'session-mq-1' as SessionId;
+    const roomId = `session-${sessionId}`;
+    let history: SessionHistoryInput[] = [];
+    const queue = [
+      {
+        $cid: 'mq-1',
+        task: 'queued hello',
+        userId: 'user-1',
+        timestamp: new Date().toISOString(),
+        project: undefined,
+        acpSessionConfig: {
+          prompt: 'queued hello',
+          inputBlocks: [{ type: 'text', text: 'queued hello' }],
+          cliType: 'builtin',
+          agentType: 'codex',
+        },
+      },
+    ];
+
+    const sessionDoc = {
+      mirror: {
+        subscribe: vi.fn(() => vi.fn()),
+      },
+      getMetaState: vi.fn(async () => ({
+        id: sessionId,
+        machineId: 'machine-1',
+        userId: 'user-1',
+        createdAt: new Date().toISOString(),
+        cliType: 'builtin',
+        agentType: 'codex',
+        status: { type: 'idle' },
+      })),
+      getHistory: vi.fn(async () => history),
+      popMessageQueue: vi.fn(async () => queue.shift() ?? null),
+      updateHistory: vi.fn(
+        async (updateFn: (items: SessionHistoryInput[]) => SessionHistoryInput[]) => {
+          history = updateFn(history);
+        }
+      ),
+      setStatus: vi.fn(async () => {}),
+      waitForRemoteSync: vi.fn(async () => {}),
+    };
+
+    const workspaceDocument = {
+      repo: {
+        getMeta: () => ({
+          scan: vi.fn(async () => [{ key: ['e', roomId], value: true }]),
+        }),
+        getDocMeta: vi.fn(async () => ({
+          meta: {
+            id: sessionId,
+            machineId: 'machine-1',
+            userId: 'user-1',
+            createdAt: new Date().toISOString(),
+            cliType: 'builtin',
+            agentType: 'codex',
+            status: { type: 'idle' },
+          },
+        })),
+        watch: vi.fn(() => ({ unsubscribe: vi.fn() })),
+      },
+      getOrCreateSessionDoc: vi.fn(async () => sessionDoc),
+      onMetaRoomSynced: vi.fn(() => vi.fn()),
+    } as unknown as LoroDocumentManager;
+
+    const watcher = createWatcher({
+      logger: createSilentLogger(),
+      machineId: 'machine-1',
+      workspaceId: 'workspace-1' as WorkspaceId,
+      workspaceDocument,
+      executionService: {
+        getExecutionSnapshot: vi.fn(() => ({
+          hasActiveTurn: false,
+          hasBlockingPendingCreate: false,
+          hasReusableSession: false,
+        })),
+        continueSession,
+        startSession,
+        cancelSession,
+      } as unknown as SessionExecutionService,
+      canUseMachine: createAllowMachineAccess(),
+    });
+
+    await watcher.start();
+
+    await vi.waitFor(() => {
+      expect(startSession).toHaveBeenCalledTimes(1);
+    });
+    expect(sessionDoc.popMessageQueue).toHaveBeenCalledTimes(1);
+    expect(sessionDoc.updateHistory).toHaveBeenCalledTimes(1);
+    expect(history[0]).toEqual(
+      expect.objectContaining({
+        id: 'queued-mq-1',
+        role: 'user',
+        status: 'pending',
+        userId: 'user-1',
+      })
+    );
+    expect(startSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'session/create',
+        sessionId,
+        userTurnId: 'queued-mq-1',
+      }),
+      { dispatchSource: 'queue' }
+    );
+  });
+
+  it('drops a resurrected queue item whose user turn already exists in history', async () => {
+    const sessionId = 'session-mq-resurrected' as SessionId;
+    const turnId = 'turn-mq-resurrected';
+    const existingTurn = {
+      ...createPendingUserTurn(turnId, 'queued hello'),
+      status: 'handled' as const,
+      read: true,
+    };
+    const popMessageQueue = vi.fn(async () => ({
+      $cid: 'mq-resurrected',
+      task: 'queued hello',
+      userId: 'user-1',
+      userTurnId: turnId,
+      timestamp: new Date().toISOString(),
+      project: undefined,
+      acpSessionConfig: {
+        prompt: 'queued hello',
+        inputBlocks: [{ type: 'text' as const, text: 'queued hello' }],
+        cliType: 'builtin' as const,
+        agentType: 'codex' as const,
+      },
+    }));
+    const updateHistory = vi.fn(async () => {});
+    const watcher = createWatcher({
+      logger: createSilentLogger(),
+      machineId: 'machine-1',
+      workspaceId: 'workspace-1' as WorkspaceId,
+      workspaceDocument: {} as LoroDocumentManager,
+      executionService: {
+        getExecutionSnapshot: vi.fn(() => ({
+          hasActiveTurn: false,
+          hasBlockingPendingCreate: false,
+          hasReusableSession: false,
+        })),
+        continueSession: vi.fn(async () => {}),
+        startSession: vi.fn(async () => {}),
+        cancelSession: vi.fn(async () => ({ success: true })),
+      } as unknown as SessionExecutionService,
+      canUseMachine: createAllowMachineAccess(),
+    });
+    const promoteNextQueuedMessage = (
+      watcher as unknown as {
+        promoteNextQueuedMessage: (
+          sessionDoc: {
+            popMessageQueue: typeof popMessageQueue;
+            updateHistory: typeof updateHistory;
+          },
+          meta: SessionMeta,
+          history: SessionHistoryInput[]
+        ) => Promise<SessionHistoryInput | null>;
+      }
+    ).promoteNextQueuedMessage.bind(watcher);
+
+    const promoted = await promoteNextQueuedMessage(
+      { popMessageQueue, updateHistory },
+      {
+        id: sessionId,
+        machineId: 'machine-1',
+        userId: 'user-1',
+        createdAt: new Date().toISOString(),
+        cliType: 'builtin',
+        agentType: 'codex',
+        status: { type: 'idle' },
+      },
+      [existingTurn]
+    );
+
+    expect(promoted).toBeNull();
+    expect(popMessageQueue).toHaveBeenCalledTimes(1);
+    expect(updateHistory).not.toHaveBeenCalled();
+  });
+
+  it('uses queue update watermarks to wake and settle idle sessions', async () => {
+    const sessionId = 'session-mq-watermark' as SessionId;
+    const roomId = `session-${sessionId}`;
+    const upsertDocMeta = vi.fn(async () => {});
+    const workspaceDocument = {
+      repo: {
+        upsertDocMeta,
+      },
+    } as unknown as LoroDocumentManager;
+    const watcher = createWatcher({
+      logger: createSilentLogger(),
+      machineId: 'machine-1',
+      workspaceId: 'workspace-1' as WorkspaceId,
+      workspaceDocument,
+      executionService: {
+        getExecutionSnapshot: vi.fn(() => ({
+          hasActiveTurn: false,
+          hasBlockingPendingCreate: false,
+          hasReusableSession: false,
+        })),
+        continueSession: vi.fn(async () => {}),
+        startSession: vi.fn(async () => {}),
+        cancelSession: vi.fn(async () => ({ success: true })),
+      } as unknown as SessionExecutionService,
+      canUseMachine: createAllowMachineAccess(),
+    });
+    const privateWatcher = watcher as unknown as {
+      sessionNeedsActiveWatch: (meta: SessionMeta) => boolean;
+      markMessageQueueSignalChecked: (
+        sessionDoc: { roomId: string },
+        meta: SessionMeta
+      ) => Promise<void>;
+    };
+    const meta = {
+      id: sessionId,
+      machineId: 'machine-1',
+      userId: 'user-1',
+      createdAt: new Date().toISOString(),
+      cliType: 'builtin',
+      agentType: 'codex',
+      status: { type: 'idle' },
+      lastHandledUserMsgId: 'turn-handled',
+      messageQueueUpdatedAt: 20,
+      messageQueueCheckedAt: 10,
+    } satisfies SessionMeta;
+
+    expect(privateWatcher.sessionNeedsActiveWatch(meta)).toBe(true);
+
+    await privateWatcher.markMessageQueueSignalChecked({ roomId }, meta);
+
+    expect(upsertDocMeta).toHaveBeenCalledWith(roomId, {
+      messageQueueCheckedAt: 20,
+    });
+  });
+
+  it('reacts to lastCanceledTurn metadata for an owned session', async () => {
+    const continueSession = vi.fn(async () => {});
+    const startSession = vi.fn(async () => {});
+    const cancelSession = vi.fn(async () => ({ success: true }));
+    const sessionId = 'session-2' as SessionId;
+    const roomId = `session-${sessionId}`;
+    const sessionDoc = {
+      mirror: {
+        subscribe: vi.fn(() => vi.fn()),
+      },
+      getMetaState: vi.fn(async () => ({
+        id: sessionId,
+        machineId: 'machine-1',
+        userId: 'user-1',
+        createdAt: new Date().toISOString(),
+        cliType: 'builtin',
+        agentType: 'codex',
+        status: { type: 'idle' },
+        lastCanceledTurn: 'assistant-turn-2',
+      })),
+      getHistory: vi.fn(async () => []),
+      setStatus: vi.fn(async () => {}),
+      waitForRemoteSync: vi.fn(async () => {}),
+    };
+
+    const workspaceDocument = {
+      repo: {
+        getMeta: () => ({
+          scan: vi.fn(async () => [{ key: ['e', roomId], value: true }]),
+        }),
+        getDocMeta: vi.fn(async () => ({
+          meta: {
+            id: sessionId,
+            machineId: 'machine-1',
+            userId: 'user-1',
+            createdAt: new Date().toISOString(),
+            cliType: 'builtin',
+            agentType: 'codex',
+            status: { type: 'idle' },
+            lastCanceledTurn: 'assistant-turn-2',
+          },
+        })),
+        watch: vi.fn(() => ({ unsubscribe: vi.fn() })),
+      },
+      getOrCreateSessionDoc: vi.fn(async () => sessionDoc),
+      onMetaRoomSynced: vi.fn(() => vi.fn()),
+    } as unknown as LoroDocumentManager;
+
+    const watcher = createWatcher({
+      logger: createSilentLogger(),
+      machineId: 'machine-1',
+      workspaceId: 'workspace-1' as WorkspaceId,
+      workspaceDocument,
+      executionService: {
+        getExecutionSnapshot: vi.fn(() => ({
+          hasActiveTurn: false,
+          hasBlockingPendingCreate: false,
+          hasReusableSession: false,
+        })),
+        continueSession,
+        startSession,
+        cancelSession,
+      } as unknown as SessionExecutionService,
+      canUseMachine: createAllowMachineAccess(),
+    });
+
+    await watcher.start();
+
+    await vi.waitFor(() => {
+      expect(cancelSession).toHaveBeenCalledTimes(1);
+    });
+    expect(cancelSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'session/cancel',
+        sessionId,
+        turnId: 'assistant-turn-2',
+      })
+    );
+  });
+
+  it('handles cancel metadata without waiting for an in-flight dispatch to finish', async () => {
+    let resolveContinue: (() => void) | undefined;
+    const continueSession = vi.fn(
+      async () =>
+        await new Promise<void>((resolve) => {
+          resolveContinue = resolve;
+        })
+    );
+    const startSession = vi.fn(async () => {});
+    const cancelSession = vi.fn(async () => ({ success: true }));
+    const sessionId = 'session-2b' as SessionId;
+    const roomId = `session-${sessionId}`;
+    let meta = {
+      id: sessionId,
+      machineId: 'machine-1',
+      userId: 'user-1',
+      createdAt: new Date().toISOString(),
+      cliType: 'builtin',
+      agentType: 'codex',
+      status: { type: 'idle' as const },
+      acpSessionId: 'acp-session-2b',
+    } as SessionMeta;
+    let metadataCallback: ((event: { kind: 'doc-metadata'; docId: string }) => void) | undefined;
+
+    const sessionDoc = {
+      mirror: {
+        subscribe: vi.fn(() => vi.fn()),
+      },
+      getMetaState: vi.fn(async () => meta),
+      getHistory: vi.fn(async () => [createPendingUserTurn('turn-2b', 'hello again')]),
+      setStatus: vi.fn(async () => {}),
+      waitForRemoteSync: vi.fn(async () => {}),
+    };
+
+    const workspaceDocument = {
+      repo: {
+        getMeta: () => ({
+          scan: vi.fn(async () => [{ key: ['e', roomId], value: true }]),
+        }),
+        getDocMeta: vi.fn(async () => ({ meta })),
+        watch: vi.fn((callback: (event: { kind: 'doc-metadata'; docId: string }) => void) => {
+          metadataCallback = callback as (event: { kind: 'doc-metadata'; docId: string }) => void;
+          return { unsubscribe: vi.fn() };
+        }),
+      },
+      getOrCreateSessionDoc: vi.fn(async () => sessionDoc),
+      onMetaRoomSynced: vi.fn(() => vi.fn()),
+    } as unknown as LoroDocumentManager;
+
+    const watcher = createWatcher({
+      logger: createSilentLogger(),
+      machineId: 'machine-1',
+      workspaceId: 'workspace-1' as WorkspaceId,
+      workspaceDocument,
+      executionService: {
+        getExecutionSnapshot: vi.fn(() => ({
+          hasActiveTurn: false,
+          hasBlockingPendingCreate: false,
+          hasReusableSession: false,
+        })),
+        continueSession,
+        startSession,
+        cancelSession,
+      } as unknown as SessionExecutionService,
+      canUseMachine: createAllowMachineAccess(),
+    });
+
+    await watcher.start();
+
+    await vi.waitFor(() => {
+      expect(continueSession).toHaveBeenCalledTimes(1);
+    });
+
+    meta = {
+      ...meta,
+      status: { type: 'running' },
+      lastCanceledTurn: 'assistant-turn-2b',
+    };
+    metadataCallback?.({ kind: 'doc-metadata', docId: roomId });
+
+    await vi.waitFor(() => {
+      expect(cancelSession).toHaveBeenCalledTimes(1);
+    });
+    expect(cancelSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'session/cancel',
+        sessionId,
+        turnId: 'assistant-turn-2b',
+      })
+    );
+
+    resolveContinue?.();
+  });
+
+  it('bootstraps owned sessions concurrently while isolating failed reconciles', async () => {
+    const continueSession = vi.fn(async () => {});
+    const startSession = vi.fn(async () => {});
+    const cancelSession = vi.fn(async () => ({ success: true }));
+    const badSessionId = 'bootstrap-bad' as SessionId;
+    const fastSessionId = 'bootstrap-fast' as SessionId;
+    const badRoomId = `session-${badSessionId}`;
+    const fastRoomId = `session-${fastSessionId}`;
+    const turnId = 'turn-bootstrap-fast';
+    let releaseBadDocMeta: (() => void) | undefined;
+    const badDocMetaBlocked = new Promise<void>((resolve) => {
+      releaseBadDocMeta = resolve;
+    });
+    const fastMeta = {
+      id: fastSessionId,
+      machineId: 'machine-1',
+      userId: 'user-1',
+      createdAt: new Date().toISOString(),
+      cliType: 'builtin',
+      agentType: 'codex',
+      status: { type: 'idle' },
+      latestUserMsgId: turnId,
+    } satisfies SessionMeta;
+    const fastSessionDoc = {
+      mirror: {
+        subscribe: vi.fn(() => vi.fn()),
+      },
+      getMetaState: vi.fn(async () => fastMeta),
+      getHistory: vi.fn(async () => [createPendingUserTurn(turnId, 'hello')]),
+      setStatus: vi.fn(async () => {}),
+      waitForRemoteSync: vi.fn(async () => {}),
+    };
+    const scan = vi.fn(async () => [
+      { key: ['e', badRoomId], value: true },
+      { key: ['e', fastRoomId], value: true },
+    ]);
+    const getDocMeta = vi.fn(async (roomId: string) => {
+      if (roomId === badRoomId) {
+        await badDocMetaBlocked;
+        throw new Error('bad session doc');
+      }
+      if (roomId === fastRoomId) {
+        return { meta: fastMeta };
+      }
+      return undefined;
+    });
+    const workspaceDocument = {
+      repo: {
+        getMeta: () => ({ scan }),
+        getDocMeta,
+        watch: vi.fn(() => ({ unsubscribe: vi.fn() })),
+      },
+      getOrCreateSessionDoc: vi.fn(async () => fastSessionDoc),
+      onMetaRoomSynced: vi.fn(() => vi.fn()),
+    } as unknown as LoroDocumentManager;
+    const logger = {
+      ...createSilentLogger(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    const onStartupBootstrapComplete = vi.fn();
+    const watcher = createWatcher({
+      logger,
+      machineId: 'machine-1',
+      workspaceId: 'workspace-1' as WorkspaceId,
+      workspaceDocument,
+      executionService: {
+        getExecutionSnapshot: vi.fn(() => ({
+          hasActiveTurn: false,
+          hasBlockingPendingCreate: false,
+          hasReusableSession: false,
+        })),
+        continueSession,
+        startSession,
+        cancelSession,
+      } as unknown as SessionExecutionService,
+      canUseMachine: createAllowMachineAccess(),
+      onStartupBootstrapComplete,
+    });
+
+    await watcher.start();
+
+    await vi.waitFor(() => {
+      expect(startSession).toHaveBeenCalledTimes(1);
+    });
+    expect(getDocMeta).toHaveBeenCalledWith(badRoomId);
+    expect(getDocMeta).toHaveBeenCalledWith(fastRoomId);
+    expect(onStartupBootstrapComplete).not.toHaveBeenCalled();
+
+    releaseBadDocMeta?.();
+
+    await vi.waitFor(() => {
+      expect(onStartupBootstrapComplete).toHaveBeenCalledTimes(1);
+    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Owned-session bootstrap completed with 1/2 session reconcile failure(s)'
+      )
+    );
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `Failed to reconcile session watch (sessionId=${badSessionId}, roomId=${badRoomId}`
+      )
+    );
+    expect(scan).toHaveBeenCalledWith({ prefix: ['e'], includeRaw: false });
+
+    watcher.stop();
+  });
+
+  it('bounds owned-session bootstrap reconciliation concurrency', async () => {
+    vi.useFakeTimers();
+    try {
+      const roomIds = Array.from({ length: 12 }, (_, index) => `session-bootstrap-${index}`);
+      const releaseReads = createDeferred();
+      const firstBatchStarted = createDeferred();
+      const bootstrapCompleted = createDeferred();
+      let activeReads = 0;
+      let maxActiveReads = 0;
+      let readCount = 0;
+      const getDocMeta = vi.fn(async () => {
+        readCount += 1;
+        activeReads += 1;
+        maxActiveReads = Math.max(maxActiveReads, activeReads);
+        if (readCount === 4) {
+          firstBatchStarted.resolve();
+        }
+        await releaseReads.promise;
+        activeReads -= 1;
+        return undefined;
+      });
+      const workspaceDocument = {
+        repo: {
+          getMeta: () => ({
+            scan: vi.fn(async () =>
+              roomIds.map((roomId) => ({
+                key: ['e', roomId],
+                value: true,
+              }))
+            ),
+          }),
+          getDocMeta,
+          watch: vi.fn(() => ({ unsubscribe: vi.fn() })),
+        },
+        getOrCreateSessionDoc: vi.fn(),
+        onMetaRoomSynced: vi.fn(() => vi.fn()),
+      } as unknown as LoroDocumentManager;
+      const watcher = createWatcher({
+        logger: createSilentLogger(),
+        machineId: 'machine-1',
+        workspaceId: 'workspace-1' as WorkspaceId,
+        workspaceDocument,
+        executionService: {
+          getExecutionSnapshot: vi.fn(() => ({
+            hasActiveTurn: false,
+            hasBlockingPendingCreate: false,
+            hasReusableSession: false,
+          })),
+          continueSession: vi.fn(async () => {}),
+          startSession: vi.fn(async () => {}),
+          cancelSession: vi.fn(async () => ({ success: true })),
+        } as unknown as SessionExecutionService,
+        canUseMachine: createAllowMachineAccess(),
+        onStartupBootstrapComplete: bootstrapCompleted.resolve,
+      });
+
+      await watcher.start();
+      await vi.advanceTimersByTimeAsync(0);
+      await firstBatchStarted.promise;
+
+      expect({ readCount, maxActiveReads }).toEqual({
+        readCount: 4,
+        maxActiveReads: 4,
+      });
+
+      releaseReads.resolve();
+      await bootstrapCompleted.promise;
+      expect(readCount).toBe(12);
+      expect(maxActiveReads).toBe(4);
+      watcher.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('coalesces meta-room recovery bursts while a bootstrap scan is in flight', async () => {
+    vi.useFakeTimers();
+    try {
+      const firstScanStarted = createDeferred();
+      const releaseFirstScan = createDeferred();
+      const secondScanStarted = createDeferred();
+      let metaRoomSyncedListener: ((reason: string) => void) | undefined;
+      const scan = vi.fn(async () => {
+        const callCount = scan.mock.calls.length;
+        if (callCount === 1) {
+          firstScanStarted.resolve();
+          await releaseFirstScan.promise;
+        } else if (callCount === 2) {
+          secondScanStarted.resolve();
+        }
+        return [];
+      });
+      const workspaceDocument = {
+        repo: {
+          getMeta: () => ({ scan }),
+          getDocMeta: vi.fn(),
+          watch: vi.fn(() => ({ unsubscribe: vi.fn() })),
+        },
+        getOrCreateSessionDoc: vi.fn(),
+        onMetaRoomSynced: vi.fn((listener: (reason: string) => void) => {
+          metaRoomSyncedListener = listener;
+          return vi.fn();
+        }),
+      } as unknown as LoroDocumentManager;
+      const watcher = createWatcher({
+        logger: createSilentLogger(),
+        machineId: 'machine-1',
+        workspaceId: 'workspace-1' as WorkspaceId,
+        workspaceDocument,
+        executionService: {
+          getExecutionSnapshot: vi.fn(() => ({
+            hasActiveTurn: false,
+            hasBlockingPendingCreate: false,
+            hasReusableSession: false,
+          })),
+          continueSession: vi.fn(async () => {}),
+          startSession: vi.fn(async () => {}),
+          cancelSession: vi.fn(async () => ({ success: true })),
+        } as unknown as SessionExecutionService,
+        canUseMachine: createAllowMachineAccess(),
+      });
+
+      await watcher.start();
+      await vi.advanceTimersByTimeAsync(0);
+      await firstScanStarted.promise;
+
+      metaRoomSyncedListener?.('transport-connected');
+      metaRoomSyncedListener?.('transport-connected');
+      metaRoomSyncedListener?.('meta-room-joined');
+      await flushMicrotasks();
+      expect(scan).toHaveBeenCalledTimes(1);
+
+      releaseFirstScan.resolve();
+      await secondScanStarted.promise;
+      await flushMicrotasks();
+
+      expect(scan).toHaveBeenCalledTimes(2);
+      expect(scan).toHaveBeenNthCalledWith(1, { prefix: ['e'], includeRaw: false });
+      expect(scan).toHaveBeenNthCalledWith(2, { prefix: ['e'], includeRaw: false });
+      watcher.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not continue a queued meta-room bootstrap after stop', async () => {
+    const continueSession = vi.fn(async () => {});
+    const startSession = vi.fn(async () => {});
+    const cancelSession = vi.fn(async () => ({ success: true }));
+    const sessionId = 'session-stopped-bootstrap' as SessionId;
+    const roomId = `session-${sessionId}`;
+    type ScanRow = { key: unknown[]; value: boolean };
+    let metaRoomSyncedListener: ((reason: string) => void) | undefined;
+    let resolveSecondScan: ((rows: ScanRow[]) => void) | undefined;
+
+    const scan = vi.fn(async () => {
+      if (scan.mock.calls.length === 1) {
+        return [] satisfies ScanRow[];
+      }
+      return await new Promise<ScanRow[]>((resolve) => {
+        resolveSecondScan = resolve;
+      });
+    });
+    const detachMetaRoomSyncedListener = vi.fn();
+    const getDocMeta = vi.fn(async () => ({
+      meta: {
+        id: sessionId,
+        machineId: 'machine-1',
+        userId: 'user-1',
+        createdAt: new Date().toISOString(),
+        cliType: 'builtin',
+        agentType: 'codex',
+        status: { type: 'idle' },
+        latestUserMsgId: 'turn-stopped-bootstrap',
+      },
+    }));
+    const getOrCreateSessionDoc = vi.fn(async () => ({
+      mirror: {
+        subscribe: vi.fn(() => vi.fn()),
+      },
+      getMetaState: vi.fn(async () => null),
+      getHistory: vi.fn(async () => []),
+      setStatus: vi.fn(async () => {}),
+      waitForRemoteSync: vi.fn(async () => {}),
+    }));
+
+    const workspaceDocument = {
+      repo: {
+        getMeta: () => ({ scan }),
+        getDocMeta,
+        watch: vi.fn(() => ({ unsubscribe: vi.fn() })),
+      },
+      getOrCreateSessionDoc,
+      onMetaRoomSynced: vi.fn((listener: (reason: string) => void) => {
+        metaRoomSyncedListener = listener;
+        return detachMetaRoomSyncedListener;
+      }),
+    } as unknown as LoroDocumentManager;
+
+    const watcher = createWatcher({
+      logger: createSilentLogger(),
+      machineId: 'machine-1',
+      workspaceId: 'workspace-1' as WorkspaceId,
+      workspaceDocument,
+      executionService: {
+        getExecutionSnapshot: vi.fn(() => ({
+          hasActiveTurn: false,
+          hasBlockingPendingCreate: false,
+          hasReusableSession: false,
+        })),
+        continueSession,
+        startSession,
+        cancelSession,
+      } as unknown as SessionExecutionService,
+      canUseMachine: createAllowMachineAccess(),
+    });
+
+    await watcher.start();
+    await vi.waitFor(() => {
+      expect(scan).toHaveBeenCalledTimes(1);
+    });
+
+    metaRoomSyncedListener?.('reconnect');
+    await vi.waitFor(() => {
+      expect(scan).toHaveBeenCalledTimes(2);
+    });
+
+    watcher.stop();
+    resolveSecondScan?.([{ key: ['e', roomId], value: true }]);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(detachMetaRoomSyncedListener).toHaveBeenCalledTimes(1);
+    expect(getDocMeta).not.toHaveBeenCalled();
+    expect(getOrCreateSessionDoc).not.toHaveBeenCalled();
+    expect(startSession).not.toHaveBeenCalled();
+    expect(continueSession).not.toHaveBeenCalled();
+  });
+
+  it('skips a user turn whose status is already handled', async () => {
+    const continueSession = vi.fn(async () => {});
+    const startSession = vi.fn(async () => {});
+    const cancelSession = vi.fn(async () => ({ success: true }));
+    const sessionId = 'session-3' as SessionId;
+    const roomId = `session-${sessionId}`;
+
+    const sessionDoc = {
+      mirror: {
+        subscribe: vi.fn(() => vi.fn()),
+      },
+      getMetaState: vi.fn(async () => ({
+        id: sessionId,
+        machineId: 'machine-1',
+        userId: 'user-1',
+        createdAt: new Date().toISOString(),
+        cliType: 'builtin',
+        agentType: 'codex',
+        status: { type: 'idle' },
+        lastHandledUserMsgId: 'turn-3',
+      })),
+      getHistory: vi.fn(async () => [
+        {
+          ...createPendingUserTurn('turn-3', 'hello again'),
+          status: 'handled',
+          read: true,
+        },
+      ]),
+      setStatus: vi.fn(async () => {}),
+      waitForRemoteSync: vi.fn(async () => {}),
+    };
+
+    const workspaceDocument = {
+      repo: {
+        getMeta: () => ({
+          scan: vi.fn(async () => [{ key: ['e', roomId], value: true }]),
+        }),
+        getDocMeta: vi.fn(async () => ({
+          meta: {
+            id: sessionId,
+            machineId: 'machine-1',
+            userId: 'user-1',
+            createdAt: new Date().toISOString(),
+            cliType: 'builtin',
+            agentType: 'codex',
+            status: { type: 'idle' },
+            lastHandledUserMsgId: 'turn-3',
+          },
+        })),
+        watch: vi.fn(() => ({ unsubscribe: vi.fn() })),
+      },
+      getOrCreateSessionDoc: vi.fn(async () => sessionDoc),
+      onMetaRoomSynced: vi.fn(() => vi.fn()),
+    } as unknown as LoroDocumentManager;
+
+    const watcher = createWatcher({
+      logger: createSilentLogger(),
+      machineId: 'machine-1',
+      workspaceId: 'workspace-1' as WorkspaceId,
+      workspaceDocument,
+      executionService: {
+        getExecutionSnapshot: vi.fn(() => ({
+          hasActiveTurn: false,
+          hasBlockingPendingCreate: false,
+          hasReusableSession: false,
+        })),
+        continueSession,
+        startSession,
+        cancelSession,
+      } as unknown as SessionExecutionService,
+      canUseMachine: createAllowMachineAccess(),
+    });
+
+    await watcher.start();
+
+    // With the lazy optimization, a session whose lastHandledUserMsgId is set
+    // and has no pending signals is skipped entirely (room never joined).
+    // Wait a tick to ensure no dispatch was triggered.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(startSession).not.toHaveBeenCalled();
+    expect(continueSession).not.toHaveBeenCalled();
+  });
+
+  it('watches idle sessions without handled turns until a fresh pending pointer arrives', () => {
+    const watcher = createWatcher({
+      logger: createSilentLogger(),
+      machineId: 'machine-1',
+      workspaceId: 'workspace-1' as WorkspaceId,
+      workspaceDocument: {} as LoroDocumentManager,
+      executionService: {
+        getExecutionSnapshot: vi.fn(() => ({
+          hasActiveTurn: false,
+          hasBlockingPendingCreate: false,
+          hasReusableSession: false,
+        })),
+      } as unknown as SessionExecutionService,
+      canUseMachine: createAllowMachineAccess(),
+    });
+    const sessionNeedsActiveWatch = (
+      watcher as unknown as {
+        sessionNeedsActiveWatch: (meta: SessionMeta) => boolean;
+      }
+    ).sessionNeedsActiveWatch.bind(watcher);
+    const baseMeta = {
+      id: 'session-recovery-idle' as SessionId,
+      machineId: 'machine-1',
+      userId: 'user-1',
+      createdAt: new Date().toISOString(),
+      cliType: 'builtin',
+      agentType: 'codex',
+      status: { type: 'idle' as const },
+    } satisfies SessionMeta;
+
+    expect(sessionNeedsActiveWatch(baseMeta)).toBe(true);
+    expect(
+      sessionNeedsActiveWatch({
+        ...baseMeta,
+        latestUserMsgId: 'turn-fresh',
+      })
+    ).toBe(true);
+    expect(
+      sessionNeedsActiveWatch({
+        ...baseMeta,
+        lastMissingHistoryUserMsgId: 'turn-missing',
+      })
+    ).toBe(false);
+  });
+
+  it('marks dispatch recovery only after waiting five minutes for missing history sync', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      const continueSession = vi.fn(async () => {});
+      const startSession = vi.fn(async () => {});
+      const cancelSession = vi.fn(async () => ({ success: true }));
+      const sessionId = 'session-missing-history' as SessionId;
+      const roomId = `session-${sessionId}`;
+      const upsertDocMeta = vi.fn(async () => {});
+      const cleanSessionDoc = vi.fn(async () => {});
+      const unsubscribeMirror = vi.fn();
+      const recordChatFailure = vi.fn(async () => {});
+      const sessionMeta = {
+        id: sessionId,
+        machineId: 'machine-1',
+        userId: 'user-1',
+        createdAt: new Date().toISOString(),
+        cliType: 'builtin',
+        agentType: 'codex',
+        status: { type: 'idle' as const },
+        latestUserMsgId: 'turn-missing',
+      } satisfies SessionMeta;
+
+      const sessionDoc = {
+        mirror: {
+          subscribe: vi.fn(() => unsubscribeMirror),
+        },
+        getMetaState: vi.fn(async () => sessionMeta),
+        getHistory: vi.fn(async () => []),
+        setStatus: vi.fn(async () => {}),
+        waitForRemoteSync: vi.fn(async () => {}),
+        waitUntilSynced: vi.fn(async () => true),
+        ensureDocRoomJoined: vi.fn(() => new Promise<void>(() => {})),
+        getDocRoomStatus: vi.fn(() => 'joined'),
+        onDocRoomStatusChange: vi.fn(() => vi.fn()),
+        rejoinDocRoom: vi.fn(async () => {}),
+      };
+
+      const workspaceDocument = {
+        repo: {
+          getDocMeta: vi.fn(async () => ({ meta: sessionMeta })),
+          upsertDocMeta,
+        },
+        getOrCreateSessionDoc: vi.fn(async () => sessionDoc),
+        cleanSessionDoc,
+      } as unknown as LoroDocumentManager;
+
+      const watcher = createWatcher({
+        logger: createSilentLogger(),
+        machineId: 'machine-1',
+        workspaceId: 'workspace-1' as WorkspaceId,
+        workspaceDocument,
+        executionService: {
+          getExecutionSnapshot: vi.fn(() => ({
+            hasActiveTurn: false,
+            hasBlockingPendingCreate: false,
+            hasReusableSession: false,
+          })),
+          continueSession,
+          startSession,
+          cancelSession,
+        } as unknown as SessionExecutionService,
+        canUseMachine: createAllowMachineAccess(),
+        recordChatFailure,
+      });
+
+      const run = runMaybeHandleSession(watcher, sessionId);
+      await vi.advanceTimersByTimeAsync(0);
+      await flushMicrotasks(50);
+
+      expect(sessionDoc.ensureDocRoomJoined).toHaveBeenCalledTimes(1);
+      expect(sessionDoc.waitUntilSynced).not.toHaveBeenCalled();
+      expect(sessionDoc.mirror.subscribe).toHaveBeenCalledTimes(1);
+      // The wait itself must not mutate session.status: a non-idle setStatus
+      // here would refresh lastRunningSeen and re-light the "Working" indicator.
+      expect(sessionDoc.setStatus).not.toHaveBeenCalled();
+      expect(upsertDocMeta).not.toHaveBeenCalled();
+
+      const elapsedMs = Date.now();
+      await vi.advanceTimersByTimeAsync(5 * 60_000 - elapsedMs - 1);
+      await flushMicrotasks();
+      expect(upsertDocMeta).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      await run;
+
+      expect(startSession).not.toHaveBeenCalled();
+      expect(continueSession).not.toHaveBeenCalled();
+      expect(upsertDocMeta).toHaveBeenCalledWith(
+        roomId,
+        expect.objectContaining({
+          status: { type: 'idle' },
+          latestUserMsgId: undefined,
+          processingUserMsgId: undefined,
+          lastMissingHistoryUserMsgId: 'turn-missing',
+        })
+      );
+      expect(upsertDocMeta.mock.calls[0]?.[1]).not.toHaveProperty('lastHandledUserMsgId');
+      expect(recordChatFailure).toHaveBeenCalledWith(
+        sessionDoc,
+        'message_delivery_failed',
+        expect.any(String)
+      );
+      expect(cleanSessionDoc).toHaveBeenCalledWith(sessionId, { preserveStatus: true });
+      expect(unsubscribeMirror).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps retrying rejoin with backoff while the joined history room stays disconnected', async () => {
+    vi.useFakeTimers();
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      const continueSession = vi.fn(async () => {});
+      const startSession = vi.fn(async () => {});
+      const cancelSession = vi.fn(async () => ({ success: true }));
+      const sessionId = 'session-history-disconnect' as SessionId;
+      const sessionMeta = {
+        id: sessionId,
+        machineId: 'machine-1',
+        userId: 'user-1',
+        createdAt: new Date().toISOString(),
+        cliType: 'builtin',
+        agentType: 'codex',
+        status: { type: 'idle' as const },
+        latestUserMsgId: 'turn-missing',
+      } satisfies SessionMeta;
+      let roomStatusListener:
+        | ((status: 'connecting' | 'joined' | 'reconnecting' | 'disconnected' | 'error') => void)
+        | undefined;
+
+      const sessionDoc = {
+        mirror: {
+          subscribe: vi.fn(() => vi.fn()),
+        },
+        getMetaState: vi.fn(async () => sessionMeta),
+        getHistory: vi.fn(async () => []),
+        setStatus: vi.fn(async () => {}),
+        waitForRemoteSync: vi.fn(async () => {}),
+        waitUntilSynced: vi.fn(async () => true),
+        ensureDocRoomJoined: vi.fn(async () => {}),
+        getDocRoomStatus: vi.fn(() => 'joined'),
+        onDocRoomStatusChange: vi.fn((listener: NonNullable<typeof roomStatusListener>) => {
+          roomStatusListener = listener;
+          return vi.fn();
+        }),
+        rejoinDocRoom: vi.fn(async () => {}),
+      };
+
+      const workspaceDocument = {
+        repo: {
+          getDocMeta: vi.fn(async () => ({ meta: sessionMeta })),
+          upsertDocMeta: vi.fn(async () => {}),
+        },
+        getOrCreateSessionDoc: vi.fn(async () => sessionDoc),
+        cleanSessionDoc: vi.fn(async () => {}),
+      } as unknown as LoroDocumentManager;
+
+      const watcher = createWatcher({
+        logger: createSilentLogger(),
+        machineId: 'machine-1',
+        workspaceId: 'workspace-1' as WorkspaceId,
+        workspaceDocument,
+        executionService: {
+          getExecutionSnapshot: vi.fn(() => ({
+            hasActiveTurn: false,
+            hasBlockingPendingCreate: false,
+            hasReusableSession: false,
+          })),
+          continueSession,
+          startSession,
+          cancelSession,
+        } as unknown as SessionExecutionService,
+        canUseMachine: createAllowMachineAccess(),
+      });
+
+      const run = runMaybeHandleSession(watcher, sessionId);
+      await vi.advanceTimersByTimeAsync(0);
+      await flushMicrotasks(50);
+      expect(roomStatusListener).toBeDefined();
+
+      roomStatusListener?.('disconnected');
+      await flushMicrotasks();
+      expect(sessionDoc.rejoinDocRoom).not.toHaveBeenCalled();
+      // The wait must not mutate session.status; mutating it here would
+      // refresh lastRunningSeen and cause the UI to re-light "Working".
+      expect(sessionDoc.setStatus).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(500);
+      await flushMicrotasks();
+      expect(sessionDoc.rejoinDocRoom).toHaveBeenCalledTimes(1);
+
+      // A later failure event schedules another attempt with exponential
+      // backoff (1s backoff + 500ms jitter for the second attempt).
+      roomStatusListener?.('error');
+      await vi.advanceTimersByTimeAsync(1_400);
+      await flushMicrotasks();
+      expect(sessionDoc.rejoinDocRoom).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(100);
+      await flushMicrotasks();
+      expect(sessionDoc.rejoinDocRoom).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      await run;
+    } finally {
+      randomSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('exits the history-sync wait without mutating status when the pending pointer already cleared', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      const sessionId = 'session-pending-cleared' as SessionId;
+      // The outer watcher read (maybeHandleSession) sees pending metadata that
+      // has already been replaced by a newer queued-message pointer — enough
+      // to trigger `waitForPendingUserTurnHistorySync` via the usual path.
+      const outerMeta = {
+        id: sessionId,
+        machineId: 'machine-1',
+        userId: 'user-1',
+        createdAt: new Date().toISOString(),
+        cliType: 'builtin',
+        agentType: 'codex',
+        status: { type: 'idle' as const },
+        latestUserMsgId: 'turn-newly-pending',
+        lastHandledUserMsgId: 'turn-previous-handled',
+      } satisfies SessionMeta;
+      // By the time the wait runs `waitUntilSynced` + `getMetaState`, the
+      // session doc itself already shows the turn has been handled (the race
+      // where a fresher meta update arrived locally between checks).
+      const freshSessionDocMeta = {
+        ...outerMeta,
+        lastHandledUserMsgId: 'turn-newly-pending',
+      } satisfies SessionMeta;
+
+      const getMetaState = vi
+        .fn()
+        .mockResolvedValueOnce(outerMeta)
+        .mockResolvedValue(freshSessionDocMeta);
+
+      const sessionDoc = {
+        mirror: {
+          subscribe: vi.fn(() => vi.fn()),
+        },
+        getMetaState,
+        getHistory: vi.fn(async () => []),
+        setStatus: vi.fn(async () => {}),
+        waitForRemoteSync: vi.fn(async () => {}),
+        waitUntilSynced: vi.fn(async () => true),
+        ensureDocRoomJoined: vi.fn(async () => {}),
+        getDocRoomStatus: vi.fn(() => 'joined'),
+        onDocRoomStatusChange: vi.fn(() => vi.fn()),
+        rejoinDocRoom: vi.fn(async () => {}),
+      };
+
+      const upsertDocMeta = vi.fn(async () => {});
+      const workspaceDocument = {
+        repo: {
+          getDocMeta: vi.fn(async () => ({ meta: outerMeta })),
+          upsertDocMeta,
+        },
+        getOrCreateSessionDoc: vi.fn(async () => sessionDoc),
+        cleanSessionDoc: vi.fn(async () => {}),
+      } as unknown as LoroDocumentManager;
+
+      const watcher = createWatcher({
+        logger: createSilentLogger(),
+        machineId: 'machine-1',
+        workspaceId: 'workspace-1' as WorkspaceId,
+        workspaceDocument,
+        executionService: {
+          getExecutionSnapshot: vi.fn(() => ({
+            hasActiveTurn: false,
+            hasBlockingPendingCreate: false,
+            hasReusableSession: false,
+          })),
+          continueSession: vi.fn(async () => {}),
+          startSession: vi.fn(async () => {}),
+          cancelSession: vi.fn(async () => ({ success: true })),
+        } as unknown as SessionExecutionService,
+        canUseMachine: createAllowMachineAccess(),
+      });
+
+      const run = runMaybeHandleSession(watcher, sessionId);
+      await vi.advanceTimersByTimeAsync(0);
+      await flushMicrotasks(50);
+      await run;
+
+      // The wait must not mutate session.status. A non-idle setStatus here
+      // would refresh lastRunningSeen and make the UI re-light the "Working"
+      // indicator after the turn had already completed — the regression this
+      // test guards against.
+      expect(sessionDoc.setStatus).not.toHaveBeenCalled();
+      expect(sessionDoc.waitUntilSynced).toHaveBeenCalled();
+      // The second (post-sync) getMetaState is what proves the fresh re-read
+      // happened: if we skipped it, the wait would hang for 5 minutes.
+      expect(getMetaState.mock.calls.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

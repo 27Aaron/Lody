@@ -1,0 +1,15 @@
+import { blogIndexHead, BlogIndexRoutePage } from '@site/src/site-pages';
+import { loadBlogIndexRoute } from '@site/src/blog-loader';
+import { createFileRoute } from '@tanstack/react-router';
+
+export const Route = createFileRoute('/blog/')({
+  loader: () => loadBlogIndexRoute({ data: { locale: 'en' } }),
+  head: () => blogIndexHead('en'),
+  component: BlogIndex,
+});
+
+function BlogIndex() {
+  const entries = Route.useLoaderData();
+
+  return <BlogIndexRoutePage entries={entries} locale="en" />;
+}

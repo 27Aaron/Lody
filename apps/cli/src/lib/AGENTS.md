@@ -1,0 +1,273 @@
+# apps/cli/src/lib — Index
+
+`CLAUDE.md` is a symlink to this file. Edit `AGENTS.md` only.
+
+**Before touching message dispatch/sync here, read
+context/message-flow.md** — the end-to-end map
+(user send → meta-activated dispatch → ACP → Loro Streams → devices). The WS/DO
+control-plane path is DEPRECATED; do not add functionality to it.
+
+- `message-handler.ts` — the CLI's central message hub (largest file): session chat
+  handling (`handleSessionChat`), ACP update buffering/flush, Code Collab v2 machine
+  RPC wiring, local project control. Turn execution itself lives in
+  `../session/session-execution-service.ts`.
+- Local session control preserves every intermediate response. New clients negotiate
+  NDJSON so ACP runtime/auth progress crosses the daemon socket immediately; legacy
+  clients keep the buffered JSON envelope. `MachineRuntime` may collect responses for
+  completion, but it must also forward each response to the streaming observer as it is sent.
+- `cloud-cli-port.ts` is the sole official-build composition root for cloud
+  clients, endpoint-derived adapters, and their lifecycle. `start.ts` validates
+  identity/deployment configuration once and injects the resulting `CloudPort`
+  through Fleet → Lody → MachineRuntime → MessageHandler/Loro/session services.
+  Daemon runtime modules must not construct cloud SDK clients or read
+  `LODY_AUTH_URL` / `LODY_AUTH_SITE_URL` / `LODY_SERVER_URL`. The local port has
+  null optional capabilities and performs no cloud I/O; explicit unavailable
+  operations fail at their public boundary, while only contractually
+  best-effort background effects may skip. `scripts/check-platform-boundaries.mjs`
+  and `tests/local-platform-zero-cloud.test.ts` enforce both halves.
+  Client-visible RPC references come from public `@lody/cloud-api`; generated
+  server declarations and private workspace packages are forbidden.
+  Streams gateway topology comes from the platform token response: prime the
+  token provider before reading `getGatewayBaseUrl()`. Runtime transports and
+  Machine RPC must not require `LODY_LORO_STREAMS_BASE_URL` as a parallel hidden
+  composition path.
+- `session-image-download.ts` — CLI-side prompt image download through the
+  injected attachment capability, including short retries before converting
+  bytes to ACP image blocks.
+- `machine-runtime.ts` — machine runtime bootstrap; still hosts the DEPRECATED
+  hosted WS control-plane listener. Remote bridge
+  attach/detach/revoke are serialized through `runBridgeTransition` (per-runtime
+  async queue): bodies never interleave, and attach is deliberately SHORT (no
+  meta catch-up wait — dual-author means the CLI only uploads its own ops), so a
+  queued detach/revoke stays prompt without preemption machinery. Route any new
+  transition through `runBridgeTransition`; keep long waits OUT of transition
+  bodies. Backfill enable/disable flips its authorization generation inside the
+  queued body (S5: a revoked workspace must never keep backfill enabled).
+- **Dual-author (no write intents)**: the renderer direct-authors user/UI
+  durable writes against its own repo and uploads them over its own Streams
+  connection; the CLI authors only agent-produced data. The former protocol
+  v4–v6 write-intent envelope (`WorkspaceWriteIntentAuthor`, `intent`/
+  `intent-ack` frames, CLI preview-comment mirror) is REMOVED — do not
+  reintroduce any proxy-authoring path (see the invariants in
+  `specs/local-first-two-plane.md`). Local dispatch triggers off the renderer-authored
+  `latestUserMsgId` doc-meta write (same doc-watch path as cloud dispatch)
+  plus the local Machine RPC fast path.
+- `local-loro-data-plane-server.ts` — Electron renderer ↔ CLI **local Loro data
+  plane** (protocol v7, push, peer-scoped): dedicated `lody-loro-data-plane`
+  socket in the 0700 run dir; routes persistent connections to per-workspace
+  `LocalLoroDataPlaneServer` engines (`@lody/shared`, owned by
+  `LoroDocumentManager`). Construct `LoroDocumentManager` with its named options
+  object; do not restore positional lifecycle dependencies, because adding a
+  transport/runtime can silently shift the local data-plane binding. Every
+  message carries `workspaceId` + `peerId`
+  (per-adapter uuid); the server keys sync state per PEER (`lastSentVV` /
+  flock bundle hash), so multiple windows multiplexed over the one relay socket
+  sync independently and a sender's own ops are never echoed. Doc rooms sync
+  via version-vector deltas both ways; flock rooms via full bundles on change —
+  broadcast passes are COALESCED (a queued-pass latch bounds a change burst to
+  one running + one queued full `exportJson`, never an unbounded chain; a change
+  landing mid-broadcast still gets its own follow-up pass).
+  Room topology/import handling is serialized per connection. All workspace
+  engines share the process-level `local-loro-data-plane-scheduler` instance
+  created in `loro/doc.ts`: presence/CRDT materialization runs via
+  `setImmediate`, globally one task/frame quantum per turn. Never run the bulk
+  writer inline from a CRDT callback, restore its unbounded loop, or create a
+  scheduler per workspace; those variants starve the socket.
+  `ping`/`pong` + a 60s idle timeout are the watchdog;
+  frame discipline is sender-enforced: an oversized flock delta chunks
+  entry-wise, an oversized DOC delta chunks at the transport layer
+  (`doc-update-chunk` frames reassembled before one import — a big session
+  doc's first catch-up is a realistic oversize, so it must NOT be a terminal
+  room error); `payload_too_large` stays terminal only for a single
+  flock entry above the budget. Receiver-side skip-until-newline is backup —
+  a framing overflow must NOT destroy the socket. Named Flock docs opened by a
+  renderer are bridged by `LoroDocumentManager` into `repo.joinFlockDocRoom()` and
+  released on the last local peer leave; Code Collab `fi`/`fis` and machine flock
+  docs must not rely on `syncOnce()` as live cloud subscription. These cloud
+  hydrates (and the session-doc equivalent) are background data relays ONLY:
+  the CLI's cloud room status is never pushed to renderers as local room
+  health — offline cloud failures must not poison the renderer's local
+  reconnect loop (`specs/local-first-two-plane.md`). There is NO polling
+  and no request/response HTTP path. Electron side:
+  `apps/electron/src/main/services/loro-data-plane-relay.ts` (persistent socket
+  with redial backoff + ping watchdog, `webContents.send` broadcast fan-out +
+  status channel; synthesizes peer `detach` for destroyed/navigated windows).
+  Renderer adapter (`@lody/shared` `local-loro-transport.ts`) filters inbound
+  by workspaceId+peerId and treats every (re)join as the reconciliation point:
+  it up-syncs its delta from the returned `serverVersion` regardless of the
+  in-memory dirty flag (offline writes survive app restarts and dropped
+  frames). Regression suite: `packages/shared/tests/local-loro-transport-bug-repro.test.ts`.
+- Liveness lives on the ephemeral presence channel (`loro/presence.ts`): machine presence
+  refreshes on `CliPresenceRuntime`'s own 30s timer. That runtime keeps TWO stores and the
+  distinction is load-bearing: `store` is the workspace-wide replica (own writes + every
+  peer observed in the shared presence room, read by machine-online checks and the PR
+  poller), while `localOriginStore` holds ONLY entries this process authored and is the
+  sole payload of the local data plane (`encodeLocalOriginPresence` /
+  `subscribeLocalOriginPresence`). Write locally-authored presence exclusively through
+  `writeLocalOrigin`/`deleteLocalOrigin` so the two can never diverge, and never relay the
+  replica — `specs/local-first-two-plane.md` explains why presence plane ownership is
+  partitioned by origin.
+  Session active presence is owned by `loro/session-active-presence.ts` only:
+  it starts once for a visible CLI turn,
+  accepts phase updates from other code, heartbeats while active, and clears on the
+  owning Effect release. That scope covers ALL turn-finalization stages, so
+  optional cloud side effects inside it (usage flush, completion notification, Live
+  Activity sync) MUST go through `MessageHandler.runTurnCloudSideEffect`:
+  known-offline (streams transport down) skips immediately, otherwise a 10s
+  bounded wait backstops half-open networks — never an unbounded hosted API await
+  (the cloud-sync-state signal in `specs/local-first-two-plane.md`). Third-party calls (GitHub,
+  model APIs) are a different reachability domain and are NOT gated by it. Do not publish/clear session presence from `setStatus`, RPC
+  dispatch, permission/image callbacks, or watcher recovery paths. Do not reintroduce
+  periodic doc-meta writes (`lastSeen`/`lastRunningSeen`) — they stall Loro flush; meta
+  timestamps are written only at status transitions, and Web live working UI reads
+  session presence directly instead of overlaying it onto `SessionMeta.status`.
+  Durable `MachineMeta.lastSeen` is fully retired (not written even at registration);
+  machine online checks read presence only. One-shot commands can read a presence
+  snapshot via `LoroDocumentManager.getOnlineMachineIds()` (null = presence room not
+  joined → status unknown, not offline).
+- Device resources use the separate `loro/machine-monitor.ts` ephemeral channel.
+  Local renderer observer/snapshot state crosses protocol-v6 `machine-monitor`
+  frames and MUST sample without a cloud transport. Cloud observers/snapshots attach
+  only after the authorized remote bridge attaches and detach on offline/revocation.
+  Sampling is observer-lease driven; never start OS probes permanently or persist snapshots.
+- Machine Flock writes for this CLI's own machine must be local-first: after `repo.flush()`,
+  call `LoroDocumentManager.markMachineFlockDocDirty(...)` (or pass the manager as the
+  sync scheduler) instead of awaiting `handle.syncOnce()` in the user/RPC request path.
+  `loro/machine-flock-sync-coordinator.ts` owns the live room, dirty state, and
+  exponential retry; request-scoped `syncOnce()` failures must not make local project
+  add/update flows fail after the local write is durable.
+- `provider-setup-manager.ts` owns durable default managed-builtin creation;
+  setup rows with executable runtime overrides are invalid. The future
+  config stays under `['providerSetup', configId]` while runtime/auth/live-probe
+  work is incomplete; only the target CLI may publish it by writing `agentConfig`
+  and deleting `providerSetup` in one commit. In cloud/dual mode queue processing
+  starts only after the machine Flock's first remote sync, so a stale local row
+  cannot outrun a remote cancellation. The OSS local platform has no remote
+  transport; its opened SQLite-backed Flock is authoritative, so existing rows
+  are processed immediately and new local-data-plane rows trigger the same queue.
+  Never make local mode wait on `firstSyncedWithRemote`. Cancellation remains as
+  `['providerSetupCancellation', configId]`; after merges, the owning CLI causally
+  deletes any concurrently published setup/config. Restart resumes only
+  non-interactive states. Never add
+  authorization URLs, codes, tokens, or raw provider output to a setup row, and
+  never publish from caller-supplied auth RPC fields.
+- `acp/` — ACP notification → session history pipeline (`history.ts`:
+  `handleACPUpdateMessage`, per-toolCallId enrichment, edit-evidence extraction;
+  `history-apply.ts`: CRDT history writes). Protocol: `context/acp-protocol.md`;
+  per-agent payload quirks: `context/acp-agent-edit-evidence.md`.
+  ACP updates must be bound to assistant-entry ownership at enqueue time, not by
+  asking for "the current turn" during flush. `session-transient-store.ts` stores
+  `assistantEntryId`/`userTurnId`/`turnEpoch` on each buffered update; `acp/history.ts`
+  exposes explicit assistant-entry vs autonomous append APIs and must not silently
+  create uuid entries for unowned output. This prevents bad-network/retry tails and
+  duplicate dispatch from rendering the same agent turn twice. Flush retries retain
+  notification-level progress and cached rich-content materialization (never re-upload
+  an attachment after only its history write failed), stop automatic retries after a
+  bounded backoff budget, and carry the enqueue-time turn id into Code Collab evidence.
+  Evidence arriving for a finalized target is serialized through the same per-turn
+  persistence chain as normal finalization; a failed persistence attempt restores both
+  captured evidence sets ahead of concurrently collected evidence and schedules bounded,
+  evidence-only backoff retries that never replay the already-persisted ACP history update.
+  Shutdown cancels those timers, waits for active per-turn chains, and directly drains retained
+  evidence before closing the diff store. It must first stop SessionManager producers while
+  keeping workspace documents open, then wait for already-started async evidence collectors,
+  flush ACP/evidence, and close stores; never close a store or take the final map/chain snapshot
+  while agent callbacks or tracked evidence collectors can still populate turn evidence.
+  Permanent deletion blocks new ACP enqueue, waits for an already-started flush, and
+  drops retry state before deleting the session doc, so a late retry cannot recreate
+  deleted data.
+  The finalized-turn late-ACP routing target does NOT expire by wall-clock time
+  (`session-transient-store.ts`): agent sessions stay alive and emit events long after
+  `stopReason` (cron, `ScheduleWakeup`, deferred work), and those must still reach the
+  Loro doc. The target is cleared only when a new turn owns ACP updates (normally
+  `beginTurn()`, but visible dispatch defers until prompt start) or replay suppression.
+  This is what lets the web derive the "session will continue" panel from the Cron/ScheduleWakeup
+  `tool_call` items in history — the CLI persists NO extra scheduled-task state (not in
+  `SessionMeta`, not a new history item); see `@lody/shared`
+  `collectPendingScheduledTasksFromHistory` + `nextCronFireMs`.
+  INVARIANT: `history-apply.ts` strips `rawInput`/`rawOutput` from ALL generic tool calls
+  (unstructured by spec) EXCEPT the four scheduling tools in `SCHEDULING_TOOL_NAMES`
+  (`CronCreate/CronDelete/CronList/ScheduleWakeup`, matched via `_meta.claudeCode.toolName`),
+  whose small `rawInput`/`rawOutput` are kept, whose persisted `title` is pinned to the
+  canonical tool name, and which also record `schedulingTimeZone` (this machine's IANA zone,
+  captured at persist time — cron is local-time to it, so the panel resolves fire times in
+  that zone via `nextCronFireMs`, not the viewer's browser zone). The deriver reads exactly
+  those fields — do not "clean up" this exception or the panel goes silently empty (unit tests
+  fabricate history and won't catch it).
+  RPC fast-path ordering: turn-scoped history LIST writes in `message-handler.ts`
+  (assistant entry creation, ACP/proposed-plan flushes, finalization, chat_failed
+  notices, image-group entries) first `await awaitTurnHistoryGate(sessionId)` —
+  see `../session/turn-history-gate.ts`. Add the same await to any NEW code path
+  that appends/positions history entries during a turn; map-keyed status/meta
+  writes stay ungated.
+- `task-doc.ts` — every CLI-side read/write of a Task document (`readTask`,
+  `createTaskFromAgent`, agent property/PR updates, exact-match body edits, comments,
+  session links) plus `listWorkspaceTaskIds` and the index-only listing
+  (`listTasksFromIndex` / pure `selectTaskIndexRows`). Creation is the ONE path that
+  passes `initialState` to the Mirror (`seedEmptyDocument`): every other path must see
+  an absent document as absent, or `readTask` starts answering with a placeholder meta
+  and TASK_NOT_FOUND stops existing. Three invariants: **each write republishes the
+  index row**
+  from the document's post-write state (the index carries what lists render —
+  counts, `lastCommentAt`, mentioned users — so skipping it makes the change
+  invisible), persisted Task documents have a repo `e/task-<id>` existence
+  entry but no duplicated `m/*` business meta, and **the agent field is never written
+  here** — it is the automation consent, so `applyAgentTaskUpdate` covers every other
+  scalar but must not grow an `agent` branch. Anything needing every visible Task
+  uses `listWorkspaceTaskIds`: it merges existence with index rows, repairs a
+  missing projection from the Task document, and never revives an index tombstone.
+  Note that `status`/`ownerId`/`projects` writes here can make a task automation-
+  eligible and start a session (see `task-automation/`).
+  Normative contract: specs/tasks.md.
+- `task-image-upload.ts` — MCP `lody_task_upload_images` reads local images with
+  `O_NOFOLLOW`, uploads them to the current workspace's private Task image
+  endpoint, and returns stable `lody-image://<imageId>` Markdown references.
+  It does not append anything to Session history; agents explicitly pass the
+  returned Markdown to Task propose/body/comment tools.
+- `task-automation/` — delegated automation: `planTaskAutomation` is a pure policy
+  (all the gates that keep it from spending tokens by surprise), the scheduler is a
+  thin orchestrator, and the per-workspace handle watches the task index and
+  re-evaluates on `onMetaRoomSynced` so work held while offline still starts. An
+  agent counts as busy while its task is **in progress**, not merely while being
+  dispatched — otherwise one agent gets two concurrent sessions in one working copy.
+- `review-automation/` — "Auto review and merge": a review agent reviews a
+  branch, blocking findings go back to the authoring session, and the PR is
+  merged once CI is green. Lives here rather than in MCP because the chain-depth
+  guard caps a chain at 5 hops and CI/GitHub are outside the MCP contract, which
+  is exactly why its own budgets are load-bearing. Auto-merge deliberately does
+  NOT reuse `deriveSessionPullRequestReadiness` (an absent CI rollup counts as
+  ready there, which would merge before CI runs). Invariants:
+  [AGENTS.md](review-automation/AGENTS.md).
+- `code-collab/` — unified Code Collab v2 filesystem RPC service; see its own
+  [AGENTS.md](code-collab/AGENTS.md).
+- **Session file attachments** (spec: `specs/session-files.md`): `message-handler.ts`
+  has `handleSessionFileUpload` (cloud, MCP `lody_upload_files`) and local
+  `handleSessionFileSendLocal`. Local bytes live in `session-file-blob-store.ts`
+  (`~/.lody/session-files/<ws>/<sess>/<fileId>`) as `transport:'local'`.
+  At dispatch, `materializeSessionFileAttachments` copies/downloads to
+  `<workspace>/.lody/attachments/...` and sends ACP `resource_link` blocks with
+  `file://` URIs; do not degrade this to text-only paths. Backfill
+  (`session-file-backfill.ts`) uploads local blobs through the injected relay,
+  flips persisted blocks
+  `local→r2`, rewrites `fileId` to the relay key, and is triggered by dispatch,
+  opportunistic handoff, and startup recovery. The flip rewrites the fileId, so a
+  `.r2meta` sidecar (relayFileId) is written BEFORE the flip: restart recovery uses
+  it to finalize a flip-committed-but-unmarked blob instead of retrying "not yet
+  persisted" forever. A blob with no history block older than the draft retention
+  window is reclaimed (abandoned staged-but-never-sent draft); blob-store writes
+  are serialized process-wide for the quota check. Backfill commits (marker
+  write, history flip) are gated by an authorization generation +
+  AbortController owned by `MessageHandler`: `disableRemoteBackfill`
+  (offline/revoke) aborts the in-flight relay upload and supersedes started
+  tasks, so a revoke landing mid-upload can never adopt the uploaded bytes
+  (S5/D10: revocation must prevent upload); re-enable opens a new generation and the pending blob
+  backfills on the next scan.
+  Human image inputs keep their ACP `image` block for visual context and also
+  materialize the same bytes to `.lody/attachments` as an ACP `resource_link`, so
+  agents can echo/transform them through a local file path.
+  Agent→human ACP `image` / `resource` / `resource_link` output is materialized by
+  `acp-agent-attachments.ts` during `message-handler.ts` ACP flush: upload to the
+  injected image/file capability, then append `image_group` / `file` history blocks.
+  `resource_link file://...` is accepted only when contained in the session workspace.
+- `replay-prompt-builder` (in `@lody/shared`) + `message-handler.ts` resume fallback:
+  see `context/hotspots.md` "CLI: prompt + message handling".
