@@ -21,8 +21,7 @@ const MARKDOWN_SOURCE = [
   '',
   'Host-backed file browsing and digest-checked editing for your repository.',
   '',
-  '> Markdown files now ship with a `Rendered` / `Code` toggle so you can read the',
-  '> formatted document or jump back into the text editor.',
+  '> Markdown files open as rendered documents, with the source editor one toggle away.',
   '',
   '## Highlights',
   '',
@@ -49,7 +48,7 @@ const MARKDOWN_SOURCE = [
   '',
   '1. Open a workspace',
   '2. Pick a file from the tree',
-  '3. Toggle **Rendered** to preview Markdown',
+  '3. Toggle **Code** to edit the Markdown source',
   '',
   '- [x] Code/Rendered toggle',
   '- [ ] Side-by-side preview',
@@ -107,36 +106,35 @@ export default meta;
 
 type Story = StoryObj<typeof MarkdownPreviewStory>;
 
-// Default: a Markdown file opens in the editable code view. The top bar exposes
-// an eye (Preview) button and a search button on the right.
-export const CodeMode: Story = {
+// Default: a Markdown file opens as a rendered document. The eye button switches
+// back to the editable source view.
+export const RenderedMode: Story = {
   parameters: {
     docs: {
       description: {
         story:
-          'Markdown files open in the live editor by default. The top bar shows a preview eye button (hover to peek, click to switch) and a search button that opens Monaco’s find widget.',
+          'Markdown files open as formatted documents by default. The top bar shows a closed preview eye that switches back to the editable source.',
       },
     },
   },
   render: () => <MarkdownPreviewStory />,
 };
 
-// Rendered: the play function clicks the preview eye, committing the formatted
-// Markdown view (headings, lists, table, code block, blockquote). The eye icon
-// flips to a closed eye once preview is active.
-export const RenderedMode: Story = {
+// Code: the play function hides the default preview and reveals Monaco with the
+// Markdown source plus search controls.
+export const CodeMode: Story = {
   parameters: {
     docs: {
       description: {
         story:
-          'After clicking the preview eye, the Markdown renders as a formatted document via the shared MarkdownRenderer (GFM tables, task lists, code blocks, blockquotes). The eye becomes a closed eye to indicate preview is active.',
+          'After clicking the closed preview eye, the Markdown source opens in Monaco with editing and search controls.',
       },
     },
   },
   render: () => <MarkdownPreviewStory />,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const previewButton = await canvas.findByRole('button', { name: /^preview$/i });
+    const previewButton = await canvas.findByRole('button', { name: /^hide preview$/i });
     await userEvent.click(previewButton);
   },
 };

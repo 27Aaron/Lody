@@ -162,9 +162,7 @@ async function render(node: ReactNode, options: RenderOptions = {}): Promise<HTM
     });
   }
   await act(async () => {
-    root?.render(
-      createElement(Provider, { store }, createElement(TooltipProvider, null, node))
-    );
+    root?.render(createElement(Provider, { store }, createElement(TooltipProvider, null, node)));
   });
   return container;
 }
@@ -384,9 +382,8 @@ describe('SessionFileContentView', () => {
       githubSession.id,
       'README.md'
     );
-    expect(view.querySelector('[data-testid="monaco-viewer"]')?.getAttribute('data-text')).toBe(
-      '# Local worktree'
-    );
+    expect(view.textContent).toContain('Local worktree');
+    expect(view.querySelector('[data-testid="monaco-viewer"]')).toBeNull();
     expect(view.textContent).not.toContain('Local project is unavailable');
   });
 
@@ -889,6 +886,43 @@ describe('SessionFileContentView', () => {
 
     expect(monacoMockState.mountCount).toBe(2);
     expect(monacoMockState.unmountCount).toBe(1);
+  });
+
+  it('renders Markdown files by default and can switch to the source editor', async () => {
+    const markdown = '# Rendered by default';
+    const provider = createFakeSessionFileProvider({
+      files: [{ path: 'README.md', kind: 'text', sourceState: 'live-readonly' }],
+      snapshots: { 'README.md': { kind: 'text', text: markdown } },
+    });
+
+    const view = await render(
+      createElement(SessionFileContentView, {
+        sessionId: session.id,
+        session,
+        filePath: 'README.md',
+        fileProvider: provider,
+        fileProviderPending: false,
+      })
+    );
+    await flushMicrotasks();
+
+    expect(view.textContent).toContain('Rendered by default');
+    expect(view.querySelector('[data-testid="monaco-viewer"]')).toBeNull();
+
+    const previewEye = Array.from(view.querySelectorAll('button')).find(
+      (button) => button.getAttribute('aria-label') === 'Hide preview'
+    );
+    expect(previewEye).not.toBeUndefined();
+
+    await act(async () => {
+      previewEye?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await flushMicrotasks();
+
+    expect(view.querySelector('[data-testid="monaco-viewer"]')?.getAttribute('data-text')).toBe(
+      markdown
+    );
+    expect(view.querySelector('button[aria-label="Preview"]')).not.toBeNull();
   });
 
   it('renders SVG text files as an image by default with a preview eye toggle', async () => {

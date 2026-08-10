@@ -252,11 +252,9 @@ function SessionFileContentViewImpl({
   // SVG is text, so it is shown in the code viewer by default but can be toggled
   // to a rendered preview.
   const [svgRenderMode, setSvgRenderMode] = useState<'rendered' | 'code'>('rendered');
-  // Markdown defaults to `code` (not `rendered` like SVG): Code Collab markdown
-  // files are commonly co-edited, so the editable Monaco surface stays the
-  // default and the rendered preview is one toggle away. The user can flip to
-  // `rendered` to read the formatted document.
-  const [markdownRenderMode, setMarkdownRenderMode] = useState<'rendered' | 'code'>('code');
+  // Markdown opens as a rendered document by default, matching SVG previews.
+  // The source remains one toggle away in the editable Monaco surface.
+  const [markdownRenderMode, setMarkdownRenderMode] = useState<'rendered' | 'code'>('rendered');
   // Incremented by the top-bar search button to open Monaco's find widget.
   const [findRequestSeq, setFindRequestSeq] = useState(0);
   // Soft refresh: keep the current body mounted; only the toolbar button spins.
