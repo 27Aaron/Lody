@@ -403,7 +403,9 @@ const buildModeOptions = (
   target?: AcpSelectorTarget,
   authority: AcpCapabilityAuthority = 'unavailable'
 ): AcpSessionSelectOption[] => {
-  const modeOption = configOptions?.find((opt) => opt.category === 'mode' && opt.type === 'select');
+  const modeOption = configOptions?.find(
+    (opt) => opt.category === 'mode' && opt.type === 'select' && opt.id !== 'interaction_mode'
+  );
   if (!modeOption) {
     return [];
   }
@@ -499,7 +501,7 @@ export const buildAcpSelectorOptions = (target?: AcpSelectorTarget): AcpSelector
   // builtin tables.
   const isAcpProbed = target?.cliType === 'registry' || target?.cliType === 'custom';
   const modeConfigOption = configOptions?.find(
-    (opt) => opt.category === 'mode' && opt.type === 'select'
+    (opt) => opt.category === 'mode' && opt.type === 'select' && opt.id !== 'interaction_mode'
   );
   const shouldUseDedicatedModeOptions = !isAcpProbed || !modeConfigOption;
 
@@ -525,6 +527,9 @@ export const buildAcpSelectorOptions = (target?: AcpSelectorTarget): AcpSelector
   );
   const configOptionSelectors = allSelectors.filter((selector) => {
     const category = selector.category ?? '';
+    if (selector.configId === 'interaction_mode') {
+      return true;
+    }
     if (category === 'mode' && modeOptions.length > 0) {
       return false;
     }
