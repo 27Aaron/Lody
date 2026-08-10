@@ -870,7 +870,7 @@ export const LocalProjectItem = memo(function LocalProjectItem({
 });
 
 export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const router = useRouter();
   const location = useLocation();
   const isMobile = useIsMobile();
@@ -910,9 +910,12 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
   }, [isMobile, setMobileDrawerOpen]);
 
   const updateBanner = useMemo(() => readUpdateBannerState(updaterState), [updaterState]);
+  // The changelog follows the language the UI actually rendered in, which is
+  // i18next's resolved language rather than the stored preference.
+  const resolvedLanguage = i18n.resolvedLanguage;
   const updateReleaseNotes = useMemo(
-    () => pickLocalizedReleaseNotes(updaterState, language),
-    [updaterState, language]
+    () => pickLocalizedReleaseNotes(updaterState, resolvedLanguage),
+    [updaterState, resolvedLanguage]
   );
 
   const { organizations, activeOrganization, switchOrganization } = useOrganization();
@@ -2024,8 +2027,8 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
   }, [updateBanner]);
 
   const handleOpenChangelogSite = useCallback(() => {
-    void openExternalUrl(getChangelogUrl(language));
-  }, [language]);
+    void openExternalUrl(getChangelogUrl(resolvedLanguage));
+  }, [resolvedLanguage]);
 
   const handleApplyDownloadedUpdate = useCallback(async () => {
     if (!isElectron || typeof window === 'undefined') return;
