@@ -214,6 +214,9 @@ export const cloudOperations = {
     getWorkspaceMemberLimitState: query<ConvexApi['billing']['getWorkspaceMemberLimitState']>(
       'billing:getWorkspaceMemberLimitState'
     ),
+    getWorkspaceSeatInvitePreview: query<ConvexApi['billing']['getWorkspaceSeatInvitePreview']>(
+      'billing:getWorkspaceSeatInvitePreview'
+    ),
     listBillingInvoices: action<ConvexApi['billing']['listBillingInvoices']>(
       'billing:listBillingInvoices'
     ),
