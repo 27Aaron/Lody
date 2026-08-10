@@ -6,7 +6,6 @@ import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import {
   findFreshSessionPresenceState,
   resolveProjectGitHubRepo,
-  type ElectronUpdaterState,
   type LocalProjectId,
   type LocalProjectMeta,
   type MachineId,
@@ -24,7 +23,7 @@ import { cn } from '@/lib/utils';
 import { formatCompactRelativeTime } from '@/lib/format-relative-time';
 import { isElectronRenderer, useElectronFullscreen } from '@/lib/electron';
 import { openExternalUrl } from '@/lib/native-browser';
-import { LODY_DISCORD_URL } from '@/lib/lody-urls';
+import { getChangelogUrl, LODY_DISCORD_URL } from '@/lib/lody-urls';
 import { getCachedWorkspaceName } from '@/lib/local-storage-cache';
 import {
   languageAtom,
@@ -70,6 +69,9 @@ import {
   type SidebarUpdatedBucketKey,
   type SidebarUpdatedItem,
 } from '@/components/sidebar-updated-session-list';
+import { SidebarUpdateBanner } from '@/components/sidebar-update-banner';
+import { UpdateChangelogDialog } from '@/components/update-changelog-dialog';
+import { pickLocalizedReleaseNotes, readUpdateBannerState } from '@/lib/electron-update-banner';
 import { useElectronUpdaterState } from '@/hooks/use-electron-updater-state';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { useOpenSettings } from '@/hooks/use-open-settings';
@@ -189,63 +191,6 @@ function getDocsLinkOrigin(): string {
     }
   }
   return DOCS_LINK_FALLBACK_ORIGIN;
-}
-
-function readDownloadedUpdaterVersion(state: ElectronUpdaterState | null): string | null {
-  if (!state || state.phase !== 'downloaded') return null;
-  const downloadedVersion = state.downloadedVersion?.trim();
-  if (downloadedVersion) return downloadedVersion;
-  const availableVersion = state.availableVersion?.trim();
-  return availableVersion || null;
-}
-
-function SidebarUpdateBanner({
-  title,
-  description,
-  changelogLabel,
-  restartLabel,
-  laterLabel,
-  isRestarting,
-  onRestart,
-  onLater,
-}: {
-  title: string;
-  description: string;
-  changelogLabel: string;
-  restartLabel: string;
-  laterLabel: string;
-  isRestarting: boolean;
-  onRestart: () => void;
-  onLater: () => void;
-}) {
-  return (
-    <div
-      className={cn(
-        'rounded-lg border border-border/80 bg-background/95 px-3 py-2 shadow-lg backdrop-blur-sm',
-        'supports-[backdrop-filter]:bg-background/85'
-      )}
-    >
-      <div className="text-sm font-semibold text-foreground">{title}</div>
-      <div className="mt-1 text-xs leading-relaxed text-muted-foreground">{description}</div>
-      <a
-        href="https://lody.ai/changelog"
-        target="_blank"
-        rel="noopener noreferrer"
-        className="mt-1 inline-flex text-xs font-medium text-primary underline-offset-2 hover:underline"
-      >
-        {changelogLabel}
-      </a>
-      <div className="mt-2 flex items-center justify-end gap-2">
-        <Button type="button" variant="ghost" size="sm" className="h-7 px-2.5" onClick={onLater}>
-          {laterLabel}
-        </Button>
-        <Button type="button" size="sm" className="h-7 px-2.5" onClick={onRestart}>
-          {isRestarting ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
-          {restartLabel}
-        </Button>
-      </div>
-    </div>
-  );
 }
 
 function getStableRepoFullNames(tasks: { repoFullName?: string | null }[]): string[] {
@@ -948,7 +893,14 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
       return null;
     }
   });
+  // Dismissing a download only hides the banner for that download; the
+  // `downloaded` banner (the one that can actually restart) comes back on its
+  // own, so this stays in memory instead of the persisted dismissal key.
+  const [dismissedDownloadingVersion, setDismissedDownloadingVersion] = useState<string | null>(
+    null
+  );
   const [isInstallingUpdate, setIsInstallingUpdate] = useState(false);
+  const [isChangelogOpen, setIsChangelogOpen] = useState(false);
 
   const defaultSessionTitle = t('sessions.untitled', 'Untitled session');
 
@@ -957,9 +909,11 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
     setMobileDrawerOpen(false);
   }, [isMobile, setMobileDrawerOpen]);
 
-  const downloadedUpdaterVersion = useMemo(() => {
-    return readDownloadedUpdaterVersion(updaterState);
-  }, [updaterState]);
+  const updateBanner = useMemo(() => readUpdateBannerState(updaterState), [updaterState]);
+  const updateReleaseNotes = useMemo(
+    () => pickLocalizedReleaseNotes(updaterState, language),
+    [updaterState, language]
+  );
 
   const { organizations, activeOrganization, switchOrganization } = useOrganization();
   const runtime = useAtomValue(activeWorkspaceRuntimeAtom);
@@ -1907,10 +1861,7 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
   const handleToggleGithubWorktreesSection = useCallback(() => {
     setGithubWorktreesSectionCollapsed((prev) => !prev);
   }, [setGithubWorktreesSectionCollapsed]);
-  const paidPlanTiers = useCloudQuery(
-    cloudOperations.billing.getMyPaidWorkspacePlanTiers,
-    {}
-  );
+  const paidPlanTiers = useCloudQuery(cloudOperations.billing.getMyPaidWorkspacePlanTiers, {});
   const planTierByWorkspaceId = useMemo(
     () => new Map((paidPlanTiers ?? []).map((entry) => [entry.workspaceId, entry.planTier])),
     [paidPlanTiers]
@@ -2058,15 +2009,23 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
     setBugReportDialogOpen(true);
   }, [closeMobileDrawer, setBugReportDialogOpen]);
 
-  const handleDismissUpdateReady = useCallback(() => {
-    if (!downloadedUpdaterVersion) return;
-    setDismissedUpdaterVersion(downloadedUpdaterVersion);
+  const handleDismissUpdateBanner = useCallback(() => {
+    if (!updateBanner) return;
+    if (updateBanner.stage === 'downloading') {
+      setDismissedDownloadingVersion(updateBanner.version);
+      return;
+    }
+    setDismissedUpdaterVersion(updateBanner.version);
     try {
-      localStorage.setItem('lody:dismissedUpdaterVersion', downloadedUpdaterVersion);
+      localStorage.setItem('lody:dismissedUpdaterVersion', updateBanner.version);
     } catch {
       // Ignore storage errors
     }
-  }, [downloadedUpdaterVersion]);
+  }, [updateBanner]);
+
+  const handleOpenChangelogSite = useCallback(() => {
+    void openExternalUrl(getChangelogUrl(language));
+  }, [language]);
 
   const handleApplyDownloadedUpdate = useCallback(async () => {
     if (!isElectron || typeof window === 'undefined') return;
@@ -2127,34 +2086,31 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
 
   const sidebarBottomFloatingContent = useMemo(() => {
     if (!isElectron) return null;
-    if (!downloadedUpdaterVersion) return null;
-    if (dismissedUpdaterVersion === downloadedUpdaterVersion) return null;
+    if (!updateBanner) return null;
+    const dismissedVersion =
+      updateBanner.stage === 'downloading' ? dismissedDownloadingVersion : dismissedUpdaterVersion;
+    if (dismissedVersion === updateBanner.version) return null;
 
     return (
       <SidebarUpdateBanner
-        title={t('sidebar.updateReady.title', 'Update ready')}
-        description={t(
-          'sidebar.updateReady.description',
-          'Version {{version}} is ready. Restart to apply the update.',
-          { version: downloadedUpdaterVersion }
-        )}
-        changelogLabel={t('sidebar.updateReady.changelog', 'View changelog')}
-        restartLabel={t('sidebar.updateReady.restart', 'Update & Restart')}
-        laterLabel={t('sidebar.updateReady.later', 'Later')}
+        stage={updateBanner.stage}
+        version={updateBanner.version}
+        percent={updateBanner.percent}
         isRestarting={isInstallingUpdate}
+        onViewChangelog={() => setIsChangelogOpen(true)}
         onRestart={() => {
           void handleApplyDownloadedUpdate();
         }}
-        onLater={handleDismissUpdateReady}
+        onLater={handleDismissUpdateBanner}
       />
     );
   }, [
+    dismissedDownloadingVersion,
     dismissedUpdaterVersion,
-    downloadedUpdaterVersion,
     handleApplyDownloadedUpdate,
-    handleDismissUpdateReady,
+    handleDismissUpdateBanner,
     isInstallingUpdate,
-    t,
+    updateBanner,
   ]);
 
   const githubWorktreesLabel = useMemo(() => t('sidebar.githubWorktrees', 'GitHub Worktrees'), [t]);
@@ -2543,6 +2499,17 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
           void handleConfirmSessionShare();
         }}
       />
+
+      {updateBanner ? (
+        <UpdateChangelogDialog
+          open={isChangelogOpen}
+          onOpenChange={setIsChangelogOpen}
+          version={updateBanner.version}
+          releaseDate={updaterState?.releaseDate}
+          notes={updateReleaseNotes}
+          onOpenChangelogSite={handleOpenChangelogSite}
+        />
+      ) : null}
 
       <Dialog
         open={pendingLocalProjectRemoval != null}

@@ -28,6 +28,12 @@ export function getDownloadPageUrl(language: string | undefined): string {
   return new URL(path, getLodyOrigin()).toString();
 }
 
+export function getChangelogUrl(language: string | undefined): string {
+  const isChinese = language?.startsWith('zh') ?? false;
+  const path = isChinese ? '/zh/changelog' : '/changelog';
+  return new URL(path, getLodyOrigin()).toString();
+}
+
 export function getWebsiteUrl(language: string | undefined): string {
   const isChinese = language?.startsWith('zh') ?? false;
   const path = isChinese ? '/zh/' : '/home';

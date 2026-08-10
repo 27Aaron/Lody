@@ -364,6 +364,16 @@ export type ElectronUpdaterState = {
   releaseName?: string;
   releaseDate?: string;
   releaseNotes?: string;
+  /**
+   * Release notes per UI language, so the renderer can show the changelog in
+   * the language the user picked instead of the single publisher-provided
+   * `releaseNotes` blob. Optional: a build whose main process does not publish
+   * localized notes keeps falling back to `releaseNotes`.
+   */
+  releaseNotesByLocale?: {
+    en?: string;
+    zh_CN?: string;
+  };
   percent?: number;
   bytesPerSecond?: number;
   transferred?: number;
