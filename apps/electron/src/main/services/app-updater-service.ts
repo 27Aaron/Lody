@@ -7,6 +7,7 @@ import type {
 } from '@lody/shared/electron-ipc'
 import { formatUnknownError } from '../utils'
 import { setAppQuitting } from '../window-state'
+import { readUpdaterReleaseMetadata } from './app-updater-metadata'
 
 const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000
 const LODY_UPDATER_STATE_EVENT = 'lodyUpdater:state'
@@ -20,21 +21,6 @@ function readNonEmptyString(value: unknown): string | undefined {
 function readObject(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object') return null
   return value as Record<string, unknown>
-}
-
-function readReleaseNotes(value: unknown): string | undefined {
-  const direct = readNonEmptyString(value)
-  if (direct) return direct
-
-  if (!Array.isArray(value)) return undefined
-  for (const item of value) {
-    const line = readNonEmptyString(item)
-    if (line) return line
-    const entry = readObject(item)
-    const note = readNonEmptyString(entry?.note)
-    if (note) return note
-  }
-  return undefined
 }
 
 function readFiniteNumber(record: Record<string, unknown> | null, key: string): number | undefined {
@@ -225,9 +211,7 @@ export class AppUpdaterService {
         phase: 'downloading',
         availableVersion: version,
         downloadedVersion: undefined,
-        releaseName: readNonEmptyString(record?.releaseName),
-        releaseDate: readNonEmptyString(record?.releaseDate),
-        releaseNotes: readReleaseNotes(record?.releaseNotes),
+        ...readUpdaterReleaseMetadata(payload),
         checkedAtMs: Date.now(),
         error: undefined
       })
@@ -265,9 +249,7 @@ export class AppUpdaterService {
         phase: 'downloaded',
         downloadedVersion: version,
         availableVersion: version ?? this.state.availableVersion,
-        releaseName: readNonEmptyString(record?.releaseName),
-        releaseDate: readNonEmptyString(record?.releaseDate),
-        releaseNotes: readReleaseNotes(record?.releaseNotes),
+        ...readUpdaterReleaseMetadata(payload),
         checkedAtMs: Date.now(),
         error: undefined
       })
