@@ -6,6 +6,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import {
   getSideChatLauncherState,
   getSidePanelTabCloseFallback,
+  getSidePanelTabStateAfterClose,
   SessionSidePanelEmptyState,
   SessionSidePanelTabBar,
   type SessionSidePanelOption,
@@ -56,6 +57,29 @@ describe('getSidePanelTabCloseFallback', () => {
 
   it('returns null only when no tab remains', () => {
     expect(getSidePanelTabCloseFallback(['files'], 'files')).toBeNull();
+  });
+});
+
+describe('getSidePanelTabStateAfterClose', () => {
+  it('keeps the sidebar open while another tab remains', () => {
+    expect(getSidePanelTabStateAfterClose(['files', 'changes'], 'changes')).toEqual({
+      fallbackTabId: 'files',
+      sidebarOpen: true,
+    });
+  });
+
+  it('closes the sidebar with the last tab', () => {
+    expect(getSidePanelTabStateAfterClose(['files'], 'files')).toEqual({
+      fallbackTabId: null,
+      sidebarOpen: false,
+    });
+  });
+
+  it('ignores a close request for a tab that is no longer open', () => {
+    expect(getSidePanelTabStateAfterClose(['files'], 'changes')).toEqual({
+      fallbackTabId: null,
+      sidebarOpen: true,
+    });
   });
 });
 

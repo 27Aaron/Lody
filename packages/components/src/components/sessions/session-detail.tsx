@@ -100,6 +100,7 @@ import { SessionTabBar, type ViewerTabItem } from './session-tab-bar';
 import {
   getSideChatLauncherState,
   getSidePanelTabCloseFallback,
+  getSidePanelTabStateAfterClose,
   SessionSidePanelEmptyState,
   SessionSidePanelTabBar,
   type SessionSidePanelOption,
@@ -3208,12 +3209,15 @@ const SessionDetail = ({
 
   const handleCloseSidebarTab = useCallback(
     (tabId: SidebarTab) => {
-      const fallbackTabId = getSidePanelTabCloseFallback(sidePanelTabIds, tabId);
+      const { fallbackTabId, sidebarOpen } = getSidePanelTabStateAfterClose(sidePanelTabIds, tabId);
       const fallbackSidebarTabId = getSidePanelTabCloseFallback(
         visibleOpenedSidebarTabs,
         tabId
       ) as SidebarTab | null;
       setOpenedSidebarTabs((current) => current.filter((candidate) => candidate !== tabId));
+      if (!sidebarOpen) {
+        setIsSidebarOpen(false);
+      }
       if (activeSidebarTab === tabId) {
         if (activeViewerTabId === null) {
           selectSidePanelTab(fallbackTabId);
@@ -3292,6 +3296,10 @@ const SessionDetail = ({
       }
       const existingIndex = viewerTabs.findIndex((tab) => tab.id === tabId);
       if (existingIndex >= 0) {
+        const { sidebarOpen } = getSidePanelTabStateAfterClose(sidePanelTabIds, tabId);
+        if (!sidebarOpen) {
+          setIsSidebarOpen(false);
+        }
         captureSessionDetailEvent('session/viewer_tab_closed', {
           viewer_tab_id: tabId,
           viewer_tab_type: tabId.startsWith('file:') ? 'file' : 'diff',
@@ -3678,10 +3686,15 @@ const SessionDetail = ({
           throw new Error(termination?.error ?? 'Side session termination failed');
         }
         await deleteSessions([sideSessionId]);
+        const { fallbackTabId, sidebarOpen } = getSidePanelTabStateAfterClose(
+          sidePanelTabIds,
+          getSideSessionPanelTabId(sideSessionId)
+        );
+        if (!sidebarOpen) {
+          setIsSidebarOpen(false);
+        }
         if (activeSideSessionId === sideSessionId) {
-          selectSidePanelTab(
-            getSidePanelTabCloseFallback(sidePanelTabIds, getSideSessionPanelTabId(sideSessionId))
-          );
+          selectSidePanelTab(fallbackTabId);
         }
       } catch (error) {
         console.error('Failed to close side session', { sideSessionId, error });
