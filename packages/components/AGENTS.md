@@ -101,6 +101,11 @@ mobile surfaces.
 - Chat landing: `src/components/chat/chat-landing.tsx`.
 - Sidebar: `loro-sidebar.tsx`, `loro-app-sidebar.tsx`, and
   `sessions/session-list-rows.ts`. Sidebar rows are sessions, not Tasks.
+- Desktop update prompt: `sidebar-update-banner.tsx` plus `update-changelog-dialog.tsx`,
+  driven by the pure selectors in `lib/electron-update-banner.ts`. The changelog opens
+  in-app; release notes come from a remote feed and render as sanitized Markdown with
+  raw HTML off. The website is only the no-notes fallback, through `getChangelogUrl`
+  and `openExternalUrl`, never a hardcoded link.
 - Agent configuration: `settings/agent-config-dialog.tsx` and
   `settings/env-vars-textarea.tsx`.
 - Responsive mobile UI: `src/components/mobile/AGENTS.md`.

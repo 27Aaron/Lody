@@ -2488,6 +2488,9 @@
   "sidebar.newSession": "新会话",
   "sidebar.renameChat.description": "为该会话输入新的名称。",
   "sidebar.renameChat.title": "重命名会话",
+  "sidebar.updateDownloading.title": "正在下载更新",
+  "sidebar.updateDownloading.description": "正在后台下载版本 {{version}}。",
+  "sidebar.updateDownloading.percent": "{{percent}}%",
   "sidebar.updateReady.changelog": "查看更新日志",
   "sidebar.updateReady.description": "版本 {{version}} 已可更新，重启后生效。",
   "sidebar.updateReady.installFailed": "重启安装更新失败。",
@@ -3307,5 +3310,10 @@
   "errorBoundary.serverErrorSummary": "Lody 后端返回了服务器错误。",
   "settings.agent.dialog.section.account": "账号",
   "settings.agent.dialog.authRequiredHint": "该 Provider 在这台机器上还没有登录凭据。",
-  "settings.agent.dialog.reauthenticateHint": "如果该 Provider 不再接受你的账号，可重新登录。"
+  "settings.agent.dialog.reauthenticateHint": "如果该 Provider 不再接受你的账号，可重新登录。",
+  "updates.changelog.title": "{{version}} 更新内容",
+  "updates.changelog.subtitle": "本次更新包含的改动。",
+  "updates.changelog.releasedOn": "发布于 {{date}}",
+  "updates.changelog.unavailable": "该版本没有附带更新说明，可打开官网更新日志查看改动。",
+  "updates.changelog.openWebsite": "打开官网更新日志"
 }
