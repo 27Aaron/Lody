@@ -30,6 +30,7 @@ import type { AcpSessionSelectOption } from '@/components/shared/acp-session-sel
  */
 const machineId = 'machine-storybook' as MachineId;
 const codexId = 'agent-codex' as AgentConfigId;
+const grokId = 'agent-grok' as AgentConfigId;
 
 const agents: AgentConfigMeta[] = [
   {
@@ -48,6 +49,15 @@ const agents: AgentConfigMeta[] = [
     description: 'Claude Code',
     cliType: 'builtin',
     agentType: 'claude',
+    env: {},
+  },
+  {
+    id: grokId,
+    machineId,
+    name: 'Grok',
+    description: 'Official Grok runtime through the Lody compatibility adapter',
+    cliType: 'builtin',
+    agentType: 'grok',
     env: {},
   },
 ];
@@ -109,6 +119,52 @@ const selectors: AcpConfigOptionSelector[] = [
     options: [
       { value: 'off', label: 'Off' },
       { value: 'on', label: 'On' },
+    ],
+  },
+];
+
+const grokSelectors: AcpConfigOptionSelector[] = [
+  {
+    type: 'select',
+    configId: 'interaction_mode',
+    category: 'mode',
+    label: 'Interaction Mode',
+    currentValue: 'agent',
+    options: [
+      { value: 'agent', label: 'Agent' },
+      { value: 'plan', label: 'Plan' },
+      { value: 'ask', label: 'Ask' },
+    ],
+  },
+  {
+    type: 'select',
+    configId: 'permission_mode',
+    category: '_permission',
+    label: 'Permission Mode',
+    currentValue: 'ask',
+    options: [
+      { value: 'ask', label: 'Ask Every Time' },
+      { value: 'always-approve', label: 'Always Approve' },
+    ],
+  },
+  {
+    type: 'select',
+    configId: 'model',
+    category: 'model',
+    label: 'Model',
+    currentValue: 'grok-build',
+    options: [{ value: 'grok-build', label: 'Grok Build' }],
+  },
+  {
+    type: 'select',
+    configId: 'reasoning_effort',
+    category: 'thought_level',
+    label: 'Reasoning Effort',
+    currentValue: 'medium',
+    options: [
+      { value: 'low', label: 'Low' },
+      { value: 'medium', label: 'Medium' },
+      { value: 'high', label: 'High' },
     ],
   },
 ];
@@ -184,6 +240,48 @@ function MachineScopeShell() {
   );
 }
 
+function GrokConfigShell() {
+  const store = useMemo(() => {
+    const next = createStore();
+    next.set(
+      agentConfigMetaCacheAtom,
+      Object.fromEntries(agents.map((agent) => [getAgentConfigRoomId(agent.id), agent]))
+    );
+    return next;
+  }, []);
+  const [values, setValues] = useState<Record<string, AcpConfigOptionValue>>(() =>
+    Object.fromEntries(grokSelectors.map((selector) => [selector.configId, selector.currentValue]))
+  );
+  const updateConfig = (id: string, value: AcpConfigOptionValue) =>
+    setValues((previous) => ({ ...previous, [id]: value }));
+
+  return (
+    <Provider store={store}>
+      <div className="flex min-h-dvh items-end bg-background p-8">
+        <div className="mb-6 flex w-full max-w-3xl items-center gap-2 rounded-xl bg-input/90 px-4 py-3">
+          <DesktopRunConfigMenu
+            agentSelection={{ agentId: grokId, machineId }}
+            allowedMachineIds={[machineId]}
+            agentLocked
+            modelOptions={[]}
+            selectedModelId={null}
+            configOptionSelectors={grokSelectors}
+            configOptionValues={values}
+            onConfigOptionChange={updateConfig}
+          />
+          <DesktopPermissionModeButton
+            modeOptions={[]}
+            selectedModeId={null}
+            configOptionSelectors={grokSelectors}
+            configOptionValues={values}
+            onConfigOptionChange={updateConfig}
+          />
+        </div>
+      </div>
+    </Provider>
+  );
+}
+
 function EmptyMachineScopeShell() {
   return (
     <div className="flex min-h-dvh items-center justify-center bg-background p-8">
@@ -205,6 +303,10 @@ type Story = StoryObj<typeof meta>;
 
 export const LockedAgent: Story = { args: { isEmptyConversation: false } };
 export const EmptyConversationAgentPickable: Story = { args: { isEmptyConversation: true } };
+export const GrokInteractionAndPermission: Story = {
+  args: { isEmptyConversation: false },
+  render: () => <GrokConfigShell />,
+};
 export const MachineScope: Story = {
   args: { isEmptyConversation: true },
   render: () => <MachineScopeShell />,

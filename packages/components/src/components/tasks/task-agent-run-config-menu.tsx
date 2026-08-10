@@ -315,20 +315,28 @@ export function TaskAgentRunConfigMenu({
       )
     : false;
 
-  const modeConfigSelector = ordered.modeSelectors[0] as AcpSelectConfigOptionSelector | undefined;
+  const explicitPermissionSelector = ordered.permissionModeSelectors[0];
+  const modeConfigSelector = (explicitPermissionSelector ?? ordered.modeSelectors[0]) as
+    | AcpSelectConfigOptionSelector
+    | undefined;
   const permissionOptions = useMemo(
-    () => (modeOptions.length > 0 ? modeOptions : (modeConfigSelector?.options ?? [])),
-    [modeConfigSelector, modeOptions]
+    () =>
+      explicitPermissionSelector
+        ? explicitPermissionSelector.options
+        : modeOptions.length > 0
+          ? modeOptions
+          : (modeConfigSelector?.options ?? []),
+    [explicitPermissionSelector, modeConfigSelector, modeOptions]
   );
   const permissionValue =
-    modeOptions.length > 0
-      ? (value?.modeId ?? null)
-      : modeConfigSelector
+    explicitPermissionSelector || modeOptions.length === 0
+      ? modeConfigSelector
         ? ((resolveConfigOptionValue(
             modeConfigSelector,
             value?.configOptionValues?.[modeConfigSelector.configId]
           ) as string) ?? null)
-        : null;
+        : null
+      : (value?.modeId ?? null);
   const permissionLabel =
     permissionOptions.find((opt) => opt.value === permissionValue)?.label ?? null;
 
@@ -413,6 +421,9 @@ export function TaskAgentRunConfigMenu({
   // After agent + selector options settle, force permission mode to Auto when
   // available and the current mode is missing or invalid for this agent.
   useEffect(() => {
+    // Explicit permission config options are initialized and persisted through
+    // configOptionValues; modeId remains available for the interaction mode.
+    if (explicitPermissionSelector) return;
     if (!value?.agentConfigId || !selectedConfig || permissionOptions.length === 0) {
       return;
     }
@@ -427,7 +438,7 @@ export function TaskAgentRunConfigMenu({
       ...(value.modelId ? { modelId: value.modelId } : {}),
       ...(value.configOptionValues ? { configOptionValues: value.configOptionValues } : {}),
     });
-  }, [commit, permissionOptions, selectedConfig, value]);
+  }, [commit, explicitPermissionSelector, permissionOptions, selectedConfig, value]);
 
   const machineFilterLabel =
     machinesWithAgents.find((entry) => entry.machineId === machineFilterId)?.name ??
@@ -699,7 +710,7 @@ export function TaskAgentRunConfigMenu({
                   disabled={opt.disabled || !value?.agentConfigId}
                   onSelect={() => {
                     if (!value?.agentConfigId) return;
-                    if (modeOptions.length > 0) {
+                    if (!explicitPermissionSelector && modeOptions.length > 0) {
                       commit({
                         agentConfigId: value.agentConfigId as AgentConfigId,
                         modeId: opt.value,

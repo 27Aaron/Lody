@@ -35,7 +35,7 @@ import {
  * `MobileRunConfigButton`, it consolidates the run knobs that used to be
  * split across the composer footer + below rows into one vertical form:
  *
- *   Agent · Model · Reasoning · Permission · Plan · Fast
+ *   Agent · Model · Interaction · Reasoning · Permission · Plan · Fast
  *
  * Shared by the in-session composer and the mobile new-chat sheet so both
  * surfaces pick models the same way. Rows derive options from the same
@@ -44,8 +44,8 @@ import {
  *
  * - Agent: read-only when `agentLocked` (mid-session); a picker while empty
  *   or on new-chat. Options are scoped by `allowedMachineIds` when set.
- * - Model / Reasoning / Permission: inline pickers (full names live here —
- *   the button face only shows an icon / short label).
+ * - Model / Interaction / Reasoning / Permission: inline pickers (full names
+ *   live here — the button face only shows an icon / short label).
  * - Plan / Fast: labelled switch rows.
  */
 export type MobileRunConfigSheetProps = {
@@ -135,6 +135,8 @@ function MobileRunConfigSheetRows({
 
   const {
     modelSelectors,
+    interactionModeSelectors,
+    permissionModeSelectors,
     modeSelectors,
     thoughtLevelSelectors,
     planModeSelectors,
@@ -170,8 +172,7 @@ function MobileRunConfigSheetRows({
     () =>
       agentSelection
         ? executorConfigs.find(
-            (cfg) =>
-              cfg.id === agentSelection.agentId && cfg.machineId === agentSelection.machineId
+            (cfg) => cfg.id === agentSelection.agentId && cfg.machineId === agentSelection.machineId
           )
         : null,
     [agentSelection, executorConfigs]
@@ -202,6 +203,32 @@ function MobileRunConfigSheetRows({
   const modelLabel = useMemo(
     () => modelPickerOptions.find((opt) => opt.value === modelValue)?.label ?? modelValue,
     [modelPickerOptions, modelValue]
+  );
+
+  /* ── Provider-specific interaction mode (for example Grok Agent / Plan / Ask) ── */
+  const interactionSelector = interactionModeSelectors[0];
+  const interactionValue = interactionSelector
+    ? ((resolveConfigOptionValue(
+        interactionSelector,
+        configOptionValues?.[interactionSelector.configId]
+      ) as string) ?? null)
+    : null;
+  const interactionOptions = useMemo<MobileInlinePickerOption<string>[]>(
+    () =>
+      (interactionSelector?.options ?? []).map((option) => ({
+        value: option.value,
+        label: option.label,
+        searchText: option.label,
+        description: option.description,
+        disabled: option.disabled,
+      })),
+    [interactionSelector]
+  );
+  const interactionLabel = useMemo(
+    () =>
+      interactionOptions.find((option) => option.value === interactionValue)?.label ??
+      interactionValue,
+    [interactionOptions, interactionValue]
   );
 
   /* ── Reasoning / thought level (first thought-level select selector) ── */
@@ -235,9 +262,15 @@ function MobileRunConfigSheetRows({
   );
 
   /* ── Permission / mode (modeOptions first, else the mode selector) ── */
-  const modeConfigSelector: AcpSelectConfigOptionSelector | undefined = modeSelectors[0];
+  const explicitPermissionSelector = permissionModeSelectors[0];
+  const modeConfigSelector: AcpSelectConfigOptionSelector | undefined =
+    explicitPermissionSelector ?? modeSelectors[0];
   const permissionOptions = useMemo<MobileInlinePickerOption<string>[]>(() => {
-    const source = modeOptions.length > 0 ? modeOptions : (modeConfigSelector?.options ?? []);
+    const source = explicitPermissionSelector
+      ? explicitPermissionSelector.options
+      : modeOptions.length > 0
+        ? modeOptions
+        : (modeConfigSelector?.options ?? []);
     return source.map((opt) => ({
       value: opt.value,
       label: opt.label,
@@ -246,16 +279,16 @@ function MobileRunConfigSheetRows({
       disabled: opt.disabled,
       icon: permissionModeIcon(opt.value),
     }));
-  }, [modeConfigSelector, modeOptions]);
+  }, [explicitPermissionSelector, modeConfigSelector, modeOptions]);
   const permissionValue =
-    modeOptions.length > 0
-      ? selectedModeId
-      : modeConfigSelector
+    explicitPermissionSelector || modeOptions.length === 0
+      ? modeConfigSelector
         ? ((resolveConfigOptionValue(
             modeConfigSelector,
             configOptionValues?.[modeConfigSelector.configId]
           ) as string) ?? null)
-        : null;
+        : null
+      : selectedModeId;
   const permissionLabel = useMemo(
     () => permissionOptions.find((opt) => opt.value === permissionValue)?.label ?? null,
     [permissionOptions, permissionValue]
@@ -336,6 +369,23 @@ function MobileRunConfigSheetRows({
         </RunConfigRow>
       ) : null}
 
+      {interactionSelector && interactionOptions.length > 0 ? (
+        <RunConfigRow label={interactionSelector.label}>
+          <MobileInlinePicker<string>
+            id="run-config-interaction"
+            value={interactionValue}
+            onChange={(value) =>
+              onConfigOptionChange?.(interactionSelector.configId, value as AcpConfigOptionValue)
+            }
+            options={interactionOptions}
+            ariaLabel={interactionSelector.label}
+            triggerContent={
+              <span className="truncate">{interactionLabel ?? interactionSelector.label}</span>
+            }
+          />
+        </RunConfigRow>
+      ) : null}
+
       {thinkingSelector && thinkingOptions.length > 0 ? (
         <RunConfigRow label={reasoningLabel}>
           <MobileInlinePicker<string>
@@ -357,10 +407,11 @@ function MobileRunConfigSheetRows({
             id="run-config-permission"
             value={permissionValue}
             onChange={(value) => {
-              if (modeOptions.length > 0) {
-                onModeChange(value);
-              } else if (modeConfigSelector) {
+              if (explicitPermissionSelector || modeOptions.length === 0) {
+                if (!modeConfigSelector) return;
                 onConfigOptionChange?.(modeConfigSelector.configId, value as AcpConfigOptionValue);
+              } else {
+                onModeChange(value);
               }
             }}
             options={permissionOptions}

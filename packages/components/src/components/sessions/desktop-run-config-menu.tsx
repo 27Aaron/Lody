@@ -45,13 +45,13 @@ import {
 /**
  * Desktop composer run-config controls. Two buttons on the composer footer:
  *
- *   [ agent icon + model · reasoning (· plan/fast glyphs) ⌄ ]  [ mode icon + mode name ⌄ ]
+ *   [ agent icon + model · reasoning (· plan/fast glyphs) ⌄ ]  [ permission icon + name ⌄ ]
  *
- * `DesktopRunConfigMenu` consolidates Agent / Model / Reasoning (side submenus)
- * plus Plan / Fast (toggle rows) into one dropdown; `DesktopPermissionModeButton`
- * stays a separate button because the mode is the knob users flip most — its
- * face shows the full mode name (truncating, then the label can be hidden via
- * container width) and opens a flat mode list.
+ * `DesktopRunConfigMenu` consolidates Agent / Model / Interaction / Reasoning
+ * (side submenus) plus Plan / Fast (toggle rows) into one dropdown;
+ * `DesktopPermissionModeButton` stays a separate button because permission is
+ * the knob users flip most — its face shows the full permission name and opens
+ * a flat permission list.
  *
  * Both menus use the app-wide DropdownMenu surface.
  */
@@ -343,10 +343,13 @@ export function DesktopRunConfigMenu({
   const executorConfigs = useAtomValue(getAllAgentConfigAtom);
   const onlineMachines = useOnlineMachines(allowedMachineIds);
   const selectableAgentConfigs = availableAgentConfigs ?? executorConfigs;
-  const { modelSelectors, thoughtLevelSelectors, planModeSelectors, fastModeSelectors } = useMemo(
-    () => orderAcpConfigOptionSelectors(configOptionSelectors),
-    [configOptionSelectors]
-  );
+  const {
+    modelSelectors,
+    interactionModeSelectors,
+    thoughtLevelSelectors,
+    planModeSelectors,
+    fastModeSelectors,
+  } = useMemo(() => orderAcpConfigOptionSelectors(configOptionSelectors), [configOptionSelectors]);
 
   /* Agent options follow the caller's machine scope. On chat landing the
      explicit machine picker owns that scope, including GitHub/no-project drafts. */
@@ -396,6 +399,18 @@ export function DesktopRunConfigMenu({
     }
   };
 
+  /* Provider-specific interaction mode (for example Grok Agent / Plan / Ask). */
+  const interactionSelector = interactionModeSelectors[0];
+  const interactionValue = interactionSelector
+    ? ((resolveConfigOptionValue(
+        interactionSelector,
+        configOptionValues?.[interactionSelector.configId]
+      ) as string) ?? null)
+    : null;
+  const interactionLabel =
+    interactionSelector?.options.find((opt) => opt.value === interactionValue)?.label ??
+    interactionValue;
+
   /* Reasoning (first thought-level select selector). */
   const thinkingSelector = useMemo(
     () =>
@@ -433,6 +448,7 @@ export function DesktopRunConfigMenu({
     agentOptions.length > 0 ||
     selectedAgentConfig != null ||
     modelPickerOptions.length > 0 ||
+    interactionSelector != null ||
     thinkingSelector != null ||
     planSelector != null ||
     fastSelector != null;
@@ -576,6 +592,29 @@ export function DesktopRunConfigMenu({
           </DropdownMenuSub>
         ) : null}
 
+        {interactionSelector ? (
+          <DropdownMenuSub>
+            <ValueSubTrigger label={interactionSelector.label} value={interactionLabel} />
+            <DropdownMenuSubContent>
+              {interactionSelector.options.map((opt) => (
+                <OptionItem
+                  key={opt.value}
+                  label={opt.label}
+                  description={opt.description}
+                  selected={opt.value === interactionValue}
+                  disabled={opt.disabled}
+                  onSelect={() =>
+                    onConfigOptionChange?.(
+                      interactionSelector.configId,
+                      opt.value as AcpConfigOptionValue
+                    )
+                  }
+                />
+              ))}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        ) : null}
+
         {thinkingSelector ? (
           <DropdownMenuSub>
             <ValueSubTrigger label={reasoningLabel} value={thinkingLabel} />
@@ -675,34 +714,42 @@ export function DesktopPermissionModeButton({
   onConfigOptionChange,
 }: DesktopPermissionModeButtonProps) {
   const { t } = useTranslation();
-  const { modeSelectors } = useMemo(
+  const { permissionModeSelectors, modeSelectors } = useMemo(
     () => orderAcpConfigOptionSelectors(configOptionSelectors),
     [configOptionSelectors]
   );
-  const modeConfigSelector: AcpSelectConfigOptionSelector | undefined = modeSelectors[0];
+  const explicitPermissionSelector = permissionModeSelectors[0];
+  const modeConfigSelector: AcpSelectConfigOptionSelector | undefined =
+    explicitPermissionSelector ?? modeSelectors[0];
   const options = useMemo(
-    () => (modeOptions.length > 0 ? modeOptions : (modeConfigSelector?.options ?? [])),
-    [modeConfigSelector, modeOptions]
+    () =>
+      explicitPermissionSelector
+        ? explicitPermissionSelector.options
+        : modeOptions.length > 0
+          ? modeOptions
+          : (modeConfigSelector?.options ?? []),
+    [explicitPermissionSelector, modeConfigSelector, modeOptions]
   );
   const value =
-    modeOptions.length > 0
-      ? selectedModeId
-      : modeConfigSelector
+    explicitPermissionSelector || modeOptions.length === 0
+      ? modeConfigSelector
         ? ((resolveConfigOptionValue(
             modeConfigSelector,
             configOptionValues?.[modeConfigSelector.configId]
           ) as string) ?? null)
-        : null;
+        : null
+      : selectedModeId;
   const label = options.find((opt) => opt.value === value)?.label ?? null;
   const permissionLabel = t('chat.runConfig.permissionLabel', 'Permission');
 
   if (options.length === 0) return null;
 
   const handleSelect = (next: string) => {
-    if (modeOptions.length > 0) {
-      onModeChange?.(next);
-    } else if (modeConfigSelector) {
+    if (explicitPermissionSelector || modeOptions.length === 0) {
+      if (!modeConfigSelector) return;
       onConfigOptionChange?.(modeConfigSelector.configId, next as AcpConfigOptionValue);
+    } else {
+      onModeChange?.(next);
     }
   };
 

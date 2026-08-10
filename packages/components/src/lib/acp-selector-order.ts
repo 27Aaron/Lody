@@ -13,6 +13,8 @@ export type OrderedAcpConfigOptionSelectors = {
   fastModeSelectors: AcpConfigOptionSelector[];
   planModeSelectors: AcpConfigOptionSelector[];
   booleanSelectors: AcpBooleanConfigOptionSelector[];
+  interactionModeSelectors: AcpSelectConfigOptionSelector[];
+  permissionModeSelectors: AcpSelectConfigOptionSelector[];
   modeSelectors: AcpSelectConfigOptionSelector[];
   otherSelectors: AcpConfigOptionSelector[];
 };
@@ -26,6 +28,8 @@ export const orderAcpConfigOptionSelectors = (
     fastModeSelectors: [],
     planModeSelectors: [],
     booleanSelectors: [],
+    interactionModeSelectors: [],
+    permissionModeSelectors: [],
     modeSelectors: [],
     otherSelectors: [],
   };
@@ -37,6 +41,17 @@ export const orderAcpConfigOptionSelectors = (
     }
     if (isThoughtLevelSelector(selector)) {
       ordered.thoughtLevelSelectors.push(selector);
+      continue;
+    }
+    if (selector.configId === 'interaction_mode' && selector.type === 'select') {
+      ordered.interactionModeSelectors.push(selector);
+      continue;
+    }
+    if (
+      selector.type === 'select' &&
+      (selector.configId === 'permission_mode' || selector.category === '_permission')
+    ) {
+      ordered.permissionModeSelectors.push(selector);
       continue;
     }
     if (selector.category === 'mode' && selector.type === 'select') {
