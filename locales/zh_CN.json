@@ -3304,5 +3304,8 @@
   "errorBoundary.hardResetConfirmButton": "清理并退出登录",
   "errorBoundary.hardResetConfirmRunning": "正在清理…",
   "errorBoundary.descriptionRetriesStopped": "这个错误每次都会重现，因此 Lody 已停止自动重试——页面会保持不动，直到你选择下面的某个步骤。",
-  "errorBoundary.serverErrorSummary": "Lody 后端返回了服务器错误。"
+  "errorBoundary.serverErrorSummary": "Lody 后端返回了服务器错误。",
+  "settings.agent.dialog.section.account": "账号",
+  "settings.agent.dialog.authRequiredHint": "该 Provider 在这台机器上还没有登录凭据。",
+  "settings.agent.dialog.reauthenticateHint": "如果该 Provider 不再接受你的账号，可重新登录。"
 }

@@ -4,7 +4,6 @@ import { useAtomValue } from 'jotai';
 import { Loader2, RefreshCw, Trash2 } from 'lucide-react';
 import {
   REGISTRY_ACP_AGENTS,
-  isBuiltinAgentType,
   type AgentConfigCliType,
   type AgentConfigMeta,
   type MachineAcpBinaryProgressMessage,
@@ -28,7 +27,6 @@ import { cn } from '@/lib/utils';
 import { activeWorkspaceRuntimeAtom } from '@/atoms/runtime';
 import { useMachineAcpBinaryProgress } from '@/hooks/use-machine-acp-binary-progress';
 import { AgentIcon } from '@/components/icons/agent-icon';
-import { AcpAuthenticationPanel } from './acp-authentication-panel';
 import {
   canShowSubscriptionRateLimits,
   formatRateLimitWindowShortLabel,
@@ -43,6 +41,8 @@ export type ProviderRowProps = {
   onRefresh?: (config: AgentConfigMeta) => Promise<void>;
 };
 
+/** One provider entry. Signing in again lives in the provider's detail dialog
+ *  (`AgentConfigDialog`), not here: only some providers can sign in at all. */
 export function ProviderRow({ config, machine, onEdit, onDelete, onRefresh }: ProviderRowProps) {
   const { t } = useTranslation();
   const { cliType, agentType } = config;
@@ -66,7 +66,6 @@ export function ProviderRow({ config, machine, onEdit, onDelete, onRefresh }: Pr
   }, [showRateLimits, machine?.raceLimits, agentType]);
 
   const typeBadge = cliType === 'builtin' ? null : cliType === 'custom' ? 'Custom' : 'Registry';
-  const canReauthenticate = cliType === 'builtin' && isBuiltinAgentType(agentType);
 
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -212,21 +211,6 @@ export function ProviderRow({ config, machine, onEdit, onDelete, onRefresh }: Pr
           ))}
         </div>
       )}
-      {canReauthenticate ? (
-        <div className="px-3 pb-2.5 pt-0.5 sm:ps-11">
-          <AcpAuthenticationPanel
-            machineId={machine?.id ?? config.machineId}
-            configId={config.id}
-            cliType={config.cliType}
-            agentType={config.agentType}
-            customAcp={config.customAcp}
-            runtimeOverrides={config.runtimeOverrides}
-            env={config.env}
-            compact
-            reauthentication
-          />
-        </div>
-      ) : null}
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>

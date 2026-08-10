@@ -3306,5 +3306,8 @@
   "errorBoundary.hardResetConfirmButton": "Clear and sign out",
   "errorBoundary.hardResetConfirmRunning": "Clearing…",
   "errorBoundary.descriptionRetriesStopped": "This error came back every time, so Lody stopped retrying on its own — the screen now stays put until you choose a step below.",
-  "errorBoundary.serverErrorSummary": "The Lody backend returned a server error."
+  "errorBoundary.serverErrorSummary": "The Lody backend returned a server error.",
+  "settings.agent.dialog.section.account": "Account",
+  "settings.agent.dialog.authRequiredHint": "This provider has no credentials on this machine yet.",
+  "settings.agent.dialog.reauthenticateHint": "Sign in again if this provider stopped accepting your account."
 }

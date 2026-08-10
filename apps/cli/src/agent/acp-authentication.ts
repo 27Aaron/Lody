@@ -8,7 +8,11 @@ import type {
   BuiltinRuntimeOverrides,
   CustomAcpLaunchSpec,
 } from '@lody/shared';
-import { getManagedBuiltinRuntimeByAgentType, isBuiltinAgentType } from '@lody/shared';
+import {
+  getManagedBuiltinRuntimeByAgentType,
+  hasBuiltinEnvAuthentication,
+  isBuiltinAgentType,
+} from '@lody/shared';
 
 import { withoutElectronBootstrapCredentials } from '@/electron-bootstrap-env';
 import type { Logger } from '@/utils/logger';
@@ -50,27 +54,6 @@ export type AcpAuthenticationResult =
 const DEFAULT_AUTHENTICATION_TIMEOUT_MS = 285_000;
 const DEFAULT_TERMINATION_GRACE_MS = 3_000;
 const DEFAULT_STATUS_PROBE_TIMEOUT_MS = 15_000;
-
-// These variables can supply credentials directly or route Claude through a
-// separately authenticated provider. Claude's native credential-store status
-// command does not reliably represent those paths, so the ACP adapter must stay
-// the source of truth when any of them is configured.
-const CLAUDE_ENV_AUTH_KEYS = [
-  'ANTHROPIC_API_KEY',
-  'ANTHROPIC_AUTH_TOKEN',
-  'ANTHROPIC_CUSTOM_HEADERS',
-  'ANTHROPIC_BASE_URL',
-  'ANTHROPIC_BEDROCK_BASE_URL',
-  'ANTHROPIC_VERTEX_BASE_URL',
-  'ANTHROPIC_FOUNDRY_BASE_URL',
-  'ANTHROPIC_FOUNDRY_RESOURCE',
-  'ANTHROPIC_FOUNDRY_API_KEY',
-  'CLAUDE_CODE_USE_BEDROCK',
-  'CLAUDE_CODE_USE_VERTEX',
-  'CLAUDE_CODE_USE_FOUNDRY',
-  'AWS_BEARER_TOKEN_BEDROCK',
-  'ANTHROPIC_VERTEX_PROJECT_ID',
-] as const;
 
 const BUILTIN_AUTH_METHODS = {
   kimi: [
@@ -151,17 +134,6 @@ function formatAuthenticationExitError(
   return `${base}. Make sure device-code login is enabled in your ChatGPT security settings or workspace permissions, then try again.`;
 }
 
-function hasNonEmptyEnvValue(env: NodeJS.ProcessEnv | undefined, key: string): boolean {
-  return Boolean(env?.[key]?.trim());
-}
-
-function hasEnvironmentAuthentication(agentType: BuiltinCliType, env: NodeJS.ProcessEnv): boolean {
-  if (agentType === 'claude') {
-    return CLAUDE_ENV_AUTH_KEYS.some((key) => hasNonEmptyEnvValue(env, key));
-  }
-  return false;
-}
-
 async function buildAuthenticationProcessEnv(options: {
   launch: ResolvedACPProcessLaunch;
   agentType: string;
@@ -218,7 +190,7 @@ export async function probeBuiltinAuthentication(
     resolveLoginShellEnv: options.resolveLoginShellEnv ?? getLoginShellEnv,
   });
   options.signal?.throwIfAborted();
-  if (hasEnvironmentAuthentication(options.agentType, env)) {
+  if (hasBuiltinEnvAuthentication(options.agentType, env)) {
     return { status: 'unknown' };
   }
   const child = (options.spawnProcess ?? spawn)(launch.command, launch.args, {

@@ -45,6 +45,7 @@ const makeMachineWithClaudeCaps = (): MachineViewMeta => ({
   },
 });
 
+/** Plain built-in Claude Code: signs in through Claude, so the detail offers it. */
 const existingConfig: AgentConfigMeta = {
   id: existingConfigId,
   machineId,
@@ -52,7 +53,23 @@ const existingConfig: AgentConfigMeta = {
   description: undefined,
   cliType: 'builtin',
   agentType: 'claude',
-  env: { ANTHROPIC_API_KEY: 'sk-test' },
+  env: {},
+};
+
+/** DeepSeek preset: runs as built-in Claude Code but authenticates through env
+ *  vars, so the detail must not offer a provider sign-in. */
+const envCredentialConfig: AgentConfigMeta = {
+  id: existingConfigId,
+  machineId,
+  name: 'DeepSeek over Claude Code',
+  description: undefined,
+  cliType: 'builtin',
+  agentType: 'claude',
+  brandId: 'deepseek',
+  env: {
+    ANTHROPIC_BASE_URL: 'https://api.deepseek.com/anthropic',
+    ANTHROPIC_AUTH_TOKEN: 'sk-storybook-demo-token',
+  },
 };
 
 const refreshCapabilities: AgentConfigDialogProps['onRefreshCapabilities'] = async (args) => ({
@@ -115,13 +132,13 @@ function NestedCreateWrapper() {
   );
 }
 
-function EditWrapper() {
+function EditWrapper({ config = existingConfig }: { config?: AgentConfigMeta }) {
   const [open, setOpen] = useState(true);
   return (
     <AgentConfigDialog
       open={open}
       onOpenChange={setOpen}
-      mode={{ kind: 'edit', config: existingConfig }}
+      mode={{ kind: 'edit', config }}
       machine={makeMachineWithClaudeCaps()}
       onSubmit={async () => {}}
       onRefreshCapabilities={refreshCapabilities}
@@ -258,6 +275,11 @@ export const Edit: Story = {
   render: () => <EditWrapper />,
 };
 
+/** Signing in again lives here, not on the provider list row. */
+export const EditEnvCredentialProvider: Story = {
+  render: () => <EditWrapper config={envCredentialConfig} />,
+};
+
 export const DeepSeekPreset: Story = {
   render: () => <DeepSeekPresetWrapper />,
 };
@@ -296,6 +318,13 @@ export const Mobile: Story = {
 
 export const MobileEdit: Story = {
   render: () => <EditWrapper />,
+  parameters: {
+    viewport: { defaultViewport: 'mobile1' },
+  },
+};
+
+export const MobileEditEnvCredentialProvider: Story = {
+  render: () => <EditWrapper config={envCredentialConfig} />,
   parameters: {
     viewport: { defaultViewport: 'mobile1' },
   },

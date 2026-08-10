@@ -8,14 +8,6 @@ import type { AgentConfigId, AgentConfigMeta, MachineId, MachineViewMeta } from 
 import { ProviderRow } from '../src/components/settings/provider-row';
 import { initI18n } from '../src/i18n';
 
-vi.mock('../src/components/settings/acp-authentication-panel', () => ({
-  AcpAuthenticationPanel: ({ reauthentication }: { reauthentication?: boolean }) => (
-    <button type="button" data-reauthentication={String(reauthentication)}>
-      Sign in again
-    </button>
-  ),
-}));
-
 const machineId = 'machine-test' as MachineId;
 const machine: MachineViewMeta = {
   id: machineId,
@@ -62,21 +54,37 @@ describe('ProviderRow reauthentication', () => {
     });
   };
 
-  it.each(['claude', 'codex', 'kimi'] as const)(
-    'offers Sign in again for the built-in %s provider',
-    async (agentType) => {
-      await renderConfig(makeConfig({ cliType: 'builtin', agentType }));
+  // Asserts on rendered text rather than a mocked panel: the row must not grow a
+  // sign-in affordance again, whichever component would provide it.
+  const hasSignInAction = () =>
+    Array.from(container.querySelectorAll('button')).some((button) =>
+      button.textContent?.includes('Sign in')
+    );
 
-      const button = container.querySelector<HTMLButtonElement>(
-        'button[data-reauthentication="true"]'
-      );
-      expect(button?.textContent).toContain('Sign in again');
-    }
-  );
+  // Signing in again lives in the provider detail dialog, so no list row shows it.
+  it.each([
+    { cliType: 'builtin', agentType: 'claude' },
+    { cliType: 'builtin', agentType: 'codex' },
+    { cliType: 'builtin', agentType: 'kimi' },
+    { cliType: 'registry', agentType: 'auggie' },
+  ] as const)('does not offer Sign in again for the $agentType provider row', async (overrides) => {
+    await renderConfig(makeConfig(overrides));
 
-  it('does not offer provider-owned login for registry agents', async () => {
-    await renderConfig(makeConfig({ cliType: 'registry', agentType: 'auggie' }));
+    expect(hasSignInAction()).toBe(false);
+  });
 
-    expect(container.querySelector('button[data-reauthentication]')).toBeNull();
+  it('still opens the provider detail when the row is clicked', async () => {
+    const config = makeConfig({ cliType: 'builtin', agentType: 'claude' });
+    const onEdit = vi.fn();
+    await act(async () => {
+      root.render(<ProviderRow config={config} machine={machine} onEdit={onEdit} />);
+    });
+
+    const row = container.querySelector<HTMLButtonElement>('button[aria-label="Edit Config"]');
+    await act(async () => {
+      row?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(onEdit).toHaveBeenCalledWith(config);
   });
 });

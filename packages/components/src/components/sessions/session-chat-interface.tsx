@@ -91,7 +91,7 @@ import {
   historyItemsToInputBlocks,
   hasReportedPreviewTarget,
   isSessionGoalCleared,
-  isSessionGoalWorking,
+  isSessionGoalActive,
   normalizeSessionInputBlocks,
   normalizeSessionTurnInputConfig,
   resolveSessionConversationConfig,
@@ -178,6 +178,11 @@ import { PullRequestBadge } from './pull-request-badge';
 import { SessionInfoBar } from './session-info-bar';
 import type { ContextChipAction, PrCiRun } from './session-info-chips';
 import { resolveSessionInfoBarGitHubActionIds } from './session-info-action-state';
+import {
+  canPauseGoalThroughPromptBridge,
+  getPromptBridgeGoalCommands,
+  isSessionPromptBusy,
+} from './session-goal-control';
 import { buildFixCiErrorsPrompt, buildResolvePrConflictsPrompt } from './session-pr-prompts';
 import { resolveConflictsActionAtomFamily } from './session-pr-agent-action';
 import { setPreferredPrMergeMethod, usePreferredPrMergeMethod } from './pr-merge-method';
@@ -367,7 +372,6 @@ interface ActionOption {
 const ACTION_OPTIONS: ActionOption[] = [{ id: 'copy-path', label: 'Copy Path', Icon: Copy }];
 
 const EMPTY_ASSISTANT_QUICK_ACTIONS: AssistantMessageAction[] = [];
-
 const DISPATCHING_TIMEOUT_MS = 15_000;
 /** Grace before the header "Syncing" spinner appears (kills session-switch flicker). */
 const TITLE_SYNCING_INDICATOR_DELAY_MS = 400;
@@ -2411,7 +2415,12 @@ export const SessionChatInterface = memo(
         ),
       [legacySession.latestGoal, session.dismissedGoalThreadId, sessionHistory]
     );
-    const isGoalWorking = isSessionGoalWorking(latestGoal);
+    const isGoalActive = isSessionGoalActive(latestGoal);
+    // The existing prompt bridge is Codex-specific. Other providers may publish
+    // neutral goal snapshots, but their advertised `_session/goal` extension is
+    // not yet routed through Lody's session control plane, so keep them read-only.
+    const goalCommands = getPromptBridgeGoalCommands(session.agentType);
+    const canPauseGoal = canPauseGoalThroughPromptBridge(session.agentType);
 
     useEffect(() => {
       if (!pendingGoalCommand) {
@@ -2603,7 +2612,7 @@ export const SessionChatInterface = memo(
       if (
         session.isArchived ||
         session.autoReview ||
-        isGoalWorking ||
+        isGoalActive ||
         session.cliType !== 'builtin' ||
         (session.agentType !== 'codex' && session.agentType !== 'claude')
       ) {
@@ -2643,7 +2652,7 @@ export const SessionChatInterface = memo(
       // The first user message uses session/new and therefore has no fork boundary.
       return userMessage.id;
     }, [
-      isGoalWorking,
+      isGoalActive,
       session.agentConfigId,
       session.agentType,
       session.autoReview,
@@ -3125,8 +3134,13 @@ export const SessionChatInterface = memo(
     }, [markSessionRead, session.id, session.lastMessageAt, shouldMarkRead]);
 
     const isDispatching = inputActionState === 'dispatching';
-    const isAgentBusy = isDispatching || isSessionWorking || isGoalWorking;
-    const canStopAgent = (isSessionActive && activeAssistantTurnId != null) || isGoalWorking;
+    const isAgentBusy = isSessionPromptBusy({
+      isDispatching,
+      isSessionWorking,
+      isGoalActive,
+    });
+    const canStopAgent =
+      (isSessionActive && activeAssistantTurnId != null) || (isGoalActive && canPauseGoal);
     const latestCompletedProposedPlan = useMemo(
       () => findLatestCompletedCodexProposedPlan(sessionDoc?.history),
       [sessionDoc?.history]
@@ -3253,9 +3267,7 @@ export const SessionChatInterface = memo(
               // connection/machine problem (browser offline, machine removed or
               // offline) hands the story to the status chip instead.
               t('sessions.statusIndicator.pendingDispatch')
-            : isGoalWorking
-              ? t('sessions.statusIndicator.goal', 'Pursuing goal')
-              : null;
+            : null;
     const agentActivityTone =
       isSessionActive && liveSessionStatus?.type === 'requestPermission' ? 'warning' : 'primary';
 
@@ -3733,6 +3745,17 @@ export const SessionChatInterface = memo(
         goal: Extract<MessageContent, { type: 'goal' }> | null = latestGoal,
         options?: { showPending?: boolean }
       ): Promise<boolean> => {
+        if (!goalCommands.includes(command)) {
+          captureSessionEvent('session/goal_command_failed', {
+            command,
+            goal_thread_id: goal?.threadId ?? null,
+            error_name: 'UnsupportedGoalCommand',
+            error_message: 'Goal command is unavailable for this agent transport',
+          });
+          toast.error(t('sessions.goal.commandError', 'Failed to send goal command'));
+          return false;
+        }
+
         if (!goal) {
           toast.error(t('sessions.goal.commandError', 'Failed to send goal command'));
           return false;
@@ -3772,7 +3795,7 @@ export const SessionChatInterface = memo(
           return false;
         }
       },
-      [captureSessionEvent, dispatchPrompt, latestGoal, t]
+      [captureSessionEvent, dispatchPrompt, goalCommands, latestGoal, t]
     );
 
     const handleGoalCardCommand = useCallback(
@@ -4343,7 +4366,7 @@ export const SessionChatInterface = memo(
         return undefined;
       }
 
-      if (isSessionWorking || isGoalWorking) {
+      if (isSessionWorking) {
         setInputActionState('ready');
         return undefined;
       }
@@ -4357,7 +4380,7 @@ export const SessionChatInterface = memo(
       }, DISPATCHING_TIMEOUT_MS);
 
       return () => window.clearTimeout(timeoutId);
-    }, [captureSessionEvent, inputActionState, isGoalWorking, isSessionWorking, liveSessionStatus]);
+    }, [captureSessionEvent, inputActionState, isSessionWorking, liveSessionStatus]);
 
     useEffect(() => {
       if (hideMessageArea) return undefined;
@@ -4441,7 +4464,7 @@ export const SessionChatInterface = memo(
         return;
       }
 
-      const goalToPause = isGoalWorking ? latestGoal : null;
+      const goalToPause = isGoalActive && canPauseGoal ? latestGoal : null;
       const goalTurnId = goalToPause?.turnId?.trim() || null;
       const turnIdToCancel = activeAssistantTurnId ?? goalTurnId;
 
@@ -4493,9 +4516,10 @@ export const SessionChatInterface = memo(
       }
     }, [
       activeAssistantTurnId,
+      canPauseGoal,
       captureSessionEvent,
       handleGoalCommand,
-      isGoalWorking,
+      isGoalActive,
       latestGoal,
       requestSessionCancel,
       session.id,
@@ -5334,9 +5358,7 @@ export const SessionChatInterface = memo(
                       and the actual grant/deny resolves on the settings page, so these must be emitted from
                       that component via onShown/onEnableClicked/onDismissed callbacks (see crossFileNeeds). */}
                   <NotificationPermissionPrompt
-                    sessionCompleted={
-                      session.status?.type === 'idle' && !isSessionWorking && !isGoalWorking
-                    }
+                    sessionCompleted={session.status?.type === 'idle' && !isSessionWorking}
                   />
 
                   {/* An active auto-review run states itself here rather than
@@ -5379,6 +5401,7 @@ export const SessionChatInterface = memo(
                   <SessionInfoBar
                     status={statusStripState}
                     goal={latestGoal}
+                    goalCommands={goalCommands}
                     goalPendingCommand={
                       pendingGoalCommand && pendingGoalCommand.threadId === latestGoal?.threadId
                         ? pendingGoalCommand.command

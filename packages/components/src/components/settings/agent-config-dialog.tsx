@@ -14,6 +14,7 @@ import {
   isAcpCapabilityCacheEntryCurrent,
   parseCustomAcpCommandLine,
   serializeCustomAcpLaunchSpec,
+  supportsBuiltinAuthentication,
   usesAcpProvidedSessionTitle,
   REGISTRY_ACP_AGENTS,
   type AgentBrandId,
@@ -912,20 +913,40 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
   const activeCredentialMode = activePreset
     ? getPresetCredentialMode(activePreset, formData.presetCredentialModeId)
     : undefined;
+  // Prefer the active preset's brand; on edit (where the preset isn't
+  // re-detected) preserve the brand already persisted on the config so an
+  // unrelated edit doesn't strip it. MiMo's custom token-plan base URL can't
+  // be recovered from env, so the persisted value is the source of truth.
+  const resolvedBrandId =
+    activePreset?.brandId ?? (mode.kind === 'edit' ? mode.config.brandId : undefined);
 
   const isCustom = formData.cliType === 'custom';
+  const isManagedBuiltin = formData.cliType === 'builtin' && isBuiltinAgentType(formData.agentType);
   const builtinVerificationContext = `${machine.id}:${builtinVerificationRevision}`;
   const requiresBuiltinCreationVerification =
-    mode.kind === 'create' &&
-    !isPreset &&
-    formData.cliType === 'builtin' &&
-    isBuiltinAgentType(formData.agentType);
+    mode.kind === 'create' && !isPreset && isManagedBuiltin;
   const builtinCreationVerified =
     !requiresBuiltinCreationVerification || verifiedBuiltinContext === builtinVerificationContext;
   const builtinCreationPending =
     requiresBuiltinCreationVerification &&
     !builtinCreationVerified &&
     pendingCreateBuiltinContext === builtinVerificationContext;
+  // Editing an existing provider offers "Sign in again" whenever the provider
+  // has a login of its own to run — this dialog is where re-authentication
+  // lives, but preset / env-credential providers (DeepSeek, MiniMax, MiMo, GLM,
+  // or a hand-rolled endpoint override) authenticate purely through env vars,
+  // so a sign-in would do nothing for them. Creating one only surfaces the
+  // panel when a live probe reported missing credentials, because that panel is
+  // the single way to unblock the creation-time verification gate.
+  const showAuthenticationPanel =
+    mode.kind === 'edit'
+      ? supportsBuiltinAuthentication({
+          cliType: formData.cliType,
+          agentType: formData.agentType,
+          brandId: resolvedBrandId,
+          env: formData.env,
+        })
+      : authRequired && isManagedBuiltin;
   const builtinRuntimeOverrideKey =
     formData.cliType !== 'builtin'
       ? null
@@ -1024,8 +1045,7 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
   // visible Test action until a real probe (or authoritative cache entry) has
   // checked sign-in, so missing credentials can be resolved inside this dialog.
   const builtinNeedsCredentialCheck =
-    formData.cliType === 'builtin' &&
-    isBuiltinAgentType(formData.agentType) &&
+    isManagedBuiltin &&
     (requiresBuiltinCreationVerification
       ? !builtinCreationVerified
       : !manuallyTested && !hasCachedCaps);
@@ -1510,12 +1530,6 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
         : isPreset
           ? buildPresetTitleGeneration(formData.cliType, agentType, formData.titleGeneration)
           : formData.titleGeneration;
-      // Prefer the active preset's brand; on edit (where the preset isn't
-      // re-detected) preserve the brand already persisted on the config so an
-      // unrelated edit doesn't strip it. MiMo's custom token-plan base URL can't
-      // be recovered from env, so the persisted value is the source of truth.
-      const brandId =
-        activePreset?.brandId ?? (mode.kind === 'edit' ? mode.config.brandId : undefined);
       await onSubmit({
         id: agentConfigId,
         name: formData.name.trim(),
@@ -1527,7 +1541,7 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
         env,
         titleGeneration,
         description: undefined,
-        brandId,
+        brandId: resolvedBrandId,
         ...(backgroundManagedBuiltinSetup ? { backgroundSetup: true } : {}),
       });
       onOpenChange(false);
@@ -1545,10 +1559,10 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
     formData,
     isCustom,
     isPreset,
-    mode,
     onOpenChange,
     onSubmit,
     parsedCustomAcp,
+    resolvedBrandId,
   ]);
 
   const submit = async () => {
@@ -1983,25 +1997,43 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
             </div>
           )}
 
-          {authRequired &&
-          formData.cliType === 'builtin' &&
-          isBuiltinAgentType(formData.agentType) ? (
-            <AcpAuthenticationPanel
-              machineId={machine.id}
-              configId={agentConfigId}
-              cliType={formData.cliType}
-              agentType={formData.agentType}
-              runtimeOverrides={formData.runtimeOverrides}
-              env={formData.env}
-              onAuthenticated={() => {
-                setAuthRequired(false);
-                setProbeError(null);
-                setManuallyTested(true);
-                if (requiresBuiltinCreationVerification) {
-                  setVerifiedBuiltinContext(builtinVerificationContext);
+          {showAuthenticationPanel ? (
+            <div className="rounded-xl border border-border/60 bg-muted/20 p-4">
+              <Field
+                label={t('settings.agent.dialog.section.account', 'Account')}
+                hint={
+                  authRequired
+                    ? t(
+                        'settings.agent.dialog.authRequiredHint',
+                        'This provider has no credentials on this machine yet.'
+                      )
+                    : t(
+                        'settings.agent.dialog.reauthenticateHint',
+                        'Sign in again if this provider stopped accepting your account.'
+                      )
                 }
-              }}
-            />
+                icon={<KeyRound className="h-3.5 w-3.5" aria-hidden="true" />}
+              >
+                <AcpAuthenticationPanel
+                  machineId={machine.id}
+                  configId={agentConfigId}
+                  cliType={formData.cliType}
+                  agentType={formData.agentType}
+                  runtimeOverrides={formData.runtimeOverrides}
+                  env={formData.env}
+                  compact
+                  reauthentication={!authRequired}
+                  onAuthenticated={() => {
+                    setAuthRequired(false);
+                    setProbeError(null);
+                    setManuallyTested(true);
+                    if (requiresBuiltinCreationVerification) {
+                      setVerifiedBuiltinContext(builtinVerificationContext);
+                    }
+                  }}
+                />
+              </Field>
+            </div>
           ) : null}
 
           {showBinaryPanel && (

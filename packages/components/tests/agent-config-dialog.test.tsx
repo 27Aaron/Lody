@@ -616,6 +616,61 @@ describe('AgentConfigDialog', () => {
     expect(onRefreshCapabilities).toHaveBeenCalledTimes(2);
   });
 
+  const findSignInAgainButton = (): HTMLButtonElement | undefined =>
+    Array.from(document.body.querySelectorAll('button')).find(
+      (button) => button.textContent?.trim() === 'Sign in again'
+    );
+
+  const renderEditingBuiltin = (overrides: Partial<AgentConfigMeta>) =>
+    renderDialog(
+      {
+        kind: 'edit',
+        config: {
+          id: claudeConfigId,
+          machineId,
+          name: 'Provider',
+          description: undefined,
+          cliType: 'builtin',
+          agentType: 'claude',
+          env: {},
+          ...overrides,
+        } as AgentConfigMeta,
+      },
+      createMachine('Workstation')
+    );
+
+  it.each(['claude', 'codex', 'kimi'] as const)(
+    'offers signing in again while editing the built-in %s provider',
+    async (agentType) => {
+      await renderEditingBuiltin({ agentType });
+
+      expect(findSignInAgainButton()).toBeDefined();
+    }
+  );
+
+  it.each([
+    {
+      label: 'a DeepSeek preset',
+      overrides: {
+        brandId: 'deepseek' as const,
+        env: {
+          ANTHROPIC_BASE_URL: 'https://api.deepseek.com/anthropic',
+          ANTHROPIC_AUTH_TOKEN: 'sk-test',
+        },
+      },
+    },
+    {
+      label: 'a hand-rolled endpoint override',
+      overrides: {
+        env: { ANTHROPIC_BASE_URL: 'http://localhost:11434', ANTHROPIC_AUTH_TOKEN: 'ollama' },
+      },
+    },
+  ])('hides signing in again while editing $label', async ({ overrides }) => {
+    await renderEditingBuiltin(overrides);
+
+    expect(findSignInAgainButton()).toBeUndefined();
+  });
+
   it('saves a normalized title reasoning effort after the title model changes', async () => {
     const onSubmit = vi.fn(async () => {});
     const config = {
