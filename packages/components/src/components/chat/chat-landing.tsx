@@ -619,6 +619,7 @@ function WorkspaceChatLanding({
   const reconcileSharingReview = useCloudMutation(cloudOperations.inbox.reconcileSharingReview);
   const markInboxItemRead = useCloudMutation(cloudOperations.inbox.markRead);
   const dismissInboxItem = useCloudMutation(cloudOperations.inbox.dismiss);
+  const suppressSharingReview = useCloudMutation(cloudOperations.inbox.suppressSharingReview);
   const handleShareLocalProjectWithTeam = useCallback(
     async (selection: LocalProjectSelection) => {
       if (!workspaceId) throw new Error('Workspace is not ready');
@@ -5317,20 +5318,29 @@ function WorkspaceChatLanding({
                   'Private machines and projects are only visible to you. Share the ones your teammates should be able to use.'
                 )}
         </p>
-        {sharingReviewState.actionTarget ? (
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+          {sharingReviewState.actionTarget ? (
+            <button
+              type="button"
+              className="text-xs font-semibold text-primary hover:underline"
+              onClick={() => {
+                void markInboxItemRead({ itemId: sharingReviewRow._id });
+                openSettings(sharingReviewState.actionTarget ?? 'projects');
+              }}
+            >
+              {sharingReviewState.actionTarget === 'devices'
+                ? t('inbox.sharingReview.actionDevices', 'Review devices')
+                : t('inbox.sharingReview.action', 'Review projects')}
+            </button>
+          ) : null}
           <button
             type="button"
-            className="mt-1.5 text-xs font-semibold text-primary hover:underline"
-            onClick={() => {
-              void markInboxItemRead({ itemId: sharingReviewRow._id });
-              openSettings(sharingReviewState.actionTarget ?? 'projects');
-            }}
+            className="text-xs font-medium text-muted-foreground hover:text-foreground hover:underline"
+            onClick={() => void suppressSharingReview({ itemId: sharingReviewRow._id })}
           >
-            {sharingReviewState.actionTarget === 'devices'
-              ? t('inbox.sharingReview.actionDevices', 'Review devices')
-              : t('inbox.sharingReview.action', 'Review projects')}
+            {t('inbox.sharingReview.neverRemind', "Don't remind me again")}
           </button>
-        ) : null}
+        </div>
       </div>
       <button
         type="button"

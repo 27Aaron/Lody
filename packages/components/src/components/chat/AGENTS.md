@@ -34,6 +34,9 @@
   this local-project access badge. The desktop machine selector marks an option as
   local only when its value exactly matches `visibleLocalMachineId`; ownership and
   Private access are independent and must never stand in for the local probe.
+- The sharing-review landing notice has two distinct durable actions: dismissing
+  it keeps the current source revision quiet, while “Don't remind me again”
+  suppresses that user's notice for the workspace across future revisions.
 - The landing composer footer is ordered run config → permission → usage on
   desktop. Mobile new-chat uses the same consolidated `MobileSessionRunConfig`
   face + sheet as the in-session composer (agent/model/reasoning/permission/

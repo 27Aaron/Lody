@@ -184,6 +184,10 @@ export const cloudOperations = {
       'teamSharing',
       'inbox:dismiss'
     ),
+    suppressSharingReview: defineCloudMutation<{ itemId: string }, { updated: boolean }>(
+      'teamSharing',
+      'inbox:suppressSharingReview'
+    ),
   },
   billing: {
     createCheckoutSession: action<ConvexApi['billing']['createCheckoutSession']>(
