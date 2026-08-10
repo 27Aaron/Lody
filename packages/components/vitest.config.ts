@@ -12,6 +12,10 @@ export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts', 'tests/**/*.test.tsx'],
     environment: 'node',
+    // This suite has hundreds of small files. Reusing worker threads avoids a
+    // child-process startup per file; two workers also outperformed four on CI-sized hosts.
+    pool: 'threads',
+    maxWorkers: 2,
     server: {
       deps: {
         inline: VITEST_INLINE_WASM_DEPS,

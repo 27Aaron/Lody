@@ -3,10 +3,9 @@ import { readDesktopMachinePairingRequestId } from '../src/lib/desktop-machine-p
 
 describe('desktop machine pairing deep links', () => {
   it('reads only the non-secret request id', () => {
-    const url = 'lody://machine/connect?requestId=request-123';
-    expect(readDesktopMachinePairingRequestId(url)).toBe('request-123');
-    expect(url).not.toContain('auth');
-    expect(url).not.toContain('token');
+    expect(readDesktopMachinePairingRequestId('lody://machine/connect?requestId=request-123')).toBe(
+      'request-123'
+    );
   });
 
   it('rejects unrelated lody links', () => {
