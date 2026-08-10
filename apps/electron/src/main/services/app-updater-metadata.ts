@@ -45,7 +45,8 @@ function readReleaseNotesByLocale(
 }
 
 export function readUpdaterReleaseMetadata(
-  value: unknown
+  value: unknown,
+  expectedVersion: string | undefined
 ): Pick<
   ElectronUpdaterState,
   'releaseName' | 'releaseDate' | 'releaseNotes' | 'releaseNotesByLocale'
@@ -53,11 +54,16 @@ export function readUpdaterReleaseMetadata(
   const record = readObject(value)
   const vendor = readObject(record?.vendor)
   const lodyChangelog = readObject(vendor?.lodyChangelog)
+  const contentVersion = readNonEmptyString(lodyChangelog?.contentVersion)
+  const releaseNotesByLocale =
+    expectedVersion && contentVersion === expectedVersion
+      ? readReleaseNotesByLocale(lodyChangelog?.locales)
+      : undefined
 
   return {
     releaseName: readNonEmptyString(record?.releaseName),
     releaseDate: readNonEmptyString(record?.releaseDate),
     releaseNotes: readReleaseNotes(record?.releaseNotes),
-    releaseNotesByLocale: readReleaseNotesByLocale(lodyChangelog?.locales)
+    releaseNotesByLocale
   }
 }

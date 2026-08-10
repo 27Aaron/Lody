@@ -211,7 +211,7 @@ export class AppUpdaterService {
         phase: 'downloading',
         availableVersion: version,
         downloadedVersion: undefined,
-        ...readUpdaterReleaseMetadata(payload),
+        ...readUpdaterReleaseMetadata(payload, version),
         checkedAtMs: Date.now(),
         error: undefined
       })
@@ -245,11 +245,12 @@ export class AppUpdaterService {
     autoUpdater.on('update-downloaded', (payload) => {
       const record = readObject(payload)
       const version = readNonEmptyString(record?.version)
+      const targetVersion = version ?? this.state.availableVersion
       this.setState({
         phase: 'downloaded',
         downloadedVersion: version,
-        availableVersion: version ?? this.state.availableVersion,
-        ...readUpdaterReleaseMetadata(payload),
+        availableVersion: targetVersion,
+        ...readUpdaterReleaseMetadata(payload, targetVersion),
         checkedAtMs: Date.now(),
         error: undefined
       })

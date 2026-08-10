@@ -1864,7 +1864,10 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
   const handleToggleGithubWorktreesSection = useCallback(() => {
     setGithubWorktreesSectionCollapsed((prev) => !prev);
   }, [setGithubWorktreesSectionCollapsed]);
-  const paidPlanTiers = useCloudQuery(cloudOperations.billing.getMyPaidWorkspacePlanTiers, {});
+  const paidPlanTiers = useCloudQuery(
+    cloudOperations.billing.getMyPaidWorkspacePlanTiers,
+    {}
+  );
   const planTierByWorkspaceId = useMemo(
     () => new Map((paidPlanTiers ?? []).map((entry) => [entry.workspaceId, entry.planTier])),
     [paidPlanTiers]
