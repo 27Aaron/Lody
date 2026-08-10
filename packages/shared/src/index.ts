@@ -271,7 +271,7 @@ export const getLoroStreamsRemoteCursorUrlAliases = (streamUrl: string): string[
   }
 };
 
-export const SUPPORTED_CLI_TYPES: CliType[] = ['kimi', 'claude', 'codex'];
+export const SUPPORTED_CLI_TYPES: CliType[] = ['kimi', 'grok', 'claude', 'codex'];
 export type SupportedLanguage = 'en' | 'zh_CN';
 export const AGENT_CONFIG_DOC_PREFIX = 'agent-';
 export const SESSION_DOC_PREFIX = 'session-';

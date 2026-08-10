@@ -18,6 +18,7 @@ import {
 import {
   BUILTIN_CLAUDE_CAPABILITY_SOURCE_VERSION,
   BUILTIN_CODEX_CAPABILITY_SOURCE_VERSION,
+  BUILTIN_GROK_CAPABILITY_SOURCE_VERSION,
   BUILTIN_KIMI_CAPABILITY_SOURCE_VERSION,
 } from '../src/agent/managed-agent-runtime';
 import * as managedRuntime from '../src/agent/managed-agent-runtime';
@@ -35,6 +36,7 @@ describe('resolveBuiltinACPSetting', () => {
     expect(() => resolveBuiltinACPSetting('claude')).toThrow(/resolveACPProcessLaunchAsync/);
     expect(() => resolveBuiltinACPSetting('codex')).toThrow(/resolveACPProcessLaunchAsync/);
     expect(() => resolveBuiltinACPSetting('kimi')).toThrow(/resolveACPProcessLaunchAsync/);
+    expect(() => resolveBuiltinACPSetting('grok')).toThrow(/resolveACPProcessLaunchAsync/);
   });
 
   it('keys builtin capability versions on the bundled adapter and managed runtime', () => {
@@ -46,6 +48,9 @@ describe('resolveBuiltinACPSetting', () => {
     );
     expect(getAcpCapabilitySourceVersion({ cliType: 'builtin', agentType: 'kimi' })).toBe(
       BUILTIN_KIMI_CAPABILITY_SOURCE_VERSION
+    );
+    expect(getAcpCapabilitySourceVersion({ cliType: 'builtin', agentType: 'grok' })).toBe(
+      BUILTIN_GROK_CAPABILITY_SOURCE_VERSION
     );
     expect(
       getAcpCapabilitySourceVersion({
@@ -132,6 +137,40 @@ describe('resolveBuiltinACPSetting', () => {
         cliType: 'builtin',
         agentType: 'kimi',
         runtimeOverrides: { kimiPath: '/opt/kimi' },
+        action: 'status',
+      })
+    ).resolves.toBeNull();
+  });
+
+  it('launches Grok ACP and device login through an overridden runtime', async () => {
+    await expect(
+      resolveACPProcessLaunchAsync({
+        cliType: 'builtin',
+        agentType: 'grok',
+        runtimeOverrides: { grokPath: '/opt/grok' },
+      })
+    ).resolves.toEqual({
+      command: process.execPath,
+      args: [expect.stringMatching(/grok-acp\.js$/u)],
+      env: { GROK_PATH: '/opt/grok', GROK_DISABLE_AUTOUPDATER: '1' },
+    });
+    await expect(
+      resolveBuiltinAuthenticationProcessLaunch({
+        cliType: 'builtin',
+        agentType: 'grok',
+        runtimeOverrides: { grokPath: '/opt/grok' },
+        action: 'login',
+      })
+    ).resolves.toEqual({
+      command: '/opt/grok',
+      args: ['login', '--device-auth'],
+      env: { GROK_DISABLE_AUTOUPDATER: '1' },
+    });
+    await expect(
+      resolveBuiltinAuthenticationProcessLaunch({
+        cliType: 'builtin',
+        agentType: 'grok',
+        runtimeOverrides: { grokPath: '/opt/grok' },
         action: 'status',
       })
     ).resolves.toBeNull();

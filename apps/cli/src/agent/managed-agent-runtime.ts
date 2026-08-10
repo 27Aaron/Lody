@@ -21,6 +21,8 @@ import * as tar from 'tar';
 import { decompressStream } from 'zstd-stream';
 import claudePackageJson from '../../../../packages/acp-extension-claude/package.json';
 import codexPackageJson from '../../../../packages/acp-extension-codex/package.json';
+import grokPackageJson from '../../../../packages/acp-extension-grok/package.json';
+import grokRuntimeManifestJson from '../../../../packages/acp-extension-grok/runtime-manifest.json';
 import claudeSdkManifestJson from '../../node_modules/@anthropic-ai/claude-agent-sdk/manifest.json';
 import claudeSdkPackageJson from '../../node_modules/@anthropic-ai/claude-agent-sdk/package.json';
 import kimiCodePackageJson from '../../node_modules/@moonshot-ai/kimi-code/package.json';
@@ -75,7 +77,11 @@ export type ManagedRuntimeStatus =
   | { kind: 'installed'; platformArch: string; version: string; command: string };
 
 export type ManagedRuntimeProgressPhase =
-  'downloading' | 'verifying' | 'extracting' | 'publishing' | 'complete';
+  | 'downloading'
+  | 'verifying'
+  | 'extracting'
+  | 'publishing'
+  | 'complete';
 
 export type ManagedRuntimeProgressEvent = {
   runtimeName: ManagedRuntimeName;
@@ -253,6 +259,8 @@ export const CODEX_ACP_ADAPTER_VERSION = codexPackageJson.version;
 export const CLAUDE_ACP_ADAPTER_VERSION = claudePackageJson.version;
 export const CLAUDE_CODE_RUNTIME_VERSION = claudeSdkManifestJson.version;
 export const KIMI_CODE_VERSION = kimiCodePackageJson.version;
+export const GROK_ACP_ADAPTER_VERSION = grokPackageJson.version;
+export const GROK_BUILD_RUNTIME_VERSION = grokRuntimeManifestJson.officialRuntime.version;
 export const KIMI_CODE_MIN_NODE_VERSION = resolveMinimumNodeVersion(
   '@moonshot-ai/kimi-code',
   kimiCodePackageJson.engines.node
@@ -261,6 +269,7 @@ export const KIMI_CODE_MIN_NODE_VERSION = resolveMinimumNodeVersion(
 export const BUILTIN_CODEX_CAPABILITY_SOURCE_VERSION = `builtin-codex-acp:${CODEX_ACP_ADAPTER_VERSION}+codex:${CODEX_RUNTIME_VERSION}`;
 export const BUILTIN_CLAUDE_CAPABILITY_SOURCE_VERSION = `builtin-claude-acp:${CLAUDE_ACP_ADAPTER_VERSION}+agent-sdk:${CLAUDE_AGENT_SDK_VERSION}+claude-code:${CLAUDE_CODE_RUNTIME_VERSION}`;
 export const BUILTIN_KIMI_CAPABILITY_SOURCE_VERSION = `builtin-kimi:${KIMI_CODE_VERSION}`;
+export const BUILTIN_GROK_CAPABILITY_SOURCE_VERSION = `builtin-grok-acp:${GROK_ACP_ADAPTER_VERSION}+official-grok:${GROK_BUILD_RUNTIME_VERSION}`;
 
 const RUNTIMES: Record<ManagedRuntimeName, RuntimeDefinition> = {
   codex: {
@@ -409,6 +418,66 @@ const RUNTIMES: Record<ManagedRuntimeName, RuntimeDefinition> = {
         size: 3386360,
         compression: 'zstd',
         cmd: 'package/dist/main.mjs',
+      },
+    },
+  },
+  'grok-build': {
+    name: 'grok-build',
+    version: GROK_BUILD_RUNTIME_VERSION,
+    platforms: {
+      'darwin-arm64': {
+        fileName: `xai-official-grok-darwin-arm64-${GROK_BUILD_RUNTIME_VERSION}.tar.zst`,
+        sha256: '63aa0a0a95e7a555a372f1a501dcf59151376d7e4d900e24e1c591ff6cc8f818',
+        size: 46222120,
+        compression: 'zstd',
+        cmd: 'grok',
+        executableSha256: '13c7f4f0b9abb00bf38216302ea4bab31f03e13555e3576620eca1de572a8d21',
+        executableSize: 131817232,
+      },
+      'darwin-x64': {
+        fileName: `xai-official-grok-darwin-x64-${GROK_BUILD_RUNTIME_VERSION}.tar.zst`,
+        sha256: '7bf0af43ba1f3dc8e860e7f887b75966ece7bb6102cc7a3b2fb5af275f757c8a',
+        size: 50590131,
+        compression: 'zstd',
+        cmd: 'grok',
+        executableSha256: 'a82210a961deac9f0cb72ec6c334196abf76a587be4593bc59db2deab85ee6dc',
+        executableSize: 147358000,
+      },
+      'linux-arm64': {
+        fileName: `xai-official-grok-linux-arm64-${GROK_BUILD_RUNTIME_VERSION}.tar.zst`,
+        sha256: 'c888d404ad218caa251cbdbbd0da5836c807957be5a83fd8ab21b69de93469d9',
+        size: 49704069,
+        compression: 'zstd',
+        cmd: 'grok',
+        executableSha256: 'bb7c51116564a2219f6a49850815060f416918ac407f1f2ba82c53c0b0d4383f',
+        executableSize: 133745832,
+      },
+      'linux-x64': {
+        fileName: `xai-official-grok-linux-x64-${GROK_BUILD_RUNTIME_VERSION}.tar.zst`,
+        sha256: '7d0bb4309e634e0ecb63403f35fa468120f5ecf2173feb6518371be1633ecd99',
+        size: 53264623,
+        compression: 'zstd',
+        cmd: 'grok',
+        executableSha256: '28dbc967a5843dae2374b6834dadbab95354e685c7e5c8dc750b92a4e5fc7c3e',
+        executableSize: 163676672,
+      },
+      'win32-arm64': {
+        fileName: `xai-official-grok-win32-arm64-${GROK_BUILD_RUNTIME_VERSION}.tar.zst`,
+        sha256: 'c821de276cb1fa835567bd6c5589709e6ba29182d6b0c9ad7c160cc3df91145c',
+        size: 45241480,
+        compression: 'zstd',
+        cmd: 'grok.exe',
+        executableSha256: '9d41447b6eee77cfb7359b7f50935ae64b4e7b7e7ef56c40e6d203f5660317e1',
+        executableSize: 121471488,
+      },
+      'win32-x64': {
+        fileName: `xai-official-grok-win32-x64-${GROK_BUILD_RUNTIME_VERSION}.tar.zst`,
+        sha256: '5d66d3e0c1e54b050c76b77dfc1dadefbf3e909459a31b4361d8307a671c179c',
+        size: 48124303,
+        compression: 'zstd',
+        cmd: 'grok.exe',
+        executableSha256: 'd546dbc995c2ce9ba97c044d6af6b53f8c11c414a6355bf006802d07c572f406',
+        executableSize: 139903488,
       },
     },
   },

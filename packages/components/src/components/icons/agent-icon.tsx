@@ -25,6 +25,7 @@ export function getAgentDisplayName(
   if (!cliType || !agentType) return null;
   if (cliType === 'builtin') {
     if (agentType === 'kimi') return 'Kimi Code';
+    if (agentType === 'grok') return 'Grok';
     if (agentType === 'claude') return 'Claude Code';
     if (agentType === 'codex') return 'Codex';
   }
@@ -97,6 +98,17 @@ export function AgentIcon({
     }
     if (agentType === 'claude') return <AnthropicIcon className={cls} />;
     if (agentType === 'codex') return <OpenAIIcon className={cls} />;
+    if (agentType === 'grok') {
+      const grokRaw = REGISTRY_AGENT_ICON_SVGS['grok-build'];
+      if (grokRaw) {
+        return (
+          <InlineSvg
+            raw={grokRaw}
+            className={`${cls} inline-flex items-center justify-center [&_svg]:h-full [&_svg]:w-full`}
+          />
+        );
+      }
+    }
   }
   if (cliType === 'registry' && agentType === 'claude-p') {
     return <AnthropicIcon className={cls} />;

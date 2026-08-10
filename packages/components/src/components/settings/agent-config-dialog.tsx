@@ -454,6 +454,15 @@ const BUILTIN_OPTIONS: AgentTypeOption[] = [
   },
   {
     kind: 'builtin',
+    value: 'builtin:grok',
+    label: 'Grok',
+    descriptionDefault: 'xAI Grok coding agent runtime',
+    cliType: 'builtin',
+    agentType: 'grok',
+    searchKeys: 'grok xai',
+  },
+  {
+    kind: 'builtin',
     value: 'builtin:claude',
     label: 'Claude',
     descriptionKey: 'settings.agent.dialog.option.claude.description',
@@ -956,7 +965,9 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
           ? 'claudeCodeExecutable'
           : formData.agentType === 'kimi'
             ? 'kimiPath'
-            : null;
+            : formData.agentType === 'grok'
+              ? 'grokPath'
+              : null;
   const builtinRuntimeOverrideValue = builtinRuntimeOverrideKey
     ? (formData.runtimeOverrides?.[builtinRuntimeOverrideKey] ?? '')
     : '';
@@ -1002,9 +1013,7 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
       : 'unknown';
   const usesDefaultManagedRuntime =
     formData.cliType === 'builtin' &&
-    (formData.agentType === 'codex' ||
-      formData.agentType === 'claude' ||
-      formData.agentType === 'kimi') &&
+    isBuiltinAgentType(formData.agentType) &&
     !hasBuiltinRuntimeOverride;
   const backgroundManagedBuiltinSetup =
     deferManagedBuiltinCreation && requiresBuiltinCreationVerification && usesDefaultManagedRuntime;
@@ -1949,10 +1958,15 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
                             'settings.agent.dialog.runtimeOverride.kimiPlaceholder',
                             '/path/to/kimi'
                           )
-                        : t(
-                            'settings.agent.dialog.runtimeOverride.claudePlaceholder',
-                            '/path/to/claude'
-                          )
+                        : formData.agentType === 'grok'
+                          ? t(
+                              'settings.agent.dialog.runtimeOverride.grokPlaceholder',
+                              '/path/to/grok'
+                            )
+                          : t(
+                              'settings.agent.dialog.runtimeOverride.claudePlaceholder',
+                              '/path/to/claude'
+                            )
                   }
                   autoComplete="off"
                   spellCheck={false}

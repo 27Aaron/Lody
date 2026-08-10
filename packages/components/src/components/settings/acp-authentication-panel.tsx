@@ -433,6 +433,7 @@ function getAcpAuthenticationAccountName(agentType: string): string {
   if (agentType === 'claude') return 'Claude';
   if (agentType === 'codex') return 'ChatGPT';
   if (agentType === 'kimi') return 'Kimi';
+  if (agentType === 'grok') return 'xAI';
   return agentType;
 }
 

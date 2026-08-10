@@ -147,9 +147,10 @@ export function resolveAgentConfigSelector(
   );
 }
 
-// CLI inference predates explicit cliType. Keep only the two historical
-// builtins here so `lody agent ... kimi` continues to mean the registry agent.
-const LEGACY_BUILTIN_AGENT_TYPES = new Set(['claude', 'codex']);
+// CLI inference predates explicit cliType. Keep the historical Claude/Codex
+// aliases and the unambiguous built-in Grok alias here; `kimi` continues to
+// mean the registry agent for backward compatibility.
+const LEGACY_BUILTIN_AGENT_TYPES = new Set(['claude', 'codex', 'grok']);
 
 export function inferAgentConfigCliType(agentType: string): AgentConfigCliType {
   const normalized = normalizeCliValue(agentType)?.toLowerCase();

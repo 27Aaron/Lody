@@ -44,6 +44,7 @@ describe('start command cli type selection', () => {
       requestedCliTypes: undefined,
       availability: {
         kimi: 'managed-runtime',
+        grok: 'managed-runtime',
         claude: '1.0.0',
         codex: '1.0.0',
       },
@@ -63,6 +64,7 @@ describe('start command cli type selection', () => {
       requestedCliTypes: undefined,
       availability: {
         kimi: false,
+        grok: false,
         claude: '1.0.0',
         codex: false,
       },
@@ -82,6 +84,7 @@ describe('start command cli type selection', () => {
       requestedCliTypes: ['codex'],
       availability: {
         kimi: false,
+        grok: false,
         claude: false,
         codex: false,
       },
@@ -101,6 +104,7 @@ describe('start command cli type selection', () => {
       requestedCliTypes: ['codex', 'claude'],
       availability: {
         kimi: false,
+        grok: false,
         claude: '1.0.0',
         codex: false,
       },
@@ -120,6 +124,7 @@ describe('start command cli type selection', () => {
       requestedCliTypes: ['codex'],
       availability: {
         kimi: false,
+        grok: false,
         claude: false,
         codex: false,
       },
@@ -139,6 +144,7 @@ describe('start command cli type selection', () => {
       requestedCliTypes: ['claude', 'codxe' as CliType],
       availability: {
         kimi: false,
+        grok: false,
         claude: '1.0.0',
         codex: false,
       },
@@ -158,6 +164,7 @@ describe('start command cli type selection', () => {
       requestedCliTypes: undefined,
       availability: {
         kimi: false,
+        grok: false,
         claude: false,
         codex: false,
       },

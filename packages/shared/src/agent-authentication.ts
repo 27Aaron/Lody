@@ -1,7 +1,7 @@
 /**
  * Which provider configs can use a built-in agent's interactive sign-in flow.
  *
- * Only the managed built-in agents (Claude Code / Codex / Kimi Code) have one.
+ * Only the managed built-in agents (Claude Code / Codex / Kimi Code / Grok) have one.
  * A config that carries its own credentials in `env` — every preset such as
  * DeepSeek, MiniMax, MiMo, or GLM, plus hand-rolled configs pointed at an
  * OpenRouter/Ollama-style endpoint — authenticates through those variables
@@ -17,8 +17,8 @@ import { isAgentBrandId, type AgentBrandId } from './agent-brand';
  * command does not reliably represent those paths, so the ACP adapter stays the
  * source of truth whenever one of them is configured.
  *
- * Codex and Kimi have no equivalent list: their authentication requirement is
- * reported by the agent itself (Codex custom model providers may set
+ * Codex, Kimi, and Grok have no equivalent list: their authentication requirement
+ * is reported by the agent itself (Codex custom model providers may set
  * `requires_openai_auth = false`), never inferred from environment variables.
  */
 const CLAUDE_ENV_AUTH_KEYS = [
@@ -63,6 +63,6 @@ export const supportsBuiltinAuthentication = (input: {
   // A persisted brand marks a preset routed through a third-party provider even
   // when its env vars have since been edited away. Only the persisted marker is
   // consulted: a brand inferred from `ANTHROPIC_BASE_URL` is already covered by
-  // the env check above for Claude, and means nothing on Codex or Kimi.
+  // the env check above for Claude, and means nothing on Codex, Kimi, or Grok.
   return !isAgentBrandId(input.brandId);
 };

@@ -235,13 +235,15 @@ const checkKimi = async () => {
 
 function detectCliTypes(options) {
   const kimi = 'managed-runtime';
+  const grok = 'managed-runtime';
   const claude = checkClaude(options);
   const codex = checkCodex(options);
-  const available = ['kimi'];
+  const available = ['kimi', 'grok'];
   if (claude) available.push('claude');
   if (codex) available.push('codex');
   return {
     kimi,
+    grok,
     claude: claude || null,
     codex: codex || null,
     available,

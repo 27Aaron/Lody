@@ -45,7 +45,7 @@ export const WorktreeCleanupScriptConfigSchema = WorktreeSetupScriptConfigSchema
 // ACP SESSION CONFIG SCHEMAS
 // ============================================
 
-export const CliTypeSchema = z.enum(['kimi', 'claude', 'codex']);
+export const CliTypeSchema = z.enum(['kimi', 'grok', 'claude', 'codex']);
 export const AgentConfigCliTypeSchema = z.enum(['builtin', 'registry', 'custom']);
 
 /** Launch spec for `cliType: 'custom'` agents (see `CustomAcpLaunchSpec`). */
@@ -61,6 +61,7 @@ export const BuiltinRuntimeOverridesSchema = z
     codexPath: z.string().optional(),
     claudeCodeExecutable: z.string().optional(),
     kimiPath: z.string().optional(),
+    grokPath: z.string().optional(),
   })
   .strict();
 

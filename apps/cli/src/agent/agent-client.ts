@@ -1364,6 +1364,11 @@ export class AgentClient implements acp.Client {
   ): Promise<acp.NewSessionResponse> {
     const connection = new acp.ClientSideConnection(() => this, stream);
     this.connection = connection;
+    const grokSessionMeta =
+      this.options.agentConfig?.cliType === 'builtin' &&
+      this.options.agentConfig.agentType === 'grok'
+        ? { _meta: { clientIdentifier: `lody:${this.options.sessionId}` } }
+        : {};
     this.logger.debug(
       `[${this.options.sessionId}] Starting ACP client (workdir=${workdir} resumeSessionId=${
         resumeSessionId ?? 'none'
@@ -1662,6 +1667,7 @@ export class AgentClient implements acp.Client {
               sessionId: resumeSessionId,
               cwd: workdir,
               mcpServers,
+              ...grokSessionMeta,
             }),
             startupAbort
           ),
@@ -1720,6 +1726,7 @@ export class AgentClient implements acp.Client {
               sessionId: resumeSessionId,
               cwd: workdir,
               mcpServers,
+              ...grokSessionMeta,
             }),
             startupAbort
           ),
@@ -1778,7 +1785,10 @@ export class AgentClient implements acp.Client {
 
       try {
         sessionResponse = await withTimeout(
-          withAbort(connection.newSession({ cwd: workdir, mcpServers }), startupAbort),
+          withAbort(
+            connection.newSession({ cwd: workdir, mcpServers, ...grokSessionMeta }),
+            startupAbort
+          ),
           this.logger,
           'connection.newSession',
           this.options.sessionId,

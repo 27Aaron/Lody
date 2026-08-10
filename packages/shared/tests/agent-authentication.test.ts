@@ -31,13 +31,14 @@ describe('hasBuiltinEnvAuthentication', () => {
     // agent — not an env heuristic — decides whether sign-in is required.
     expect(hasBuiltinEnvAuthentication('codex', { OPENAI_API_KEY: 'sk-test' })).toBe(false);
     expect(hasBuiltinEnvAuthentication('kimi', { MOONSHOT_API_KEY: 'sk-test' })).toBe(false);
+    expect(hasBuiltinEnvAuthentication('grok', { XAI_API_KEY: 'xai-test' })).toBe(false);
     expect(hasBuiltinEnvAuthentication('auggie', { ANTHROPIC_API_KEY: 'sk-test' })).toBe(false);
   });
 });
 
 describe('supportsBuiltinAuthentication', () => {
   it('allows sign-in for managed built-in agents without env credentials', () => {
-    for (const agentType of ['claude', 'codex', 'kimi']) {
+    for (const agentType of ['claude', 'codex', 'kimi', 'grok']) {
       expect(supportsBuiltinAuthentication({ cliType: 'builtin', agentType, env: {} })).toBe(true);
     }
   });
