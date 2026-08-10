@@ -209,9 +209,9 @@ describe('WorkspaceTargetRouter local-only mode', () => {
     expect(router.resolveTransportRoute({ kind: 'meta', id: 'meta' })).toEqual({
       transportIds: ['local'],
     });
-    expect(
-      router.resolveTransportRoute({ kind: 'doc', id: getSessionRoomId(sessionId) })
-    ).toEqual({ transportIds: ['local'] });
+    expect(router.resolveTransportRoute({ kind: 'doc', id: getSessionRoomId(sessionId) })).toEqual({
+      transportIds: ['local'],
+    });
     // Workspace-scoped Flock rooms (e.g. the task index) fall back to cloud in
     // dual mode; local-only must route them local too.
     expect(router.resolveTransportRoute({ kind: 'flock-doc', id: 'ws-1:ti' })).toEqual({

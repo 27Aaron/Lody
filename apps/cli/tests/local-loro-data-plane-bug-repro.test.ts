@@ -50,10 +50,12 @@ const logger: Logger = {
 
 const WORKSPACE_ID = 'ws-f6';
 
-// The socket path is derived from os.homedir() ($HOME/.lody/run, S1); redirect
+// The socket path is derived from os.homedir(); redirect
 // HOME to a temp dir so the test can never collide with a real running daemon.
 let tempHome: string | null = null;
 let originalHome: string | undefined;
+let originalPlatform: string | undefined;
+let originalDataDir: string | undefined;
 
 class SocketClient {
   readonly messages: LocalLoroDataPlaneServerMessage[] = [];
@@ -137,9 +139,17 @@ function joinLine(requestId: string, docId: string): string {
 describe('local Loro data-plane socket server — F6 regression', () => {
   beforeAll(async () => {
     originalHome = process.env.HOME;
-    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'lody-dp-f6-'));
+    originalPlatform = process.env.LODY_PLATFORM;
+    originalDataDir = process.env.LODY_DATA_DIR;
+    // macOS exposes os.tmpdir() as a long /var/folders path. Keep the test's
+    // Unix socket below sockaddr_un's 104-byte path limit, like the CI runner's
+    // /tmp, while retaining the platform temp directory on Windows.
+    const tempRoot = process.platform === 'win32' ? os.tmpdir() : '/tmp';
+    tempHome = fs.mkdtempSync(path.join(tempRoot, 'lody-dp-f6-'));
     process.env.HOME = tempHome;
-    fs.mkdirSync(path.join(tempHome, '.lody', 'run'), { recursive: true });
+    process.env.LODY_PLATFORM = 'local';
+    delete process.env.LODY_DATA_DIR;
+    fs.mkdirSync(path.dirname(getLocalLoroDataPlaneSocketPath()), { recursive: true });
 
     const docs = new Map<string, LoroDoc>();
     const engine = new LocalLoroDataPlaneServer({
@@ -163,7 +173,12 @@ describe('local Loro data-plane socket server — F6 regression', () => {
 
   afterAll(async () => {
     await stopLocalLoroDataPlaneServer();
-    process.env.HOME = originalHome;
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    if (originalPlatform === undefined) delete process.env.LODY_PLATFORM;
+    else process.env.LODY_PLATFORM = originalPlatform;
+    if (originalDataDir === undefined) delete process.env.LODY_DATA_DIR;
+    else process.env.LODY_DATA_DIR = originalDataDir;
     if (tempHome) fs.rmSync(tempHome, { recursive: true, force: true });
   });
 

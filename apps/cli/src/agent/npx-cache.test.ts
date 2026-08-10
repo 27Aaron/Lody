@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AcpTimeoutError } from './agent-client';
 import {
@@ -28,6 +28,21 @@ import {
   purgeLodyNpmCache,
   withLodyNpmCacheForNpx,
 } from './npx-cache';
+
+const originalPlatform = process.env.LODY_PLATFORM;
+const originalDataDir = process.env.LODY_DATA_DIR;
+
+beforeEach(() => {
+  process.env.LODY_PLATFORM = 'local';
+  delete process.env.LODY_DATA_DIR;
+});
+
+afterEach(() => {
+  if (originalPlatform === undefined) delete process.env.LODY_PLATFORM;
+  else process.env.LODY_PLATFORM = originalPlatform;
+  if (originalDataDir === undefined) delete process.env.LODY_DATA_DIR;
+  else process.env.LODY_DATA_DIR = originalDataDir;
+});
 
 function makeIo(setup: {
   files?: Record<string, string>;
@@ -660,10 +675,17 @@ describe('npm cache isolation helpers', () => {
   });
 
   it('recognizes only the Lody npm cache path', () => {
-    expect(isLodyNpmCacheDir('/Users/u/.lody/npm-cache', '/Users/u')).toBe(true);
-    expect(isLodyNpmCacheDir('/Users/u/.lody/npm-cache/', '/Users/u')).toBe(true);
+    expect(isLodyNpmCacheDir('/Users/u/.lody-oss/npm-cache', '/Users/u')).toBe(true);
+    expect(isLodyNpmCacheDir('/Users/u/.lody-oss/npm-cache/', '/Users/u')).toBe(true);
+    expect(isLodyNpmCacheDir('/Users/u/.lody/npm-cache', '/Users/u')).toBe(false);
     expect(isLodyNpmCacheDir('/Users/u/.npm', '/Users/u')).toBe(false);
     expect(isLodyNpmCacheDir(undefined, '/Users/u')).toBe(false);
+  });
+
+  it('recognizes the cloud installation cache only in cloud mode', () => {
+    process.env.LODY_PLATFORM = 'cloud';
+    expect(isLodyNpmCacheDir('/Users/u/.lody/npm-cache', '/Users/u')).toBe(true);
+    expect(isLodyNpmCacheDir('/Users/u/.lody-oss/npm-cache', '/Users/u')).toBe(false);
   });
 });
 
@@ -858,7 +880,7 @@ describe('purgeBrokenNpxCache', () => {
 
 describe('purgeLodyNpmCache', () => {
   it('purges only Lody-owned _npx and _cacache dirs', () => {
-    const cache = '/Users/u/.lody/npm-cache';
+    const cache = '/Users/u/.lody-oss/npm-cache';
     const npx = join(cache, '_npx');
     const cacache = join(cache, '_cacache');
     const userNpm = '/Users/u/.npm';
@@ -893,7 +915,7 @@ describe('purgeLodyNpmCache', () => {
   });
 
   it('is best-effort when cleanup fails', () => {
-    const cache = '/Users/u/.lody/npm-cache';
+    const cache = '/Users/u/.lody-oss/npm-cache';
     const npx = join(cache, '_npx');
     const cacache = join(cache, '_cacache');
     const io = makeIo({

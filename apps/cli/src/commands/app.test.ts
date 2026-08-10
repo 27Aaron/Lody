@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   LocalProjectControlRequest,
   LocalProjectControlResponse,
@@ -11,6 +11,16 @@ import { buildOpenLocalProjectDeepLink } from '@/lib/desktop-deep-link';
 const MACHINE_ID = 'machine-1' as MachineId;
 const ROOT_PATH = '/tmp/lody-app-test-project';
 const LOCAL_PROJECT_ID = 'local-project-abc123' as LocalProjectId;
+const originalPlatform = process.env.LODY_PLATFORM;
+
+beforeEach(() => {
+  process.env.LODY_PLATFORM = 'local';
+});
+
+afterEach(() => {
+  if (originalPlatform === undefined) delete process.env.LODY_PLATFORM;
+  else process.env.LODY_PLATFORM = originalPlatform;
+});
 
 function addOk(): Extract<LocalProjectControlResponse, { type: 'local-project/add' }> {
   return {
@@ -132,12 +142,14 @@ describe('resolveLocalProjectForApp', () => {
   });
 
   it('still resolves the deterministic project id when the daemon is down', async () => {
-    const send = vi.fn(async (): Promise<LocalProjectControlResponse> => ({
-      ok: false,
-      type: 'local-project/add',
-      error: 'daemon_unavailable',
-      message: 'Local CLI daemon is not running.',
-    }));
+    const send = vi.fn(
+      async (): Promise<LocalProjectControlResponse> => ({
+        ok: false,
+        type: 'local-project/add',
+        error: 'daemon_unavailable',
+        message: 'Local CLI daemon is not running.',
+      })
+    );
 
     const target = await resolveLocalProjectForApp({
       machineId: MACHINE_ID,
@@ -154,12 +166,14 @@ describe('resolveLocalProjectForApp', () => {
   });
 
   it('propagates other control failures', async () => {
-    const send = vi.fn(async (): Promise<LocalProjectControlResponse> => ({
-      ok: false,
-      type: 'local-project/add',
-      error: 'path_invalid',
-      message: 'Selected path is not a directory',
-    }));
+    const send = vi.fn(
+      async (): Promise<LocalProjectControlResponse> => ({
+        ok: false,
+        type: 'local-project/add',
+        error: 'path_invalid',
+        message: 'Selected path is not a directory',
+      })
+    );
 
     await expect(
       resolveLocalProjectForApp({
@@ -182,7 +196,9 @@ describe('buildOpenLocalProjectDeepLink', () => {
         localProjectId: LOCAL_PROJECT_ID,
         workspaceSlug: 'acme',
       })
-    ).toBe(`lody://chat/new?machine=${MACHINE_ID}&project=${LOCAL_PROJECT_ID}&workspaceSlug=acme`);
+    ).toBe(
+      `lody-oss://chat/new?machine=${MACHINE_ID}&project=${LOCAL_PROJECT_ID}&workspaceSlug=acme`
+    );
   });
 
   it('omits an unknown workspace slug so the app keeps its current workspace', () => {
@@ -192,6 +208,17 @@ describe('buildOpenLocalProjectDeepLink', () => {
         localProjectId: LOCAL_PROJECT_ID,
         workspaceSlug: null,
       })
-    ).toBe(`lody://chat/new?machine=${MACHINE_ID}&project=${LOCAL_PROJECT_ID}`);
+    ).toBe(`lody-oss://chat/new?machine=${MACHINE_ID}&project=${LOCAL_PROJECT_ID}`);
+  });
+
+  it('uses the official desktop protocol in cloud mode', () => {
+    process.env.LODY_PLATFORM = 'cloud';
+    expect(
+      buildOpenLocalProjectDeepLink({
+        machineId: MACHINE_ID,
+        localProjectId: LOCAL_PROJECT_ID,
+        workspaceSlug: 'acme',
+      })
+    ).toBe(`lody://chat/new?machine=${MACHINE_ID}&project=${LOCAL_PROJECT_ID}&workspaceSlug=acme`);
   });
 });

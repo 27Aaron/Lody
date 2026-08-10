@@ -24,10 +24,16 @@ describe('session file blob store', () => {
   let sourceDir: string;
   let originalQuota: string | undefined;
   let originalRetainDays: string | undefined;
+  let originalPlatform: string | undefined;
+  let originalDataDir: string | undefined;
 
   beforeEach(async () => {
     originalQuota = process.env.LODY_SESSION_FILE_BLOB_QUOTA_BYTES;
     originalRetainDays = process.env.LODY_SESSION_FILE_BLOB_RETAIN_DAYS;
+    originalPlatform = process.env.LODY_PLATFORM;
+    originalDataDir = process.env.LODY_DATA_DIR;
+    process.env.LODY_PLATFORM = 'local';
+    delete process.env.LODY_DATA_DIR;
     delete process.env.LODY_SESSION_FILE_BLOB_QUOTA_BYTES;
     delete process.env.LODY_SESSION_FILE_BLOB_RETAIN_DAYS;
     homeDir = await mkdtemp(join(tmpdir(), 'lody-blob-home-'));
@@ -45,6 +51,10 @@ describe('session file blob store', () => {
     } else {
       process.env.LODY_SESSION_FILE_BLOB_RETAIN_DAYS = originalRetainDays;
     }
+    if (originalPlatform === undefined) delete process.env.LODY_PLATFORM;
+    else process.env.LODY_PLATFORM = originalPlatform;
+    if (originalDataDir === undefined) delete process.env.LODY_DATA_DIR;
+    else process.env.LODY_DATA_DIR = originalDataDir;
     await rm(homeDir, { recursive: true, force: true });
     await rm(sourceDir, { recursive: true, force: true });
   });
@@ -55,9 +65,9 @@ describe('session file blob store', () => {
     return p;
   };
 
-  it('lays out blobs under .lody/session-files/<workspace>/<session>/<fileId>', () => {
+  it('lays out blobs under the local installation data directory', () => {
     const dir = getSessionFileBlobDir({ workspaceId: 'ws', sessionId: 'sess', homeDir });
-    expect(dir).toBe(join(homeDir, '.lody', 'session-files', 'ws', 'sess'));
+    expect(dir).toBe(join(homeDir, '.lody-oss', 'session-files', 'ws', 'sess'));
     const file = getSessionFileBlobPath({
       workspaceId: 'ws',
       sessionId: 'sess',
@@ -288,7 +298,7 @@ describe('session file blob store', () => {
     const old = new Date(1_000);
     const backfilledPath = join(
       homeDir,
-      '.lody',
+      '.lody-oss',
       'session-files',
       '_backfilled',
       'ws',
@@ -303,7 +313,7 @@ describe('session file blob store', () => {
   });
 
   it('returns no pending blobs for an empty/absent workspace', async () => {
-    await mkdir(join(homeDir, '.lody'), { recursive: true });
+    await mkdir(join(homeDir, '.lody-oss'), { recursive: true });
     expect(await listPendingLocalSessionFiles({ workspaceId: 'ws', homeDir })).toEqual([]);
   });
 });
