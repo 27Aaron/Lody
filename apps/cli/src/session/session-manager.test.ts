@@ -171,6 +171,7 @@ describe('SessionManager cleanup phases', () => {
       workspaceDocument,
       {
         sessionSandboxFactory: async () => createNoopSessionSandbox(),
+        cloudPort: createTestCloudPort(),
       }
     );
     const cleanupSessionsSpy = vi
@@ -284,6 +285,7 @@ describe('SessionManager child session workdir resolution', () => {
       workspaceDocument,
       {
         sessionSandboxFactory: async () => createNoopSessionSandbox(),
+        cloudPort: createTestCloudPort(),
       }
     );
 
@@ -419,6 +421,7 @@ describe('SessionManager child session workdir resolution', () => {
       workspaceDocument,
       {
         sessionSandboxFactory: async () => createNoopSessionSandbox(),
+        cloudPort: createTestCloudPort(),
       }
     );
 
@@ -526,6 +529,7 @@ describe('SessionManager worktree setup', () => {
       createWorkspaceDocument(docs),
       {
         sessionSandboxFactory: async () => createNoopSessionSandbox(),
+        cloudPort: createTestCloudPort(),
       }
     );
     const worktreeManager = getWorktreeManager({
@@ -593,6 +597,7 @@ describe('SessionManager worktree setup', () => {
       createWorkspaceDocument(new Map()),
       {
         sessionSandboxFactory: async () => createNoopSessionSandbox(),
+        cloudPort: createTestCloudPort(),
       }
     );
     const worktreeManager = getWorktreeManager({
@@ -781,6 +786,7 @@ describe('SessionManager preparation compatibility', () => {
       createWorkspaceDocument(new Map()),
       {
         sessionSandboxFactory: async () => createNoopSessionSandbox(),
+        cloudPort: createTestCloudPort(),
       }
     );
     const sessionId = 'missing-agent-config-cold-fallback' as SessionId;
@@ -833,6 +839,7 @@ describe('SessionManager preparation compatibility', () => {
       createWorkspaceDocument(new Map()),
       {
         sessionSandboxFactory: async () => createNoopSessionSandbox(),
+        cloudPort: createTestCloudPort(),
       }
     );
     const sessionId = 'changed-project-cold-fallback' as SessionId;

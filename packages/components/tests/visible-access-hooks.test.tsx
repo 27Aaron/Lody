@@ -40,6 +40,7 @@ vi.mock('../src/hooks/use-authenticated-convex', () => ({
 }));
 
 vi.mock('../src/hooks/use-recoverable-convex-query', () => ({
+  usePublicConvexQuery: () => undefined,
   useRecoverableConvexQuery: (...args: unknown[]) => queryMocks.useQuery(...args),
 }));
 

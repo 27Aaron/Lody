@@ -207,17 +207,15 @@ describe('WorkspaceTargetRouter local-only mode', () => {
     // No setLocalMachineId call: local-only must not wait for identity.
     expect(router.getPlaneForMachine(remoteMachineId)).toBe('local');
     expect(router.resolveTransportRoute({ kind: 'meta', id: 'meta' })).toEqual({
-      memberIds: ['local'],
-      primaryMemberId: 'local',
+      transportIds: ['local'],
     });
     expect(
       router.resolveTransportRoute({ kind: 'doc', id: getSessionRoomId(sessionId) })
-    ).toEqual({ memberIds: ['local'], primaryMemberId: 'local' });
+    ).toEqual({ transportIds: ['local'] });
     // Workspace-scoped Flock rooms (e.g. the task index) fall back to cloud in
     // dual mode; local-only must route them local too.
     expect(router.resolveTransportRoute({ kind: 'flock-doc', id: 'ws-1:ti' })).toEqual({
-      memberIds: ['local'],
-      primaryMemberId: 'local',
+      transportIds: ['local'],
     });
     expect(router.getPlaneForFlockDoc('ws-1:ti')).toBe('local');
     await expect(router.prepareSessionTarget(sessionId)).resolves.toBe('local');

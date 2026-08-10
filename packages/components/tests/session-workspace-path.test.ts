@@ -30,7 +30,7 @@ describe('session workspace path resolver', () => {
         sessionId: 'session123' as SessionId,
         isWorktree: true,
         dotlodyPath: '/Users/alice/.lody',
-        repoFullName: 'loro-dev/lody',
+        repoFullName: 'example/project',
       })
     ).toBe('/Users/alice/.lody/repos/github---example---project/worktrees/session123');
   });

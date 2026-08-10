@@ -66,11 +66,11 @@ describe('getCliPlatformKind / applyLocalPlatformEnv', () => {
     process.env = { ...savedEnv };
   });
 
-  it('defaults to cloud and honors LODY_PLATFORM=local', () => {
+  it('defaults to local and honors LODY_PLATFORM=cloud', () => {
     delete process.env.LODY_PLATFORM;
-    expect(getCliPlatformKind()).toBe('cloud');
-    process.env.LODY_PLATFORM = 'local';
     expect(getCliPlatformKind()).toBe('local');
+    process.env.LODY_PLATFORM = 'cloud';
+    expect(getCliPlatformKind()).toBe('cloud');
   });
 
   it('applyLocalPlatformEnv blanks every cloud endpoint', () => {

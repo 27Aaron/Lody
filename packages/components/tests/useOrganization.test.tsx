@@ -22,6 +22,10 @@ vi.mock('../src/providers/convex-provider', () => ({
   useAuthClient: () => organizationMocks.authClient,
 }));
 
+vi.mock('../src/lib/app-platform', () => ({
+  isLocalAppPlatform: () => false,
+}));
+
 const { StableSessionContext } = await import('../src/hooks/useStableSession');
 const { useOrganization } = await import('../src/hooks/useOrganization');
 
