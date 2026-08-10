@@ -104,8 +104,10 @@ import {
 import { Button } from '@/ui/button';
 import { TooltipProvider } from '@/ui/tooltip';
 import {
+  CODEX_COLLABORATION_MODE_CONFIG_ID,
+  CODEX_COLLABORATION_MODE_DEFAULT_VALUE,
+  CODEX_COLLABORATION_MODE_PLAN_VALUE,
   CODEX_FAST_MODE_CONFIG_ID,
-  CODEX_PLAN_MODE_CONFIG_ID,
 } from '@/components/shared/acp-selector-options';
 import type {
   AgentConfigMeta,
@@ -3255,7 +3257,7 @@ export function LandingAppPreview({
   }, []);
   const [configValues, setConfigValues] = useState<Record<string, AcpConfigOptionValue>>({
     reasoning_effort: 'medium',
-    [CODEX_PLAN_MODE_CONFIG_ID]: false,
+    [CODEX_COLLABORATION_MODE_CONFIG_ID]: CODEX_COLLABORATION_MODE_DEFAULT_VALUE,
     [CODEX_FAST_MODE_CONFIG_ID]: false,
   });
 
@@ -3319,7 +3321,7 @@ export function LandingAppPreview({
     if (selectedProvider === 'claude') {
       setConfigValues((prev) => ({
         ...prev,
-        [CODEX_PLAN_MODE_CONFIG_ID]: false,
+        [CODEX_COLLABORATION_MODE_CONFIG_ID]: CODEX_COLLABORATION_MODE_DEFAULT_VALUE,
         [CODEX_FAST_MODE_CONFIG_ID]: false,
       }));
     }
@@ -3410,11 +3412,15 @@ export function LandingAppPreview({
     if (selectedProvider === 'codex') {
       selectors.push(
         {
-          configId: CODEX_PLAN_MODE_CONFIG_ID,
+          configId: CODEX_COLLABORATION_MODE_CONFIG_ID,
           label: t.config.planMode,
-          type: 'boolean',
-          currentValue: false,
-          options: [],
+          category: CODEX_COLLABORATION_MODE_CONFIG_ID,
+          type: 'select',
+          currentValue: CODEX_COLLABORATION_MODE_DEFAULT_VALUE,
+          options: [
+            { value: CODEX_COLLABORATION_MODE_DEFAULT_VALUE, label: 'Default' },
+            { value: CODEX_COLLABORATION_MODE_PLAN_VALUE, label: t.config.planMode },
+          ],
         },
         {
           configId: CODEX_FAST_MODE_CONFIG_ID,

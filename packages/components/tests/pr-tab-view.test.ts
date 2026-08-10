@@ -129,4 +129,35 @@ describe('PrTabView refresh button', () => {
 
     expect(onRefresh).toHaveBeenCalledTimes(1);
   });
+
+  it('pins the comment composer below the scrollable PR content', () => {
+    const onPostComment = vi.fn();
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    flushSync(() => {
+      root?.render(
+        createElement(PrTabView, {
+          repoFullName: 'loro-dev/lody',
+          prNumber: 42,
+          state: 'ready',
+          data,
+          onPostComment,
+        })
+      );
+    });
+
+    const textarea = container.querySelector<HTMLTextAreaElement>(
+      'textarea[placeholder="Leave a comment"]'
+    );
+    const scrollArea = container.querySelector<HTMLElement>('[data-pr-content-scroll-area]');
+    const composer = container.querySelector<HTMLElement>('[data-pr-comment-composer]');
+
+    expect(textarea).not.toBeNull();
+    expect(scrollArea).not.toBeNull();
+    expect(scrollArea?.contains(textarea)).toBe(false);
+    expect(composer?.contains(textarea)).toBe(true);
+    expect(scrollArea?.nextElementSibling).toBe(composer);
+  });
 });

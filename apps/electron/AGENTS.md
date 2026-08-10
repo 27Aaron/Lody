@@ -43,6 +43,11 @@ Root `AGENTS.md` also applies.
 
 ## Renderer and window integration
 
+- Generic update metadata may carry localized Markdown under
+  `vendor.lodyChangelog.locales.{en,zh_CN}` in addition to the standard English
+  `releaseNotes` fallback. Main validates and bounds those remote strings before
+  exposing them through `ElectronUpdaterState`; renderer code must use the shared
+  safe Markdown renderer rather than raw HTML.
 - Theme changes must also update the native window color in `window-theme.ts`.
   Windows title-bar geometry must stay aligned across
   `MAIN_WINDOW_TITLE_BAR_OVERLAY_HEIGHT`, the `h-9` drag strip in

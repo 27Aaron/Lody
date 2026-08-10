@@ -233,6 +233,24 @@ type UpcomingInvoicePreview = {
   creditApplied: { amount: number } | null;
 };
 
+/**
+ * Cost of adding one more workspace member. `not_billed` covers free
+ * workspaces and gift/enterprise entitlements that are not billed per seat;
+ * `billed` quotes the prorated charge applied when the invitation is accepted.
+ */
+type SeatInvitePreview =
+  | { status: 'not_billed'; reason: 'free' | 'covered' }
+  | {
+      status: 'billed';
+      interval: BillingInterval;
+      unitAmount: number;
+      proratedAmount: number | null;
+      currentPeriodEnd: number | null;
+      seatCount: number;
+      nextSeatCount: number;
+      nextRenewalAmount: number;
+    };
+
 export type CloudApi = {
   activity: {
     recordMyWorkspaceDailyActiveUser: Mutation<
@@ -303,6 +321,7 @@ export type CloudApi = {
         pendingInvitationCount: number;
       } | null
     >;
+    getWorkspaceSeatInvitePreview: Query<{ workspaceId: string }, SeatInvitePreview | null>;
     listBillingInvoices: Action<
       { workspaceId: string },
       { invoices: BillingInvoiceRecord[]; upcoming: UpcomingInvoicePreview | null }

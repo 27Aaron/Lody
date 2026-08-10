@@ -9,14 +9,11 @@ import {
   Mail,
   Clock,
   Copy,
-  Shield,
   Trash2,
   ChevronDown,
   Check,
   LogOut,
   KeyRound,
-  CreditCard,
-  Users,
   Pencil,
   X,
 } from 'lucide-react';
@@ -24,8 +21,6 @@ import { Button } from '@/ui/button';
 import { Input } from '@/ui/input';
 import { Label } from '@/ui/label';
 import { Badge } from '@/ui/badge';
-import { Alert, AlertDescription, AlertTitle } from '@/ui/alert';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/ui/select';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -54,6 +49,11 @@ import {
   AlertDialogTitle,
 } from '@/ui/alert-dialog';
 import { CompactRow, CompactSection } from './compact-layout';
+import {
+  InviteMemberDialog,
+  type InviteMemberRole,
+  type SeatInvitePreview,
+} from './invite-member-dialog';
 import { AvatarEditor } from './avatar-editor';
 import { ChangePasswordButton } from './change-password-button';
 import { LinkedAccountsList, type LinkedAccountInfo } from './linked-accounts-list';
@@ -129,6 +129,11 @@ export interface AccountSettingsPureProps {
   memberLimit?: number | null;
   memberLimitReached?: boolean;
   billingUiAvailable?: boolean;
+  /**
+   * Seat cost of one more member, shown in the invite dialog. `undefined`
+   * while loading; `null` when unavailable.
+   */
+  seatPreview?: SeatInvitePreview | null;
   loading?: boolean;
   onSignOut: () => void | Promise<void>;
   onInviteMember: (email: string, role: 'member' | 'admin') => Promise<Invitation | null>;
@@ -180,6 +185,7 @@ export function AccountSettingsPure({
   memberLimit = null,
   memberLimitReached = false,
   billingUiAvailable = true,
+  seatPreview,
   loading,
   onSignOut,
   onInviteMember,
@@ -224,8 +230,6 @@ export function AccountSettingsPure({
   const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
   const [deleteUserDialogOpen, setDeleteUserDialogOpen] = useState(false);
   const [userToDelete, setUserToDelete] = useState<string | null>(null);
-  const [inviteEmail, setInviteEmail] = useState('');
-  const [inviteRole, setInviteRole] = useState<'member' | 'admin'>('member');
   const [inviting, setInviting] = useState(false);
   const [pendingInvitations, setPendingInvitations] = useState(initialPendingInvitations);
   const [cancellingInvitationIds, setCancellingInvitationIds] = useState<Set<string>>(
@@ -415,17 +419,13 @@ export function AccountSettingsPure({
     }
   };
 
-  const handleInviteMember = async () => {
-    if (!inviteEmail.trim()) return;
-
+  const handleInviteMember = async (email: string, invitedRole: InviteMemberRole) => {
     setInviting(true);
     try {
-      const result = await onInviteMember(inviteEmail, inviteRole);
+      const result = await onInviteMember(email, invitedRole);
       if (result) {
         setPendingInvitations((prev) => [...prev, result]);
         setInviteDialogOpen(false);
-        setInviteEmail('');
-        setInviteRole('member');
       }
     } finally {
       setInviting(false);
@@ -474,6 +474,8 @@ export function AccountSettingsPure({
         workspaceJoinRequestsSlot={workspaceJoinRequestsSlot}
         memberLimit={memberLimit}
         memberLimitReached={memberLimitReached}
+        billingUiAvailable={billingUiAvailable}
+        seatPreview={seatPreview}
         onSignOut={onSignOut}
         onInviteMember={onInviteMember}
         onRemoveMember={onRemoveMember}
@@ -1102,112 +1104,21 @@ export function AccountSettingsPure({
       </CompactSection>
 
       {/* Invite Dialog */}
-      <Dialog open={inviteDialogOpen} onOpenChange={setInviteDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>
-              {memberLimitReached
-                ? t(
-                    billingUiAvailable
-                      ? 'workspace.invite.limitTitle'
-                      : 'workspace.invite.mobileLimitTitle'
-                  )
-                : t('workspace.invite.title')}
-            </DialogTitle>
-            <DialogDescription>
-              {memberLimitReached
-                ? t('workspace.invite.limitDescription', { limit: memberLimit ?? 3 })
-                : t('workspace.invite.description')}
-            </DialogDescription>
-          </DialogHeader>
-          {memberLimitReached ? (
-            <Alert className="my-4">
-              <Users />
-              <AlertTitle>{t('workspace.invite.limitAlertTitle')}</AlertTitle>
-              <AlertDescription>
-                {t(
-                  billingUiAvailable
-                    ? 'workspace.invite.limitAlertDescription'
-                    : 'workspace.invite.mobileLimitAlertDescription'
-                )}
-              </AlertDescription>
-            </Alert>
-          ) : (
-            <div className="space-y-4 py-4">
-              <div className="space-y-2">
-                <Label htmlFor="email">{t('workspace.invite.email')}</Label>
-                <Input
-                  id="email"
-                  value={inviteEmail}
-                  onChange={(e) => setInviteEmail(e.target.value)}
-                  placeholder={t('workspace.invite.emailPlaceholder')}
-                  type="email"
-                  autoComplete="email"
-                  autoCapitalize="none"
-                  autoCorrect="off"
-                  spellCheck={false}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="role">{t('workspace.invite.role')}</Label>
-                <Select
-                  value={inviteRole}
-                  onValueChange={(value) => setInviteRole(value as 'member' | 'admin')}
-                >
-                  <SelectTrigger className="h-9 w-full sm:w-[220px]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="member">{t('organization.role.member')}</SelectItem>
-                    <SelectItem value="admin">
-                      <div className="flex items-center">
-                        <Shield className="mr-2 h-4 w-4" />
-                        <span>{t('organization.role.admin')}</span>
-                      </div>
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-          )}
-          <DialogFooter>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setInviteDialogOpen(false)}
-              disabled={inviting}
-            >
-              {memberLimitReached ? t('common.close') : t('common.cancel')}
-            </Button>
-            {memberLimitReached ? (
-              hasAdminPermission &&
-              billingUiAvailable &&
-              onOpenBilling && (
-                <Button
-                  size="sm"
-                  onClick={() => {
-                    setInviteDialogOpen(false);
-                    onOpenBilling();
-                  }}
-                >
-                  <CreditCard className="mr-1.5 h-3.5 w-3.5" />
-                  {t('workspace.invite.upgradeButton')}
-                </Button>
-              )
-            ) : (
-              <Button
-                size="sm"
-                onClick={() => {
-                  void handleInviteMember();
-                }}
-                disabled={!inviteEmail.trim() || inviting}
-              >
-                {inviting ? t('common.inviting') : t('common.invite')}
-              </Button>
-            )}
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <InviteMemberDialog
+        open={inviteDialogOpen}
+        onOpenChange={setInviteDialogOpen}
+        workspaceName={organization.name}
+        memberLimit={memberLimit}
+        memberLimitReached={memberLimitReached}
+        billingUiAvailable={billingUiAvailable}
+        hasAdminPermission={hasAdminPermission}
+        seatPreview={seatPreview}
+        inviting={inviting}
+        onInvite={(email, invitedRole) => {
+          void handleInviteMember(email, invitedRole);
+        }}
+        {...(onOpenBilling ? { onOpenBilling } : {})}
+      />
 
       {/* Remove Member Dialog */}
       <AlertDialog open={deleteUserDialogOpen} onOpenChange={setDeleteUserDialogOpen}>
