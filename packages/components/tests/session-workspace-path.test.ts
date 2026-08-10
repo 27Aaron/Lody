@@ -32,7 +32,7 @@ describe('session workspace path resolver', () => {
         dotlodyPath: '/Users/alice/.lody',
         repoFullName: 'example/project',
       })
-    ).toBe('/Users/alice/.lody/repos/github---loro-dev---lody/worktrees/session123');
+    ).toBe('/Users/alice/.lody/repos/github---example---project/worktrees/session123');
   });
 
   it('derives non-worktree paths without per-session machine meta entries', () => {

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { pathToFileURL } from 'node:url';
+import { collectRuntimeDependencyVersionIssues } from './published-runtime-dependency-policy.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -35,10 +36,8 @@ const requiredPublishedRuntimeDependencies = [
 // resolve a layout the packaging never saw. Do NOT drop to @lydell/node-pty@1.1.0: it
 // repackages node-pty 1.1.0-beta14, which predates the queued pty writer and writes
 // through tty.WriteStream, where EAGAIN is masked and can block (microsoft/node-pty#833).
-const requiredExactPublishedRuntimeDependencies = new Map([
-  ['loro-crdt', '1.14.0'],
-  ['@lydell/node-pty', '1.2.0-beta.14'],
-]);
+const requiredExactPublishedRuntimeDependencies = ['loro-crdt'];
+const requiredPinnedPublishedRuntimeDependencies = new Map([['@lydell/node-pty', '1.2.0-beta.14']]);
 
 for (const block of dependencyBlocks) {
   const dependencies = packageJson[block];
@@ -246,14 +245,11 @@ function checkPublishedRuntimeDependencies() {
 }
 
 function checkExactPublishedRuntimeDependencies(publishedDependencyBlocks) {
-  const mismatched = [];
-
-  for (const [dependencyName, expectedVersion] of requiredExactPublishedRuntimeDependencies) {
-    const actualVersion = findPublishedDependencyVersion(publishedDependencyBlocks, dependencyName);
-    if (actualVersion !== expectedVersion) {
-      mismatched.push({ dependencyName, expectedVersion, actualVersion });
-    }
-  }
+  const mismatched = collectRuntimeDependencyVersionIssues({
+    dependencyBlocks: publishedDependencyBlocks,
+    exactDependencies: requiredExactPublishedRuntimeDependencies,
+    pinnedDependencies: requiredPinnedPublishedRuntimeDependencies,
+  });
 
   if (mismatched.length === 0) {
     return;
@@ -269,17 +265,6 @@ function checkExactPublishedRuntimeDependencies(publishedDependencyBlocks) {
     '\nUse exact versions so the published CLI resolves the same dependency build that was tested.'
   );
   process.exit(1);
-}
-
-function findPublishedDependencyVersion(publishedDependencyBlocks, dependencyName) {
-  for (const dependencies of publishedDependencyBlocks) {
-    const version = dependencies?.[dependencyName];
-    if (typeof version === 'string') {
-      return version;
-    }
-  }
-
-  return null;
 }
 
 function runPublishedRuntimeSmoke() {
