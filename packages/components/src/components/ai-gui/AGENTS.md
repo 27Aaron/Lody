@@ -85,6 +85,13 @@ context/message-flow.md.
   (`CONVERSATION_GUTTER_X_CLASS` / `px-3 sm:px-4`), **not** on the `VList`.
   Virtua absolute rows ignore scroller horizontal padding, which used to leave
   avatars flush to the screen edge while the composer stayed inset.
+  **One left rail per turn**: no top-level row adds its own leading pad —
+  prose (`MarkdownBlock`), `ActivityGroupHeader`, `WorkedGroupHeader`,
+  `SubagentTaskPanel`, edited-files, footer. `MarkdownBlock` carried `sm:px-2`
+  and the footer/edited-files were tuned to that 8px, so prose read as indented
+  beside the chevrons. Footer keeps `-mx-[7px]` to put its glyph on the rail.
+  Indents belong to CHILD rows only (`activity_detail`, worked-group details).
+  Story: `AssistantTurnAlignment.stories.tsx`.
 - `build-chat-stream-items.ts` — `buildChatStreamItems()` turns `sessionDoc.history`
   into `VList` items. **Normalizes defensively** so interrupted / bad-network docs
   can't make virtua overlap deterministically: drops empty assistant entries (they'd

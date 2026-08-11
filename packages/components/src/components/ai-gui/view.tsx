@@ -2614,7 +2614,9 @@ const WorkedGroupHeader = ({
         'group flex w-full items-center gap-1 rounded-md py-0.5 text-left transition-colors',
         /* Quieter than the answer body so process chrome does not compete. */
         'text-muted-foreground hover:bg-hover/40 hover:text-foreground',
-        'sm:gap-1.5 sm:pl-1.5 sm:pr-1'
+        /* No leading pad: this chevron shares the turn's left rail with
+           `ActivityGroupHeader` and the answer prose. */
+        'sm:gap-1.5 sm:pr-1'
       )}
       onClick={() => onExpandedChange(!expanded)}
       aria-expanded={expanded}
@@ -2867,11 +2869,10 @@ const AssistantTurnFooter = ({
                action bar can ride on the answer's line leading. This is a
                bordered card, not text, so it needs its own separation: without
                it the card border lands flush against the answer's last line box
-               (measured 0px on mobile, where `px-0` also shares the text's left
-               edge — it read as part of the paragraph). 8px puts the visible gap
-               at ~10px, matching the block rhythm of the rest of the turn. */
+               (measured 0px, and since the card shares the text's left edge it
+               read as part of the paragraph). 8px puts the visible gap at ~10px,
+               matching the block rhythm of the rest of the turn. */
             'pt-2',
-            isMobile ? 'px-0' : 'px-2',
             isMobile && '[&>div]:rounded-lg [&>div]:border-border/40 [&>div]:bg-muted/10'
           )}
           onFileClick={
@@ -2883,7 +2884,7 @@ const AssistantTurnFooter = ({
         <div
           className={cn(
             'flex flex-wrap items-center justify-start text-[11px] text-muted-foreground',
-            isMobile ? 'min-h-6 gap-1' : 'min-h-7 gap-2 px-2',
+            isMobile ? 'min-h-6 gap-1' : 'min-h-7 gap-2',
             !isMobile && 'opacity-0 transition-opacity duration-150 focus-within:opacity-100',
             !isMobile && isTurnHovered && 'opacity-100'
           )}
@@ -3191,7 +3192,6 @@ const AssistantChatItem = memo(function AssistantChatItem({
           onFilePathClick,
           conversationFontSize,
           coveredFilePaths,
-          flushHorizontal: isWorkedDetail,
         });
       }
       case 'activity_group_header':
@@ -3535,8 +3535,6 @@ const renderAssistantContent = (
     onFilePathClick?: (filePath: string) => void;
     conversationFontSize?: ConversationFontSize;
     coveredFilePaths?: ReadonlySet<string>;
-    /** Align body with process group chevrons (no extra horizontal pad). */
-    flushHorizontal?: boolean;
   }
 ) => {
   const messageId = options?.messageId ?? 'assistant';
@@ -3549,8 +3547,6 @@ const renderAssistantContent = (
         <MarkdownBlock
           text={content.text}
           size={conversationFontSize}
-          /* Process-rail body: flush left so group chevrons align. */
-          classes={options?.flushHorizontal ? 'px-0 sm:px-0' : undefined}
           isStreaming={options?.isStreaming}
           onFilePathClick={options?.onFilePathClick}
           coveredFilePaths={options?.coveredFilePaths}
@@ -4318,7 +4314,6 @@ const ToolTitleWithHighlight = ({ title, className }: { title: string; className
 export const MarkdownBlock = memo(function MarkdownBlock({
   text,
   size = 'default',
-  classes = '',
   isStreaming = false,
   onFilePathClick,
   coveredFilePaths,
@@ -4326,7 +4321,6 @@ export const MarkdownBlock = memo(function MarkdownBlock({
 }: {
   text: string;
   size?: ConversationFontSize;
-  classes?: string;
   isStreaming?: boolean;
   onFilePathClick?: (filePath: string) => void;
   /** Paths already shown in the turn edited-files footer (dedupe chips). */
@@ -4337,17 +4331,18 @@ export const MarkdownBlock = memo(function MarkdownBlock({
     onFilePathClick?.(href);
   });
 
+  /* No horizontal pad and no wrapper: assistant prose shares the turn's left
+     rail with the activity/worked chevrons, the subagent card, and the footer.
+     See the "one left rail" note in AGENTS.md. */
   return (
-    <div className={cn('sm:px-2', classes)}>
-      <MarkdownRenderer
-        text={text}
-        size={size}
-        isStreaming={isStreaming}
-        onAgentFileLinkClick={onFilePathClick ? handleAgentFileLinkClick : undefined}
-        coveredFilePaths={coveredFilePaths}
-        searchBlockId={searchBlockId}
-      />
-    </div>
+    <MarkdownRenderer
+      text={text}
+      size={size}
+      isStreaming={isStreaming}
+      onAgentFileLinkClick={onFilePathClick ? handleAgentFileLinkClick : undefined}
+      coveredFilePaths={coveredFilePaths}
+      searchBlockId={searchBlockId}
+    />
   );
 });
 
