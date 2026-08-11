@@ -139,6 +139,10 @@ function daemonAuthFailureHint(
       return `Run ${chalk.yellow('lody login')} from a terminal, or pass ${chalk.yellow('--auth <cli_token>')}.`;
     case 'login_failed':
       return `Run ${chalk.yellow('lody login')} and retry.`;
+    default: {
+      const unreachable: never = reason;
+      return unreachable;
+    }
   }
 }
 

@@ -593,7 +593,7 @@ describe('buildAcpSelectorOptions', () => {
     ).toMatchObject({
       label: 'Interaction Mode',
       currentValue: 'agent',
-      options: [{ value: 'agent' }, { value: 'plan' }, { value: 'ask' }],
+      options: [{ value: 'agent' }, { value: 'plan' }],
     });
   });
 

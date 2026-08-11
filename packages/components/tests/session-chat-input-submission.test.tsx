@@ -7,6 +7,11 @@ import type { SessionMeta } from '@lody/shared';
 
 vi.mock('@posthog/react', () => ({ usePostHog: () => null }));
 
+vi.mock('../src/components/mentions/mention-session-source', async (importOriginal) => ({
+  ...(await importOriginal()),
+  useSessionMentionItems: () => [],
+}));
+
 vi.mock('../src/components/chat/chat-composer', async () => {
   const React = await import('react');
   return {

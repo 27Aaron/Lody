@@ -4,6 +4,11 @@ import { act, createRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('../src/components/mentions/mention-session-source', async (importOriginal) => ({
+  ...(await importOriginal()),
+  useSessionMentionItems: () => [],
+}));
+
 import { ChatComposer } from '../src/components/chat/chat-composer';
 import { initI18n } from '../src/i18n';
 
