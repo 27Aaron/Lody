@@ -1,6 +1,8 @@
 export interface DaemonStartOptions {
   auth?: string;
   machineName?: string;
+  /** Opt out of the pre-spawn backend connectivity + sign-in check. */
+  skipAuthCheck?: boolean;
 }
 
 export function buildDaemonStartPassthroughArgs(

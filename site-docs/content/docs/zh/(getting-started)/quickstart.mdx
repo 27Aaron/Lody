@@ -32,7 +32,6 @@ Lody 全面支持了所有平台浏览器访问和客户端应用，包括 macOS
 ### 启动
 
 ```bash tab="守护进程（推荐）"
-npx lody login
 npx lody daemon start
 ```
 ```bash tab="前台运行"
@@ -40,9 +39,9 @@ npx lody login
 npx lody start
 ```
 
-`npx lody login` 会使用 device code 的方案在浏览器中打开登录页面，headless 环境会显示登录链接，完成登录后 CLI 会自动获取到你的账号信息。
+`npx lody daemon start` 会先检查能否连上 Lody、以及这台机器是否已登录。如果没有登录，它会直接走 device code 流程：在浏览器中打开登录页面（headless 环境则打印登录链接），等你完成登录后再进入后台运行。接入远端机器也是这一条命令——通过 SSH 在服务器、云主机或另一台电脑上执行，那台机器就会出现在你的工作区里。
 
-`npx lody daemon start` 会在后台启动 Lody CLI，并在异常退出后自动恢复。如果你不方便访问浏览器，也可以使用 `npx lody daemon start --auth <cli_token>` 直接启动 CLI 守护进程。 `cli_token` 可以在桌面端的 **设置** -> **账户** -> **CLI Token** 中查看和生成。
+守护进程会在 CLI 异常退出后自动恢复。如果你完全不方便访问浏览器，可以使用 `npx lody daemon start --auth <cli_token>` 直接启动，`cli_token` 可以在桌面端的 **设置** -> **账户** -> **CLI Token** 中查看和生成。如果你更习惯把登录作为单独一步，`npx lody login` 依然可用。
 
 
 <Callout title="将桌面端作为纯远程控制端">

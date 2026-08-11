@@ -91,7 +91,20 @@ variable). It grants the same access as an interactive login for the workspaces 
 ## Daemon Mode
 
 `lody daemon start` runs the Lody CLI in the background and keeps it available for desktop, web,
-and mobile clients without leaving a terminal window open.
+and mobile clients without leaving a terminal window open. This is also the command that connects a
+remote machine: run it over SSH on a server or another workstation and that machine joins your
+workspace.
+
+Before it goes into the background, `lody daemon start` verifies that it can reach Lody and that
+this machine is signed in:
+
+- Signed in and reachable: it starts the daemon.
+- Not signed in (or the stored credential was rejected): it starts the device-authorization flow,
+  opens the sign-in link in your browser (printing it when there is no browser), and waits for you
+  to finish before entering daemon mode. Without an attached terminal — CI, a scripted SSH command —
+  it does not wait for a browser; it fails and asks for `lody login` or `--auth <cli_token>`.
+- Lody unreachable: it stops with the connection error instead of leaving a daemon that cannot sync.
+  Pass `--skip-auth-check` to start anyway, or `--auth <cli_token>` to sign in non-interactively.
 
 | Command               | What it does                                    |
 | --------------------- | ----------------------------------------------- |

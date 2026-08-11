@@ -11,6 +11,8 @@ export type CliSectionCopy = {
   /** Shell prompt glyph, e.g. `$`. */
   prompt: string;
   lines: readonly {
+    /** Optional `#` caption rendered above the command (where it runs). */
+    caption?: string;
     /** Full command string after the prompt. */
     cmd: string;
   }[];
@@ -34,9 +36,12 @@ export function LandingCliSection({ copy }: { copy: CliSectionCopy }) {
           <pre className="uw-cli__body-term">
             <code>
               {copy.lines.map((line) => (
-                <span key={line.cmd} className="uw-cli__line">
-                  <span className="uw-cli__prompt">{copy.prompt}</span>
-                  <span className="uw-cli__cmd">{line.cmd}</span>
+                <span key={line.cmd} className="uw-cli__group">
+                  {line.caption ? <span className="uw-cli__caption"># {line.caption}</span> : null}
+                  <span className="uw-cli__line">
+                    <span className="uw-cli__prompt">{copy.prompt}</span>
+                    <span className="uw-cli__cmd">{line.cmd}</span>
+                  </span>
                 </span>
               ))}
             </code>

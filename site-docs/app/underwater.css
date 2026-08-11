@@ -2507,6 +2507,26 @@ html.underwater-landing-page.dark
   line-height: 1.55;
 }
 
+.uw-cli__group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+/* Says WHERE the next command runs (remote machine vs. anywhere). Prose, so it
+   must escape the `pre` white-space it would otherwise inherit — on a phone the
+   caption is wider than the terminal and would be clipped. */
+.uw-cli__caption {
+  color: hsl(205 16% 52%);
+  user-select: none;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.uw-cli__group + .uw-cli__group:has(.uw-cli__caption) {
+  margin-top: 0.6rem;
+}
+
 .uw-cli__line {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);

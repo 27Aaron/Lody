@@ -73,6 +73,14 @@ Two things the dev build does deliberately, both load-bearing:
   connection state and `connectedWorkspaces`; aggregate `connectivity` is local runtime
   health and must not be presented as proof that the cached CLI token was accepted.
 
+- `lody daemon start` resolves cloud authentication in the FOREGROUND process before
+  spawning the detached runner (`commands/daemon-auth-preflight.ts`): validate the cached
+  credential against the backend, and on a missing/rejected credential run the interactive
+  device-authorization flow (browser link) right there. The runner is detached, so a
+  credential failure inside it is invisible. An unreachable backend aborts instead of
+  re-authenticating — a network outage must not replace a working credential — and a
+  non-TTY run aborts instead of blocking on a browser link until the device code expires.
+  `--skip-auth-check` is the explicit opt-out; `--auth` keeps its non-interactive path.
 - New one-shot commands should use `src/lib/command-runtime.ts` (`runOneShotCommand`)
   so exit codes, telemetry flush, and stream flushing are handled consistently.
 - Process entrypoints, command-owned boundaries, global process-error handlers, and
