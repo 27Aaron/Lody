@@ -20,6 +20,15 @@ export type MobileDeepSectionCopy = {
   mediaNote?: string;
 };
 
+/**
+ * AVIF/WebP siblings are generated next to the PNG under `public/landing/`.
+ * Returns the PNG itself for any src that is not one of ours, so a caller
+ * passing an external or extension-less URL degrades to a plain <img>.
+ */
+function islandSource(src: string, ext: 'avif' | 'webp'): string | undefined {
+  return src.endsWith('.png') ? `${src.slice(0, -4)}.${ext}` : undefined;
+}
+
 export function LandingMobileDeepSection({ copy }: { copy: MobileDeepSectionCopy }) {
   return (
     <section className="uw-mobile-deep" aria-labelledby="uw-mobile-deep-title">
@@ -28,12 +37,21 @@ export function LandingMobileDeepSection({ copy }: { copy: MobileDeepSectionCopy
         <div className="uw-mobile-deep__media">
           {copy.mediaImage ? (
             <div className="uw-media uw-media--island uw-media--bare">
-              <img
-                src={copy.mediaImage}
-                alt={copy.mediaAlt ?? ''}
-                loading="lazy"
-                decoding="async"
-              />
+              {/* Intrinsic 1280x753, rendered at max-width 32rem. `width`/`height`
+                  give the box an aspect ratio before the bytes land, so this
+                  below-the-fold image cannot shift the section as it decodes. */}
+              <picture>
+                <source srcSet={islandSource(copy.mediaImage, 'avif')} type="image/avif" />
+                <source srcSet={islandSource(copy.mediaImage, 'webp')} type="image/webp" />
+                <img
+                  src={copy.mediaImage}
+                  alt={copy.mediaAlt ?? ''}
+                  width={1280}
+                  height={753}
+                  loading="lazy"
+                  decoding="async"
+                />
+              </picture>
             </div>
           ) : (
             <div

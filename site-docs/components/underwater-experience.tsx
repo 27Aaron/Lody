@@ -19,10 +19,9 @@ import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import {
   DESIGN_DEMO_DURATION_MS,
   DIFF_DEMO_DURATION_MS,
-  LandingAppPreview,
   MOBILE_DEMO_DURATION_MS,
   WORKTREE_DEMO_DURATION_MS,
-} from './landing-app-preview';
+} from './landing-demo-durations';
 import { LandingFeatureTabs } from './landing-feature-tabs';
 import { LandingCtaSection, type LandingCtaCopy } from './landing-cta-section';
 import {
@@ -50,6 +49,26 @@ import type { PlatformDownloadLabels } from './landing-platform-download';
 // mounts, the container's CSS gradient (kept in sync with the BG shader) shows.
 const underwaterBackgroundModule = import('./underwater-background');
 const UnderwaterPointCloudBackground = lazy(() => underwaterBackgroundModule);
+
+// The product stage sits below the 100dvh hero, but `landing-app-preview` is the
+// landing's single heaviest module: it mounts REAL product UI and drags the chat
+// composer, markdown renderer and katex in behind it. Statically imported it
+// landed in the landing's critical chunk and delayed the hero's LCP for UI the
+// visitor cannot even see yet. Lazy + armed on approach instead.
+//
+// Unlike three.js above, this one is NOT module-eval — the fetch is deferred to
+// `armPreview()` so the hero copy and the WebGL scene get the first-paint
+// bandwidth to themselves. Arming is deliberately EARLY (a viewport of
+// rootMargin, plus an idle fallback for visitors who never scroll), so by the
+// time the stage is reached the chunk is parsed and the frame is never empty.
+const LandingAppPreview = lazy(() =>
+  import('./landing-app-preview').then((m) => ({ default: m.LandingAppPreview }))
+);
+
+/** Preview chunk is armed at most once per page session. */
+const PREVIEW_ARM_ROOT_MARGIN = '100% 0px';
+/** Fallback for visitors who never scroll — still warm, just not on the hot path. */
+const PREVIEW_ARM_IDLE_TIMEOUT_MS = 2_500;
 
 const TAB_DURATIONS: readonly number[] = [
   WORKTREE_DEMO_DURATION_MS,
@@ -141,7 +160,21 @@ export function UnderwaterExperience({
    * (no auto-advance) without unmounting demos. Unrelated to unlock.
    */
   const [stageInView, setStageInView] = useState(true);
+  /**
+   * One-shot latch for the lazy preview chunk. Separate from `demosLive`: the
+   * preview must already be MOUNTED by the time demos unlock, otherwise the
+   * stage would show an empty frame at exactly the moment the visitor arrives.
+   */
+  const [previewArmed, setPreviewArmed] = useState(false);
+  const previewArmedRef = useRef(false);
+  const armPreview = () => {
+    if (previewArmedRef.current) return;
+    previewArmedRef.current = true;
+    setPreviewArmed(true);
+  };
   const unlockDemos = () => {
+    // Reaching the stage always implies the preview is needed now.
+    armPreview();
     if (demosLiveRef.current) return;
     demosLiveRef.current = true;
     setDemosLive(true);
@@ -177,6 +210,34 @@ export function UnderwaterExperience({
     );
     io.observe(el);
     return () => io.disconnect();
+  }, []);
+
+  // Arm the lazy preview chunk one viewport ahead of the stage, so scrolling down
+  // never lands on an unmounted frame. Idle timer is the no-scroll fallback.
+  useEffect(() => {
+    const el = stageRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') {
+      armPreview();
+      return undefined;
+    }
+    const io = new IntersectionObserver(
+      ([entry]) => {
+        if (entry?.isIntersecting) armPreview();
+      },
+      { rootMargin: PREVIEW_ARM_ROOT_MARGIN }
+    );
+    io.observe(el);
+
+    const hasIdle = typeof window.requestIdleCallback === 'function';
+    const idle = hasIdle
+      ? window.requestIdleCallback(armPreview, { timeout: PREVIEW_ARM_IDLE_TIMEOUT_MS })
+      : window.setTimeout(armPreview, PREVIEW_ARM_IDLE_TIMEOUT_MS);
+
+    return () => {
+      io.disconnect();
+      if (hasIdle) window.cancelIdleCallback(idle as number);
+      else window.clearTimeout(idle as number);
+    };
   }, []);
 
   // Hero → product stage: desktop (fine pointer) light-nudge springs to the demo.
@@ -418,14 +479,29 @@ export function UnderwaterExperience({
                   // Soft freeze off-screen (CSS play-state). Never unmount demos.
                   paused={!demosLive || !stageInView}
                 />
-                <div className="underwater-reveal__frame" data-settled="true">
+                {/* The preview is a DISPLAY-ONLY replica of the product: the frame is
+                    already `pointer-events: none`, so none of the real buttons and
+                    session rows inside it can be clicked. Without `inert` they were
+                    still in the accessibility tree and the tab order — a screen
+                    reader announced dozens of unusable controls (and Lighthouse
+                    flagged them: unnamed button, label/name mismatch, target size).
+                    `inert` removes the whole subtree from AT and focus; `aria-hidden`
+                    keeps older engines in line. Both belong here on the frame, NOT on
+                    the labelled <section>, whose name still describes the stage. */}
+                <div className="underwater-reveal__frame" data-settled="true" aria-hidden inert>
                   {/* `demo` stays set once unlocked — scroll must not remount scripts.
-                      `ghostEnabled` only silences pointer theater off-stage. */}
-                  <LandingAppPreview
-                    locale={locale}
-                    demo={activeDemo}
-                    ghostEnabled={demosLive && stageInView}
-                  />
+                      `ghostEnabled` only silences pointer theater off-stage.
+                      `previewArmed` only gates the FIRST mount; it never flips back,
+                      so this cannot remount ghost scripts mid-scroll. */}
+                  {previewArmed ? (
+                    <Suspense fallback={null}>
+                      <LandingAppPreview
+                        locale={locale}
+                        demo={activeDemo}
+                        ghostEnabled={demosLive && stageInView}
+                      />
+                    </Suspense>
+                  ) : null}
                 </div>
               </div>
             </section>

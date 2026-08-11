@@ -42,7 +42,7 @@ export type MobileDemoScreen = 'home' | 'compose' | 'session';
 // opaque in the PNG, so the UI gets an iOS-like safe-area top pad beneath it.
 // Height matches the desktop demo stage (1120×760) so switching to this tab
 // does not jump the reveal taller than worktree/diff/design.
-const PHONE_IMG = '/landing/iphone-17-pro-silver.png';
+const PHONE_IMG = '/landing/iphone-17-pro-silver.webp';
 const PHONE_AR = 1350 / 2760;
 const PHONE_H = 760;
 const PHONE_W = Math.round(PHONE_H * PHONE_AR); // ≈ 372

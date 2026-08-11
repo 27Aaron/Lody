@@ -1,6 +1,6 @@
 import { preloadBlogContent } from '@site/components/blog';
 import { loadBlogPostRoute } from '@site/src/blog-loader';
-import { blogIndexHead, blogPostHead, BlogPostRoutePage } from '@site/src/site-pages';
+import { BlogPostRoutePage, blogIndexHead, blogPostHead } from '@site/src/site-pages/blog';
 import { createFileRoute } from '@tanstack/react-router';
 
 export const Route = createFileRoute('/zh/blog/$')({
