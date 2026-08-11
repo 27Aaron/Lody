@@ -1247,11 +1247,12 @@ export const PrTabView = memo(function PrTabView({
                   <SessionCommentMarkdown body={pr.body} allowHtml />
                 </div>
               ) : (
-                <ScrollArea className="mt-2.5" viewportClassName="max-h-[320px]">
-                  <div className="pr-1 text-sm leading-relaxed text-foreground/90">
-                    <SessionCommentMarkdown body={pr.body} allowHtml />
-                  </div>
-                </ScrollArea>
+                <div
+                  data-pr-description=""
+                  className="mt-2.5 pr-1 text-sm leading-relaxed text-foreground/90"
+                >
+                  <SessionCommentMarkdown body={pr.body} allowHtml />
+                </div>
               )
             ) : (
               <p className="mt-2.5 text-xs italic text-muted-foreground">
