@@ -190,7 +190,10 @@ export class LoroDataPlaneRelay {
       })
       socket.on('data', (chunk) => {
         this.lastInboundAt = Date.now()
-        splitLines(chunk.toString('utf8'))
+        // Raw bytes on purpose: the splitter owns the stateful UTF-8 decode, so
+        // a multi-byte character split across two socket chunks is not mangled
+        // into U+FFFD (flock bundles carry file paths as literal UTF-8 JSON).
+        splitLines(chunk)
       })
       socket.on('drain', () => this.flushPendingDaemonWrites(socket))
     })

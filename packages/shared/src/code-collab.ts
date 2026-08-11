@@ -782,10 +782,24 @@ const normalizeCodeCollabFileIndexSignalValue = (
 const isCodeCollabFileIndexSignalKey = (key: readonly unknown[]): boolean =>
   key.length === 1 && key[0] === CODE_COLLAB_FILE_INDEX_SIGNAL_KEY[0];
 
-export function readCodeCollabFileIndexFromFlock(
-  flock: CodeCollabFileIndexReadableFlock
-): CodeCollabV2FileIndexState {
+/**
+ * A row key carrying U+FFFD is not a real path: no scanner produces one (the
+ * CLI reads names from the filesystem, which hands out well-formed UTF-8), so
+ * it can only come from a byte stream that was decoded across a chunk boundary
+ * — see `createUtf8StreamDecoder`. Such a row is an LWW record under its OWN
+ * corrupted key, so a correct republish never overwrites it and the garbled
+ * path would otherwise survive in the file tree and `@file` menu forever.
+ * Treat it as absent on read and prune it on the next write.
+ */
+const isCorruptedCodeCollabWorkspacePath = (workspacePath: string): boolean =>
+  workspacePath.includes('\uFFFD');
+
+function scanCodeCollabFileIndexFlock(flock: CodeCollabFileIndexReadableFlock): {
+  fileIndex: CodeCollabV2FileIndexState;
+  corruptedPaths: string[];
+} {
   const fileIndex: CodeCollabV2FileIndexState = {};
+  const corruptedPaths: string[] = [];
   for (const row of flock.scan()) {
     if (row.value === undefined) {
       continue;
@@ -794,13 +808,23 @@ export function readCodeCollabFileIndexFromFlock(
     if (typeof workspacePath !== 'string' || workspacePath.length === 0 || extra.length > 0) {
       continue;
     }
+    if (isCorruptedCodeCollabWorkspacePath(workspacePath)) {
+      corruptedPaths.push(workspacePath);
+      continue;
+    }
     const parsed = normalizeCodeCollabFileIndexValue(row.value);
     if (!parsed) {
       continue;
     }
     fileIndex[workspacePath] = parsed;
   }
-  return fileIndex;
+  return { fileIndex, corruptedPaths };
+}
+
+export function readCodeCollabFileIndexFromFlock(
+  flock: CodeCollabFileIndexReadableFlock
+): CodeCollabV2FileIndexState {
+  return scanCodeCollabFileIndexFlock(flock).fileIndex;
 }
 
 export function readCodeCollabFileIndexSignalFromFlock(
@@ -842,8 +866,13 @@ export function writeCodeCollabFileIndexToFlock(
   next: CodeCollabV2FileIndexState,
   nowMs: number
 ): boolean {
-  const previous = readCodeCollabFileIndexFromFlock(flock);
+  const { fileIndex: previous, corruptedPaths } = scanCodeCollabFileIndexFlock(flock);
   let changed = false;
+
+  for (const workspacePath of corruptedPaths) {
+    flock.delete(codeCollabFileIndexKeyForWorkspacePath(workspacePath), nowMs);
+    changed = true;
+  }
 
   for (const workspacePath of Object.keys(previous)) {
     if (Object.prototype.hasOwnProperty.call(next, workspacePath)) {
@@ -904,6 +933,12 @@ export function applyCodeCollabFileIndexFlockEvents(
     const current = next ?? previous;
     const [workspacePath, ...extra] = event.key;
     if (typeof workspacePath !== 'string' || workspacePath.length === 0 || extra.length > 0) {
+      continue;
+    }
+    if (isCorruptedCodeCollabWorkspacePath(workspacePath)) {
+      if (Object.prototype.hasOwnProperty.call(current, workspacePath)) {
+        delete mutableNext()[workspacePath];
+      }
       continue;
     }
     if (event.value === undefined) {

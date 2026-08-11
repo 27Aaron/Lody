@@ -69,7 +69,7 @@ class SocketClient {
         for (const waiter of [...this.waiters]) waiter();
       },
     });
-    socket.on('data', (chunk) => splitLines(chunk.toString('utf8')));
+    socket.on('data', (chunk) => splitLines(chunk));
     // Swallow EPIPE etc. from writes racing the server-side destroy.
     socket.on('error', () => {});
     this.closed = new Promise<void>((resolve) => {

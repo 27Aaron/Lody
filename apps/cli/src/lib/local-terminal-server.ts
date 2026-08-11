@@ -3,6 +3,7 @@ import net from 'node:net';
 import { getLocalTerminalSocketPath } from '@lody/shared/node/local-terminal';
 import { ensureLocalDaemonRunDir } from '@lody/shared/node/local-ipc';
 import {
+  createUtf8StreamDecoder,
   TerminalClientMessageSchema,
   type TerminalClientMessage,
   type TerminalServerEvent,
@@ -257,6 +258,10 @@ async function startLocalTerminalServerInner(config: LocalTerminalServerConfig):
 
   const server = net.createServer((socket) => {
     let buffer = '';
+    // One decoder per connection: a pasted multi-byte character can land on a
+    // socket chunk boundary, and per-chunk `toString('utf8')` would turn it into
+    // U+FFFD on both sides of the split.
+    const decodeChunk = createUtf8StreamDecoder();
     const state = createTerminalSocketState();
     activeClientSockets.add(socket);
     const unsubscribe = config.terminalPtyService.onEvent((event) => {
@@ -264,7 +269,7 @@ async function startLocalTerminalServerInner(config: LocalTerminalServerConfig):
     });
 
     socket.on('data', (chunk) => {
-      buffer += chunk.toString('utf8');
+      buffer += decodeChunk(chunk);
       // Compare char length (O(1)) rather than re-scanning the whole buffer with
       // Buffer.byteLength on every chunk (O(n²) across a large multi-chunk paste).
       // This is a safety cap against an unbounded line, so an approximate bound is fine.
