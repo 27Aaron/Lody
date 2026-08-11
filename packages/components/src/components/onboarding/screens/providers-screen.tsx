@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { CheckCircle2, ChevronDown, ChevronUp, Loader2, Plus, Trash2, XCircle } from 'lucide-react';
 import {
   REGISTRY_ACP_AGENTS,
+  getManagedBuiltinRuntimeByAgentType,
   type AgentBrandId,
   type BuiltinAgentType,
   type AgentConfigCliType,
@@ -79,7 +80,7 @@ const PROVIDERS_SCREEN_MACHINE_TIMEOUT_MS = 15_000;
  * agents resolve from REGISTRY_AGENT_ICON_SVGS, presets from their brand icon).
  */
 type ShowcasePick =
-  | { kind: 'builtin'; agentType: 'kimi' }
+  | { kind: 'builtin'; agentType: BuiltinAgentType }
   | { kind: 'registry'; id: string }
   | { kind: 'preset'; presetId: string };
 
@@ -100,7 +101,7 @@ function showcasePickKey(pick: ShowcasePick): string {
       : `preset:${pick.presetId}`;
 }
 
-function builtinShowcase(agentType: 'kimi', label: string): ShowcaseAgent {
+function builtinShowcase(agentType: BuiltinAgentType, label: string): ShowcaseAgent {
   return { pick: { kind: 'builtin', agentType }, label, icon: { cliType: 'builtin', agentType } };
 }
 
@@ -125,6 +126,7 @@ function presetShowcase(presetId: string, label: string, brandId: AgentBrandId):
  */
 const FEATURED_SHOWCASE_AGENTS: ShowcaseAgent[] = [
   builtinShowcase('kimi', 'Kimi'),
+  builtinShowcase('grok', 'Grok'),
   registryShowcase('amp-acp', 'Amp'),
   registryShowcase('cursor', 'Cursor'),
   registryShowcase('opencode', 'OpenCode'),
@@ -133,7 +135,6 @@ const FEATURED_SHOWCASE_AGENTS: ShowcaseAgent[] = [
   registryShowcase('pi-acp', 'Pi'),
   registryShowcase('factory-droid', 'Factory Droid'),
   registryShowcase('github-copilot-cli', 'GitHub Copilot'),
-  registryShowcase('grok-build', 'Grok'),
   presetShowcase(DEEPSEEK_CLAUDE_PRESET_ID, 'DeepSeek', 'deepseek'),
 ];
 
@@ -835,7 +836,9 @@ export function ProvidersScreen({
               initialForm: {
                 cliType: 'builtin',
                 agentType: pick.agentType,
-                name: 'Kimi Code',
+                name:
+                  getManagedBuiltinRuntimeByAgentType(pick.agentType)?.displayName ??
+                  pick.agentType,
               },
             });
             return;

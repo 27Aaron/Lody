@@ -35,12 +35,16 @@ arrive: context/message-flow.md "Upstream".
   session notifications before refusing, so the turn's response routinely wins that
   race and would otherwise mask the refusal.
 - `acp-runner.ts` — process spawn/restart around the client.
-- `setting.ts` — launch resolution. Builtin Claude/Codex/Kimi require
+- `setting.ts` — launch resolution. Builtin Claude/Codex/Kimi/Grok require
   `resolveACPProcessLaunchAsync()` because they may install Lody-managed native
   or Node-package runtimes and then spawn bundled adapter entries.
-- `managed-agent-runtime.ts` — pinned Codex/Claude Code native and Kimi Node-package `.tar.zst`
+- `managed-agent-runtime.ts` — pinned Codex/Claude Code/Grok native and Kimi Node-package `.tar.zst`
   artifacts, checksums, resumable downloads, the active installation profile's
   `agent-binaries` layout, and best-effort `bin` symlinks for complete native CLIs.
+  Grok launches the pinned `acp-extension-grok` compatibility adapter with an
+  official, unmodified R2-managed runtime in `GROK_PATH`. The submodule owns the
+  private-wire contract and minimum official version; it is never the source for
+  production runtime binaries.
   Its artifact base URL is injected from `CloudPort.runtimeArtifacts`; do not read
   deployment environment or derive the channel inside the runtime manager. Local
   and cloud process assembly share the public R2-backed default owned by
@@ -53,7 +57,8 @@ arrive: context/message-flow.md "Upstream".
   observes cancellation. An immediate retry waits for an earlier aborted generation's scratch
   cleanup before starting a new generation for the same artifact.
 - `acp-authentication.ts` — trusted builtin authentication lifecycle. Kimi runs
-  `acp --login`; Claude Code runs the official `auth login --claudeai`
+  `acp --login`; Grok runs the official `login --device-auth`; Claude Code runs
+  the official `auth login --claudeai`
   subscription flow; Codex always runs the official `login --device-auth`
   ChatGPT flow so Web can complete authentication against a remote machine.
   `acp-authentication-output.ts` incrementally converts bounded provider output
@@ -67,7 +72,7 @@ arrive: context/message-flow.md "Upstream".
   Claude capability refreshes first run its native status command so missing
   credentials become structured auth-required state before adapter startup;
   explicit environment-authenticated paths bypass the native status check and
-  remain under adapter validation. Codex authentication requirements come from
+  remain under adapter validation. Grok and Codex authentication requirements come from
   ACP session creation because `codex login status` cannot account for custom
   model providers with `requires_openai_auth = false`. The per-agent slot covers async
   launch preparation as well as the child process, so cancel and concurrent start cannot race spawn;
@@ -87,7 +92,7 @@ arrive: context/message-flow.md "Upstream".
   agent startup. Automatic `_npx`/`_cacache` cleanup is only allowed for that
   Lody-owned cache, never arbitrary user npm caches.
 - `acp-capabilities.ts` / `acp-startup-monitor.ts` / `acp-analytics.ts` — capability
-  cache, startup health, analytics. Default builtin Codex/Claude capabilities
+  cache, startup health, analytics. Default builtin Codex/Claude/Kimi/Grok capabilities
   come from `getStaticBuiltinAcpCapabilities()` in `@lody/shared` only for
   `cliType: 'builtin'` without runtime overrides, so onboarding/settings/chat can
   render mode/model/config options without spawning adapters or downloading

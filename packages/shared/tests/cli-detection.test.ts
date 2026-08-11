@@ -124,9 +124,10 @@ describe('CLI auth file detection', () => {
 
       expect(detectCliTypes({ homeDir })).toEqual({
         kimi: 'managed-runtime',
+        grok: 'managed-runtime',
         claude: null,
         codex: 'configured',
-        available: ['kimi', 'codex'],
+        available: ['kimi', 'grok', 'codex'],
       });
     } finally {
       if (originalCodexHome === undefined) {

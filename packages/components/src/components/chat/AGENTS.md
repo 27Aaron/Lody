@@ -38,9 +38,11 @@
   it keeps the current source revision quiet, while “Don't remind me again”
   suppresses that user's notice for the workspace across future revisions.
 - The landing composer footer is ordered run config → permission → usage on
-  desktop. Mobile new-chat uses the same consolidated `MobileSessionRunConfig`
-  face + sheet as the in-session composer (agent/model/reasoning/permission/
-  Plan/Fast), with usage beside it; do not reintroduce separate model/thinking
+  desktop. Provider interaction mode is a row inside run config; the standalone
+  button is reserved for explicit permission mode, with legacy ACP modes as its
+  fallback. Mobile new-chat uses the same consolidated `MobileSessionRunConfig`
+  face + sheet as the in-session composer (agent/model/interaction/reasoning/
+  permission/Plan/Fast), with usage beside it; do not reintroduce separate model/thinking
   chips or a below-composer agent/permission row. Usage reads subscription rate
   limits from the selected agent's Machine Flock metadata and remains hidden for
   custom or environment-overridden providers.

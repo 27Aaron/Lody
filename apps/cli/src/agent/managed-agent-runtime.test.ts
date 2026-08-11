@@ -13,12 +13,14 @@ import claudePackageLock from '../../../../packages/acp-extension-claude/package
 import codexPackageLock from '../../../../packages/acp-extension-codex/package-lock.json';
 import claudeSdkManifest from '../../node_modules/@anthropic-ai/claude-agent-sdk/manifest.json';
 import kimiCodePackageJson from '../../node_modules/@moonshot-ai/kimi-code/package.json';
+import grokRuntimeManifest from '../../../../packages/acp-extension-grok/runtime-manifest.json';
 
 import {
   classifyManagedRuntimeFailureReason,
   CLAUDE_AGENT_SDK_VERSION,
   CLAUDE_CODE_RUNTIME_VERSION,
   CODEX_RUNTIME_VERSION,
+  GROK_BUILD_RUNTIME_VERSION,
   KIMI_CODE_MIN_NODE_VERSION,
   KIMI_CODE_VERSION,
   formatManagedRuntimeFailureMessage,
@@ -114,6 +116,30 @@ describe('ManagedAgentRuntimeManager', () => {
     expect(mapManagedRuntimePlatform('kimi-code', 'darwin', 'arm64')).toBe('node');
     expect(mapManagedRuntimePlatform('kimi-code', 'linux', 'x64')).toBe('node');
     expect(mapManagedRuntimePlatform('kimi-code', 'win32', 'x64')).toBe('node');
+  });
+
+  it('pins Grok 1.0.0 for every supported native platform', () => {
+    expect(GROK_BUILD_RUNTIME_VERSION).toBe(grokRuntimeManifest.officialRuntime.version);
+    expect(grokRuntimeManifest.officialRuntime.minimumSupportedVersion).toBe('1.0.0');
+    expect(mapManagedRuntimePlatform('grok-build', 'darwin', 'arm64')).toBe('darwin-arm64');
+    expect(mapManagedRuntimePlatform('grok-build', 'linux', 'x64')).toBe('linux-x64');
+    expect(mapManagedRuntimePlatform('grok-build', 'win32', 'arm64')).toBe('win32-arm64');
+
+    const manager = new ManagedAgentRuntimeManager({ rootDir });
+    const definition = manager.getDefinition('grok-build');
+    expect(Object.keys(definition.platforms).sort()).toEqual([
+      'darwin-arm64',
+      'darwin-x64',
+      'linux-arm64',
+      'linux-x64',
+      'win32-arm64',
+      'win32-x64',
+    ]);
+    expect(
+      Object.values(definition.platforms).every(
+        (archive) => archive.executableSha256 && archive.executableSize
+      )
+    ).toBe(true);
   });
 
   it('rejects Kimi before download when the host Node version is too old', async () => {

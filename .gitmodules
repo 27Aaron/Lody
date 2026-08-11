@@ -4,3 +4,6 @@
 [submodule "packages/acp-extension-claude"]
 	path = packages/acp-extension-claude
 	url = https://github.com/loro-dev/acp-extension-claude.git
+[submodule "packages/acp-extension-grok"]
+	path = packages/acp-extension-grok
+	url = https://github.com/LodyAI/acp-extension-grok.git

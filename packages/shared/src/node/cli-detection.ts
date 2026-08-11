@@ -266,6 +266,7 @@ export const checkKimi = async (): Promise<string | false> => {
 
 export type CliDetectionResult = {
   kimi: string;
+  grok: string;
   claude: string | null;
   codex: string | null;
   available: CliType[];
@@ -273,13 +274,15 @@ export type CliDetectionResult = {
 
 export function detectCliTypes(options?: CliDetectionOptions): CliDetectionResult {
   const kimi = 'managed-runtime';
+  const grok = 'managed-runtime';
   const claude = checkClaude(options);
   const codex = checkCodex(options);
-  const available: CliType[] = ['kimi'];
+  const available: CliType[] = ['kimi', 'grok'];
   if (claude) available.push('claude');
   if (codex) available.push('codex');
   return {
     kimi,
+    grok,
     claude: claude || null,
     codex: codex || null,
     available,

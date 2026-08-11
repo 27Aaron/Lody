@@ -240,8 +240,10 @@ Session conversation page chain:
   the composer, so its right edge and max width must stay aligned automatically.
   Desktop run knobs are TWO footer buttons from `desktop-run-config-menu.tsx`:
   `DesktopRunConfigMenu` (`[agent icon] model · reasoning ⌄` face; dropdown =
-  Agent/Model/Reasoning side submenus + Plan/Fast toggle rows) and
-  `DesktopPermissionModeButton` (mode icon + full name; flat mode list). Both
+  Agent/Model/Interaction/Reasoning side submenus + Plan/Fast toggle rows) and
+  `DesktopPermissionModeButton` (permission icon + full name; flat permission
+  list). Explicit `_permission` config options take precedence over legacy ACP
+  modes; provider interaction modes stay inside the run-config dropdown. Both
   are also used by the desktop chat landing; `DesktopRunConfigMenu` receives an
   explicit agent selection/machine scope rather than reading `SessionMeta`.
   Agent/Model/Reasoning option selection closes the dropdown and must not return

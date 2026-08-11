@@ -2,7 +2,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { pathToFileURL } from 'node:url';
 import { collectRuntimeDependencyVersionIssues } from './published-runtime-dependency-policy.js';
@@ -93,6 +93,7 @@ if (violations.length > 0) {
 }
 
 checkPublishedRuntimeDependencies();
+runGrokAdapterBundleSmoke();
 runPublishedRuntimeSmoke();
 runWorkspaceWatchWorkerSmoke();
 runDiffWorkerSmoke();
@@ -264,6 +265,33 @@ function checkExactPublishedRuntimeDependencies(publishedDependencyBlocks) {
   console.error(
     '\nUse exact versions so the published CLI resolves the same dependency build that was tested.'
   );
+  process.exit(1);
+}
+
+function runGrokAdapterBundleSmoke() {
+  const adapterPath = path.join(distDir, 'grok-acp.js');
+  if (!fs.existsSync(adapterPath)) {
+    console.error(`Published CLI Grok adapter is missing: ${adapterPath}`);
+    process.exit(1);
+  }
+
+  const env = { ...process.env };
+  delete env.GROK_PATH;
+  const result = spawnSync(process.execPath, [adapterPath], {
+    cwd: cliRoot,
+    encoding: 'utf8',
+    env,
+    input: '',
+  });
+  const expectedError = 'GROK_PATH must point to the official Grok runtime';
+  if (result.status === 1 && result.stderr.includes(expectedError)) {
+    return;
+  }
+
+  console.error('Published CLI Grok adapter bundle smoke failed.');
+  if (result.error) console.error(result.error.message);
+  if (result.stdout) console.error(result.stdout);
+  if (result.stderr) console.error(result.stderr);
   process.exit(1);
 }
 

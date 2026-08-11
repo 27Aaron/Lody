@@ -40,6 +40,7 @@ describe('session usage', () => {
     expect(getRateLimitRemainingPercent(0.55, 'claude')).toBeCloseTo(45);
     expect(getRateLimitRemainingPercent(1, 'claude')).toBe(0);
     expect(getRateLimitRemainingPercent(1, 'codex')).toBe(99);
+    expect(getRateLimitRemainingPercent(0.5, 'grok')).toBe(99.5);
   });
 
   it('uses provider-reported window durations instead of positional 5h/7d labels', () => {
@@ -75,6 +76,22 @@ describe('session usage', () => {
     expect(getAgentRateLimitWindows(usage(), 'codex')).toMatchObject([
       { usedPercent: 25, windowDurationMins: 300 },
       { usedPercent: 40, windowDurationMins: 10_080 },
+    ]);
+  });
+
+  it('keeps sub-one-percent Grok usage on the percentage scale', () => {
+    expect(
+      getAgentRateLimitWindows(
+        usage({ fiveHour: null, sevenDay: 0.5, sevenDayResetAt: 1784505071 }),
+        'grok'
+      )
+    ).toEqual([
+      {
+        usedPercent: 0.5,
+        remainingPercent: 99.5,
+        windowDurationMins: 10_080,
+        resetsAt: 1784505071,
+      },
     ]);
   });
 
@@ -147,6 +164,13 @@ describe('session usage', () => {
       canShowSubscriptionRateLimits({
         cliType: 'builtin',
         agentType: 'codex',
+        config: { env: {} },
+      })
+    ).toBe(true);
+    expect(
+      canShowSubscriptionRateLimits({
+        cliType: 'builtin',
+        agentType: 'grok',
         config: { env: {} },
       })
     ).toBe(true);

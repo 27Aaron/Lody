@@ -61,6 +61,8 @@ const mapIds = (value: OrderedAcpConfigOptionSelectors) => ({
   thought: value.thoughtLevelSelectors.map((selector) => selector.configId),
   fastMode: value.fastModeSelectors.map((selector) => selector.configId),
   planMode: value.planModeSelectors.map((selector) => selector.configId),
+  interactionMode: value.interactionModeSelectors.map((selector) => selector.configId),
+  permissionMode: value.permissionModeSelectors.map((selector) => selector.configId),
   mode: value.modeSelectors.map((selector) => selector.configId),
   other: value.otherSelectors.map((selector) => selector.configId),
   boolean: value.booleanSelectors.map((selector) => selector.configId),
@@ -84,6 +86,8 @@ describe('orderAcpConfigOptionSelectors', () => {
       thought: ['reasoning_effort'],
       fastMode: ['fast-mode'],
       planMode: ['collaboration_mode'],
+      interactionMode: [],
+      permissionMode: [],
       mode: ['mode'],
       boolean: ['safe_mode'],
       other: ['verbosity', 'temperature'],
@@ -101,6 +105,8 @@ describe('orderAcpConfigOptionSelectors', () => {
       thought: [],
       fastMode: ['fast'],
       planMode: [],
+      interactionMode: [],
+      permissionMode: [],
       mode: ['mode'],
       boolean: [],
       other: [],
@@ -118,6 +124,8 @@ describe('orderAcpConfigOptionSelectors', () => {
       thought: [],
       fastMode: ['fast'],
       planMode: [],
+      interactionMode: [],
+      permissionMode: [],
       mode: [],
       boolean: [],
       other: ['temperature'],
@@ -135,7 +143,29 @@ describe('orderAcpConfigOptionSelectors', () => {
       thought: ['reasoning_effort'],
       fastMode: [],
       planMode: [],
+      interactionMode: [],
+      permissionMode: [],
       mode: ['custom_mode'],
+      boolean: [],
+      other: [],
+    });
+  });
+
+  it('separates Grok interaction and permission selectors from legacy modes', () => {
+    const selectors = [
+      makeSelector('interaction_mode', 'Interaction mode', 'mode'),
+      makeSelector('permission_mode', 'Permission mode', '_permission'),
+      makeSelector('mode', 'Legacy permission mode', 'mode'),
+    ];
+
+    expect(mapIds(orderAcpConfigOptionSelectors(selectors))).toEqual({
+      model: [],
+      thought: [],
+      fastMode: [],
+      planMode: [],
+      interactionMode: ['interaction_mode'],
+      permissionMode: ['permission_mode'],
+      mode: ['mode'],
       boolean: [],
       other: [],
     });

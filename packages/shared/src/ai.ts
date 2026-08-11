@@ -13,6 +13,7 @@ import type { WorktreeScriptPhase } from './project';
 
 export const MANAGED_BUILTIN_RUNTIMES = [
   { runtimeName: 'kimi-code', agentType: 'kimi', displayName: 'Kimi Code' },
+  { runtimeName: 'grok-build', agentType: 'grok', displayName: 'Grok' },
   { runtimeName: 'claude-code', agentType: 'claude', displayName: 'Claude Code' },
   { runtimeName: 'codex', agentType: 'codex', displayName: 'Codex' },
 ] as const;
@@ -50,6 +51,7 @@ export type BuiltinRuntimeOverrides = {
   codexPath?: string;
   claudeCodeExecutable?: string;
   kimiPath?: string;
+  grokPath?: string;
 };
 
 export const isBuiltinRuntimeOverrides = (value: unknown): value is BuiltinRuntimeOverrides => {
@@ -60,12 +62,14 @@ export const isBuiltinRuntimeOverrides = (value: unknown): value is BuiltinRunti
     codexPath?: unknown;
     claudeCodeExecutable?: unknown;
     kimiPath?: unknown;
+    grokPath?: unknown;
   };
   return (
     (record.codexPath === undefined || typeof record.codexPath === 'string') &&
     (record.claudeCodeExecutable === undefined ||
       typeof record.claudeCodeExecutable === 'string') &&
-    (record.kimiPath === undefined || typeof record.kimiPath === 'string')
+    (record.kimiPath === undefined || typeof record.kimiPath === 'string') &&
+    (record.grokPath === undefined || typeof record.grokPath === 'string')
   );
 };
 
@@ -366,6 +370,7 @@ export const CODEX_AUTO_REVIEW_MODE_ID = 'agent-auto-review';
 
 const BUILTIN_DEFAULT_MODE_IDS: Record<BuiltinAgentType, string> = {
   kimi: 'auto',
+  grok: 'agent',
   claude: 'auto',
   codex: CODEX_AUTO_REVIEW_MODE_ID,
 };
@@ -596,6 +601,7 @@ export function classifyPermissionModeFace(modeId: string | null | undefined): P
       // "Don't Ask" skips the human approval prompt — flag it like full access.
       return { kind: 'deny', tone: 'warning', render: 'icon' };
     case 'yolo':
+    case 'always-approve':
       return { kind: 'full-access', tone: 'warning', render: 'icon' };
     // Unknown / third-party (not adapted): keep the face clean; full name shows
     // in the sheet.
@@ -708,6 +714,94 @@ const KIMI_STATIC_CONFIG_OPTIONS: AcpConfigOptionSummary[] = [
   },
 ];
 
+const GROK_STATIC_MODES: StaticBuiltinAcpCapabilities['modes'] = [
+  {
+    id: 'default',
+    name: 'Agent',
+    description: 'Use tools and make changes when needed',
+  },
+  {
+    id: 'plan',
+    name: 'Plan',
+    description: 'Plan and reason without modifying the workspace',
+  },
+];
+
+const GROK_STATIC_MODELS: StaticBuiltinAcpCapabilities['models'] = [
+  {
+    modelId: 'grok-build',
+    name: 'Grok Build',
+  },
+];
+
+const GROK_STATIC_CONFIG_OPTIONS: AcpConfigOptionSummary[] = [
+  {
+    id: 'interaction_mode',
+    name: 'Interaction Mode',
+    description: 'Controls whether the agent acts, plans, or answers read-only questions',
+    category: 'mode',
+    type: 'select',
+    currentValue: BUILTIN_DEFAULT_MODE_IDS.grok,
+    options: [
+      { value: 'agent', name: 'Agent', description: 'Use tools and make changes when needed' },
+      {
+        value: 'plan',
+        name: 'Plan',
+        description: 'Plan and reason without modifying the workspace',
+      },
+    ],
+  },
+  {
+    id: 'permission_mode',
+    name: 'Permission Mode',
+    description: 'Controls how protected tool actions are approved',
+    category: '_permission',
+    type: 'select',
+    currentValue: 'ask',
+    options: [
+      {
+        value: 'ask',
+        name: 'Ask Every Time',
+        description: 'Request approval before protected actions',
+      },
+      {
+        value: 'auto',
+        name: 'Auto',
+        description: 'Let Grok decide when approval is required (experimental)',
+      },
+      {
+        value: 'always-approve',
+        name: 'Always Approve',
+        description: 'Approve protected actions automatically',
+      },
+    ],
+  },
+  {
+    id: 'model',
+    name: 'Model',
+    description: 'Select the model used for this session',
+    category: 'model',
+    type: 'select',
+    currentValue: 'grok-build',
+    options: [{ value: 'grok-build', name: 'Grok Build' }],
+  },
+  {
+    id: 'reasoning_effort',
+    name: 'Reasoning Effort',
+    description: 'Controls how much reasoning the model performs',
+    category: 'thought_level',
+    type: 'select',
+    currentValue: 'medium',
+    options: [
+      { value: 'minimal', name: 'Minimal' },
+      { value: 'low', name: 'Low' },
+      { value: 'medium', name: 'Medium' },
+      { value: 'high', name: 'High' },
+      { value: 'xhigh', name: 'X-High' },
+    ],
+  },
+];
+
 const STATIC_BUILTIN_ACP_CAPABILITIES: Record<BuiltinAgentType, StaticBuiltinAcpCapabilities> = {
   claude: {
     modes: CLAUDE_STATIC_MODES,
@@ -723,6 +817,11 @@ const STATIC_BUILTIN_ACP_CAPABILITIES: Record<BuiltinAgentType, StaticBuiltinAcp
     modes: KIMI_STATIC_MODES,
     models: [],
     configOptions: KIMI_STATIC_CONFIG_OPTIONS,
+  },
+  grok: {
+    modes: GROK_STATIC_MODES,
+    models: GROK_STATIC_MODELS,
+    configOptions: GROK_STATIC_CONFIG_OPTIONS,
   },
 };
 

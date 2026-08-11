@@ -65,6 +65,15 @@ const BUILTIN_AUTH_METHODS = {
       args: ['--login'],
     },
   ],
+  grok: [
+    {
+      id: 'xai-device-login',
+      name: 'xAI',
+      description: 'Sign in with an xAI account',
+      type: 'terminal',
+      args: ['login', '--device-auth'],
+    },
+  ],
   claude: [
     {
       id: 'claude-ai-login',
@@ -157,10 +166,10 @@ async function buildAuthenticationProcessEnv(options: {
 
 /**
  * Uses the provider's official status command to distinguish missing local
- * credentials from an ACP startup failure. Kimi has no equivalent lightweight
- * status command. Codex's status command only describes its OpenAI credential
- * store and cannot account for custom model providers, so both adapters remain
- * the source of truth.
+ * credentials from an ACP startup failure. Kimi and Grok have no equivalent
+ * lightweight status command. Codex's status command only describes its OpenAI
+ * credential store and cannot account for custom model providers, so those ACP
+ * adapters remain the source of truth.
  */
 export async function probeBuiltinAuthentication(
   options: ProbeBuiltinAuthenticationOptions
@@ -169,7 +178,11 @@ export async function probeBuiltinAuthentication(
   if (options.cliType !== 'builtin' || !isBuiltinAgentType(options.agentType)) {
     return { status: 'unknown' };
   }
-  if (options.agentType === 'kimi' || options.agentType === 'codex') {
+  if (
+    options.agentType === 'kimi' ||
+    options.agentType === 'grok' ||
+    options.agentType === 'codex'
+  ) {
     return { status: 'unknown' };
   }
   const launch = await resolveBuiltinAuthenticationProcessLaunch({

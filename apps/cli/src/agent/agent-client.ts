@@ -1330,6 +1330,18 @@ export class AgentClient implements acp.Client {
     return this.options.agentConfig?.agentType === 'codex';
   }
 
+  private getGrokClientIdentifier(): string | undefined {
+    return this.options.agentConfig?.cliType === 'builtin' &&
+      this.options.agentConfig.agentType === 'grok'
+      ? `lody:${this.options.sessionId}`
+      : undefined;
+  }
+
+  private getGrokSessionMeta() {
+    const clientIdentifier = this.getGrokClientIdentifier();
+    return clientIdentifier ? { _meta: { clientIdentifier } } : {};
+  }
+
   private isCurrentAcpSession(acpSessionId: string): boolean {
     return this.acpSessionId !== null && acpSessionId === this.acpSessionId;
   }
@@ -1364,6 +1376,8 @@ export class AgentClient implements acp.Client {
   ): Promise<acp.NewSessionResponse> {
     const connection = new acp.ClientSideConnection(() => this, stream);
     this.connection = connection;
+    const grokClientIdentifier = this.getGrokClientIdentifier();
+    const grokSessionMeta = this.getGrokSessionMeta();
     this.logger.debug(
       `[${this.options.sessionId}] Starting ACP client (workdir=${workdir} resumeSessionId=${
         resumeSessionId ?? 'none'
@@ -1403,6 +1417,7 @@ export class AgentClient implements acp.Client {
         withAbort(
           connection.initialize({
             protocolVersion: acp.PROTOCOL_VERSION,
+            ...(grokClientIdentifier ? { _meta: { clientIdentifier: grokClientIdentifier } } : {}),
             clientCapabilities: {
               terminal: this.terminalEnabled,
               plan: {},
@@ -1662,6 +1677,7 @@ export class AgentClient implements acp.Client {
               sessionId: resumeSessionId,
               cwd: workdir,
               mcpServers,
+              ...grokSessionMeta,
             }),
             startupAbort
           ),
@@ -1720,6 +1736,7 @@ export class AgentClient implements acp.Client {
               sessionId: resumeSessionId,
               cwd: workdir,
               mcpServers,
+              ...grokSessionMeta,
             }),
             startupAbort
           ),
@@ -1778,7 +1795,10 @@ export class AgentClient implements acp.Client {
 
       try {
         sessionResponse = await withTimeout(
-          withAbort(connection.newSession({ cwd: workdir, mcpServers }), startupAbort),
+          withAbort(
+            connection.newSession({ cwd: workdir, mcpServers, ...grokSessionMeta }),
+            startupAbort
+          ),
           this.logger,
           'connection.newSession',
           this.options.sessionId,
@@ -1858,7 +1878,7 @@ export class AgentClient implements acp.Client {
     if (!forkSessionTurnId) {
       try {
         return await withTimeout(
-          connection.newSession({ cwd: workdir, mcpServers }),
+          connection.newSession({ cwd: workdir, mcpServers, ...this.getGrokSessionMeta() }),
           this.logger,
           'connection.newSession.editAndResend',
           this.options.sessionId,

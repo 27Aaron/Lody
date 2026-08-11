@@ -62,6 +62,8 @@ export const SessionUsagePopover = memo(function SessionUsagePopover({
       )
     : [];
   const hasRateLimit = rateLimitWindows.length > 0;
+  const isRateLimitUnavailable = rateLimit?.limits.apiUnavailable === true;
+  const hasRateLimitDetails = hasRateLimit || isRateLimitUnavailable;
   const triggerValue =
     context?.usedPercentage ??
     (showRateLimitWithoutContext ? rateLimitWindows[0]?.usedPercent : undefined);
@@ -163,23 +165,29 @@ export const SessionUsagePopover = memo(function SessionUsagePopover({
           />
         ) : null}
 
-        {(context || isContextCompacting) && hasRateLimit ? (
+        {(context || isContextCompacting) && hasRateLimitDetails ? (
           <Separator className="my-2.5 bg-border/60" />
         ) : null}
 
-        {hasRateLimit ? (
+        {hasRateLimitDetails ? (
           <div className="space-y-2.5">
             <div className="truncate text-[11px] font-medium text-muted-foreground">
               {resolvedModelLabel}
             </div>
-            {rateLimitWindows.map((window, index) => (
-              <UsageMeter
-                key={`${window.windowDurationMins ?? 'unknown'}-${index}`}
-                label={formatWindowLabel(window.windowDurationMins)}
-                value={window.usedPercent}
-                detail={formatReset(window.resetsAt)}
-              />
-            ))}
+            {hasRateLimit ? (
+              rateLimitWindows.map((window, index) => (
+                <UsageMeter
+                  key={`${window.windowDurationMins ?? 'unknown'}-${index}`}
+                  label={formatWindowLabel(window.windowDurationMins)}
+                  value={window.usedPercent}
+                  detail={formatReset(window.resetsAt)}
+                />
+              ))
+            ) : (
+              <div className="text-xs text-muted-foreground">
+                {t('sessions.usage.unavailable', 'The provider did not report usage for this plan')}
+              </div>
+            )}
           </div>
         ) : null}
       </PopoverContent>

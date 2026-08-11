@@ -99,6 +99,39 @@ describe('AgentClient session preparation gate', () => {
     ]);
   });
 
+  it('registers the same Grok client identifier for initial and replacement sessions', async () => {
+    const client = new AgentClient({
+      logger: createLogger(),
+      sessionId: 'session-grok' as SessionId,
+      terminalManager: {} as never,
+      agentConfig: { cliType: 'builtin', agentType: 'grok' },
+      onUpdateMessage: vi.fn(),
+      onRequestPermission: vi.fn(),
+    });
+
+    await client.startSession({} as never, '/workdir');
+
+    expect(connectionMocks.initialize).toHaveBeenCalledWith(
+      expect.objectContaining({
+        _meta: { clientIdentifier: 'lody:session-grok' },
+      })
+    );
+    expect(connectionMocks.newSession).toHaveBeenCalledWith({
+      cwd: '/workdir',
+      mcpServers: [],
+      _meta: { clientIdentifier: 'lody:session-grok' },
+    });
+
+    connectionMocks.newSession.mockResolvedValueOnce({ sessionId: 'acp-session-2' });
+    await client.prepareReplacementSession();
+
+    expect(connectionMocks.newSession).toHaveBeenLastCalledWith({
+      cwd: '/workdir',
+      mcpServers: [],
+      _meta: { clientIdentifier: 'lody:session-grok' },
+    });
+  });
+
   it('aborts while waiting for a claim without creating an ACP session', async () => {
     const target = deferred<{ workdir: string }>();
     const startupAbort = deferred<never>();

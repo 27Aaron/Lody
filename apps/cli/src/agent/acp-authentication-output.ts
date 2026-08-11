@@ -33,6 +33,12 @@ function isTrustedAuthorizationUrl(agentType: BuiltinCliType, url: URL): boolean
       (url.pathname.startsWith('/codex/device') || url.pathname.startsWith('/oauth/authorize'))
     );
   }
+  if (agentType === 'grok') {
+    return (
+      hasDomain(url.hostname, 'accounts.x.ai') &&
+      (url.pathname.startsWith('/oauth2/device') || url.pathname.startsWith('/device'))
+    );
+  }
   return hasDomain(url.hostname, 'kimi.com') && url.pathname.startsWith('/code/authorize_device');
 }
 

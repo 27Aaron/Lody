@@ -21,10 +21,12 @@ import { getAcpBinaryManager } from '@/agent/acp-binary-manager';
 import {
   BUILTIN_CLAUDE_CAPABILITY_SOURCE_VERSION,
   BUILTIN_CODEX_CAPABILITY_SOURCE_VERSION,
+  BUILTIN_GROK_CAPABILITY_SOURCE_VERSION,
   BUILTIN_KIMI_CAPABILITY_SOURCE_VERSION,
   CLAUDE_ACP_ADAPTER_VERSION,
   CODEX_ACP_ADAPTER_VERSION,
   getManagedAgentRuntimeManager,
+  GROK_ACP_ADAPTER_VERSION,
   KIMI_CODE_VERSION,
   type ManagedRuntimeProgressCallback,
 } from '@/agent/managed-agent-runtime';
@@ -108,6 +110,11 @@ export const BuiltinACPSetting: Record<CliType, ACPSetting> = {
     version: KIMI_CODE_VERSION,
     binName: 'kimi',
   },
+  grok: {
+    packageName: 'acp-extension-grok',
+    version: GROK_ACP_ADAPTER_VERSION,
+    binName: 'grok',
+  },
   claude: {
     packageName: 'acp-extension-claude',
     version: CLAUDE_ACP_ADAPTER_VERSION,
@@ -185,6 +192,9 @@ export function getAcpCapabilitySourceVersion(input: ResolveACPSettingInput): st
       }
       if (input.agentType === 'kimi') {
         return `${BUILTIN_KIMI_CAPABILITY_SOURCE_VERSION}${runtimeOverrideSuffix}`;
+      }
+      if (input.agentType === 'grok') {
+        return `${BUILTIN_GROK_CAPABILITY_SOURCE_VERSION}${runtimeOverrideSuffix}`;
       }
     }
     return `builtin:${input.agentType}:unknown`;
@@ -307,7 +317,7 @@ function trimRuntimeOverride(value: string | undefined): string | undefined {
   return trimmed ? resolve(expandHomePath(trimmed)) : undefined;
 }
 
-function resolveCliAdapterEntry(adapter: 'claude-acp' | 'codex-acp'): string[] {
+function resolveCliAdapterEntry(adapter: 'claude-acp' | 'codex-acp' | 'grok-acp'): string[] {
   const argvEntry = process.argv[1] ? resolve(process.argv[1]) : undefined;
   const candidates: string[] = [];
   if (argvEntry) {
@@ -366,6 +376,20 @@ async function resolveBuiltinACPProcessLaunch(
       env: { CODEX_PATH: codexPath },
     };
   }
+  if (input.agentType === 'grok') {
+    const overridePath = trimRuntimeOverride(input.runtimeOverrides?.grokPath);
+    const grokPath =
+      overridePath ??
+      (await getManagedAgentRuntimeManager().ensureRuntime('grok-build', {
+        onProgress: input.onManagedRuntimeProgress,
+        signal: input.signal,
+      }));
+    return {
+      command: process.execPath,
+      args: [...resolveCliAdapterEntry('grok-acp'), ...(input.extraArgs ?? [])],
+      env: { GROK_PATH: grokPath, GROK_DISABLE_AUTOUPDATER: '1' },
+    };
+  }
 
   const overridePath = trimRuntimeOverride(input.runtimeOverrides?.claudeCodeExecutable);
   const claudePath =
@@ -389,8 +413,8 @@ async function resolveBuiltinACPProcessLaunch(
  * Resolves the trusted provider CLI used for builtin authentication. Claude and
  * Codex keep credentials in their own stores, so authentication runs their
  * official managed binaries directly instead of going through the ACP adapter.
- * Kimi exposes login through its ACP entry point and has no separate status
- * command that Lody can probe.
+ * Kimi exposes login through its ACP entry point. Kimi and Grok have no
+ * separate status command that Lody can probe.
  */
 export async function resolveBuiltinAuthenticationProcessLaunch(
   input: ResolveBuiltinAuthenticationProcessLaunchInput
@@ -418,6 +442,21 @@ export async function resolveBuiltinAuthenticationProcessLaunch(
     return {
       command: codexPath,
       args: input.action === 'login' ? ['login', '--device-auth'] : ['login', 'status'],
+    };
+  }
+  if (input.agentType === 'grok') {
+    if (input.action === 'status') return null;
+    const overridePath = trimRuntimeOverride(input.runtimeOverrides?.grokPath);
+    const grokPath =
+      overridePath ??
+      (await getManagedAgentRuntimeManager().ensureRuntime('grok-build', {
+        onProgress: input.onManagedRuntimeProgress,
+        signal: input.signal,
+      }));
+    return {
+      command: grokPath,
+      args: ['login', '--device-auth'],
+      env: { GROK_DISABLE_AUTOUPDATER: '1' },
     };
   }
 
