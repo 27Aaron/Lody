@@ -725,11 +725,6 @@ const GROK_STATIC_MODES: StaticBuiltinAcpCapabilities['modes'] = [
     name: 'Plan',
     description: 'Plan and reason without modifying the workspace',
   },
-  {
-    id: 'ask',
-    name: 'Ask',
-    description: 'Answer questions without modifying the workspace',
-  },
 ];
 
 const GROK_STATIC_MODELS: StaticBuiltinAcpCapabilities['models'] = [
@@ -753,11 +748,6 @@ const GROK_STATIC_CONFIG_OPTIONS: AcpConfigOptionSummary[] = [
         value: 'plan',
         name: 'Plan',
         description: 'Plan and reason without modifying the workspace',
-      },
-      {
-        value: 'ask',
-        name: 'Ask',
-        description: 'Answer questions without modifying the workspace',
       },
     ],
   },

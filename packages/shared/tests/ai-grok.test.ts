@@ -24,7 +24,7 @@ describe('builtin Grok shared contract', () => {
   it('mirrors the config options exposed by the official-runtime compatibility adapter', () => {
     const capabilities = getStaticBuiltinAcpCapabilities('builtin', 'grok');
 
-    expect(capabilities?.modes.map((mode) => mode.id)).toEqual(['default', 'plan', 'ask']);
+    expect(capabilities?.modes.map((mode) => mode.id)).toEqual(['default', 'plan']);
     expect(capabilities?.models.map((model) => model.modelId)).toEqual(['grok-build']);
     expect(capabilities?.configOptions.map((option) => option.id)).toEqual([
       'interaction_mode',
@@ -33,6 +33,10 @@ describe('builtin Grok shared contract', () => {
       'reasoning_effort',
     ]);
     expect(capabilities?.configOptions[0]?.currentValue).toBe('agent');
+    expect(capabilities?.configOptions[0]?.options.map((option) => option.value)).toEqual([
+      'agent',
+      'plan',
+    ]);
     expect(capabilities?.configOptions[1]?.options.map((option) => option.value)).toEqual([
       'ask',
       'auto',
