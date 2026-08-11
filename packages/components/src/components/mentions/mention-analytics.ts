@@ -123,57 +123,6 @@ function withBase(
 // capturePostHogEvent already null-guards the client and sanitizes properties,
 // so these helpers are side-effect-only and never throw into product code.
 
-export function captureMentionFileMenuOpen(
-  postHog: PostHogAnalyticsClient | null | undefined,
-  base: MentionAnalyticsBaseProps,
-  props: { sourceKind: MentionFileSourceKind; status: string; itemsCount: number }
-): void {
-  capturePostHogEvent(
-    postHog,
-    'mention/file/menu_open',
-    withBase(
-      {
-        source_kind: props.sourceKind,
-        status: props.status,
-        items_count: props.itemsCount,
-      },
-      base
-    )
-  );
-}
-
-export function captureMentionFileSelect(
-  postHog: PostHogAnalyticsClient | null | undefined,
-  base: MentionAnalyticsBaseProps,
-  props: { kind: 'file' | 'dir'; rank: number; termLength: number; sourceKind: MentionFileSourceKind }
-): void {
-  capturePostHogEvent(
-    postHog,
-    'mention/file/select',
-    withBase(
-      {
-        kind: props.kind,
-        rank: props.rank,
-        term_length: props.termLength,
-        source_kind: props.sourceKind,
-      },
-      base
-    )
-  );
-}
-
-export function captureMentionFileMenuEmpty(
-  postHog: PostHogAnalyticsClient | null | undefined,
-  base: MentionAnalyticsBaseProps,
-  props: { sourceKind: MentionFileSourceKind; termLength: number }
-): void {
-  capturePostHogEvent(
-    postHog,
-    'mention/file/menu_empty',
-    withBase({ source_kind: props.sourceKind, term_length: props.termLength }, base)
-  );
-}
-
 export function captureMentionFileFetchError(
   postHog: PostHogAnalyticsClient | null | undefined,
   base: MentionAnalyticsBaseProps,
@@ -205,45 +154,54 @@ export function captureMentionFileLocalFetchError(
   );
 }
 
-export function captureMentionCommandMenuOpen(
+// ---------------------------------------------------------------------------
+// Single `@` two-level menu
+//
+// One menu replaced the four per-trigger menus, so these carry a `category`
+// dimension instead of living in per-type event families. Together they give
+// the first-level -> second-level funnel: menu_open -> category_enter -> select.
+// ---------------------------------------------------------------------------
+
+export function captureMentionMenuOpen(
   postHog: PostHogAnalyticsClient | null | undefined,
   base: MentionAnalyticsBaseProps,
-  props: { itemsCount: number; termLength: number }
+  props: { level: string; categoryCount: number }
 ): void {
   capturePostHogEvent(
     postHog,
-    'mention/command/menu_open',
-    withBase({ items_count: props.itemsCount, term_length: props.termLength }, base)
+    'mention/menu_open',
+    withBase({ level: props.level, category_count: props.categoryCount }, base)
   );
 }
 
-export function captureMentionCommandSelect(
+export function captureMentionCategoryEnter(
   postHog: PostHogAnalyticsClient | null | undefined,
   base: MentionAnalyticsBaseProps,
-  props: { commandName: string; rank: number; termLength: number }
+  props: { category: string; termLength: number }
 ): void {
   capturePostHogEvent(
     postHog,
-    'mention/command/select',
+    'mention/category_enter',
+    withBase({ category: props.category, term_length: props.termLength }, base)
+  );
+}
+
+export function captureMentionSelect(
+  postHog: PostHogAnalyticsClient | null | undefined,
+  base: MentionAnalyticsBaseProps,
+  props: { category: string; level: string; rank: number; termLength: number }
+): void {
+  capturePostHogEvent(
+    postHog,
+    'mention/select',
     withBase(
       {
-        command_name: props.commandName,
+        category: props.category,
+        level: props.level,
         rank: props.rank,
         term_length: props.termLength,
       },
       base
     )
-  );
-}
-
-export function captureMentionCommandMenuEmpty(
-  postHog: PostHogAnalyticsClient | null | undefined,
-  base: MentionAnalyticsBaseProps,
-  props: { termLength: number; commandCount: number }
-): void {
-  capturePostHogEvent(
-    postHog,
-    'mention/command/menu_empty',
-    withBase({ term_length: props.termLength, command_count: props.commandCount }, base)
   );
 }

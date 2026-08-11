@@ -100,7 +100,10 @@ function makeServerConfig(paths: ReturnType<typeof makePaths>) {
     control: {
       machineId: 'machine-1',
       logger,
-      dispatchSession: vi.fn(async () => [dispatchResponse]),
+      dispatchSession: vi.fn(async (_message, options) => {
+        options?.onResponse?.(dispatchResponse);
+        return [dispatchResponse];
+      }),
       dispatchProject: vi.fn(),
     },
     version: '0.0.0-test',

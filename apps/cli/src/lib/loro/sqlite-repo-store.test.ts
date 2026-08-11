@@ -1,7 +1,7 @@
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { JsonObject, RemoteCursor } from '@loro-dev/streams-crdt';
 import {
   DEFAULT_LORO_STREAMS_BASE_URL,
@@ -19,6 +19,13 @@ import {
 
 const createdPaths = new Set<string>();
 const openStores = new Set<SqliteRepoStore>();
+const originalPlatform = process.env.LODY_PLATFORM;
+const originalDataDir = process.env.LODY_DATA_DIR;
+
+beforeEach(() => {
+  process.env.LODY_PLATFORM = 'local';
+  delete process.env.LODY_DATA_DIR;
+});
 
 const createCursor = (streamUrl: string): RemoteCursor<JsonObject> => ({
   streamUrl,
@@ -57,6 +64,10 @@ afterEach(async () => {
     })
   );
   createdPaths.clear();
+  if (originalPlatform === undefined) delete process.env.LODY_PLATFORM;
+  else process.env.LODY_PLATFORM = originalPlatform;
+  if (originalDataDir === undefined) delete process.env.LODY_DATA_DIR;
+  else process.env.LODY_DATA_DIR = originalDataDir;
 });
 
 describe('SQLite Loro repo store', () => {
@@ -118,7 +129,7 @@ describe('SQLite Loro repo store', () => {
       const cliStore = await createCliSqliteRepoStore(workspaceId);
       openStores.add(cliStore.sqliteStore);
 
-      expect(cliStore.baseDir).toBe(path.join(tempHome, '.lody', 'loro-repo', 'workspace-1'));
+      expect(cliStore.baseDir).toBe(path.join(tempHome, '.lody-oss', 'loro-repo', 'workspace-1'));
       expect(cliStore.dbPath).toBe(path.join(cliStore.baseDir, 'repo.sqlite3'));
       expect(getLoroRepoStorageBaseDir(workspaceId)).toBe(cliStore.baseDir);
       expect(getLoroRepoSqliteDbPath(workspaceId)).toBe(cliStore.dbPath);

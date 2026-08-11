@@ -113,7 +113,9 @@ async function startInner(config: LocalLoroDataPlaneSocketServerConfig): Promise
         });
       },
     });
-    socket.on('data', (chunk) => splitLines(chunk.toString('utf8')));
+    // Hand the splitter raw bytes: it owns the stateful UTF-8 decode, so a
+    // multi-byte character straddling a socket chunk boundary survives.
+    socket.on('data', (chunk) => splitLines(chunk));
 
     // Dead-peer cleanup half of the idle watchdog (the relay pings often enough
     // that a healthy connection never trips this).

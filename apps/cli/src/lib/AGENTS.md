@@ -80,8 +80,14 @@ control-plane path is DEPRECATED; do not add functionality to it.
   doc's first catch-up is a realistic oversize, so it must NOT be a terminal
   room error); `payload_too_large` stays terminal only for a single
   flock entry above the budget. Receiver-side skip-until-newline is backup —
-  a framing overflow must NOT destroy the socket. Named Flock docs opened by a
-  renderer are bridged by `LoroDocumentManager` into `repo.joinFlockDocRoom()` and
+  a framing overflow must NOT destroy the socket. Feed `createJsonLineSplitter`
+  the RAW socket chunk: it owns a stateful UTF-8 decode, and per-chunk
+  `toString('utf8')` mangles a multi-byte character split across a chunk
+  boundary into U+FFFD. A flock bundle carries file paths as literal UTF-8 JSON,
+  so that corruption becomes a permanent garbled LWW key in the receiver's
+  replica (`isCorruptedCodeCollabWorkspacePath` prunes the survivors).
+  Named Flock docs opened by a renderer are bridged by `LoroDocumentManager`
+  into `repo.joinFlockDocRoom()` and
   released on the last local peer leave; Code Collab `fi`/`fis` and machine flock
   docs must not rely on `syncOnce()` as live cloud subscription. These cloud
   hydrates (and the session-doc equivalent) are background data relays ONLY:

@@ -36,6 +36,7 @@ const convexAuthMock = vi.hoisted(() => ({
 }));
 
 vi.mock('../src/hooks/use-recoverable-convex-query', () => ({
+  usePublicConvexQuery: () => undefined,
   useRecoverableConvexQuery: () => null,
 }));
 

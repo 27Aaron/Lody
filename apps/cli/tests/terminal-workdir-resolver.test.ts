@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   type LocalProjectId,
   type MachineId,
@@ -11,8 +11,9 @@ import {
 import {
   deriveRepoIdFromGitHubRepo,
   deriveRepoIdFromLocalProjectPath,
-  getWorktreeHostPath,
+  getWorktreeHostPathFromDotlodyPath,
 } from '@lody/shared/node/worktree-paths';
+import { getLodyDataDir } from '@lody/shared/node/installation-profile';
 import {
   resolveTerminalWorkdirFromMetadata,
   type TerminalSessionMetaLookup,
@@ -22,12 +23,23 @@ const machineId = 'machine-1' as MachineId;
 const localProjectId = 'local-project-1' as LocalProjectId;
 
 let tempDirs: string[] = [];
+const originalPlatform = process.env.LODY_PLATFORM;
+const originalDataDir = process.env.LODY_DATA_DIR;
+
+beforeEach(() => {
+  process.env.LODY_PLATFORM = 'local';
+  delete process.env.LODY_DATA_DIR;
+});
 
 afterEach(() => {
   for (const dir of tempDirs) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
   tempDirs = [];
+  if (originalPlatform === undefined) delete process.env.LODY_PLATFORM;
+  else process.env.LODY_PLATFORM = originalPlatform;
+  if (originalDataDir === undefined) delete process.env.LODY_DATA_DIR;
+  else process.env.LODY_DATA_DIR = originalDataDir;
 });
 
 function makeTempDir(): string {
@@ -93,10 +105,10 @@ describe('terminal workdir resolver', () => {
     const homeDir = makeTempDir();
     const sessionId = 'session-github' as SessionId;
     const repoFullName = 'loro-dev/lody';
-    const expected = getWorktreeHostPath(
+    const expected = getWorktreeHostPathFromDotlodyPath(
       deriveRepoIdFromGitHubRepo(repoFullName),
       sessionId,
-      homeDir
+      getLodyDataDir('local', homeDir)
     );
     fs.mkdirSync(expected, { recursive: true });
 
@@ -138,10 +150,10 @@ describe('terminal workdir resolver', () => {
     const homeDir = makeTempDir();
     const rootPath = makeTempDir();
     const sessionId = 'session-local-worktree' as SessionId;
-    const expected = getWorktreeHostPath(
+    const expected = getWorktreeHostPathFromDotlodyPath(
       deriveRepoIdFromLocalProjectPath(rootPath),
       sessionId,
-      homeDir
+      getLodyDataDir('local', homeDir)
     );
     fs.mkdirSync(expected, { recursive: true });
 
@@ -169,7 +181,7 @@ describe('terminal workdir resolver', () => {
   it('resolves chat-only sessions to the default chat workdir', async () => {
     const homeDir = makeTempDir();
     const sessionId = 'session-chat-only' as SessionId;
-    const expected = path.join(homeDir, '.lody', 'chats', sessionId);
+    const expected = path.join(homeDir, '.lody-oss', 'chats', sessionId);
 
     await expect(
       createResolver({
@@ -216,7 +228,7 @@ describe('terminal workdir resolver', () => {
     const homeDir = makeTempDir();
     const parentSessionId = 'session-parent-chat' as SessionId;
     const childSessionId = 'session-child-chat' as SessionId;
-    const expected = path.join(homeDir, '.lody', 'chats', parentSessionId);
+    const expected = path.join(homeDir, '.lody-oss', 'chats', parentSessionId);
 
     await expect(
       createResolver({

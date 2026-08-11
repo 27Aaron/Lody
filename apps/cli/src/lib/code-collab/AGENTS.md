@@ -15,7 +15,11 @@ directory.
   Git All Changes uses the owner base; non-Git uses local diff evidence only when a
   trustworthy base exists.
   Shared file tree/All Changes uses owner-session Flock stream
-  `<workspace-id>:fi:<master-session-id>` (one row per path). Successful changes or
+  `<workspace-id>:fi:<master-session-id>` (one row per path). A row whose path key
+  carries U+FFFD came from a byte stream decoded across a chunk boundary, not from
+  a scan; it is its own LWW key, so a correct republish cannot overwrite it. The
+  shared helpers hide it on read and delete it on the next write — do not "restore"
+  such rows. Successful changes or
   targeted repairs advance signal stream `<workspace-id>:fis:<master-session-id>`;
   the named Flock bridge in `apps/cli/src/lib/loro/doc.ts` lets Electron invalidate
   and refresh its Machine RPC snapshot. Both streams have 180-day TTL and must not

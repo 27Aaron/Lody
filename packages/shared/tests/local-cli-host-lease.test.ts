@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   acquireLocalCliHostLease,
+  getLocalCliHostEndpoint,
   requestLocalCliHostShutdown,
   type LocalCliHostEndpoint,
   type LocalCliHostLease,
@@ -33,9 +34,8 @@ describe('local CLI host lease', () => {
     const commonJs =
       require('../src/node/local-cli-host-lease.cjs') as typeof import('../src/node/local-cli-host-lease');
 
-    expect(commonJs.getLocalCliHostEndpoint()).toMatchObject(
-      process.platform === 'win32' ? { kind: 'pipe' } : { kind: 'tcp', port: 17_788 }
-    );
+    expect(commonJs.getLocalCliHostEndpoint('cloud')).toEqual(getLocalCliHostEndpoint('cloud'));
+    expect(commonJs.getLocalCliHostEndpoint('local')).toEqual(getLocalCliHostEndpoint('local'));
     expect(commonJs.acquireLocalCliHostLease).toBeTypeOf('function');
     expect(commonJs.requestLocalCliHostShutdown).toBeTypeOf('function');
   });

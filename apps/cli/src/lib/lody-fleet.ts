@@ -1218,27 +1218,27 @@ export class LodyFleet {
       }
 
       if (matches.length === 0) {
-        return [
-          {
-            type: responseType,
-            sessionId: message.sessionId,
-            success: false,
-            error: 'session_not_found',
-            message: `Session not found: ${message.sessionId}`,
-          } as LocalSessionControlResponse,
-        ];
+        const response = {
+          type: responseType,
+          sessionId: message.sessionId,
+          success: false,
+          error: 'session_not_found',
+          message: `Session not found: ${message.sessionId}`,
+        } as LocalSessionControlResponse;
+        options.onResponse?.(response);
+        return [response];
       }
 
       if (matches.length > 1) {
-        return [
-          {
-            type: responseType,
-            sessionId: message.sessionId,
-            success: false,
-            error: 'session_ambiguous',
-            message: `Session ${message.sessionId} exists in multiple active workspace runtimes`,
-          } as LocalSessionControlResponse,
-        ];
+        const response = {
+          type: responseType,
+          sessionId: message.sessionId,
+          success: false,
+          error: 'session_ambiguous',
+          message: `Session ${message.sessionId} exists in multiple active workspace runtimes`,
+        } as LocalSessionControlResponse;
+        options.onResponse?.(response);
+        return [response];
       }
 
       return await matches[0]!.lody.dispatchLocalControl(

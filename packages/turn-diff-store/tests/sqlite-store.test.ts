@@ -1,5 +1,4 @@
 import { mkdtempSync, rmSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -11,7 +10,6 @@ import { SqliteTurnDiffStore } from '../src/sqlite-store';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const TURN_DIFF_APPLICATION_ID = 0x4c544431;
-const require = createRequire(import.meta.url);
 const tempDirectories: string[] = [];
 let nextHeadProof = 0;
 
@@ -829,7 +827,6 @@ describe('TurnDiffStore worker client', () => {
       dbPath: createDbPath(),
       now: () => 1_000,
       workerUrl: new URL('./worker-entry.mjs', import.meta.url),
-      workerExecArgv: ['--import', require.resolve('tsx')],
     });
     try {
       await store.recordTurn({
@@ -868,7 +865,6 @@ describe('TurnDiffStore worker client', () => {
         retentionDays: 100,
         now: () => calibratedNowMs,
         workerUrl: new URL('./worker-entry.mjs', import.meta.url),
-        workerExecArgv: ['--import', require.resolve('tsx')],
       });
 
     let store = createStore();
@@ -927,7 +923,6 @@ describe('TurnDiffStore worker client', () => {
       retentionDays: 1,
       now: () => DAY_MS + 1,
       workerUrl: new URL('./worker-entry.mjs', import.meta.url),
-      workerExecArgv: ['--import', require.resolve('tsx')],
       onBackgroundGc: (result) => resolveBackgroundGc?.(result),
     });
     try {
@@ -966,7 +961,6 @@ describe('TurnDiffStore worker client', () => {
       gcTargetBytes: 128 * 1024,
       now: () => 1_000,
       workerUrl: new URL('./worker-entry.mjs', import.meta.url),
-      workerExecArgv: ['--import', require.resolve('tsx')],
       onBackgroundGc: (result) => {
         backgroundGcCount += 1;
         resolveBackgroundGc?.(result);

@@ -160,4 +160,36 @@ describe('PrTabView refresh button', () => {
     expect(composer?.contains(textarea)).toBe(true);
     expect(scrollArea?.nextElementSibling).toBe(composer);
   });
+
+  it('lets the PR description expand inside the panel scroll area', () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    flushSync(() => {
+      root?.render(
+        createElement(PrTabView, {
+          repoFullName: 'loro-dev/lody',
+          prNumber: 42,
+          state: 'ready',
+          data: {
+            ...data,
+            pullRequest: {
+              ...pullRequest,
+              body: 'A long pull request description.',
+            },
+          },
+        })
+      );
+    });
+
+    const scrollArea = container.querySelector<HTMLElement>('[data-pr-content-scroll-area]');
+    const description = container.querySelector<HTMLElement>('[data-pr-description]');
+    const panelViewport = scrollArea?.querySelector<HTMLElement>(
+      '[data-radix-scroll-area-viewport]'
+    );
+
+    expect(description).not.toBeNull();
+    expect(description?.closest('[data-radix-scroll-area-viewport]')).toBe(panelViewport);
+  });
 });

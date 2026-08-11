@@ -179,7 +179,9 @@ if (hasSingleInstanceLock) {
     globalShortcutsService.registerAll()
     app.once('will-quit', () => globalShortcutsService.dispose())
     app.on('browser-window-created', (_, window) => {
-      optimizer.watchWindowShortcuts(window)
+      // Keep Electron's native Cmd/Ctrl zoom shortcuts available. The toolkit
+      // blocks Minus and shifted Equal by default when zoom is not enabled.
+      optimizer.watchWindowShortcuts(window, { zoom: true })
       // electron-toolkit deliberately blocks the production reload shortcut.
       // Restore the normal desktop-app behavior requested by the user while
       // leaving Cmd/Ctrl+Shift+R and DevTools handling unchanged.

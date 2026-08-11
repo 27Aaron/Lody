@@ -157,7 +157,7 @@ import {
   extractIssuePRMentionsFromText,
   useKnownIssuePrItems,
 } from '@/components/mentions/issue-pr-hash-mention';
-import { useSkillMentionPromptExpansion } from '@/components/mentions/mention-skill-source';
+import { useMentionPromptExpansion } from '@/components/mentions/mention-expansion';
 import { useChatLandingImageDraft } from '@/hooks/use-chat-landing-image-draft';
 import { useChatLandingFileDraft } from '@/hooks/use-chat-landing-file-draft';
 import { useChatLandingDraftSession } from '@/hooks/use-chat-landing-draft-session';
@@ -550,7 +550,7 @@ function WorkspaceChatLanding({
   const machinePairingStatus =
     observedMachinePairing === null
       ? 'expired'
-      : (observedMachinePairing?.status ?? (machinePairing ? 'pending' : null));
+      : observedMachinePairing?.status ?? (machinePairing ? 'pending' : null);
   const pairedMachineId = observedMachinePairing?.machineId as MachineId | undefined;
   const runtimeInitializing = useAtomValue(runtimeInitializingAtom);
   const controlConnectionState = useAtomValue(lodyControlConnectionStateAtom);
@@ -643,11 +643,8 @@ function WorkspaceChatLanding({
   const liveSessionStatuses = useMemo(() => {
     const next = new Map<string, SessionStatus>();
     for (const session of visibleAllActiveSessions) {
-      const status = findFreshSessionPresenceState(
-        presenceStates,
-        session.id,
-        presenceNowMs
-      )?.status;
+      const status = findFreshSessionPresenceState(presenceStates, session.id, presenceNowMs)
+        ?.status;
       if (status) {
         next.set(session.id, status);
       }
@@ -696,10 +693,10 @@ function WorkspaceChatLanding({
     workspaceId ? { workspaceId } : 'skip'
   ) as
     | {
-        repoFullName: string;
-        worktreeSetup?: WorktreeSetupScriptConfig;
-        worktreeCleanup?: WorktreeCleanupScriptConfig;
-      }[]
+      repoFullName: string;
+      worktreeSetup?: WorktreeSetupScriptConfig;
+      worktreeCleanup?: WorktreeCleanupScriptConfig;
+    }[]
     | null
     | undefined;
   const repositories = freshRepositories ?? cachedRepositories ?? undefined;
@@ -1453,16 +1450,16 @@ function WorkspaceChatLanding({
   const { modeOptions, modelOptions, configOptionSelectors } = selectorOptions;
   const selectedRateLimits =
     selectedConfig &&
-    canShowSubscriptionRateLimits({
-      cliType: selectedConfig.cliType,
-      agentType: selectedConfig.agentType,
-      config: selectedConfig,
-    })
+      canShowSubscriptionRateLimits({
+        cliType: selectedConfig.cliType,
+        agentType: selectedConfig.agentType,
+        config: selectedConfig,
+      })
       ? selectedMachine?.raceLimits
       : undefined;
   const selectedModelLabel = modelOptions.find((option) => option.value === selectedModelId)?.label;
   const selectedAgentDefaults = useMemo(
-    () => (selectedAgent ? (agentDefaultsCache.get(selectedAgent.agentId) ?? {}) : {}),
+    () => (selectedAgent ? agentDefaultsCache.get(selectedAgent.agentId) ?? {} : {}),
     [selectedAgent]
   );
   useReconcileAcpSessionConfigSelection({
@@ -1484,12 +1481,12 @@ function WorkspaceChatLanding({
     () =>
       selectedConfig?.cliType && selectedConfig.agentType
         ? {
-            cliType: selectedConfig.cliType,
-            agentType: selectedConfig.agentType,
-            // The selected agent's machine — lets the `$` menu surface that
-            // machine's global skills even for GitHub / plain (chat) contexts.
-            ...(selectedAgent?.machineId ? { machineId: selectedAgent.machineId } : {}),
-          }
+          cliType: selectedConfig.cliType,
+          agentType: selectedConfig.agentType,
+          // The selected agent's machine — lets the `$` menu surface that
+          // machine's global skills even for GitHub / plain (chat) contexts.
+          ...(selectedAgent?.machineId ? { machineId: selectedAgent.machineId } : {}),
+        }
         : undefined,
     [selectedConfig?.cliType, selectedConfig?.agentType, selectedAgent?.machineId]
   );
@@ -1525,25 +1522,25 @@ function WorkspaceChatLanding({
     },
     thinkEffort: cycleThinkEffortSelector
       ? {
-          values: cycleThinkEffortSelector.options.map((option) => option.value),
-          current:
-            typeof cycleThinkEffortCurrent === 'string'
-              ? cycleThinkEffortCurrent
-              : cycleThinkEffortSelector.currentValue,
-          onSelect: (value) => handleConfigOptionChange(cycleThinkEffortSelector.configId, value),
-        }
+        values: cycleThinkEffortSelector.options.map((option) => option.value),
+        current:
+          typeof cycleThinkEffortCurrent === 'string'
+            ? cycleThinkEffortCurrent
+            : cycleThinkEffortSelector.currentValue,
+        onSelect: (value) => handleConfigOptionChange(cycleThinkEffortSelector.configId, value),
+      }
       : null,
     provider: selectedAgent
       ? {
-          values: cycleProviderSelections.map((selection) => selection.agentId),
-          current: selectedAgent.agentId,
-          onSelect: (agentId) => {
-            const nextSelection = cycleProviderSelections.find(
-              (selection) => selection.agentId === agentId
-            );
-            if (nextSelection) setSelectedAgent(nextSelection);
-          },
-        }
+        values: cycleProviderSelections.map((selection) => selection.agentId),
+        current: selectedAgent.agentId,
+        onSelect: (agentId) => {
+          const nextSelection = cycleProviderSelections.find(
+            (selection) => selection.agentId === agentId
+          );
+          if (nextSelection) setSelectedAgent(nextSelection);
+        },
+      }
       : null,
   });
 
@@ -1676,15 +1673,15 @@ function WorkspaceChatLanding({
       {
         description: showProjectSharing
           ? t(
-              'machinePairing.privateByDefault',
-              'This machine is private by default. Share it from device settings when teammates should be able to use it.'
-            )
+            'machinePairing.privateByDefault',
+            'This machine is private by default. Share it from device settings when teammates should be able to use it.'
+          )
           : undefined,
         action: showProjectSharing
           ? {
-              label: t('machinePairing.openDeviceSettings', 'Open device settings'),
-              onClick: () => openSettings('devices'),
-            }
+            label: t('machinePairing.openDeviceSettings', 'Open device settings'),
+            onClick: () => openSettings('machines'),
+          }
           : undefined,
       }
     );
@@ -1988,13 +1985,13 @@ function WorkspaceChatLanding({
       project_kind: contextType,
       repo_id_hash: contextType === 'github' ? hashAnalyticsId(selectedRepo) : null,
       local_project_id:
-        contextType === 'local' ? (selectedLocalProject?.localProjectId ?? null) : null,
-      machine_id: contextType === 'local' ? (selectedLocalProject?.machineId ?? null) : null,
+        contextType === 'local' ? selectedLocalProject?.localProjectId ?? null : null,
+      machine_id: contextType === 'local' ? selectedLocalProject?.machineId ?? null : null,
       has_git_branch:
         contextType === 'local'
           ? localGitStateError
             ? null
-            : (activeLocalGitState?.git ?? null)
+            : activeLocalGitState?.git ?? null
           : true,
     });
   }, [
@@ -2540,12 +2537,12 @@ function WorkspaceChatLanding({
         workspace_id: workspaceId ?? null,
         machine_id:
           contextType === 'local'
-            ? (selectedLocalProject?.machineId ?? selectedAgent?.machineId ?? null)
-            : (selectedAgent?.machineId ?? null),
+            ? selectedLocalProject?.machineId ?? selectedAgent?.machineId ?? null
+            : selectedAgent?.machineId ?? null,
         agent_config_id: selectedAgent?.agentId ?? null,
         repo_id_hash: contextType === 'github' ? hashAnalyticsId(selectedRepo) : null,
         local_project_id:
-          contextType === 'local' ? (selectedLocalProject?.localProjectId ?? null) : null,
+          contextType === 'local' ? selectedLocalProject?.localProjectId ?? null : null,
         ...extra,
       });
     },
@@ -2591,7 +2588,7 @@ function WorkspaceChatLanding({
       contextType === 'local'
         ? selectedMachineId && isSelectedMachineValid
           ? selectedMachineId
-          : (selectedLocalProject?.machineId ?? null)
+          : selectedLocalProject?.machineId ?? null
         : selectedMachineId && isSelectedMachineValid
           ? selectedMachineId
           : null;
@@ -2701,8 +2698,8 @@ function WorkspaceChatLanding({
         prompt: promptPayload,
         cliType: selectedConfig.cliType,
         agentType: selectedConfig.agentType,
-        modeId: modeOptions.length > 0 ? (selectedModeId ?? undefined) : undefined,
-        modelId: modelOptions.length > 0 ? (selectedModelId ?? undefined) : undefined,
+        modeId: modeOptions.length > 0 ? selectedModeId ?? undefined : undefined,
+        modelId: modelOptions.length > 0 ? selectedModelId ?? undefined : undefined,
         configOptionValues,
         issuePRMentions,
       });
@@ -2934,11 +2931,11 @@ function WorkspaceChatLanding({
             ...(hidesBillingUi
               ? {}
               : {
-                  action: {
-                    label: t('sessions.freeTurnLimitUpgrade'),
-                    onClick: () => openSettings('billing'),
-                  },
-                }),
+                action: {
+                  label: t('sessions.freeTurnLimitUpgrade'),
+                  onClick: () => openSettings('billing'),
+                },
+              }),
           });
         }
       } else {
@@ -2970,7 +2967,7 @@ function WorkspaceChatLanding({
     [localProjectMachineId, selectedMachineId, isSelectedMachineValid]
   );
   const localProjectSelectorMachineId =
-    contextType === 'local' ? (selectedMachineId ?? localProjectMachineId) : null;
+    contextType === 'local' ? selectedMachineId ?? localProjectMachineId : null;
   const localProjectSelectorEmptyText = t(
     getEmptyLocalProjectsMessageKey(Boolean(localProjectSelectorMachineId))
   );
@@ -3010,9 +3007,9 @@ function WorkspaceChatLanding({
   ) : null;
   const localGitStateRetryNode =
     contextType === 'local' &&
-    selectedLocalProject &&
-    localGitStateError &&
-    !loadingLocalGitState ? (
+      selectedLocalProject &&
+      localGitStateError &&
+      !loadingLocalGitState ? (
       <Tooltip delayDuration={300}>
         <TooltipTrigger asChild>
           <Button
@@ -3036,7 +3033,7 @@ function WorkspaceChatLanding({
     ? t('chat.workdir.checkingGit', 'Checking whether this project is a git repository.')
     : activeLocalGitState?.git === false
       ? t('chat.workdir.notGitRepo', 'This local project is not a git repository.')
-      : (localGitStateError ?? undefined);
+      : localGitStateError ?? undefined;
 
   const topWorktreeNode =
     contextType === 'github' && selectedRepo ? (
@@ -3129,9 +3126,9 @@ function WorkspaceChatLanding({
         latestMessageAtByLocalProject: mobileSheetRecency.byProject,
         projectSharing: showProjectSharing
           ? {
-              currentUserId: userId ?? null,
-              machineAccessByMachineId: accessByMachineId,
-            }
+            currentUserId: userId ?? null,
+            machineAccessByMachineId: accessByMachineId,
+          }
           : undefined,
       }),
     [
@@ -3271,8 +3268,7 @@ function WorkspaceChatLanding({
           <span className="truncate">
             {isInitialDataLoading
               ? t('chat.machineSelector.loading', 'Loading machine...')
-              : (mobileSheetSelectedMachineLabel ??
-                t('chat.machineSelector.placeholder', 'Machine'))}
+              : mobileSheetSelectedMachineLabel ?? t('chat.machineSelector.placeholder', 'Machine')}
           </span>
         </>
       }
@@ -3534,11 +3530,11 @@ function WorkspaceChatLanding({
       githubDisabled={
         !hasGitHubRepos
           ? {
-              label: t(
-                'chat.mobileHome.emptyGitHubProjects',
-                '当前 workspace 没有已授权的 GitHub 仓库'
-              ),
-            }
+            label: t(
+              'chat.mobileHome.emptyGitHubProjects',
+              '当前 workspace 没有已授权的 GitHub 仓库'
+            ),
+          }
           : undefined
       }
     />
@@ -3565,7 +3561,7 @@ function WorkspaceChatLanding({
   };
 
   const handleGoToAgentSettings = () => {
-    openSettings('agent-config');
+    openSettings('agents');
   };
 
   // ── Mention source ──
@@ -3585,7 +3581,7 @@ function WorkspaceChatLanding({
       selectedMachineId && isSelectedMachineValid
         ? selectedMachineId
         : contextType === 'local'
-          ? (selectedLocalProject?.machineId ?? null)
+          ? selectedLocalProject?.machineId ?? null
           : null;
     return candidateMachineId === selectedAgent.machineId ? candidateMachineId : null;
   }, [
@@ -3682,11 +3678,11 @@ function WorkspaceChatLanding({
     selectedRepo,
     workspaceId,
   ]);
-  const expandSkillMentionsForPrompt = useSkillMentionPromptExpansion(
-    mentionSource,
+  const expandSkillMentionsForPrompt = useMentionPromptExpansion({
+    source: mentionSource,
     skillAgent,
-    prompt
-  );
+    promptValue: prompt,
+  });
   const promptPlaceholder = t(
     getChatComposerPromptPlaceholderKey({ mentionSource, availableCommands })
   );
@@ -3730,10 +3726,10 @@ function WorkspaceChatLanding({
     selectedMachineProjectStatus === null
       ? null
       : t(
-          getEmptyLocalProjectsMessageKey(
-            selectedMachineProjectStatus === 'no-projects-on-selected-machine'
-          )
-        );
+        getEmptyLocalProjectsMessageKey(
+          selectedMachineProjectStatus === 'no-projects-on-selected-machine'
+        )
+      );
   const visibleComposerStatus = getChatLandingVisibleComposerStatus({
     contextType,
     composerStatus,
@@ -4168,7 +4164,7 @@ function WorkspaceChatLanding({
           isPrivateProject:
             showProjectSharing && kind === 'local' && localProjectKey
               ? accessByMachineId.get(session.machineId)?.sharedWithTeam !== true ||
-                visibleLocalProjectAccess.get(localProjectKey)?.sharedWithTeam !== true
+              visibleLocalProjectAccess.get(localProjectKey)?.sharedWithTeam !== true
               : false,
           /* Worktree glyph only meaningful for local-project sessions;
              GitHub rows already use the owner avatar as their leading icon. */
@@ -4182,7 +4178,7 @@ function WorkspaceChatLanding({
              without breaking the row). */
           owner:
             teamMembersByUserId != null && session.userId
-              ? (teamMembersByUserId.get(session.userId) ?? { id: session.userId })
+              ? teamMembersByUserId.get(session.userId) ?? { id: session.userId }
               : undefined,
         };
       })
@@ -4306,31 +4302,31 @@ function WorkspaceChatLanding({
     const multiPills: MultiSelectPill[] = [
       ...(repoOptions.length > 0
         ? ([
-            {
-              kind: 'multi',
-              id: 'repo',
-              label: t('chat.mobileHome.filters.repo.label', 'Repository'),
-              options: repoOptions,
-              defaultIds: new Set<string>(allRepoIds),
-              selectedIds: new Set<string>(allRepoIds.filter((id) => !chatExcludedRepos.has(id))),
-              onChange: (next) => setChatExcludedRepos(invertSelection(allRepoIds, next)),
-            },
-          ] satisfies MultiSelectPill[])
+          {
+            kind: 'multi',
+            id: 'repo',
+            label: t('chat.mobileHome.filters.repo.label', 'Repository'),
+            options: repoOptions,
+            defaultIds: new Set<string>(allRepoIds),
+            selectedIds: new Set<string>(allRepoIds.filter((id) => !chatExcludedRepos.has(id))),
+            onChange: (next) => setChatExcludedRepos(invertSelection(allRepoIds, next)),
+          },
+        ] satisfies MultiSelectPill[])
         : []),
       ...(projectOptions.length > 0
         ? ([
-            {
-              kind: 'multi',
-              id: 'project',
-              label: t('chat.mobileHome.filters.project.label', 'Project'),
-              options: projectOptions,
-              defaultIds: new Set<string>(allProjectIds),
-              selectedIds: new Set<string>(
-                allProjectIds.filter((id) => !chatExcludedProjects.has(id))
-              ),
-              onChange: (next) => setChatExcludedProjects(invertSelection(allProjectIds, next)),
-            },
-          ] satisfies MultiSelectPill[])
+          {
+            kind: 'multi',
+            id: 'project',
+            label: t('chat.mobileHome.filters.project.label', 'Project'),
+            options: projectOptions,
+            defaultIds: new Set<string>(allProjectIds),
+            selectedIds: new Set<string>(
+              allProjectIds.filter((id) => !chatExcludedProjects.has(id))
+            ),
+            onChange: (next) => setChatExcludedProjects(invertSelection(allProjectIds, next)),
+          },
+        ] satisfies MultiSelectPill[])
         : []),
       {
         kind: 'multi',
@@ -4363,21 +4359,21 @@ function WorkspaceChatLanding({
       },
       ...(machineOptions.length > 1
         ? ([
-            {
-              kind: 'multi',
-              id: 'machine',
-              label: t('chat.mobileHome.filters.machine.label', '机器'),
-              options: machineOptions,
-              defaultIds: new Set<string>(allMachineIds),
-              selectedIds: new Set<string>(
-                allMachineIds.filter((id) => !chatExcludedMachines.has(id as MachineId))
+          {
+            kind: 'multi',
+            id: 'machine',
+            label: t('chat.mobileHome.filters.machine.label', '机器'),
+            options: machineOptions,
+            defaultIds: new Set<string>(allMachineIds),
+            selectedIds: new Set<string>(
+              allMachineIds.filter((id) => !chatExcludedMachines.has(id as MachineId))
+            ),
+            onChange: (next) =>
+              setChatExcludedMachines(
+                invertSelection(allMachineIds as MachineId[], next) as Set<MachineId>
               ),
-              onChange: (next) =>
-                setChatExcludedMachines(
-                  invertSelection(allMachineIds as MachineId[], next) as Set<MachineId>
-                ),
-            },
-          ] satisfies MultiSelectPill[])
+          },
+        ] satisfies MultiSelectPill[])
         : []),
     ];
 
@@ -4484,7 +4480,7 @@ function WorkspaceChatLanding({
   const showMobileInbox = showProjectSharing && inboxFeatureEnabled;
   const effectiveMobileHomeTab: MobileHomeTab =
     (selectedMobileHomeTab === 'tasks' && !tasksFeatureEnabled) ||
-    (selectedMobileHomeTab === 'inbox' && !showMobileInbox)
+      (selectedMobileHomeTab === 'inbox' && !showMobileInbox)
       ? 'chat'
       : selectedMobileHomeTab;
   useEffect(() => {
@@ -4511,23 +4507,23 @@ function WorkspaceChatLanding({
               description:
                 privateCount > 0
                   ? t(
-                      'inbox.sharingReview.privateResources',
-                      '{{count}} private machine or project resources are only visible to you.',
-                      { count: privateCount }
-                    )
+                    'inbox.sharingReview.privateResources',
+                    '{{count}} private machine or project resources are only visible to you.',
+                    { count: privateCount }
+                  )
                   : sharingReviewState.teamLooksEmpty
                     ? t(
-                        'inbox.sharingReview.emptyTeam',
-                        'Nothing is visible in this team workspace yet. Ask a teammate to share a machine or project if you expected to see their conversations.'
-                      )
+                      'inbox.sharingReview.emptyTeam',
+                      'Nothing is visible in this team workspace yet. Ask a teammate to share a machine or project if you expected to see their conversations.'
+                    )
                     : t(
-                        'inbox.sharingReview.noLocalResources',
-                        'No team machines or local projects are visible to you. A teammate may need to share them before their local conversations appear.'
-                      ),
+                      'inbox.sharingReview.noLocalResources',
+                      'No team machines or local projects are visible to you. A teammate may need to share them before their local conversations appear.'
+                    ),
               updatedAt: item.updatedAt,
               unread: item.readAt === undefined,
               actionLabel:
-                sharingReviewState.actionTarget === 'devices'
+                sharingReviewState.actionTarget === 'machines'
                   ? t('inbox.sharingReview.actionDevices', 'Review devices')
                   : sharingReviewState.actionTarget === 'projects'
                     ? t('inbox.sharingReview.action', 'Review projects')
@@ -4544,8 +4540,8 @@ function WorkspaceChatLanding({
                 ? t('inbox.permission.question', 'The agent has a question for you.')
                 : item.toolLabel
                   ? t('inbox.permission.tool', 'Approval needed: {{tool}}', {
-                      tool: item.toolLabel,
-                    })
+                    tool: item.toolLabel,
+                  })
                   : t('inbox.permission.default', 'The agent is waiting for your approval.'),
               updatedAt: item.updatedAt,
               unread: item.readAt === undefined,
@@ -4579,8 +4575,8 @@ function WorkspaceChatLanding({
       if (!item) return;
       void markInboxItemRead({ itemId: item._id });
       if (item.kind === 'sharing_review') {
-        if (sharingReviewState.actionTarget === 'devices') {
-          openSettings('devices');
+        if (sharingReviewState.actionTarget === 'machines') {
+          openSettings('machines');
         } else if (sharingReviewState.actionTarget === 'projects') {
           setSelectedMobileHomeTab('projects');
         }
@@ -4820,7 +4816,7 @@ function WorkspaceChatLanding({
   const projectUrlMachineId = preSelectedMachine ? (preSelectedMachine as MachineId) : null;
   const projectUrlProjectId = preSelectedProject ? (preSelectedProject as LocalProjectId) : null;
   const projectUrlRepoFullName =
-    projectUrlMachineId && projectUrlProjectId ? null : (preSelectedRepo ?? null);
+    projectUrlMachineId && projectUrlProjectId ? null : preSelectedRepo ?? null;
   const mobileProjectContext = useMemo<MobileProjectContext | null>(() => {
     if (!isMobile) return null;
     if (projectUrlMachineId && projectUrlProjectId) {
@@ -4922,17 +4918,17 @@ function WorkspaceChatLanding({
       } else {
         const transport = mobileProjectUsesLocalIpc
           ? createLocalProjectIpcFileTransport({
-              workspaceId,
-              localProjectId: mobileProjectContext.projectId as LocalProjectId,
-            })
+            workspaceId,
+            localProjectId: mobileProjectContext.projectId as LocalProjectId,
+          })
           : workspaceRuntime && userId
             ? createLocalProjectRpcFileTransport({
-                workspaceId,
-                machineId: mobileProjectContext.machineId as MachineId,
-                localProjectId: mobileProjectContext.projectId as LocalProjectId,
-                requestedByUserId: userId,
-                requestLocalProjectControl: workspaceRuntime.requestLocalProjectControl,
-              })
+              workspaceId,
+              machineId: mobileProjectContext.machineId as MachineId,
+              localProjectId: mobileProjectContext.projectId as LocalProjectId,
+              requestedByUserId: userId,
+              requestLocalProjectControl: workspaceRuntime.requestLocalProjectControl,
+            })
             : null;
         provider = transport ? new LocalProjectRpcFileProvider({ transport }) : null;
       }
@@ -5056,7 +5052,7 @@ function WorkspaceChatLanding({
              Same team-scope-only behavior. */
           owner:
             teamMembersByUserId != null && session.userId
-              ? (teamMembersByUserId.get(session.userId) ?? { id: session.userId })
+              ? teamMembersByUserId.get(session.userId) ?? { id: session.userId }
               : undefined,
         };
       });
@@ -5305,18 +5301,18 @@ function WorkspaceChatLanding({
         <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
           {sharingReviewState.teamLooksEmpty
             ? t(
-                'inbox.sharingReview.emptyTeam',
-                'Nothing is visible in this team workspace yet. Ask a teammate to share a machine or project if you expected to see their conversations.'
-              )
+              'inbox.sharingReview.emptyTeam',
+              'Nothing is visible in this team workspace yet. Ask a teammate to share a machine or project if you expected to see their conversations.'
+            )
             : sharingReviewState.privateMachineCount + sharingReviewState.privateProjectCount === 0
               ? t(
-                  'inbox.sharingReview.noLocalResources',
-                  'No team machines or local projects are visible to you. A teammate may need to share them before their local conversations appear.'
-                )
+                'inbox.sharingReview.noLocalResources',
+                'No team machines or local projects are visible to you. A teammate may need to share them before their local conversations appear.'
+              )
               : t(
-                  'inbox.sharingReview.landing',
-                  'Private machines and projects are only visible to you. Share the ones your teammates should be able to use.'
-                )}
+                'inbox.sharingReview.landing',
+                'Private machines and projects are only visible to you. Share the ones your teammates should be able to use.'
+              )}
         </p>
         <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
           {sharingReviewState.actionTarget ? (
@@ -5328,8 +5324,8 @@ function WorkspaceChatLanding({
                 openSettings(sharingReviewState.actionTarget ?? 'projects');
               }}
             >
-              {sharingReviewState.actionTarget === 'devices'
-                ? t('inbox.sharingReview.actionDevices', 'Review devices')
+              {sharingReviewState.actionTarget === 'machines'
+                ? t('inbox.sharingReview.actionDevices', 'Review machines')
                 : t('inbox.sharingReview.action', 'Review projects')}
             </button>
           ) : null}
@@ -5952,7 +5948,7 @@ function WorkspaceChatLanding({
         status={machinePairingStatus}
         machineId={pairedMachineId}
         machineName={observedMachinePairing?.machineName}
-        command={machinePairingStatus === 'pending' ? (machinePairing?.command ?? null) : null}
+        command={machinePairingStatus === 'pending' ? machinePairing?.command ?? null : null}
         expiresAt={machinePairing?.expiresAt ?? null}
         creating={machinePairingCreating}
         createError={machinePairingCreateError}
@@ -5961,7 +5957,7 @@ function WorkspaceChatLanding({
           if (!machinePairing) return;
           await cancelMachinePairingRequest({ requestId: machinePairing.requestId });
         }}
-        onConfigureAgents={() => openSettings('agent-config')}
+        onConfigureAgents={() => openSettings('agents')}
       />
     </>
   );

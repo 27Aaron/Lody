@@ -97,6 +97,8 @@ export interface ChatComposerProps {
      `$` menu surface that machine's global skills even for GitHub / plain-agent
      chats (not just local-project chats). */
   skillAgent?: SkillMentionAgent;
+  /** Dropped from the `@session:` category — a session never references itself. */
+  currentSessionId?: string | null;
   promptId?: string;
   promptValue: string;
   onPromptChange: (value: string) => void;
@@ -204,6 +206,7 @@ export function ChatComposer({
   mentionSource,
   availableCommands,
   skillAgent,
+  currentSessionId,
   promptId,
   promptValue,
   onPromptChange,
@@ -259,7 +262,6 @@ export function ChatComposer({
   // (desktop keeps its 2-line default); it still auto-grows as the user types.
   const singleLineMobile = isMobile && variant === 'session';
   const effectivePromptRows = singleLineMobile ? 1 : promptRows;
-  const skillMentionPlacement = isLanding ? 'caret' : 'above-input';
   // Desktop-only ⌘L discovery hint in the empty composer. Requires a fine pointer
   // AND non-mobile layout so phone frames / narrow viewports never show a
   // keyboard shortcut that doesn't exist on touch. Hidden once focused or typing.
@@ -810,7 +812,7 @@ export function ChatComposer({
                 mentionSource={mentionSource}
                 availableCommands={availableCommands}
                 skillAgent={skillAgent}
-                skillMentionPlacement={skillMentionPlacement}
+                currentSessionId={currentSessionId}
                 value={promptValue}
                 onValueChange={onPromptChange}
                 externalMentions={pastedTextMentions}
@@ -907,7 +909,7 @@ export function ChatComposer({
               mentionSource={mentionSource}
               availableCommands={availableCommands}
               skillAgent={skillAgent}
-              skillMentionPlacement={skillMentionPlacement}
+              currentSessionId={currentSessionId}
               value={promptValue}
               onValueChange={onPromptChange}
               externalMentions={pastedTextMentions}

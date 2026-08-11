@@ -33,9 +33,38 @@ interface ItemData {
   value: string;
   disabled: boolean;
   onMentionSelect?: () => void;
+
+  /**
+   * Literal text written into the input when this item is committed.
+   *
+   * It replaces the whole span from the trigger character to the caret, so it
+   * must carry its own leading marker (`@src/foo.ts`, `#123`). Defaults to
+   * `${trigger}${label}`.
+   */
+  insertText?: string;
+
+  /**
+   * Marks the item as a navigation step rather than a mention: selecting it
+   * rewrites the trigger span to this text and keeps the menu open, without
+   * recording a mention range or a selected value. Used to descend into a
+   * directory (`@src/`) or into a mention category (`@issue:`).
+   *
+   * Like `insertText`, it replaces the span from the trigger and carries its
+   * own leading marker.
+   */
+  navigateText?: string;
+
+  /** Mention kind recorded on the committed range. Defaults to `mention`. */
+  kind?: MentionKind;
 }
 
-type MentionKind = 'mention' | 'pasted_text';
+/**
+ * `pasted_text` is the one kind the primitive itself branches on — an external
+ * range it renders but never owns. Everything else is an opaque tag the menu
+ * chooses, recorded on the range and echoed as `data-mention-kind`, so adding a
+ * mention category does not touch this file.
+ */
+type MentionKind = 'mention' | 'pasted_text' | (string & {});
 
 interface Mention extends Omit<ItemData, 'label' | 'disabled'> {
   start: number;
@@ -79,6 +108,14 @@ interface MentionContextValue {
   mentions: Mention[];
   onMentionsChange: React.Dispatch<React.SetStateAction<Mention[]>>;
   onMentionAdd: (value: string, triggerIndex: number, options?: { commit?: boolean }) => void;
+  /**
+   * Pop the text between the trigger and the caret back to the bare trigger,
+   * undoing one drill-down step. Returns false when there is no trigger to pop
+   * back to. The caller decides *when* this applies (Backspace on a namespace
+   * prefix, the menu's Back button); the transaction itself lives here because
+   * it has to interleave the controlled value commit with caret restoration.
+   */
+  onNavigateBack: () => boolean;
   onMentionsRemove: (mentionsToRemove: Mention[]) => void;
   onMentionClick?: (mention: Mention) => void;
   pendingSelection: MentionSelectionRange | null;
@@ -324,6 +361,13 @@ const MentionRoot = React.forwardRef<RootElement, MentionRootProps>((props, forw
     itemMap,
     onFilter,
     exactMatch,
+    // Menus rank and slice their own candidates before rendering them, so the
+    // built-in scorer must not decide visibility on top of that. Left on, it
+    // matched the search term against each item's `value`, which hid every row
+    // whose payload happened not to contain the term — an issue row (`#3312`)
+    // under a text query — and a hidden row renders null, so its collection
+    // entry lost its node and arrow-key movement stopped at the first group.
+    manualFiltering: true,
     onCallback: (itemCount) => {
       if (autoCloseOnEmpty && itemCount === 0) {
         // Close the menu if no items match the filter
@@ -373,16 +417,19 @@ const MentionRoot = React.forwardRef<RootElement, MentionRootProps>((props, forw
       const input = inputRef.current;
 
       const selectedItem = getEnabledItems().find((item) => item.value === payloadValue);
-      const rawLabel = selectedItem?.label ?? payloadValue;
-      const isDirectoryToken = payloadValue.endsWith('/');
-      const shouldCommitDirectory = Boolean(options?.commit);
-      const treatAsDirectory = isDirectoryToken && !shouldCommitDirectory;
-      // When committing a directory as a final mention, strip the trailing slash
-      // so the displayed text reads e.g. `@src/components` instead of `@src/components/`.
-      const mentionLabel =
-        isDirectoryToken && !treatAsDirectory ? rawLabel.replace(/\/+$/, '') : rawLabel;
-      const mentionText = `${trigger}${mentionLabel}`;
-      const suffix = treatAsDirectory ? '' : ' ';
+      // A navigation item rewrites the trigger span and keeps the menu open
+      // instead of committing. `commit` overrides it, so pressing Enter on a
+      // candidate the user already typed out inserts it for real.
+      const navigateText = options?.commit ? undefined : selectedItem?.navigateText;
+      const isNavigating = navigateText !== undefined;
+      // `navigateText`/`insertText` replace everything from the trigger to the
+      // caret and carry their own marker; the fallback re-derives it from the
+      // active trigger.
+      const mentionText =
+        navigateText ??
+        selectedItem?.insertText ??
+        `${trigger}${selectedItem?.label ?? payloadValue}`;
+      const suffix = isNavigating ? '' : ' ';
       const sourceValue = input?.value ?? inputValue;
       const beforeTrigger = sourceValue.slice(0, triggerIndex);
       const insertionPoint = input?.selectionStart ?? triggerIndex;
@@ -397,7 +444,7 @@ const MentionRoot = React.forwardRef<RootElement, MentionRootProps>((props, forw
         value: payloadValue,
         start: triggerIndex,
         end: triggerIndex + mentionText.length,
-        kind: 'mention',
+        kind: selectedItem?.kind ?? 'mention',
       };
 
       setMentions((prev) => {
@@ -411,12 +458,12 @@ const MentionRoot = React.forwardRef<RootElement, MentionRootProps>((props, forw
           }
           return mention;
         });
-        if (treatAsDirectory) return updatedMentions;
+        if (isNavigating) return updatedMentions;
         return [...updatedMentions, newMention].sort((a, b) => a.start - b.start);
       });
 
       setInputValue(newValue);
-      if (!treatAsDirectory) {
+      if (!isNavigating) {
         selectedItem?.onMentionSelect?.();
         setValue((prev) => {
           const next = [...(prev ?? [])];
@@ -435,8 +482,12 @@ const MentionRoot = React.forwardRef<RootElement, MentionRootProps>((props, forw
         expectedValue: newValue,
       });
 
-      if (treatAsDirectory) {
-        filterStore.search = mentionLabel;
+      if (isNavigating) {
+        // Keep the filter in step with what now sits between the trigger and the
+        // caret, so the menu re-filters for the level we just descended into.
+        filterStore.search = mentionText.startsWith(trigger)
+          ? mentionText.slice(trigger.length)
+          : mentionText;
         setOpen(true);
         setHighlightedItem(null);
         requestAnimationFrame(() => onItemsFilter());
@@ -458,6 +509,26 @@ const MentionRoot = React.forwardRef<RootElement, MentionRootProps>((props, forw
       onItemsFilter,
     ]
   );
+
+  const onNavigateBack = React.useCallback(() => {
+    const input = inputRef.current;
+    if (!input) return false;
+    const caretPosition = input.selectionStart ?? input.value.length;
+    const triggerIndex = input.value.lastIndexOf(trigger, caretPosition);
+    if (triggerIndex === -1) return false;
+
+    const caret = triggerIndex + trigger.length;
+    const nextValue = input.value.slice(0, caret) + input.value.slice(caretPosition);
+    setInputValue(nextValue);
+    // Same reason as `onMentionAdd`: MentionInput restores the caret once it has
+    // rendered this exact value, because touching the DOM selection here races
+    // the controlled value commit.
+    setPendingSelection({ start: caret, end: caret, expectedValue: nextValue });
+    filterStore.search = '';
+    setHighlightedItem(null);
+    requestAnimationFrame(() => onItemsFilter());
+    return true;
+  }, [filterStore, onItemsFilter, setInputValue, trigger]);
 
   const onMentionsRemove = React.useCallback(
     (mentionsToRemove: Mention[]) => {
@@ -530,6 +601,7 @@ const MentionRoot = React.forwardRef<RootElement, MentionRootProps>((props, forw
       mentions={mentions}
       onMentionsChange={setMentions}
       onMentionAdd={onMentionAdd}
+      onNavigateBack={onNavigateBack}
       onMentionsRemove={onMentionsRemove}
       onMentionClick={onMentionClick}
       pendingSelection={pendingSelection}

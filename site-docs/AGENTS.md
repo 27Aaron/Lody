@@ -37,7 +37,7 @@
   height/opacity for promo banner, strike-through reference, and note swap.
 - Framework boundary files live under `src/`: `src/router.tsx`,
   `src/routes/__root.tsx`, file routes in `src/routes/**`, and shared route/page
-  adapters in `src/site-pages.tsx`. Do not add new route logic under `app/`;
+  adapters in `src/site-pages/**`. Do not add new route logic under `app/`;
   `app/` is now CSS-only.
 - Content is Fumadocs MDX. `fumadocs-mdx` generates `.source/`, and
   `scripts/site-paths.mjs` enumerates prerender paths for docs/blog/changelog.
@@ -137,7 +137,17 @@
   immediately; (3) first render waits on `renderer.compileAsync` (`ready` gate)
   so shader compilation never blocks the main thread. Tune/downgrade rebuilds
   stay synchronous on the main thread.
-- `landing-app-preview.tsx` is the live product mock for the center stage.
+- `landing-app-preview.tsx` is the live product mock for the center stage, and the
+  landing's heaviest module (real product UI + composer/markdown/katex behind it).
+  `underwater-experience.tsx` mounts it via `lazy()` — deliberately NOT module-eval
+  `import()` like the background, so hero + WebGL keep first-paint bandwidth. The
+  `previewArmed` latch fires one viewport ahead (idle fallback for non-scrollers)
+  and never flips back, so the frame is filled before arrival and ghost scripts
+  never remount. Tab durations + the demo id union live in
+  `landing-demo-durations.ts`; importing them from the preview would pull it back
+  into the critical chunk. The stage frame carries `aria-hidden` + `inert` — the
+  replica is `pointer-events: none`, but its real buttons/session rows otherwise
+  stayed in the a11y tree and tab order.
   `landing-control-plane.tsx` remains an unmounted reference component on disk.
 - The desktop session shell must track `packages/components/src/components/sessions`
   1:1 — read that directory's `AGENTS.md` before touching it. Current shape:
@@ -175,12 +185,18 @@ bg-sidebar`) whose `SessionSidePanelTabBar` carries Files / All Changes /
 
 - `src/routes/**` maps URLs to TanStack routes. Keep route files thin: define
   `createFileRoute`, `loader`, `head`, and component wiring only.
-- `src/site-pages.tsx` adapts reusable page components to TanStack loaders/head.
-  Put shared route data and locale logic here; do not import `.source/server`
-  from this client-shared module.
+- `src/site-pages/<domain>.tsx` adapts reusable page components to TanStack
+  loaders/head — one module per domain (`landing`, `docs`, `blog`, `changelog`,
+  `pricing`, `download`, `legal`, `not-found`). Do not reintroduce a barrel that
+  re-exports them: every route file imports this layer, so a barrel puts the docs
+  layout, blog, changelog and pricing on the landing's chunk. `SiteNotFound` has
+  its own module for the same reason — `__root.tsx` is on every page.
+  `src/site-pages/shared.ts` holds `SiteLocale`, `localeCode` and the route-data
+  types and must stay free of page-component imports. Do not import
+  `.source/server` from these client-shared modules.
 - `lib/docs.server.ts` is the server-only docs lookup layer for Fumadocs page
   metadata/tree/toc. Docs route files call it through `src/docs-loader.ts`, and
-  `src/site-pages.tsx` renders MDX through `.source/browser` client loaders.
+  `src/site-pages/docs.tsx` renders MDX through `.source/browser` client loaders.
 - `lib/blog.server.ts` and `lib/changelog.server.ts` are the server-only
   Fumadocs lookup layers for those collections. `lib/blog.ts` and
   `lib/changelog.ts` must stay browser-safe: types, formatting, and pure

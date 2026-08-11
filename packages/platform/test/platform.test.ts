@@ -62,6 +62,7 @@ describe('cloud operation descriptors', () => {
         kind: 'query',
         capability: 'billing',
         name: 'billing:getPlan',
+        access: 'authenticated',
       }
     );
     expect(
@@ -70,10 +71,16 @@ describe('cloud operation descriptors', () => {
       kind: 'mutation',
       capability: 'githubIntegration',
       name: 'github:setEnabled',
+      access: 'authenticated',
     });
     expect(
       defineCloudAction<Record<string, never>, string>('billing', 'billing:createCheckout')
-    ).toEqual({ kind: 'action', capability: 'billing', name: 'billing:createCheckout' });
+    ).toEqual({
+      kind: 'action',
+      capability: 'billing',
+      name: 'billing:createCheckout',
+      access: 'authenticated',
+    });
   });
 
   it('rejects malformed names at assembly instead of deferring the error to a request', () => {

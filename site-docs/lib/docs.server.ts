@@ -1,4 +1,4 @@
-import type { DocsRouteData, SiteLocale } from '@site/src/site-pages';
+import type { DocsRouteData, SiteLocale } from '@site/src/site-pages/shared';
 import { notFound } from '@tanstack/react-router';
 import { renderToString } from 'react-dom/server.edge';
 import { sourceEn, sourceZh } from './source';

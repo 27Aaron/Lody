@@ -584,17 +584,29 @@ function postSessionControlOverSocket(
                     parseSessionControlEnvelope(
                       { ok: status >= 200 && status < 300, status },
                       payload
+                    ).pipe(
+                      Effect.match({
+                        onFailure: (error) => ({ ok: false as const, error }),
+                        onSuccess: (legacyResponses) => ({
+                          ok: true as const,
+                          responses: legacyResponses,
+                        }),
+                      })
                     )
                   ).then(
-                    (legacyResponses) => {
-                      for (const controlResponse of legacyResponses) {
+                    (result) => {
+                      if (!result.ok) {
+                        settleWith(() => reject(result.error));
+                        return;
+                      }
+                      for (const controlResponse of result.responses) {
                         try {
                           options.onResponse?.(controlResponse);
                         } catch {
                           // Observers cannot break the request transport.
                         }
                       }
-                      settleWith(() => resolve(legacyResponses));
+                      settleWith(() => resolve(result.responses));
                     },
                     (error) => settleWith(() => reject(error))
                   );

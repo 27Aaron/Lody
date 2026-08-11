@@ -1,4 +1,4 @@
-import type { DocsRouteData, SiteLocale } from '@site/src/site-pages';
+import type { DocsRouteData, SiteLocale } from '@site/src/site-pages/shared';
 import { createServerFn } from '@tanstack/react-start';
 import { staticFunctionMiddleware } from '@tanstack/start-static-server-functions';
 

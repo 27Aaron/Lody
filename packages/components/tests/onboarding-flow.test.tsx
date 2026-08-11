@@ -25,6 +25,7 @@ vi.mock('convex/react', () => ({
 }));
 
 vi.mock('../src/hooks/use-recoverable-convex-query', () => ({
+  usePublicConvexQuery: () => undefined,
   useRecoverableConvexQuery: () => [],
 }));
 
@@ -108,6 +109,8 @@ describe('desktop onboarding flow', () => {
     store.set(runtimeAtom, {
       workspaceId,
       workspaceSlug: 'workspace-1',
+      getMachineAcpBinaryProgress: () => null,
+      subscribeMachineAcpBinaryProgress: () => () => undefined,
     } as never);
     container = document.createElement('div');
     document.body.appendChild(container);

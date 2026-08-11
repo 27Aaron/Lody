@@ -103,14 +103,15 @@ Two things the dev build does deliberately, both load-bearing:
 
 - `src/commands/app.ts` registers the directory as a local project through the
   daemon (`local-project/add`, idempotent — the id is a sha256 of the resolved root
-  path), then hands `lody://chat/new?machine=…&project=…[&workspaceSlug=…]` to the OS
+  path), then hands the active installation profile's deep link
+  (`lody://chat/new?…` for cloud, `lody-oss://chat/new?…` for local) to the OS
   via `utils/open-browser.ts`. Link shape lives in `src/lib/desktop-deep-link.ts`;
   the desktop side parses it in
   `packages/components/src/lib/desktop-open-local-project-deep-link.ts` and routes to
   `/<slug>/chat?context=local&machine=…&project=…`. Both sides pin the URL in unit tests.
 - INVARIANT: registration happens only in the CLI. The deep link carries ids, never a
   path, and the app must never register a project from one — any web page can navigate
-  the OS to `lody://…`, so a path-carrying link would let a site hand agents an
+  the OS to either registered protocol, so a path-carrying link would let a site hand agents an
   arbitrary directory. An unknown project id just stays unselected.
 - `workspaceSlug` is present only when the daemon reported workspace candidates (i.e.
   multiple active workspaces). With one workspace the app's current workspace is

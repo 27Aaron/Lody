@@ -342,6 +342,7 @@ import {
 import { isAskUserQuestionPermissionMeta, type AnalyticsOutcome } from '@lody/shared';
 import { collectPendingScheduledTasksFromHistory, type PendingScheduledTask } from '@lody/shared';
 import { buildAuthorFixPrompt } from '@lody/shared';
+import { ACP_PLAN_PERMISSION_MODE_ID } from '@lody/shared';
 import {
   getPullRequestNumber,
   getPullRequestRepoFullName,
@@ -357,6 +358,8 @@ import {
   findLatestCompletedCodexProposedPlan,
   shouldShowCodexProposedPlanDecision,
 } from '@/lib/codex-plan-decision';
+import { resolveModeIdAfterPlanExit } from '@/lib/plan-mode-exit';
+import { planModeExitApprovalCountAtomFamily } from '@/atoms/plan-mode-exit';
 import { canShowSubscriptionRateLimits } from '@/lib/session-usage';
 
 // ── Path launcher options for "Open in" split button ──
@@ -1071,10 +1074,17 @@ export function SessionHeaderMenu({
                   }
                   title={
                     showBaseBranchContext
-                      ? `${branchDisplayValue}\n${t('sessions.baseBranch', 'Base branch')}: ${baseBranch}`
+                      ? `${branchDisplayValue}\n${t(
+                          'sessions.baseBranch',
+                          'Base branch'
+                        )}: ${baseBranch}`
                       : branchDisplayValue
                   }
-                  aria-label={`${currentBranch ? t('sessions.copyCurrentBranch', 'Copy current branch') : t('sessions.copyBaseBranch', 'Copy base branch')}: ${branchDisplayValue}`}
+                  aria-label={`${
+                    currentBranch
+                      ? t('sessions.copyCurrentBranch', 'Copy current branch')
+                      : t('sessions.copyBaseBranch', 'Copy base branch')
+                  }: ${branchDisplayValue}`}
                 >
                   <GitBranch className="mt-0.5 h-3.5 w-3.5 text-muted-foreground" />
                   <span className="min-w-0 flex-1">
@@ -1250,13 +1260,10 @@ export function SessionHeaderMenu({
               {sharing.visibility === 'unknown'
                 ? t('sessions.sharing.loadingAction', 'Checking sharing…')
                 : sharing.privateReason === 'machine-not-registered'
-                  ? t(
-                      'sessions.sharing.registerDeviceToShare',
-                      'Register this device before sharing'
-                    )
-                  : sharing.canManage
-                    ? t('sessions.sharing.shareWithTeam', 'Share with team…')
-                    : t('sessions.sharing.onlyOwnerCanShare', 'Only the device owner can share')}
+                ? t('sessions.sharing.registerDeviceToShare', 'Register this device before sharing')
+                : sharing.canManage
+                ? t('sessions.sharing.shareWithTeam', 'Share with team…')
+                : t('sessions.sharing.onlyOwnerCanShare', 'Only the device owner can share')}
             </DropdownMenuItem>
           ) : null}
 
@@ -1787,11 +1794,11 @@ export const SessionChatInterface = memo(
       analyticsSessionProject?.kind === 'github' ? analyticsSessionProject.repoFullName : null;
     const analyticsSessionProjectGithubRepoFullName =
       analyticsSessionProject?.kind === 'local'
-        ? (analyticsSessionProject.githubRepoFullName ?? null)
+        ? analyticsSessionProject.githubRepoFullName ?? null
         : null;
     const analyticsSessionProjectLocalProjectId =
       analyticsSessionProject?.kind === 'local'
-        ? (analyticsSessionProject.localProjectId ?? null)
+        ? analyticsSessionProject.localProjectId ?? null
         : null;
     const sessionAnalyticsProject = useMemo(
       () =>
@@ -2792,12 +2799,12 @@ export const SessionChatInterface = memo(
     const searchContextValue = useMemo(() => {
       const isSearchActive = isSearchOpen && normalizedSearchQuery.length > 0;
       const matchedBlockIds = isSearchActive ? Array.from(searchBlockMatches.keys()) : [];
-      const activeBlockId = isSearchActive ? (activeSearchResult?.blockId ?? null) : null;
+      const activeBlockId = isSearchActive ? activeSearchResult?.blockId ?? null : null;
       return {
         isOpen: isSearchActive,
         query: isSearchActive ? normalizedSearchQuery : '',
         activeBlockId,
-        activeResultId: isSearchActive ? (activeSearchResult?.resultId ?? null) : null,
+        activeResultId: isSearchActive ? activeSearchResult?.resultId ?? null : null,
         blockMatches: isSearchActive ? searchBlockMatches : new Map(),
         hasMatchedPrefix: (prefix: string) =>
           matchedBlockIds.some((blockId) => blockId === prefix || blockId.startsWith(`${prefix}:`)),
@@ -3162,6 +3169,21 @@ export const SessionChatInterface = memo(
     });
     const isProposedPlanDecisionReady =
       !isMachineRemoved && !isArchivedSession && !isExternalHistoryRefreshing;
+
+    // Approving "Yes, implement this plan" switches the mode of the RUNNING
+    // turn only — the composer would still say Plan and quietly plan again on
+    // the next send. The permission cards bump this counter when THIS user
+    // approves, so the selector follows.
+    const planModeExitApprovalCount = useAtomValue(planModeExitApprovalCountAtomFamily(session.id));
+    useEffect(() => {
+      if (planModeExitApprovalCount === 0 || selectedModeId !== ACP_PLAN_PERMISSION_MODE_ID) {
+        return;
+      }
+      const nextModeId = resolveModeIdAfterPlanExit(modeOptions, defaultModeId);
+      if (nextModeId) {
+        handleModeChange(nextModeId);
+      }
+    }, [defaultModeId, handleModeChange, modeOptions, planModeExitApprovalCount, selectedModeId]);
     const sessionBranch = useMemo(
       () =>
         resolveBaseBranchPreference({
@@ -3187,7 +3209,7 @@ export const SessionChatInterface = memo(
         const projectRepoFullName =
           typeof rawProject.repoFullName === 'string'
             ? rawProject.repoFullName.trim()
-            : (session.repoFullName?.trim() ?? '');
+            : session.repoFullName?.trim() ?? '';
         if (!projectRepoFullName) {
           return undefined;
         }
@@ -3212,7 +3234,7 @@ export const SessionChatInterface = memo(
             typeof rawProject.githubRepoFullName === 'string' &&
             rawProject.githubRepoFullName.trim()
               ? rawProject.githubRepoFullName.trim()
-              : (session.repoFullName?.trim() ?? undefined),
+              : session.repoFullName?.trim() ?? undefined,
           ...(branch ? { branch } : {}),
           ...(typeof rawProject.useWorktree === 'boolean'
             ? { useWorktree: rawProject.useWorktree }
@@ -4070,7 +4092,7 @@ export const SessionChatInterface = memo(
 
     const effectivePrStatus = activePrData
       ? derivePrStatusFromDetails(activePrData.pullRequest)
-      : (latestPr?.status ?? null);
+      : latestPr?.status ?? null;
 
     // The compact `SessionMeta.pullRequests` status (`latestPr.status`) is only
     // written by the CLI PR poller / webhook fan-out, so it can lag behind
@@ -5050,7 +5072,7 @@ export const SessionChatInterface = memo(
 
     const handleOpenPathLauncherSettings = useCallback(() => {
       captureSessionEvent('session/open_in_ide_manage_clicked');
-      openSettings('general');
+      openSettings('preferences');
     }, [captureSessionEvent, openSettings]);
 
     const handleCopySessionLink = useCallback(async () => {
@@ -5182,7 +5204,7 @@ export const SessionChatInterface = memo(
             initialTitle: session.title ?? '',
           });
         }}
-        onOpenReviewSettings={() => openSettings('general')}
+        onOpenReviewSettings={() => openSettings('preferences')}
         owner={ownerMenuState}
         onArchive={onArchiveSession}
         onRestore={onRestoreSession}

@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { Effect } from 'effect';
-import { type MachineId } from '@lody/shared';
+import {
+  type LocalSessionControlRequest,
+  type LocalSessionControlResponse,
+  type MachineId,
+  type SessionId,
+} from '@lody/shared';
 import { LodyFleet } from '../src/lib/lody-fleet';
 import {
   CatalogPermissionError,
@@ -317,24 +322,21 @@ describe('LodyFleet remote authentication boundary', () => {
       machineId: 'machine-1' as MachineId,
       machineName: 'host',
       runtimeStateReporter: runtimeStateReporter as never,
+      cloudPort: createTestCloudPort((onValue) => {
+        onValue({ status: 'unauthorized', reason: 'CLI token is invalid or expired.' });
+        return () => {};
+      }),
       localWorkspaceCatalog: createCatalogStub(() => Effect.succeed(catalogSnapshot({}))),
       localFirstBootstrap: true,
       onFatalAuthFailure,
-    }) as unknown as {
-      convex: {
-        onUpdate: (
-          query: unknown,
-          args: unknown,
-          onValue: (value: { valid: false; userId: null; workspaces: [] }) => void
-        ) => () => void;
-      };
-      startWorkspaceSubscription: (options: { waitForInitial: boolean }) => Promise<void>;
-    };
-    fleet.convex = {
-      onUpdate: (_query, _args, onValue) => {
-        onValue({ valid: false, userId: null, workspaces: [] });
-        return () => {};
+      machineLifecycleCapability: {
+        launchMode: 'foreground',
+        canRemoteRestart: false,
+        canRemoteUpgrade: false,
+        reason: 'not_daemon',
       },
+    }) as unknown as {
+      startWorkspaceSubscription: (options: { waitForInitial: boolean }) => Promise<void>;
     };
 
     await fleet.startWorkspaceSubscription({ waitForInitial: false });
@@ -342,5 +344,74 @@ describe('LodyFleet remote authentication boundary', () => {
     expect(runtimeStateReporter.setBackendAuthorization).toHaveBeenCalledWith('rejected');
     expect(runtimeStateReporter.setBackendConnection).toHaveBeenCalledWith('disconnected');
     expect(onFatalAuthFailure).toHaveBeenCalledOnce();
+  });
+});
+
+describe('LodyFleet local session control streaming', () => {
+  type FleetControlInternals = {
+    runtimes: Map<
+      string,
+      {
+        lody: {
+          documentManager: {
+            repo: { getDocMeta: (roomId: string) => Promise<{ meta: {} } | undefined> };
+          };
+        };
+      }
+    >;
+    dispatchLocalSessionControl: (
+      message: LocalSessionControlRequest,
+      options: { onResponse?: (response: LocalSessionControlResponse) => void }
+    ) => Promise<LocalSessionControlResponse[]>;
+  };
+
+  const imageUploadRequest = (): LocalSessionControlRequest => ({
+    type: 'session/image-upload',
+    machineId: 'machine-1' as MachineId,
+    sessionId: 'session-1' as SessionId,
+    paths: ['/tmp/screenshot.png'],
+  });
+
+  const createControlFleet = (): FleetControlInternals =>
+    createFleetHarness(createCatalogStub(() => Effect.succeed(catalogSnapshot({}))))
+      .fleet as unknown as FleetControlInternals;
+
+  it('streams the response when an upload session cannot be found', async () => {
+    const fleet = createControlFleet();
+    const onResponse = vi.fn();
+
+    const responses = await fleet.dispatchLocalSessionControl(imageUploadRequest(), {
+      onResponse,
+    });
+
+    expect(responses).toEqual([
+      expect.objectContaining({ success: false, error: 'session_not_found' }),
+    ]);
+    expect(onResponse).toHaveBeenCalledOnce();
+    expect(onResponse).toHaveBeenCalledWith(responses[0]);
+  });
+
+  it('streams the response when an upload session matches multiple workspaces', async () => {
+    const fleet = createControlFleet();
+    const runtime = {
+      lody: {
+        documentManager: {
+          repo: { getDocMeta: vi.fn(async () => ({ meta: {} })) },
+        },
+      },
+    };
+    fleet.runtimes.set('workspace-1', runtime);
+    fleet.runtimes.set('workspace-2', runtime);
+    const onResponse = vi.fn();
+
+    const responses = await fleet.dispatchLocalSessionControl(imageUploadRequest(), {
+      onResponse,
+    });
+
+    expect(responses).toEqual([
+      expect.objectContaining({ success: false, error: 'session_ambiguous' }),
+    ]);
+    expect(onResponse).toHaveBeenCalledOnce();
+    expect(onResponse).toHaveBeenCalledWith(responses[0]);
   });
 });

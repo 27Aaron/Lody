@@ -40,11 +40,36 @@ interface MentionItemProps
 
   /** Called when this item is committed as a mention by mouse or keyboard. */
   onMentionSelect?: () => void;
+
+  /**
+   * Literal text written into the input when this item is committed, replacing
+   * the whole span from the trigger to the caret. Must carry its own leading
+   * marker. Defaults to `${trigger}${label}`.
+   */
+  insertText?: string;
+
+  /**
+   * Makes this item a navigation step: selecting it rewrites the trigger span
+   * to this text and keeps the menu open, without recording a mention.
+   */
+  navigateText?: string;
+
+  /** Mention kind recorded on the committed range. */
+  kind?: ItemData["kind"];
 }
 
 const MentionItem = React.forwardRef<ItemElement, MentionItemProps>(
   (props, forwardedRef) => {
-    const { value, label: labelProp, disabled = false, onMentionSelect, ...itemProps } = props;
+    const {
+      value,
+      label: labelProp,
+      disabled = false,
+      onMentionSelect,
+      insertText,
+      navigateText,
+      kind,
+      ...itemProps
+    } = props;
     const context = useMentionContext(ITEM_NAME);
     const [itemNode, setItemNode] = React.useState<ItemElement | null>(null);
     const itemNodeRef = React.useRef<ItemElement | null>(null);
@@ -77,14 +102,32 @@ const MentionItem = React.forwardRef<ItemElement, MentionItemProps>(
         throw new Error(`\`${ITEM_NAME}\` value cannot be an empty string`);
       }
 
+      // Register the stable ref object, never a `{ current: node }` snapshot.
+      // The collection keys its map by this object and reads `.current` when it
+      // sorts by document position, so a snapshot taken before the node mounts
+      // leaves a null-node entry behind: the sort collapses around it and
+      // highlight movement matches the wrong row, losing the highlight and
+      // jumping back to the first group.
       return context.onItemRegister({
-        ref: { current: itemNode },
+        ref: itemNodeRef,
         value,
         label,
         disabled: isDisabled,
         onMentionSelect: handleMentionSelect,
+        insertText,
+        navigateText,
+        kind,
       });
-    }, [label, value, isDisabled, handleMentionSelect, itemNode, context.onItemRegister]);
+    }, [
+      label,
+      value,
+      isDisabled,
+      handleMentionSelect,
+      context.onItemRegister,
+      insertText,
+      navigateText,
+      kind,
+    ]);
 
     const isVisible = context.getIsItemVisible(value);
 
@@ -142,7 +185,7 @@ const MentionItem = React.forwardRef<ItemElement, MentionItemProps>(
           onPointerMove={composeEventHandlers(itemProps.onPointerMove, () => {
             if (isDisabled || !itemNode) return;
             context.onHighlightedItemChange({
-              ref: { current: itemNode },
+              ref: itemNodeRef,
               label,
               value,
               disabled: isDisabled,
