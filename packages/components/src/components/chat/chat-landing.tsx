@@ -5324,8 +5324,8 @@ function WorkspaceChatLanding({
                 openSettings(sharingReviewState.actionTarget ?? 'projects');
               }}
             >
-              {sharingReviewState.actionTarget === 'devices'
-                ? t('inbox.sharingReview.actionDevices', 'Review devices')
+              {sharingReviewState.actionTarget === 'machines'
+                ? t('inbox.sharingReview.actionDevices', 'Review machines')
                 : t('inbox.sharingReview.action', 'Review projects')}
             </button>
           ) : null}
