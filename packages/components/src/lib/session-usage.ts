@@ -53,9 +53,6 @@ export function normalizeRateLimitUsedPercent(
   if (cliType === 'claude' && value >= 0 && value <= 1) {
     return clampPercentage(value * 100);
   }
-  if (cliType !== 'codex' && value > 0 && value < 1) {
-    return clampPercentage(value * 100);
-  }
   return clampPercentage(value);
 }
 

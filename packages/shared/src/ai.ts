@@ -775,6 +775,11 @@ const GROK_STATIC_CONFIG_OPTIONS: AcpConfigOptionSummary[] = [
         description: 'Request approval before protected actions',
       },
       {
+        value: 'auto',
+        name: 'Auto',
+        description: 'Let Grok decide when approval is required (experimental)',
+      },
+      {
         value: 'always-approve',
         name: 'Always Approve',
         description: 'Approve protected actions automatically',

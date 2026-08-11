@@ -103,6 +103,40 @@ describe('SessionUsagePopover', () => {
     expect(container.querySelector('button')).toBeNull();
   });
 
+  it('shows a truthful unavailable state when the provider omits utilization', async () => {
+    const unavailableLimits: MachineRateLimits = {
+      [getRateLimitEntryKey('grok', 'grok')]: {
+        schemaVersion: 2,
+        planName: 'X Premium+',
+        limitName: 'Grok Build',
+        limitId: 'grok',
+        windows: [],
+        fiveHour: null,
+        sevenDay: null,
+        fiveHourResetAt: null,
+        sevenDayResetAt: null,
+        apiUnavailable: true,
+      },
+    };
+    await renderUsage({
+      agentType: 'grok',
+      modelId: 'grok-4.5',
+      rateLimits: unavailableLimits,
+      contextWindowUsage: { size: 128_000, used: 32_000 },
+    });
+
+    const trigger = container.querySelector('button');
+    expect(trigger?.textContent).toBe('25%');
+    expect(trigger?.getAttribute('aria-label')).toBe('Open usage details, 25% used');
+
+    await act(async () => {
+      trigger?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(document.body.querySelector('[aria-label="Usage"]')?.textContent).toContain(
+      'The provider did not report usage for this plan'
+    );
+  });
+
   it('hides the trigger when context data is invalid even if subscription usage exists', async () => {
     await renderUsage({ contextWindowUsage: { size: 0, used: 0 }, rateLimits });
 

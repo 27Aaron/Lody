@@ -36,6 +36,12 @@ const PERMISSION_MODE_OPTIONS: Record<string, KnownOptionTranslation> = {
     descriptionKey: 'chat.runConfig.grok.permission.ask.description',
     descriptionFallback: 'Request approval before protected actions',
   },
+  auto: {
+    labelKey: 'chat.runConfig.grok.permission.auto.label',
+    labelFallback: 'Auto',
+    descriptionKey: 'chat.runConfig.grok.permission.auto.description',
+    descriptionFallback: 'Let Grok decide when approval is required (experimental)',
+  },
   'always-approve': {
     labelKey: 'chat.runConfig.grok.permission.alwaysApprove.label',
     labelFallback: 'Always Approve',

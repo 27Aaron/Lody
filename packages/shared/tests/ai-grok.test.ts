@@ -35,6 +35,7 @@ describe('builtin Grok shared contract', () => {
     expect(capabilities?.configOptions[0]?.currentValue).toBe('agent');
     expect(capabilities?.configOptions[1]?.options.map((option) => option.value)).toEqual([
       'ask',
+      'auto',
       'always-approve',
     ]);
     expect(getBuiltinDefaultModeId('builtin', 'grok')).toBe('agent');

@@ -30,6 +30,7 @@ const options: AcpSelectorOptions = {
       currentValue: 'ask',
       options: [
         { value: 'ask', label: 'Ask Every Time' },
+        { value: 'auto', label: 'Auto' },
         { value: 'always-approve', label: 'Always Approve' },
       ],
     },
@@ -45,6 +46,7 @@ describe('localizeBuiltinGrokSelectorOptions', () => {
       'chat.runConfig.grok.interaction.ask.label': '问答',
       'chat.runConfig.grok.permission.label': '权限模式',
       'chat.runConfig.grok.permission.ask.label': '每次询问',
+      'chat.runConfig.grok.permission.auto.label': '自动',
       'chat.runConfig.grok.permission.alwaysApprove.label': '始终允许',
     };
     const t = ((key: string, fallback: string) => translations[key] ?? fallback) as TFunction;
@@ -62,6 +64,7 @@ describe('localizeBuiltinGrokSelectorOptions', () => {
     expect(permission?.label).toBe('权限模式');
     expect(permission?.options.map(({ value, label }) => ({ value, label }))).toEqual([
       { value: 'ask', label: '每次询问' },
+      { value: 'auto', label: '自动' },
       { value: 'always-approve', label: '始终允许' },
     ]);
   });
