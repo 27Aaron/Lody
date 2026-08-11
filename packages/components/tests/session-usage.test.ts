@@ -153,6 +153,13 @@ describe('session usage', () => {
     expect(
       canShowSubscriptionRateLimits({
         cliType: 'builtin',
+        agentType: 'grok',
+        config: { env: {} },
+      })
+    ).toBe(true);
+    expect(
+      canShowSubscriptionRateLimits({
+        cliType: 'builtin',
         agentType: 'claude',
         config: { env: { ANTHROPIC_BASE_URL: 'https://example.com' } },
       })

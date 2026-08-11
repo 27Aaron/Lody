@@ -162,7 +162,10 @@ export function canShowSubscriptionRateLimits({
   agentType: string;
   config?: Pick<AgentConfigMeta, 'brandId' | 'env'> | null;
 }): boolean {
-  if (cliType !== 'builtin' || (agentType !== 'claude' && agentType !== 'codex')) {
+  if (
+    cliType !== 'builtin' ||
+    (agentType !== 'claude' && agentType !== 'codex' && agentType !== 'grok')
+  ) {
     return false;
   }
   if (!config) return true;
