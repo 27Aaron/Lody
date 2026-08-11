@@ -5,6 +5,7 @@ import {
   DARWIN_PRESSURE_CRITICAL,
   DARWIN_PRESSURE_WARNING,
   getEffectiveMemoryLimitBytes,
+  type CgroupMemoryState,
   type DarwinMemoryPressureLevel,
   type MemoryPressureSnapshot,
 } from '@/utils/memory';
@@ -59,6 +60,15 @@ export interface SessionGCConfig {
    * start could synchronously tear down every idle session. The periodic sweep picks up the rest.
    */
   maxEvictionsPerCall: number;
+  /**
+   * Extra forced re-samples before a turn is refused (default: 2).
+   *
+   * Reclaimable page cache is returned in milliseconds, so a snapshot taken mid-scan can show
+   * no headroom that is gone again a moment later. Only the about-to-fail path pays this.
+   */
+  pressureRecheckAttempts: number;
+  /** Delay between those re-samples (default: 500ms). */
+  pressureRecheckDelayMs: number;
 }
 
 export type MemoryPressureReason =
@@ -66,7 +76,9 @@ export type MemoryPressureReason =
   | 'commit'
   | 'physical_and_commit'
   | 'darwin_pressure_warning'
-  | 'darwin_pressure_critical';
+  | 'darwin_pressure_critical'
+  | 'cgroup_low_headroom'
+  | 'cgroup_stalled';
 
 export interface MemoryPressureVerdict {
   /** Reclaim idle sessions. Invisible to users; they are restored on their next turn. */
@@ -89,6 +101,8 @@ export interface SessionGCDeps {
   getSessionIds: () => SessionId[];
   memoryPressure: MemoryPressureSnapshotSource;
   logger: Logger;
+  /** Injectable so the pressure re-check backoff never needs a real sleep in tests. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 export interface MemoryPressureEvictionResult {
@@ -102,6 +116,9 @@ export interface MemoryPressureEvictionResult {
   pressureReason: MemoryPressureReason | null;
   /** macOS only; lets the failure message describe the kernel verdict instead of byte counts. */
   memoryPressureLevel?: DarwinMemoryPressureLevel;
+  /** Linux only; lets the failure message break the number down instead of quoting one total. */
+  cgroup?: CgroupMemoryState;
+  hostAvailableBytes?: number;
   availableCommitBytes?: number;
   commitThresholdBytes?: number;
   commitLimitBytes?: number;
@@ -119,6 +136,11 @@ const GIB = 1024 * 1024 * 1024;
 const WINDOWS_COMMIT_THRESHOLD_FLOOR_BYTES = 512 * 1024 * 1024;
 const WINDOWS_COMMIT_THRESHOLD_CEILING_BYTES = 2 * GIB;
 const DEFAULT_MAX_EVICTIONS_PER_CALL = 3;
+const DEFAULT_PRESSURE_RECHECK_ATTEMPTS = 2;
+const DEFAULT_PRESSURE_RECHECK_DELAY_MS = 500;
+/** ~10% of the last ten seconds spent stalled on reclaim. */
+const DEFAULT_PSI_STALL_AVG10 = 10;
+const DEFAULT_CGROUP_HARD_FLOOR_BYTES = 128 * 1024 * 1024;
 
 /**
  * Default memory pressure threshold: 10% of effective memory (cgroup-aware),
@@ -143,6 +165,14 @@ export function loadGCConfig(): SessionGCConfig {
       'LODY_SESSION_GC_MAX_EVICTIONS_PER_CALL',
       DEFAULT_MAX_EVICTIONS_PER_CALL
     ),
+    pressureRecheckAttempts: readEnvNumber(
+      'LODY_SESSION_GC_PRESSURE_RECHECK_ATTEMPTS',
+      DEFAULT_PRESSURE_RECHECK_ATTEMPTS
+    ),
+    pressureRecheckDelayMs: readEnvNumber(
+      'LODY_SESSION_GC_PRESSURE_RECHECK_DELAY_MS',
+      DEFAULT_PRESSURE_RECHECK_DELAY_MS
+    ),
   };
 }
 
@@ -157,12 +187,22 @@ export interface MemoryPressureThresholds {
   platform: NodeJS.Platform;
   thresholdBytes: number;
   commitThresholdBytes: number;
+  /**
+   * `memory.pressure` "some avg10" at or above which the cgroup counts as genuinely stalled.
+   * 10 means ~10% of the last ten seconds was spent waiting on reclaim.
+   */
+  psiStallAvg10: number;
+  /**
+   * Fallback for kernels built without PSI: hard headroom (`memory.max - memory.current`,
+   * no reclaim credited) below this means every allocation forces synchronous reclaim.
+   */
+  cgroupHardFloorBytes: number;
 }
 
 /**
  * Decide, from one memory sample, whether to reclaim idle sessions and whether to refuse a turn.
  *
- * Pure — the platform is an explicit input so both branches are testable everywhere.
+ * Pure — the platform is an explicit input so every branch is testable everywhere.
  */
 export function evaluateMemoryPressure(
   snapshot: MemoryPressureSnapshot,
@@ -180,10 +220,44 @@ export function evaluateMemoryPressure(
     return { evict: false, block: false, reason: null };
   }
 
-  const physicalPressure = snapshot.availableMemoryBytes < thresholds.thresholdBytes;
   const commitPressure =
     snapshot.availableCommitBytes !== undefined &&
     snapshot.availableCommitBytes < thresholds.commitThresholdBytes;
+
+  const cgroup = snapshot.cgroup;
+  if (cgroup) {
+    // `MemAvailable` is already reclaim-aware, so when the HOST is the binding constraint the
+    // number is trustworthy on its own and may refuse a turn directly.
+    const hostLow =
+      snapshot.hostAvailableBytes !== undefined &&
+      snapshot.hostAvailableBytes < thresholds.thresholdBytes;
+    const cgroupLow =
+      cgroup.hardHeadroomBytes + cgroup.reclaimableBytes < thresholds.thresholdBytes;
+
+    // The cgroup estimate deliberately under-counts (active_file is excluded), so low headroom
+    // alone is NOT enough to fail a user's turn — a tree scan parks tens of GB of clean cache in
+    // `memory.current` and the kernel gives it straight back. Require evidence that reclaim is
+    // actually hurting: PSI stall, or, on kernels without PSI, hard headroom so low that every
+    // allocation forces synchronous reclaim.
+    const stalled =
+      cgroup.psiSomeAvg10 !== null
+        ? cgroup.psiSomeAvg10 >= thresholds.psiStallAvg10
+        : cgroup.hardHeadroomBytes < thresholds.cgroupHardFloorBytes;
+
+    if (hostLow || (cgroupLow && stalled)) {
+      return { evict: true, block: true, reason: stalled ? 'cgroup_stalled' : 'physical' };
+    }
+    if (cgroupLow) {
+      // Worth reclaiming idle sessions — invisible to the user — but not worth refusing a turn.
+      return { evict: true, block: false, reason: 'cgroup_low_headroom' };
+    }
+    if (commitPressure) {
+      return { evict: true, block: true, reason: 'commit' };
+    }
+    return { evict: false, block: false, reason: null };
+  }
+
+  const physicalPressure = snapshot.availableMemoryBytes < thresholds.thresholdBytes;
 
   const reason: MemoryPressureReason | null =
     physicalPressure && commitPressure
@@ -194,8 +268,9 @@ export function evaluateMemoryPressure(
           ? 'commit'
           : null;
 
-  // Linux cgroup limits and Windows commit limits are hard: overrunning them is an OOM kill or
-  // an allocation failure, so the reclaim and refuse thresholds stay the same here.
+  // No cgroup limit: on Linux this is `MemAvailable`, which already credits reclaimable cache,
+  // and on Windows it is `AvailableBytes`, which already credits the standby list. Both are
+  // trustworthy enough to refuse on. The Windows commit limit is a genuine hard ceiling.
   return { evict: reason !== null, block: reason !== null, reason };
 }
 
@@ -296,9 +371,19 @@ export class SessionGCManager {
       platform: this.platform,
       thresholdBytes,
       commitThresholdBytes,
+      psiStallAvg10: DEFAULT_PSI_STALL_AVG10,
+      cgroupHardFloorBytes: DEFAULT_CGROUP_HARD_FLOOR_BYTES,
     };
     let memorySnapshot = await this.deps.memoryPressure.getLatest();
     let verdict = evaluateMemoryPressure(memorySnapshot, thresholds);
+
+    // The cached sample may be seconds old. That is fine for deciding "nothing to do", but never
+    // for acting: memory moves fast enough that a stale sample can both invent pressure that is
+    // already over and miss pressure that just started.
+    if (this.config.enabled && verdict.evict) {
+      memorySnapshot = await this.deps.memoryPressure.refresh();
+      verdict = evaluateMemoryPressure(memorySnapshot, thresholds);
+    }
 
     if (!this.config.enabled || !verdict.evict) {
       return this.buildEvictionResult({
@@ -359,6 +444,28 @@ export class SessionGCManager {
       }
     }
 
+    // Last chance before failing a user's turn. Reclaimable cache comes back in milliseconds, so
+    // a sample taken during a burst of file I/O can report no headroom that is already gone by
+    // the time we would surface the error. Only this path pays the delay.
+    for (
+      let attempt = 0;
+      verdict.block && attempt < this.config.pressureRecheckAttempts;
+      attempt++
+    ) {
+      await this.sleep(this.config.pressureRecheckDelayMs);
+      memorySnapshot = await this.deps.memoryPressure.refresh();
+      verdict = evaluateMemoryPressure(memorySnapshot, thresholds);
+      if (!verdict.block) {
+        this.deps.logger.debug(
+          `[GC] Memory pressure cleared on recheck ${attempt + 1}: ${this.describeMemoryState(
+            memorySnapshot,
+            thresholdBytes,
+            commitThresholdBytes
+          )}`
+        );
+      }
+    }
+
     const availableMemory = memorySnapshot.availableMemoryBytes;
     const stillUnderPressure = verdict.block;
 
@@ -402,6 +509,10 @@ export class SessionGCManager {
       ...(snapshot.memoryPressureLevel !== undefined
         ? { memoryPressureLevel: snapshot.memoryPressureLevel }
         : {}),
+      ...(snapshot.cgroup !== undefined ? { cgroup: snapshot.cgroup } : {}),
+      ...(snapshot.hostAvailableBytes !== undefined
+        ? { hostAvailableBytes: snapshot.hostAvailableBytes }
+        : {}),
       ...(snapshot.availableCommitBytes !== undefined
         ? {
             availableCommitBytes: snapshot.availableCommitBytes,
@@ -413,6 +524,13 @@ export class SessionGCManager {
     };
   }
 
+  private sleep(ms: number): Promise<void> {
+    if (this.deps.sleep) return this.deps.sleep(ms);
+    return new Promise((resolve) => {
+      setTimeout(resolve, ms).unref?.();
+    });
+  }
+
   private describeMemoryState(
     snapshot: MemoryPressureSnapshot,
     thresholdBytes: number,
@@ -420,6 +538,18 @@ export class SessionGCManager {
   ): string {
     if (snapshot.memoryPressureLevel !== undefined) {
       return `kernel pressure level ${snapshot.memoryPressureLevel}`;
+    }
+
+    const cgroup = snapshot.cgroup;
+    if (cgroup) {
+      const mb = (bytes: number) => Math.round(bytes / 1024 / 1024);
+      return (
+        `cgroup ${cgroup.path}: hard headroom ${mb(cgroup.hardHeadroomBytes)}MB + ` +
+        `reclaimable ${mb(cgroup.reclaimableBytes)}MB (of ${mb(cgroup.stat.activeFileBytes)}MB ` +
+        `active file cache not counted), host available ` +
+        `${snapshot.hostAvailableBytes !== undefined ? mb(snapshot.hostAvailableBytes) : '?'}MB, ` +
+        `PSI some avg10 ${cgroup.psiSomeAvg10 ?? '?'}, threshold ${mb(thresholdBytes)}MB`
+      );
     }
 
     const commitText =

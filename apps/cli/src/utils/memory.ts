@@ -30,32 +30,40 @@ export const DARWIN_PRESSURE_WARNING = 2 satisfies DarwinMemoryPressureLevel;
 export const DARWIN_PRESSURE_CRITICAL = 4 satisfies DarwinMemoryPressureLevel;
 
 export interface MemoryPressureSnapshot {
+  /**
+   * Reclaim-aware headroom: what a new process can actually get. On Linux this counts
+   * page cache the kernel will hand back, NOT just untouched bytes.
+   */
   availableMemoryBytes: number;
   effectiveMemoryLimitBytes: number;
   /** macOS only; absent when the probe is unavailable or returned an unknown value. */
   memoryPressureLevel?: DarwinMemoryPressureLevel;
+  /** Linux only; `MemAvailable`, before any cgroup limit is applied. */
+  hostAvailableBytes?: number;
+  /** Linux only; present when some ancestor cgroup imposes a `memory.max`. */
+  cgroup?: CgroupMemoryState;
   availableCommitBytes?: number;
   commitLimitBytes?: number;
   committedBytes?: number;
 }
 
 /**
- * Get the available system memory in bytes, cgroup-aware.
+ * Reclaim-aware available memory for the current process, cgroup-aware.
  *
- * On Linux under cgroup v2, the effective available memory is the minimum of:
- * - System-wide `MemAvailable` from `/proc/meminfo`
- * - The cgroup's remaining budget: `memory.max - memory.current`
+ * On Linux the answer is the minimum of:
+ * - System-wide `MemAvailable` from `/proc/meminfo` (already reclaim-aware)
+ * - The cgroup's budget: `memory.max - memory.current` PLUS reclaimable cache/slab
  *
- * This prevents over-allocating when a parent cgroup (e.g. `user.slice`) imposes
- * a limit lower than total system memory.
+ * The reclaimable term is the whole point. `memory.current` counts page cache, so
+ * without it a cgroup that has merely read a lot of files looks full.
  *
  * On other platforms, falls back to `os.freemem()`.
  */
 export function getAvailableMemoryBytes(): number {
   const systemAvailable = getSystemAvailableMemoryBytesSync();
-  const cgroupAvailable = getCgroupAvailableMemoryBytes();
-  if (cgroupAvailable !== null) {
-    return Math.min(systemAvailable, cgroupAvailable);
+  const cgroup = readCgroupMemoryState();
+  if (cgroup !== null) {
+    return Math.min(systemAvailable, cgroup.hardHeadroomBytes + cgroup.reclaimableBytes);
   }
   return systemAvailable;
 }
@@ -66,15 +74,18 @@ export async function getMemoryPressureSnapshot(): Promise<MemoryPressureSnapsho
     getDarwinMemoryPressureLevel(),
   ]);
   const systemAvailable = await getSystemAvailableMemoryBytes(windowsStatus);
-  const cgroupAvailable = getCgroupAvailableMemoryBytes();
+  const cgroup = readCgroupMemoryState();
   const availableMemoryBytes =
-    cgroupAvailable !== null ? Math.min(systemAvailable, cgroupAvailable) : systemAvailable;
+    cgroup !== null
+      ? Math.min(systemAvailable, cgroup.hardHeadroomBytes + cgroup.reclaimableBytes)
+      : systemAvailable;
   const effectiveMemoryLimitBytes = getEffectiveMemoryLimitBytes();
 
   return {
     availableMemoryBytes,
     effectiveMemoryLimitBytes,
     ...(darwinPressureLevel !== null ? { memoryPressureLevel: darwinPressureLevel } : {}),
+    ...(cgroup !== null ? { cgroup, hostAvailableBytes: systemAvailable } : {}),
     ...(windowsStatus
       ? {
           availableCommitBytes: windowsStatus.availableCommitBytes,
@@ -95,7 +106,7 @@ export async function getMemoryPressureSnapshot(): Promise<MemoryPressureSnapsho
  */
 export function getEffectiveMemoryLimitBytes(): number {
   const totalMem = os.totalmem();
-  const cgroupMax = getCgroupMemoryMaxBytes();
+  const cgroupMax = findTightestCgroupLimit()?.maxBytes ?? null;
   if (cgroupMax !== null) {
     return Math.min(totalMem, cgroupMax);
   }
@@ -311,36 +322,28 @@ export function parseDarwinAvailableMemoryBytes(vmStatOutput: string): number | 
 }
 
 /**
- * Read the cgroup memory limit (`memory.max`) for the current process.
- * Walks up the cgroup hierarchy to find the most restrictive ancestor limit.
- * Returns null if not running under cgroup v2 or if the limit is "max" (unlimited).
+ * Locate the most restrictive ancestor cgroup that actually imposes a `memory.max`.
+ *
+ * Returns its `/sys/fs/cgroup/...` prefix plus the limit, or null when not under
+ * cgroup v2 or when every ancestor is unlimited.
  */
-function getCgroupMemoryMaxBytes(): number | null {
+function findTightestCgroupLimit(): { prefix: string; maxBytes: number } | null {
   try {
     const cgroupPath = readSelfCgroupPath();
     if (cgroupPath === null) return null;
 
-    // Walk from the process's own cgroup up to the root, collecting
-    // the tightest memory.max along the way.
-    let tightest: number | null = null;
+    let tightest: { prefix: string; maxBytes: number } | null = null;
     let current = cgroupPath;
 
     // Safety limit to avoid infinite loop
     for (let depth = 0; depth < 20; depth++) {
-      const memMaxPath = `/sys/fs/cgroup${current === '/' ? '' : current}/memory.max`;
-      const raw = readFileSafe(memMaxPath);
-      if (raw !== null) {
-        const trimmed = raw.trim();
-        if (trimmed !== 'max') {
-          const value = parseInt(trimmed, 10);
-          if (Number.isFinite(value) && value > 0) {
-            tightest = tightest === null ? value : Math.min(tightest, value);
-          }
-        }
+      const prefix = `/sys/fs/cgroup${current === '/' ? '' : current}`;
+      const value = parseCgroupLimit(readFileSafe(`${prefix}/memory.max`));
+      if (value !== null && (tightest === null || value < tightest.maxBytes)) {
+        tightest = { prefix, maxBytes: value };
       }
 
       if (current === '/' || current === '') break;
-      // Move to parent cgroup
       const parent = current.substring(0, current.lastIndexOf('/')) || '/';
       if (parent === current) break;
       current = parent;
@@ -352,54 +355,125 @@ function getCgroupMemoryMaxBytes(): number | null {
   }
 }
 
+function parseCgroupLimit(raw: string | null): number | null {
+  if (raw === null) return null;
+  const trimmed = raw.trim();
+  if (trimmed === 'max') return null;
+  const value = parseInt(trimmed, 10);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+export interface CgroupMemoryStat {
+  inactiveFileBytes: number;
+  activeFileBytes: number;
+  slabReclaimableBytes: number;
+  dirtyBytes: number;
+}
+
+export interface CgroupMemoryState {
+  /** Filesystem prefix of the limiting cgroup, for diagnostics. */
+  path: string;
+  maxBytes: number;
+  /** The throttling threshold, when set. Crossing it means reclaim pressure, not death. */
+  highBytes: number | null;
+  currentBytes: number;
+  /** `memory.max - memory.current`: what is left without reclaiming anything. */
+  hardHeadroomBytes: number;
+  /** Cache and slab the kernel can hand back without swapping or OOM-killing. */
+  reclaimableBytes: number;
+  stat: CgroupMemoryStat;
+  /** `memory.pressure` "some avg10": share of the last 10s stalled on reclaim. */
+  psiSomeAvg10: number | null;
+  /** `memory.events` counters. Growth means the kernel really did throttle us. */
+  events: { high: number; max: number } | null;
+}
+
 /**
- * Read the cgroup available memory (memory.max - memory.current) for the current process.
- * Returns null if not under cgroup v2 or memory.max is unlimited.
+ * Read the limiting cgroup's memory state, including what is reclaimable.
+ *
+ * INVARIANT: `memory.current` counts page cache, so `memory.max - memory.current` alone
+ * reports a cgroup as full when it is merely warm. A tree scan can park tens of GB of
+ * clean page cache in `memory.current` while resident process memory is a fraction of
+ * that; the kernel hands that cache straight back on the next allocation. Treating it as
+ * unavailable is what made this guard refuse turns on a machine in no distress at all.
  */
-function getCgroupAvailableMemoryBytes(): number | null {
-  try {
-    const cgroupPath = readSelfCgroupPath();
-    if (cgroupPath === null) return null;
+function readCgroupMemoryState(): CgroupMemoryState | null {
+  const limit = findTightestCgroupLimit();
+  if (limit === null) return null;
 
-    // Find the tightest ancestor limit and the current usage at that level
-    let tightestMax: number | null = null;
-    let tightestPath: string | null = null;
-    let current = cgroupPath;
+  const currentRaw = readFileSafe(`${limit.prefix}/memory.current`);
+  if (currentRaw === null) return null;
+  const currentBytes = parseInt(currentRaw.trim(), 10);
+  if (!Number.isFinite(currentBytes)) return null;
 
-    for (let depth = 0; depth < 20; depth++) {
-      const prefix = `/sys/fs/cgroup${current === '/' ? '' : current}`;
-      const raw = readFileSafe(`${prefix}/memory.max`);
-      if (raw !== null) {
-        const trimmed = raw.trim();
-        if (trimmed !== 'max') {
-          const value = parseInt(trimmed, 10);
-          if (Number.isFinite(value) && value > 0) {
-            if (tightestMax === null || value < tightestMax) {
-              tightestMax = value;
-              tightestPath = prefix;
-            }
-          }
-        }
-      }
+  const stat = parseCgroupMemoryStat(readFileSafe(`${limit.prefix}/memory.stat`) ?? '');
 
-      if (current === '/' || current === '') break;
-      const parent = current.substring(0, current.lastIndexOf('/')) || '/';
-      if (parent === current) break;
-      current = parent;
+  return {
+    path: limit.prefix,
+    maxBytes: limit.maxBytes,
+    highBytes: parseCgroupLimit(readFileSafe(`${limit.prefix}/memory.high`)),
+    currentBytes,
+    hardHeadroomBytes: Math.max(0, limit.maxBytes - currentBytes),
+    reclaimableBytes: computeCgroupReclaimableBytes(stat),
+    stat,
+    psiSomeAvg10: parseCgroupPressureSomeAvg10(
+      readFileSafe(`${limit.prefix}/memory.pressure`) ?? ''
+    ),
+    events: parseCgroupMemoryEvents(readFileSafe(`${limit.prefix}/memory.events`) ?? ''),
+  };
+}
+
+export function parseCgroupMemoryStat(raw: string): CgroupMemoryStat {
+  const values = new Map<string, number>();
+  for (const line of raw.split('\n')) {
+    const match = line.trim().match(/^([a-z_]+)\s+(\d+)$/);
+    if (match?.[1] && match[2]) {
+      values.set(match[1], parseInt(match[2], 10));
     }
-
-    if (tightestMax === null || tightestPath === null) return null;
-
-    const currentRaw = readFileSafe(`${tightestPath}/memory.current`);
-    if (currentRaw === null) return null;
-
-    const currentUsage = parseInt(currentRaw.trim(), 10);
-    if (!Number.isFinite(currentUsage)) return null;
-
-    return Math.max(0, tightestMax - currentUsage);
-  } catch {
-    return null;
   }
+  return {
+    inactiveFileBytes: values.get('inactive_file') ?? 0,
+    activeFileBytes: values.get('active_file') ?? 0,
+    slabReclaimableBytes: values.get('slab_reclaimable') ?? 0,
+    dirtyBytes: (values.get('file_dirty') ?? 0) + (values.get('file_writeback') ?? 0),
+  };
+}
+
+/**
+ * Conservative estimate of cgroup memory the kernel can reclaim without I/O stalls.
+ *
+ * `inactive_file` less dirty/writeback pages (those must be written out first), plus half
+ * of `slab_reclaimable` (dentry/inode caches shrink under pressure but not completely).
+ *
+ * `active_file` is deliberately EXCLUDED even though the kernel does deactivate and
+ * reclaim it under pressure — a heavy tree scan leaves most cache in the active list, so
+ * counting it would dominate the estimate with the least predictable term. The
+ * under-count is intentional and is compensated by requiring a real stall signal (PSI or
+ * `memory.events` growth) before any turn is refused; see `evaluateMemoryPressure`.
+ */
+export function computeCgroupReclaimableBytes(stat: CgroupMemoryStat): number {
+  const cleanInactiveFile = Math.max(0, stat.inactiveFileBytes - stat.dirtyBytes);
+  return cleanInactiveFile + Math.floor(stat.slabReclaimableBytes / 2);
+}
+
+export function parseCgroupPressureSomeAvg10(raw: string): number | null {
+  const match = raw.match(/^some\s+avg10=([\d.]+)/m);
+  if (!match?.[1]) return null;
+  const value = Number.parseFloat(match[1]);
+  return Number.isFinite(value) ? value : null;
+}
+
+export function parseCgroupMemoryEvents(raw: string): { high: number; max: number } | null {
+  const read = (key: string): number | null => {
+    const match = raw.match(new RegExp(`^${key}\\s+(\\d+)$`, 'm'));
+    if (!match?.[1]) return null;
+    const value = parseInt(match[1], 10);
+    return Number.isFinite(value) ? value : null;
+  };
+  const high = read('high');
+  const max = read('max');
+  if (high === null || max === null) return null;
+  return { high, max };
 }
 
 function readSelfCgroupPath(): string | null {

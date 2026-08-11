@@ -164,10 +164,20 @@ control-plane path is DEPRECATED; do not add functionality to it.
   user-visible failure. On **macOS the signal is `kern.memorystatus_vm_pressure_level`**, not bytes
   — WARNING reclaims, only CRITICAL refuses, and an unreadable level FAILS OPEN. Do not add a
   byte-threshold fallback there: byte estimates cannot see compressor headroom, which is where a
-  Mac's reclaimable memory lives, so they report pressure on healthy machines. Linux/Windows keep
-  byte thresholds because those limits are hard (cgroup OOM kill, commit-limit allocation failure).
-  Eviction is bounded per call (`maxEvictionsPerCall`) because the caller awaits it on the prompt
-  hot path.
+  Mac's reclaimable memory lives, so they report pressure on healthy machines.
+  On **Linux under a cgroup, `memory.max - memory.current` is NOT headroom** — `memory.current`
+  counts page cache, so a tree scan parks tens of GB of clean cache in it and the cgroup reads as
+  full while resident memory is a fraction of that. Headroom therefore credits reclaimable
+  cache/slab (`computeCgroupReclaimableBytes`), and because that estimate deliberately excludes
+  `active_file` it is only allowed to RECLAIM on its own — refusing a turn additionally requires a
+  real stall (`memory.pressure` some avg10, or a hard-headroom floor on kernels without PSI). Host
+  `MemAvailable` needs no such corroboration; it is already reclaim-aware. Windows likewise: its
+  `AvailableBytes` already counts the standby list, and its commit limit is a genuine hard ceiling.
+  Two more rules, both learned from a false refusal: never act on the CACHED sample (force a
+  refresh once anything looks like pressure), and re-check with a short delay before failing a turn
+  (`pressureRecheckAttempts`) because reclaim returns cache in milliseconds. Eviction is bounded
+  per call (`maxEvictionsPerCall`) because the caller awaits it on the prompt hot path. The
+  threshold is a safety MARGIN, never "what a turn needs" — do not phrase it that way to users.
 - `provider-setup-manager.ts` owns durable default managed-builtin creation;
   setup rows with executable runtime overrides are invalid. The future
   config stays under `['providerSetup', configId]` while runtime/auth/live-probe

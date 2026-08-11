@@ -1892,19 +1892,44 @@ export class SessionExecutionService {
       );
     }
 
-    const availableMb = Math.round(result.availableMemoryBytes / 1024 / 1024);
-    const thresholdMb = Math.round(result.thresholdBytes / 1024 / 1024);
+    const mb = (bytes: number) => `${Math.round(bytes / 1024 / 1024)}MB`;
+    const availableMb = mb(result.availableMemoryBytes);
+    // Deliberately NOT "required to start a turn": the threshold is a safety margin the machine
+    // should keep free, not a measurement of what a turn costs. Quoting it as a requirement sent
+    // people hunting for 2.6GB that nothing was ever going to allocate.
+    const marginMb = mb(result.thresholdBytes);
     const commitText =
       result.availableCommitBytes !== undefined &&
       (result.pressureReason === 'commit' || result.pressureReason === 'physical_and_commit') &&
       result.commitThresholdBytes !== undefined
-        ? ` Commit headroom is ${Math.round(result.availableCommitBytes / 1024 / 1024)}MB ` +
-          `(threshold: ${Math.round(result.commitThresholdBytes / 1024 / 1024)}MB).`
+        ? ` Commit headroom is ${mb(result.availableCommitBytes)} ` +
+          `(safety margin: ${mb(result.commitThresholdBytes)}).`
         : '';
 
+    // Under a cgroup, one total explains nothing — the operator needs to see which term is
+    // binding, and how much of `memory.current` is just page cache.
+    const cgroup = result.cgroup;
+    if (cgroup) {
+      const hostText =
+        result.hostAvailableBytes !== undefined
+          ? `host available ${mb(result.hostAvailableBytes)}, `
+          : '';
+      const stallText =
+        cgroup.psiSomeAvg10 !== null
+          ? `stalled ${cgroup.psiSomeAvg10}% of the last 10s on reclaim`
+          : 'PSI unavailable; hard headroom is below the floor';
+      return (
+        `The machine is under memory pressure and ${stallText}. ` +
+        `cgroup ${cgroup.path}: ${mb(cgroup.currentBytes)} of ${mb(cgroup.maxBytes)} used, ` +
+        `${mb(cgroup.hardHeadroomBytes)} unused plus ${mb(cgroup.reclaimableBytes)} reclaimable ` +
+        `cache/slab; ${hostText}safety margin ${marginMb}. ` +
+        `The turn was not started; free memory and retry.${commitText}`
+      );
+    }
+
     return (
-      `The machine is under memory pressure (${availableMb}MB available, ` +
-      `${thresholdMb}MB required to start a turn). The turn was not started; ` +
+      `The machine is under memory pressure (${availableMb} available, ` +
+      `safety margin ${marginMb}). The turn was not started; ` +
       `free memory and retry.${commitText}`
     );
   }
