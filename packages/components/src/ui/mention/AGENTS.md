@@ -4,6 +4,41 @@ Shared mention primitive used by composer autocomplete surfaces.
 
 ## Invariants
 
+- Inserted text comes from the item, not from the trigger. `MentionItem`'s
+  `insertText` (commit) and `navigateText` (drill-down) replace the whole span
+  from the trigger character to the caret, so each carries its own leading
+  marker; without them the primitive falls back to `${trigger}${label}`.
+- An item with `navigateText` is a navigation step: selecting it rewrites the
+  trigger span, keeps the menu open, and records neither a mention range nor a
+  selected value. `onMentionAdd(..., { commit: true })` overrides that and
+  commits through `insertText`. Directory drill-down is one caller of this
+  contract, not a primitive special case — the primitive must not infer
+  navigation from a trailing `/`.
+- Backspace/ArrowLeft pop a `<namespace>:` drill-down prefix back to the bare
+  trigger in one keystroke (`isMentionNavigationPrefix`); path drill-downs are
+  excluded so Backspace still walks a path one character at a time.
+  Tab/ArrowRight descend into a highlighted navigation item.
+- The pop-back itself is `context.onNavigateBack()`, owned by the root next to
+  `onMentionAdd`: it has to interleave the controlled value commit with caret
+  restoration, so a menu's own Back affordance calls it rather than restaging the
+  transaction. Callers decide only *when* it applies.
+- `mention-trigger.ts` is the single owner of the `<namespace>:` grammar
+  (`parseMentionNamespaceSearch`). The menu resolves its level from the same
+  parse Backspace pops from, so the two cannot disagree about what is a
+  namespace.
+- `MentionKind` stays product-neutral: `pasted_text` is the only member the
+  primitive branches on, and every other kind is an opaque tag the menu chooses.
+  Adding a mention category must not edit this package.
+- `MentionItem` registers its stable ref object, never a `{ current: node }`
+  snapshot. The collection keys its map by that object and sorts by document
+  position through `.current`, so a snapshot taken before the node mounts leaves
+  a null-node entry behind — the sort collapses around it and highlight movement
+  matches the wrong row.
+- The primitive does not filter. Menus rank and slice their own candidates, so
+  `useFilterStore` runs with `manualFiltering`; letting the built-in scorer also
+  match the search term against each item's `value` hides rows whose payload
+  happens not to contain it, and a hidden row renders null, which strips its node
+  from the collection and breaks arrow-key movement across groups.
 - Desktop `MentionContent` is caret-anchored vertically but horizontally constrained
   to the textarea range via its virtual collision boundary and
   `--mention-input-width`.
@@ -27,4 +62,4 @@ Shared mention primitive used by composer autocomplete surfaces.
   handles drawer-safe portal placement.
 - `mention-item.tsx`, `mention-label.tsx`, `mention-highlighter.tsx`, and
   `mention-trigger.ts` provide row selection, accessibility label, inline
-  highlighting, and trigger parsing helpers.
+  highlighting, and trigger/drill-down-prefix parsing helpers.
