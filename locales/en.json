@@ -1901,6 +1901,7 @@
   "sessions.systemNotices.chatFailed.turnPrePromptFailed": "Failed before the agent could start",
   "sessions.systemNotices.chatFailed.messageDeliveryFailed": "Message delivery failed - please resend after sync recovers",
   "sessions.systemNotices.chatFailed.machineAccessDenied": "Machine access denied",
+  "sessions.systemNotices.chatFailed.memoryPressure": "The machine is low on memory - free some memory and retry",
   "sessions.systemNotices.chatFailed.unknown": "An unexpected error occurred",
   "sessions.systemNotices.chatFailed.viewDetails": "View details",
   "sessions.systemNotices.chatFailed.copyError": "Copy error",

@@ -1,6 +1,11 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { SessionId } from '@lody/shared';
-import { SessionGCManager, SessionGCConfig, loadGCConfig } from './session-gc-manager';
+import {
+  SessionGCManager,
+  SessionGCConfig,
+  loadGCConfig,
+  evaluateMemoryPressure,
+} from './session-gc-manager';
 
 // Mock the memory utility
 vi.mock('@/utils/memory', () => ({
@@ -9,6 +14,9 @@ vi.mock('@/utils/memory', () => ({
     effectiveMemoryLimitBytes: 32 * 1024 * 1024 * 1024,
   })),
   getEffectiveMemoryLimitBytes: vi.fn(() => 32 * 1024 * 1024 * 1024), // 32 GB by default
+  DARWIN_PRESSURE_NORMAL: 1,
+  DARWIN_PRESSURE_WARNING: 2,
+  DARWIN_PRESSURE_CRITICAL: 4,
 }));
 
 import { getMemoryPressureSnapshot } from '@/utils/memory';
@@ -55,29 +63,39 @@ describe('SessionGCManager', () => {
     vi.useRealTimers();
   });
 
-  const createManager = (config?: Partial<SessionGCConfig>) => {
+  // Platform is explicit in every test: the byte-threshold branch does not run on macOS, so a
+  // host-dependent default would make these pass or fail based on the developer's laptop.
+  const createManager = (
+    config?: Partial<SessionGCConfig>,
+    platform: NodeJS.Platform = 'linux'
+  ) => {
     const defaultConfig: SessionGCConfig = {
       idleTimeoutMs: 20 * 60 * 1000, // 20 minutes
       sweepIntervalMs: 60 * 1000, // 1 minute
       enabled: true,
       memoryThresholdBytes: 1024 * 1024 * 1024, // 1 GB
+      maxEvictionsPerCall: 100,
       ...config,
     };
-    return new SessionGCManager(defaultConfig, {
-      getSessionLastActivity: (sessionId) => sessionActivities.get(sessionId),
-      hasActiveTurn: (sessionId) => activeTurns.has(sessionId),
-      hasActiveGoal: async (sessionId) => activeGoals.has(sessionId),
-      hasPendingUpdates: (sessionId) => pendingUpdates.has(sessionId),
-      hasPendingUserWork: async (sessionId) => pendingUserWork.has(sessionId),
-      isArchiveInFlight: (sessionId) => archiveInFlight.has(sessionId),
-      cleanSession: cleanMock,
-      getSessionIds: () => [...sessionActivities.keys()],
-      memoryPressure: {
-        getLatest: mockedGetMemoryPressureSnapshot,
-        refresh: mockedGetMemoryPressureSnapshot,
+    return new SessionGCManager(
+      defaultConfig,
+      {
+        getSessionLastActivity: (sessionId) => sessionActivities.get(sessionId),
+        hasActiveTurn: (sessionId) => activeTurns.has(sessionId),
+        hasActiveGoal: async (sessionId) => activeGoals.has(sessionId),
+        hasPendingUpdates: (sessionId) => pendingUpdates.has(sessionId),
+        hasPendingUserWork: async (sessionId) => pendingUserWork.has(sessionId),
+        isArchiveInFlight: (sessionId) => archiveInFlight.has(sessionId),
+        cleanSession: cleanMock,
+        getSessionIds: () => [...sessionActivities.keys()],
+        memoryPressure: {
+          getLatest: mockedGetMemoryPressureSnapshot,
+          refresh: mockedGetMemoryPressureSnapshot,
+        },
+        logger: loggerMock as any,
       },
-      logger: loggerMock as any,
-    });
+      platform
+    );
   };
 
   describe('loadGCConfig', () => {
@@ -89,6 +107,8 @@ describe('SessionGCManager', () => {
       // Default threshold = 10% of effective memory (32 GB mock), clamped to [1 GB, 4 GB]
       // = floor(32 * 1024^3 * 0.1) = 3,435,973,836 bytes (~3.2 GB)
       expect(config.memoryThresholdBytes).toBe(Math.floor(32 * 1024 * 1024 * 1024 * 0.1));
+      // Eviction runs on the prompt hot path, so a single turn start can only pay for a few.
+      expect(config.maxEvictionsPerCall).toBe(3);
     });
 
     it('reads env vars', () => {
@@ -543,6 +563,190 @@ describe('SessionGCManager', () => {
       manager.start();
 
       expect(loggerMock.debug).toHaveBeenCalledWith('[GC] Session GC is disabled');
+    });
+  });
+
+  describe('evaluateMemoryPressure', () => {
+    const GB = 1024 * 1024 * 1024;
+    const thresholds = (platform: NodeJS.Platform) => ({
+      platform,
+      thresholdBytes: 1 * GB,
+      commitThresholdBytes: 1 * GB,
+    });
+
+    describe('darwin', () => {
+      // The byte figures below are deliberately "under pressure" by the Linux rule, to prove the
+      // kernel level is the only input on macOS.
+      const starvedBytes = {
+        availableMemoryBytes: 100 * 1024 * 1024,
+        effectiveMemoryLimitBytes: 32 * GB,
+      };
+
+      it('does nothing at NORMAL even when available bytes look low', () => {
+        expect(
+          evaluateMemoryPressure({ ...starvedBytes, memoryPressureLevel: 1 }, thresholds('darwin'))
+        ).toEqual({ evict: false, block: false, reason: null });
+      });
+
+      it('reclaims but does not refuse a turn at WARNING', () => {
+        expect(
+          evaluateMemoryPressure({ ...starvedBytes, memoryPressureLevel: 2 }, thresholds('darwin'))
+        ).toEqual({ evict: true, block: false, reason: 'darwin_pressure_warning' });
+      });
+
+      it('reclaims and refuses a turn at CRITICAL', () => {
+        expect(
+          evaluateMemoryPressure({ ...starvedBytes, memoryPressureLevel: 4 }, thresholds('darwin'))
+        ).toEqual({ evict: true, block: true, reason: 'darwin_pressure_critical' });
+      });
+
+      it('fails open when the kernel level is unavailable', () => {
+        // Must NOT fall back to the byte thresholds: they misreport pressure on healthy Macs.
+        expect(evaluateMemoryPressure(starvedBytes, thresholds('darwin'))).toEqual({
+          evict: false,
+          block: false,
+          reason: null,
+        });
+      });
+    });
+
+    describe('linux', () => {
+      it('reclaims and refuses together below the threshold', () => {
+        expect(
+          evaluateMemoryPressure(
+            { availableMemoryBytes: 500 * 1024 * 1024, effectiveMemoryLimitBytes: 32 * GB },
+            thresholds('linux')
+          )
+        ).toEqual({ evict: true, block: true, reason: 'physical' });
+      });
+
+      it('does nothing above the threshold', () => {
+        expect(
+          evaluateMemoryPressure(
+            { availableMemoryBytes: 4 * GB, effectiveMemoryLimitBytes: 32 * GB },
+            thresholds('linux')
+          )
+        ).toEqual({ evict: false, block: false, reason: null });
+      });
+
+      it('ignores a kernel level that should never be present off macOS', () => {
+        expect(
+          evaluateMemoryPressure(
+            {
+              availableMemoryBytes: 4 * GB,
+              effectiveMemoryLimitBytes: 32 * GB,
+              memoryPressureLevel: 4,
+            },
+            thresholds('linux')
+          )
+        ).toEqual({ evict: false, block: false, reason: null });
+      });
+    });
+
+    describe('win32', () => {
+      it('reports commit pressure on its own', () => {
+        expect(
+          evaluateMemoryPressure(
+            {
+              availableMemoryBytes: 4 * GB,
+              effectiveMemoryLimitBytes: 32 * GB,
+              availableCommitBytes: 100 * 1024 * 1024,
+            },
+            thresholds('win32')
+          )
+        ).toEqual({ evict: true, block: true, reason: 'commit' });
+      });
+
+      it('reports both when physical and commit are exhausted', () => {
+        expect(
+          evaluateMemoryPressure(
+            {
+              availableMemoryBytes: 500 * 1024 * 1024,
+              effectiveMemoryLimitBytes: 32 * GB,
+              availableCommitBytes: 100 * 1024 * 1024,
+            },
+            thresholds('win32')
+          )
+        ).toEqual({ evict: true, block: true, reason: 'physical_and_commit' });
+      });
+    });
+  });
+
+  describe('evictForMemoryPressure on darwin', () => {
+    const idleSessions = (count: number) => {
+      const now = Date.now();
+      for (let i = 0; i < count; i++) {
+        // Descending idle time so eviction order is deterministic: session-0 is the stalest.
+        sessionActivities.set(`session-${i}` as SessionId, now - (count - i) * 60_000);
+      }
+    };
+
+    it('reclaims idle sessions at WARNING without failing the turn', async () => {
+      const manager = createManager({ maxEvictionsPerCall: 100 }, 'darwin');
+      idleSessions(2);
+      mockedGetMemoryPressureSnapshot.mockResolvedValue({
+        availableMemoryBytes: 100 * 1024 * 1024,
+        effectiveMemoryLimitBytes: 32 * 1024 * 1024 * 1024,
+        memoryPressureLevel: 2,
+      });
+
+      const result = await manager.evictForMemoryPressure();
+
+      expect(cleanMock).toHaveBeenCalledTimes(2);
+      expect(result.hadMemoryPressure).toBe(true);
+      expect(result.stillUnderPressure).toBe(false);
+      expect(result.pressureReason).toBe('darwin_pressure_warning');
+    });
+
+    it('fails the turn at CRITICAL', async () => {
+      const manager = createManager({}, 'darwin');
+      mockedGetMemoryPressureSnapshot.mockResolvedValue({
+        availableMemoryBytes: 100 * 1024 * 1024,
+        effectiveMemoryLimitBytes: 32 * 1024 * 1024 * 1024,
+        memoryPressureLevel: 4,
+      });
+
+      const result = await manager.evictForMemoryPressure();
+
+      expect(result.stillUnderPressure).toBe(true);
+      expect(result.pressureReason).toBe('darwin_pressure_critical');
+      expect(result.memoryPressureLevel).toBe(4);
+    });
+
+    it('does not act on low available bytes when the kernel reports NORMAL', async () => {
+      const manager = createManager({}, 'darwin');
+      idleSessions(2);
+      mockedGetMemoryPressureSnapshot.mockResolvedValue({
+        // Well under memoryThresholdBytes — the old heuristic would have evicted and blocked here.
+        availableMemoryBytes: 100 * 1024 * 1024,
+        effectiveMemoryLimitBytes: 32 * 1024 * 1024 * 1024,
+        memoryPressureLevel: 1,
+      });
+
+      const result = await manager.evictForMemoryPressure();
+
+      expect(cleanMock).not.toHaveBeenCalled();
+      expect(result.hadMemoryPressure).toBe(false);
+      expect(result.stillUnderPressure).toBe(false);
+    });
+
+    it('bounds evictions per call so a turn start is not stalled', async () => {
+      const manager = createManager({ maxEvictionsPerCall: 3 }, 'darwin');
+      idleSessions(10);
+      mockedGetMemoryPressureSnapshot.mockResolvedValue({
+        availableMemoryBytes: 100 * 1024 * 1024,
+        effectiveMemoryLimitBytes: 32 * 1024 * 1024 * 1024,
+        memoryPressureLevel: 2,
+      });
+
+      await manager.evictForMemoryPressure();
+
+      expect(cleanMock).toHaveBeenCalledTimes(3);
+      expect(cleanMock.mock.calls.map(([id]) => id)).toEqual([
+        'session-0',
+        'session-1',
+        'session-2',
+      ]);
     });
   });
 });

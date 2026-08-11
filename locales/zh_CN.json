@@ -1899,6 +1899,7 @@
   "sessions.systemNotices.chatFailed.turnPrePromptFailed": "Agent 启动前失败",
   "sessions.systemNotices.chatFailed.messageDeliveryFailed": "消息送达失败 - 请在同步恢复后重发",
   "sessions.systemNotices.chatFailed.machineAccessDenied": "机器访问被拒绝",
+  "sessions.systemNotices.chatFailed.memoryPressure": "机器内存不足 - 请释放内存后重试",
   "sessions.systemNotices.chatFailed.unknown": "发生意外错误",
   "sessions.systemNotices.chatFailed.viewDetails": "查看详情",
   "sessions.systemNotices.chatFailed.copyError": "复制错误",

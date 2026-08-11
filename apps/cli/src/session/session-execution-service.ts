@@ -1883,6 +1883,15 @@ export class SessionExecutionService {
   }
 
   private formatMemoryPressureFailureMessage(result: MemoryPressureEvictionResult): string {
+    // macOS decides from the kernel's own pressure level, not from a byte budget. Quoting
+    // "N MB available / M MB required" there would state a threshold that was never applied.
+    if (result.pressureReason === 'darwin_pressure_critical') {
+      return (
+        'The machine is at critical memory pressure — macOS is reclaiming memory and ' +
+        'terminating processes to keep up. The turn was not started; free memory and retry.'
+      );
+    }
+
     const availableMb = Math.round(result.availableMemoryBytes / 1024 / 1024);
     const thresholdMb = Math.round(result.thresholdBytes / 1024 / 1024);
     const commitText =

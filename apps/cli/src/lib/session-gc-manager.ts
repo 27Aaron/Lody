@@ -1,7 +1,13 @@
 import { SessionId } from '@lody/shared';
 import { Logger } from '@/utils/logger';
 import { formatErrorMessage } from '@/utils/format-error';
-import { getEffectiveMemoryLimitBytes, type MemoryPressureSnapshot } from '@/utils/memory';
+import {
+  DARWIN_PRESSURE_CRITICAL,
+  DARWIN_PRESSURE_WARNING,
+  getEffectiveMemoryLimitBytes,
+  type DarwinMemoryPressureLevel,
+  type MemoryPressureSnapshot,
+} from '@/utils/memory';
 import type { MemoryPressureSnapshotSource } from '@/monitor/memory-pressure-sampler';
 
 /**
@@ -17,9 +23,23 @@ import type { MemoryPressureSnapshotSource } from '@/monitor/memory-pressure-sam
  *
  * ## Memory Pressure Eviction
  *
- * Before starting a new session, call `evictForMemoryPressure()` to check available system memory.
- * If available memory is below `memoryThresholdBytes` (default: 1 GB), idle sessions are evicted
- * one at a time (longest idle first) until memory is above the threshold or no idle sessions remain.
+ * Before starting a new session, call `evictForMemoryPressure()`. It produces two independent
+ * verdicts (see `evaluateMemoryPressure`): whether to reclaim idle sessions, and whether the
+ * machine is too constrained to start a turn at all. Reclaiming is cheap and invisible to the
+ * user (a reclaimed session is restored on its next turn); refusing a turn is not, so the two
+ * are deliberately not the same threshold.
+ *
+ * The signal is platform specific:
+ *
+ * - **macOS** uses `kern.memorystatus_vm_pressure_level`, the kernel's own verdict and the one
+ *   jetsam acts on. WARNING reclaims (the kernel is already killing idle processes at that
+ *   point, so ordered reclamation beats waiting to be picked at random); only CRITICAL refuses
+ *   a turn. Byte-based estimates are NOT used here and must not be reintroduced as a fallback:
+ *   they cannot see compressor headroom, which is where most of a Mac's reclaimable memory is,
+ *   and they consequently report pressure on perfectly healthy machines.
+ * - **Linux/Windows** keep the byte thresholds. There the limits are real and hard — a cgroup
+ *   `memory.max` overrun is an OOM kill and a Windows commit-limit overrun is an allocation
+ *   failure — so refusing early is correct.
  */
 
 export interface SessionGCConfig {
@@ -31,6 +51,29 @@ export interface SessionGCConfig {
   enabled: boolean;
   /** Memory threshold in bytes; below this, memory pressure eviction kicks in (default: 1 GB) */
   memoryThresholdBytes: number;
+  /**
+   * Upper bound on sessions evicted per `evictForMemoryPressure()` call (default: 3).
+   *
+   * This runs on the prompt hot path — the caller awaits it before `agent.prompt` — and each
+   * eviction terminates an ACP process and unloads a Loro document. Without a bound, one turn
+   * start could synchronously tear down every idle session. The periodic sweep picks up the rest.
+   */
+  maxEvictionsPerCall: number;
+}
+
+export type MemoryPressureReason =
+  | 'physical'
+  | 'commit'
+  | 'physical_and_commit'
+  | 'darwin_pressure_warning'
+  | 'darwin_pressure_critical';
+
+export interface MemoryPressureVerdict {
+  /** Reclaim idle sessions. Invisible to users; they are restored on their next turn. */
+  evict: boolean;
+  /** Refuse to start a turn. User-visible failure — reserved for genuinely constrained machines. */
+  block: boolean;
+  reason: MemoryPressureReason | null;
 }
 
 export interface SessionGCDeps {
@@ -51,10 +94,14 @@ export interface SessionGCDeps {
 export interface MemoryPressureEvictionResult {
   availableMemoryBytes: number;
   thresholdBytes: number;
+  /** Something was worth reclaiming. Not a statement about whether the turn may proceed. */
   hadMemoryPressure: boolean;
+  /** The turn must be refused. */
   stillUnderPressure: boolean;
   evictedSessionIds: SessionId[];
-  pressureReason: 'physical' | 'commit' | 'physical_and_commit' | null;
+  pressureReason: MemoryPressureReason | null;
+  /** macOS only; lets the failure message describe the kernel verdict instead of byte counts. */
+  memoryPressureLevel?: DarwinMemoryPressureLevel;
   availableCommitBytes?: number;
   commitThresholdBytes?: number;
   commitLimitBytes?: number;
@@ -71,6 +118,7 @@ function readEnvNumber(key: string, fallback: number): number {
 const GIB = 1024 * 1024 * 1024;
 const WINDOWS_COMMIT_THRESHOLD_FLOOR_BYTES = 512 * 1024 * 1024;
 const WINDOWS_COMMIT_THRESHOLD_CEILING_BYTES = 2 * GIB;
+const DEFAULT_MAX_EVICTIONS_PER_CALL = 3;
 
 /**
  * Default memory pressure threshold: 10% of effective memory (cgroup-aware),
@@ -91,6 +139,10 @@ export function loadGCConfig(): SessionGCConfig {
       'LODY_SESSION_GC_MEMORY_THRESHOLD_BYTES',
       defaultMemoryThresholdBytes()
     ),
+    maxEvictionsPerCall: readEnvNumber(
+      'LODY_SESSION_GC_MAX_EVICTIONS_PER_CALL',
+      DEFAULT_MAX_EVICTIONS_PER_CALL
+    ),
   };
 }
 
@@ -101,12 +153,60 @@ function getWindowsCommitThresholdBytes(memoryThresholdBytes: number): number {
   );
 }
 
+export interface MemoryPressureThresholds {
+  platform: NodeJS.Platform;
+  thresholdBytes: number;
+  commitThresholdBytes: number;
+}
+
+/**
+ * Decide, from one memory sample, whether to reclaim idle sessions and whether to refuse a turn.
+ *
+ * Pure — the platform is an explicit input so both branches are testable everywhere.
+ */
+export function evaluateMemoryPressure(
+  snapshot: MemoryPressureSnapshot,
+  thresholds: MemoryPressureThresholds
+): MemoryPressureVerdict {
+  if (thresholds.platform === 'darwin') {
+    // Fail open. An unreadable level must not silently reactivate the byte thresholds:
+    // they misreport pressure on healthy Macs, which is the bug this branch exists to fix.
+    if (snapshot.memoryPressureLevel === DARWIN_PRESSURE_CRITICAL) {
+      return { evict: true, block: true, reason: 'darwin_pressure_critical' };
+    }
+    if (snapshot.memoryPressureLevel === DARWIN_PRESSURE_WARNING) {
+      return { evict: true, block: false, reason: 'darwin_pressure_warning' };
+    }
+    return { evict: false, block: false, reason: null };
+  }
+
+  const physicalPressure = snapshot.availableMemoryBytes < thresholds.thresholdBytes;
+  const commitPressure =
+    snapshot.availableCommitBytes !== undefined &&
+    snapshot.availableCommitBytes < thresholds.commitThresholdBytes;
+
+  const reason: MemoryPressureReason | null =
+    physicalPressure && commitPressure
+      ? 'physical_and_commit'
+      : physicalPressure
+        ? 'physical'
+        : commitPressure
+          ? 'commit'
+          : null;
+
+  // Linux cgroup limits and Windows commit limits are hard: overrunning them is an OOM kill or
+  // an allocation failure, so the reclaim and refuse thresholds stay the same here.
+  return { evict: reason !== null, block: reason !== null, reason };
+}
+
 export class SessionGCManager {
   private sweepInterval: NodeJS.Timeout | null = null;
 
   constructor(
     private config: SessionGCConfig,
-    private deps: SessionGCDeps
+    private deps: SessionGCDeps,
+    /** Injectable so both the kernel-signal and byte-threshold branches are testable anywhere. */
+    private platform: NodeJS.Platform = process.platform
   ) {}
 
   start(): void {
@@ -114,10 +214,15 @@ export class SessionGCManager {
       this.deps.logger.debug('[GC] Session GC is disabled');
       return;
     }
+    const pressureSignal =
+      this.platform === 'darwin'
+        ? 'kern.memorystatus_vm_pressure_level'
+        : `available<${Math.round(this.config.memoryThresholdBytes / 1024 / 1024)}MB`;
     this.deps.logger.debug(
       `[GC] Starting session GC (interval=${this.config.sweepIntervalMs}ms, ` +
         `idleTimeout=${this.config.idleTimeoutMs}ms, ` +
-        `memoryThreshold=${Math.round(this.config.memoryThresholdBytes / 1024 / 1024)}MB)`
+        `pressureSignal=${pressureSignal}, ` +
+        `maxEvictionsPerCall=${this.config.maxEvictionsPerCall})`
     );
     this.sweepInterval = setInterval(() => void this.sweep(), this.config.sweepIntervalMs);
   }
@@ -173,11 +278,12 @@ export class SessionGCManager {
   }
 
   /**
-   * Evict idle sessions under memory pressure.
+   * Reclaim idle sessions under memory pressure, and report whether a turn may start.
    *
-   * Call this before starting a new session. If available system memory is below
-   * `memoryThresholdBytes`, evicts the longest-idle sessions one at a time until
-   * memory is above the threshold or no idle sessions remain.
+   * Call this before starting a turn. Evicts the longest-idle sessions one at a time (bounded by
+   * `maxEvictionsPerCall`) while the platform signal still asks for reclamation, then reports
+   * `stillUnderPressure` — which is the REFUSE verdict, not the reclaim one. On macOS those two
+   * differ: WARNING reclaims silently, only CRITICAL refuses.
    *
    * @param excludeSessionId - Session to exclude from eviction (e.g. the session being started)
    */
@@ -186,60 +292,32 @@ export class SessionGCManager {
   ): Promise<MemoryPressureEvictionResult> {
     const thresholdBytes = this.config.memoryThresholdBytes;
     const commitThresholdBytes = getWindowsCommitThresholdBytes(thresholdBytes);
-    let memorySnapshot = await this.deps.memoryPressure.getLatest();
-    let availableMemory = memorySnapshot.availableMemoryBytes;
-    let pressureReason = this.getPressureReason(
-      memorySnapshot,
+    const thresholds: MemoryPressureThresholds = {
+      platform: this.platform,
       thresholdBytes,
-      commitThresholdBytes
-    );
+      commitThresholdBytes,
+    };
+    let memorySnapshot = await this.deps.memoryPressure.getLatest();
+    let verdict = evaluateMemoryPressure(memorySnapshot, thresholds);
 
-    if (!this.config.enabled) {
-      return {
-        availableMemoryBytes: availableMemory,
+    if (!this.config.enabled || !verdict.evict) {
+      return this.buildEvictionResult({
+        snapshot: memorySnapshot,
         thresholdBytes,
+        commitThresholdBytes,
         hadMemoryPressure: false,
-        stillUnderPressure: false,
+        // A disabled GC never blocks: it is the operator opting out of the whole mechanism.
+        verdict: this.config.enabled ? verdict : { evict: false, block: false, reason: null },
         evictedSessionIds: [],
-        pressureReason: null,
-        ...(memorySnapshot.availableCommitBytes !== undefined
-          ? {
-              availableCommitBytes: memorySnapshot.availableCommitBytes,
-              commitThresholdBytes,
-              commitLimitBytes: memorySnapshot.commitLimitBytes,
-              committedBytes: memorySnapshot.committedBytes,
-            }
-          : {}),
-      };
+      });
     }
 
-    if (pressureReason === null) {
-      return {
-        availableMemoryBytes: availableMemory,
-        thresholdBytes,
-        hadMemoryPressure: false,
-        stillUnderPressure: false,
-        evictedSessionIds: [],
-        pressureReason: null,
-        ...(memorySnapshot.availableCommitBytes !== undefined
-          ? {
-              availableCommitBytes: memorySnapshot.availableCommitBytes,
-              commitThresholdBytes,
-              commitLimitBytes: memorySnapshot.commitLimitBytes,
-              committedBytes: memorySnapshot.committedBytes,
-            }
-          : {}),
-      };
-    }
-
-    const commitText =
-      memorySnapshot.availableCommitBytes !== undefined
-        ? `, commit headroom ${Math.round(memorySnapshot.availableCommitBytes / 1024 / 1024)}MB ` +
-          `(threshold: ${Math.round(commitThresholdBytes / 1024 / 1024)}MB)`
-        : '';
     this.deps.logger.debug(
-      `[GC] Memory pressure detected: ${Math.round(availableMemory / 1024 / 1024)}MB available ` +
-        `(threshold: ${Math.round(thresholdBytes / 1024 / 1024)}MB)${commitText}`
+      `[GC] Memory pressure detected (${verdict.reason}): ${this.describeMemoryState(
+        memorySnapshot,
+        thresholdBytes,
+        commitThresholdBytes
+      )}`
     );
 
     // Get all sessions sorted by idle time (longest idle first)
@@ -248,7 +326,7 @@ export class SessionGCManager {
 
     const evictedSessionIds: SessionId[] = [];
     for (const { sessionId, idleMs } of sessions) {
-      if (pressureReason === null) {
+      if (!verdict.evict || evictedSessionIds.length >= this.config.maxEvictionsPerCall) {
         break;
       }
 
@@ -273,12 +351,7 @@ export class SessionGCManager {
         evictedSessionIds.push(sessionId);
         // Re-check memory after eviction
         memorySnapshot = await this.deps.memoryPressure.refresh();
-        availableMemory = memorySnapshot.availableMemoryBytes;
-        pressureReason = this.getPressureReason(
-          memorySnapshot,
-          thresholdBytes,
-          commitThresholdBytes
-        );
+        verdict = evaluateMemoryPressure(memorySnapshot, thresholds);
       } catch (error) {
         this.deps.logger.error(
           `[GC] Failed to evict session ${sessionId}: ${formatErrorMessage(error)}`
@@ -286,7 +359,8 @@ export class SessionGCManager {
       }
     }
 
-    const stillUnderPressure = pressureReason !== null;
+    const availableMemory = memorySnapshot.availableMemoryBytes;
+    const stillUnderPressure = verdict.block;
 
     if (evictedSessionIds.length > 0) {
       this.deps.logger.debug(
@@ -299,44 +373,64 @@ export class SessionGCManager {
       );
     }
 
-    return {
-      availableMemoryBytes: availableMemory,
+    return this.buildEvictionResult({
+      snapshot: memorySnapshot,
       thresholdBytes,
+      commitThresholdBytes,
       hadMemoryPressure: true,
-      stillUnderPressure,
+      verdict,
       evictedSessionIds,
-      pressureReason,
-      ...(memorySnapshot.availableCommitBytes !== undefined
+    });
+  }
+
+  private buildEvictionResult(options: {
+    snapshot: MemoryPressureSnapshot;
+    thresholdBytes: number;
+    commitThresholdBytes: number;
+    hadMemoryPressure: boolean;
+    verdict: MemoryPressureVerdict;
+    evictedSessionIds: SessionId[];
+  }): MemoryPressureEvictionResult {
+    const { snapshot, thresholdBytes, commitThresholdBytes, verdict } = options;
+    return {
+      availableMemoryBytes: snapshot.availableMemoryBytes,
+      thresholdBytes,
+      hadMemoryPressure: options.hadMemoryPressure,
+      stillUnderPressure: verdict.block,
+      evictedSessionIds: options.evictedSessionIds,
+      pressureReason: verdict.reason,
+      ...(snapshot.memoryPressureLevel !== undefined
+        ? { memoryPressureLevel: snapshot.memoryPressureLevel }
+        : {}),
+      ...(snapshot.availableCommitBytes !== undefined
         ? {
-            availableCommitBytes: memorySnapshot.availableCommitBytes,
+            availableCommitBytes: snapshot.availableCommitBytes,
             commitThresholdBytes,
-            commitLimitBytes: memorySnapshot.commitLimitBytes,
-            committedBytes: memorySnapshot.committedBytes,
+            commitLimitBytes: snapshot.commitLimitBytes,
+            committedBytes: snapshot.committedBytes,
           }
         : {}),
     };
   }
 
-  private getPressureReason(
+  private describeMemoryState(
     snapshot: MemoryPressureSnapshot,
     thresholdBytes: number,
     commitThresholdBytes: number
-  ): MemoryPressureEvictionResult['pressureReason'] {
-    const physicalPressure = snapshot.availableMemoryBytes < thresholdBytes;
-    const commitPressure =
-      snapshot.availableCommitBytes !== undefined &&
-      snapshot.availableCommitBytes < commitThresholdBytes;
+  ): string {
+    if (snapshot.memoryPressureLevel !== undefined) {
+      return `kernel pressure level ${snapshot.memoryPressureLevel}`;
+    }
 
-    if (physicalPressure && commitPressure) {
-      return 'physical_and_commit';
-    }
-    if (physicalPressure) {
-      return 'physical';
-    }
-    if (commitPressure) {
-      return 'commit';
-    }
-    return null;
+    const commitText =
+      snapshot.availableCommitBytes !== undefined
+        ? `, commit headroom ${Math.round(snapshot.availableCommitBytes / 1024 / 1024)}MB ` +
+          `(threshold: ${Math.round(commitThresholdBytes / 1024 / 1024)}MB)`
+        : '';
+    return (
+      `${Math.round(snapshot.availableMemoryBytes / 1024 / 1024)}MB available ` +
+      `(threshold: ${Math.round(thresholdBytes / 1024 / 1024)}MB)${commitText}`
+    );
   }
 
   /**

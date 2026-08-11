@@ -13,9 +13,27 @@ export interface WindowsMemoryStatus {
   availableCommitBytes: number;
 }
 
+/**
+ * macOS kernel memory pressure level (`kern.memorystatus_vm_pressure_level`),
+ * mapped 1:1 onto `dispatch_source_memorypressure_flags_t`.
+ *
+ * XNU derives this from a single ratio: pages occupied by the compressor versus
+ * `active + inactive + free + speculative`. It enters WARNING once the compressor
+ * holds more physical memory than all of those queues combined, and CRITICAL at
+ * roughly 1.9x that. Free-memory byte counts do not enter the decision at all,
+ * which is exactly why they are a poor admission signal on this platform.
+ */
+export type DarwinMemoryPressureLevel = 1 | 2 | 4;
+
+export const DARWIN_PRESSURE_NORMAL = 1 satisfies DarwinMemoryPressureLevel;
+export const DARWIN_PRESSURE_WARNING = 2 satisfies DarwinMemoryPressureLevel;
+export const DARWIN_PRESSURE_CRITICAL = 4 satisfies DarwinMemoryPressureLevel;
+
 export interface MemoryPressureSnapshot {
   availableMemoryBytes: number;
   effectiveMemoryLimitBytes: number;
+  /** macOS only; absent when the probe is unavailable or returned an unknown value. */
+  memoryPressureLevel?: DarwinMemoryPressureLevel;
   availableCommitBytes?: number;
   commitLimitBytes?: number;
   committedBytes?: number;
@@ -43,7 +61,10 @@ export function getAvailableMemoryBytes(): number {
 }
 
 export async function getMemoryPressureSnapshot(): Promise<MemoryPressureSnapshot> {
-  const windowsStatus = await getWindowsMemoryStatus();
+  const [windowsStatus, darwinPressureLevel] = await Promise.all([
+    getWindowsMemoryStatus(),
+    getDarwinMemoryPressureLevel(),
+  ]);
   const systemAvailable = await getSystemAvailableMemoryBytes(windowsStatus);
   const cgroupAvailable = getCgroupAvailableMemoryBytes();
   const availableMemoryBytes =
@@ -53,6 +74,7 @@ export async function getMemoryPressureSnapshot(): Promise<MemoryPressureSnapsho
   return {
     availableMemoryBytes,
     effectiveMemoryLimitBytes,
+    ...(darwinPressureLevel !== null ? { memoryPressureLevel: darwinPressureLevel } : {}),
     ...(windowsStatus
       ? {
           availableCommitBytes: windowsStatus.availableCommitBytes,
@@ -169,9 +191,63 @@ export function parseWindowsMemoryStatus(rawJson: string): WindowsMemoryStatus |
 }
 
 /**
+ * Read the macOS kernel memory pressure level.
+ *
+ * This is the same value jetsam itself acts on, and it is the only admission
+ * signal on macOS that is not systematically wrong: byte-based estimates cannot
+ * account for the compressor's remaining headroom, which is where most of a
+ * Mac's reclaimable memory actually lives.
+ *
+ * Returns null off macOS, or when the probe fails/returns an unknown value. The
+ * caller must treat null as "no pressure" (fail open) rather than falling back
+ * to a byte threshold.
+ */
+async function getDarwinMemoryPressureLevel(): Promise<DarwinMemoryPressureLevel | null> {
+  if (process.platform !== 'darwin') {
+    return null;
+  }
+
+  try {
+    const { stdout } = await execFileAsync(
+      'sysctl',
+      ['-n', 'kern.memorystatus_vm_pressure_level'],
+      {
+        encoding: 'utf8',
+        timeout: MEMORY_PROBE_TIMEOUT_MS,
+      }
+    );
+    return parseDarwinPressureLevel(String(stdout ?? ''));
+  } catch {
+    return null;
+  }
+}
+
+export function parseDarwinPressureLevel(raw: string): DarwinMemoryPressureLevel | null {
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return null;
+  }
+
+  const value = Number.parseInt(trimmed, 10);
+  if (
+    value === DARWIN_PRESSURE_NORMAL ||
+    value === DARWIN_PRESSURE_WARNING ||
+    value === DARWIN_PRESSURE_CRITICAL
+  ) {
+    return value;
+  }
+
+  // Unknown level: a future kernel value must not be guessed at.
+  return null;
+}
+
+/**
  * On macOS, `os.freemem()` is too conservative because it excludes memory that
  * can be reclaimed quickly, such as cached file-backed pages. Approximate the
  * reclaimable budget from `vm_stat` instead.
+ *
+ * This number is reported to the device resource monitor. It is deliberately NOT
+ * the admission signal on macOS — see `getDarwinMemoryPressureLevel`.
  */
 async function getDarwinAvailableMemoryBytes(): Promise<number | null> {
   if (process.platform !== 'darwin') {

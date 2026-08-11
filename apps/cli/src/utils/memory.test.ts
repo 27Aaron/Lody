@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   getAvailableMemoryBytes,
   parseDarwinAvailableMemoryBytes,
+  parseDarwinPressureLevel,
   parseWindowsMemoryStatus,
 } from './memory';
 
@@ -52,5 +53,27 @@ File-backed pages:                       124000.
 
   it('returns null when windows memory JSON is malformed', () => {
     expect(parseWindowsMemoryStatus('{"AvailableBytes":"nope"}')).toBeNull();
+  });
+});
+
+describe('parseDarwinPressureLevel', () => {
+  it('parses the three levels the kernel can report', () => {
+    // `sysctl -n` emits a bare integer plus a trailing newline.
+    expect(parseDarwinPressureLevel('1\n')).toBe(1);
+    expect(parseDarwinPressureLevel('2\n')).toBe(2);
+    expect(parseDarwinPressureLevel('4\n')).toBe(4);
+  });
+
+  it('tolerates surrounding whitespace', () => {
+    expect(parseDarwinPressureLevel('  4  ')).toBe(4);
+  });
+
+  it.each([
+    ['empty output', ''],
+    ['sysctl error text', 'sysctl: unknown oid'],
+    ['a level this code does not understand', '3'],
+    ['a non-integer', '2.5'],
+  ])('returns null for %s so the caller fails open', (_label, raw) => {
+    expect(parseDarwinPressureLevel(raw)).toBeNull();
   });
 });

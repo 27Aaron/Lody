@@ -158,6 +158,16 @@ control-plane path is DEPRECATED; do not add functionality to it.
   `LODY_LORO_HEALTH_STABILITY_WINDOW_MS` (5s) counts as a failed recovery and
   charges the attempt counter instead of resetting it, and `force` must not
   clear that history. Regression coverage: `tests/reconnect-storm-repro.test.ts`.
+- `session-gc-manager.ts` — idle cleanup plus memory-pressure reclamation. `evaluateMemoryPressure`
+  returns TWO independent verdicts, `evict` and `block`, and they are not the same threshold:
+  reclaiming an idle session is invisible (it is restored on its next turn), refusing a turn is a
+  user-visible failure. On **macOS the signal is `kern.memorystatus_vm_pressure_level`**, not bytes
+  — WARNING reclaims, only CRITICAL refuses, and an unreadable level FAILS OPEN. Do not add a
+  byte-threshold fallback there: byte estimates cannot see compressor headroom, which is where a
+  Mac's reclaimable memory lives, so they report pressure on healthy machines. Linux/Windows keep
+  byte thresholds because those limits are hard (cgroup OOM kill, commit-limit allocation failure).
+  Eviction is bounded per call (`maxEvictionsPerCall`) because the caller awaits it on the prompt
+  hot path.
 - `provider-setup-manager.ts` owns durable default managed-builtin creation;
   setup rows with executable runtime overrides are invalid. The future
   config stays under `['providerSetup', configId]` while runtime/auth/live-probe

@@ -1846,6 +1846,11 @@ const ChatFailedNoticeView = ({
         );
       case 'machine_access_denied':
         return t('sessions.systemNotices.chatFailed.machineAccessDenied', 'Machine access denied');
+      case 'memory_pressure':
+        return t(
+          'sessions.systemNotices.chatFailed.memoryPressure',
+          'The machine is low on memory - free some memory and retry'
+        );
       case 'acp_auth_required':
         return t('sessions.systemNotices.chatFailed.acpAuthRequired', 'Authentication required');
       case 'acp_internal_error':
