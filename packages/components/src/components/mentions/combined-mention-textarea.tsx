@@ -1,31 +1,38 @@
 import * as React from 'react';
-import { useAtomValue } from 'jotai';
-import { usePostHog } from '@posthog/react';
-import { currentWorkspaceIdAtom } from '@/atoms';
+import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
-import { FileIcon, FolderIcon } from '@/components/icons/file-icons';
-import { CommandSlashMentionMenu } from '@/components/mentions/command-slash-mention';
 import {
-  captureMentionFileMenuEmpty,
-  captureMentionFileMenuOpen,
-  captureMentionFileSelect,
   type MentionFileSourceKind,
   type MentionSurface,
 } from '@/components/mentions/mention-analytics';
 import {
+  buildItemSuggestions,
+  getIssuePrFuseOptions,
   IssuePrMentionHydrator,
-  IssuePrMentionMenu,
   IssuePrMentionTitleHint,
   useKnownIssuePrItems,
+  type ItemSuggestion as IssuePrSuggestion,
 } from '@/components/mentions/issue-pr-hash-mention';
 import {
-  buildPathSuggestions,
-  type FuseConstructor,
   getFuseOptions,
-  getSuggestions,
   hydrateFileMentionsFromText,
   type PathSuggestion,
 } from '@/components/mentions/file-at-mention';
+import {
+  hydrateSessionMentionsFromText,
+  resolveSessionMentionIds,
+  useSessionMentionItems,
+  SESSION_MENTION_PREFIX,
+  type SessionMentionItem,
+} from '@/components/mentions/mention-session-source';
+import { useMentionFuseCtor } from '@/components/mentions/mention-fuse';
+import { useMentionHydration } from '@/components/mentions/mention-hydration';
+import { MentionTwoLevelMenu } from '@/components/mentions/mention-two-level-menu';
+import {
+  buildMentionFileIndex,
+  useMentionCategories,
+  type MentionCategorySources,
+} from '@/components/mentions/mention-registry';
 import {
   buildLazyDirectoryToken,
   type MentionFileDataState,
@@ -35,136 +42,193 @@ import {
 import {
   SKILL_MENTION_TRIGGER,
   SkillMentionHydrator,
-  SkillMentionMenu,
   getAllowedSkillMentionDirs,
   type SkillMentionAgent,
-  type SkillMentionMenuPlacement,
+  type SkillMentionItem,
   useMentionProjectSkills,
 } from '@/components/mentions/mention-skill-source';
 import { type AcpCommandSummary } from '@lody/shared';
-import {
-  Mention,
-  MentionContent,
-  MentionInput,
-  MentionItem,
-  MentionLabel,
-  useMentionContext,
-} from '@/ui/mention';
+import { Mention, MentionInput, MentionLabel, useMentionContext } from '@/ui/mention';
 import type { Mention as MentionRange } from '@/ui/mention/index';
 import { Textarea, type TextareaProps } from '@/ui/textarea';
 
 // ============================================================================
-// UI Components
+// Two-level `@` menu
 // ============================================================================
 
-function FileMentionLoadingSkeleton() {
-  const rows = ['w-[72%]', 'w-[54%]', 'w-[86%]', 'w-[63%]', 'w-[78%]', 'w-[58%]'];
-
-  return (
-    <div className="px-2 py-2">
-      <div className="animate-pulse space-y-2">
-        {rows.map((widthClass, index) => (
-          <div
-            // eslint-disable-next-line react/no-array-index-key
-            key={index}
-            className={cn('h-4 rounded-xs', 'bg-muted/70', widthClass)}
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-let fileFuseCtorCache: FuseConstructor<PathSuggestion> | null = null;
-let fileFuseCtorPromise: Promise<void> | null = null;
-const fileFuseCtorSubscribers = new Set<() => void>();
-
-function loadFileFuseCtor(): void {
-  if (fileFuseCtorCache || fileFuseCtorPromise) return;
-  fileFuseCtorPromise = import('fuse.js')
-    .then((mod) => {
-      const ctor = (mod as unknown as { default?: unknown }).default ?? mod;
-      fileFuseCtorCache = ctor as FuseConstructor<PathSuggestion>;
-      fileFuseCtorSubscribers.forEach((callback) => {
-        callback();
-      });
-    })
-    .catch(() => {
-      // fuse.js isn't installed yet; fallback to substring matching.
-      fileFuseCtorPromise = null;
-    });
-}
-
-function subscribeFileFuseCtor(callback: () => void): () => void {
-  fileFuseCtorSubscribers.add(callback);
-  return () => {
-    fileFuseCtorSubscribers.delete(callback);
-  };
-}
-
-function getFileFuseCtorSnapshot(): FuseConstructor<PathSuggestion> | null {
-  return fileFuseCtorCache;
-}
-
-function useFileFuseCtor(enabled: boolean): FuseConstructor<PathSuggestion> | null {
-  const ctor = React.useSyncExternalStore(
-    subscribeFileFuseCtor,
-    getFileFuseCtorSnapshot,
-    getFileFuseCtorSnapshot
-  );
-  React.useEffect(() => {
-    if (enabled) loadFileFuseCtor();
-  }, [enabled]);
-  return enabled ? ctor : null;
-}
-
-function FileMentionMenu({
-  sourceKind,
+/**
+ * Builds the mention registry from the composer's already-fetched data and
+ * renders the single `@` menu. Lives inside `<Mention>` so Fuse loading stays
+ * keyed to the menu actually being open.
+ */
+function TwoLevelMentionMenu({
   fileData,
+  fileSourceKind,
+  enableFileMentions,
   onLazyDirectoryOpen,
+  enableIssueMentions,
+  repoFullName,
+  issuePrData,
+  enableSkillMentions,
+  skillItems,
+  skillState,
+  allowedSkillDirs,
+  enableCommandMentions,
+  availableCommands,
+  sessionItems,
   surface,
 }: {
-  sourceKind: MentionFileSourceKind;
   fileData: MentionFileDataState;
+  fileSourceKind: MentionFileSourceKind;
+  enableFileMentions: boolean;
   onLazyDirectoryOpen?: (directoryId: string) => void;
+  enableIssueMentions: boolean;
+  repoFullName?: string;
+  issuePrData: ReturnType<typeof useKnownIssuePrItems>['issuePrData'];
+  enableSkillMentions: boolean;
+  skillItems: SkillMentionItem[];
+  skillState: { status: string; error?: string };
+  allowedSkillDirs: ReadonlySet<string> | null;
+  enableCommandMentions: boolean;
+  availableCommands?: AcpCommandSummary[];
+  sessionItems: SessionMentionItem[];
   surface: MentionSurface;
 }) {
-  const context = useMentionContext('FileMentionMenu');
-  const trigger = context.trigger;
-  const postHog = usePostHog();
-  const workspaceId = useAtomValue(currentWorkspaceIdAtom);
+  const context = useMentionContext('TwoLevelMentionMenu');
+  const { t } = useTranslation();
+  const active = context.open;
 
-  // File mention state
-  const fileTerm = trigger === '@' ? context.filterStore.search : '';
-  const fileSuggestionIndex = React.useMemo(() => {
-    if (!fileData.entry || trigger !== '@') return null;
-    const base = buildPathSuggestions(fileData.entry.paths);
-    const tokens = new Set(base.allTokens);
-    const lazyDirectories =
-      fileData.entry.lazyDirectories?.flatMap((entry) => {
-        const token = buildLazyDirectoryToken(entry.path);
-        if (!token || tokens.has(token)) return [];
-        tokens.add(token);
-        return [
-          {
-            kind: 'dir' as const,
-            path: token.replace(/\/+$/u, ''),
-            token,
-            searchable: token.toLowerCase(),
-          },
-        ];
-      }) ?? [];
-    if (lazyDirectories.length === 0) return base;
-    const dirs = [...base.dirs, ...lazyDirectories].sort((left, right) =>
-      left.token.localeCompare(right.token)
-    );
-    return {
-      dirs,
-      files: base.files,
-      allSuggestions: [...dirs, ...base.files],
-      allTokens: tokens,
-    };
-  }, [fileData.entry, trigger]);
+  const fileIndex = React.useMemo(
+    () =>
+      enableFileMentions ? buildMentionFileIndex(fileData.entry, buildLazyDirectoryToken) : null,
+    [enableFileMentions, fileData.entry]
+  );
+  const fileFuseCtor = useMentionFuseCtor<PathSuggestion>(active && fileIndex !== null);
+  const fileFuse = React.useMemo(() => {
+    if (!fileFuseCtor || !fileIndex) return null;
+    try {
+      return new fileFuseCtor(fileIndex.allSuggestions, getFuseOptions());
+    } catch {
+      return null;
+    }
+  }, [fileFuseCtor, fileIndex]);
+
+  const issuePrSuggestions = React.useMemo(
+    () =>
+      enableIssueMentions && issuePrData.entry ? buildItemSuggestions(issuePrData.entry.items) : [],
+    [enableIssueMentions, issuePrData.entry]
+  );
+  const issuePrFuseCtor = useMentionFuseCtor<IssuePrSuggestion>(
+    active && issuePrSuggestions.length > 0
+  );
+  const createIssuePrFuse = React.useCallback(
+    (list: IssuePrSuggestion[]) => {
+      if (!issuePrFuseCtor || list.length === 0) return null;
+      try {
+        return new issuePrFuseCtor(list, getIssuePrFuseOptions());
+      } catch {
+        return null;
+      }
+    },
+    [issuePrFuseCtor]
+  );
+
+  const fileSource = React.useMemo<MentionCategorySources['file']>(
+    () => ({
+      enabled: enableFileMentions,
+      status:
+        fileData.status === 'error'
+          ? 'error'
+          : fileData.status === 'loading' && !fileData.entry
+            ? 'loading'
+            : 'ready',
+      message:
+        fileData.status === 'error'
+          ? (fileData.error ?? t('mention.file.loadError', 'Failed to load files.'))
+          : undefined,
+      notice: fileData.entry?.truncated
+        ? fileSourceKind === 'github'
+          ? t(
+              'mention.file.truncatedGithub',
+              'Repo is very large; GitHub returned a truncated file list.'
+            )
+          : t(
+              'mention.file.truncatedLocal',
+              'Project is very large; local file list was truncated.'
+            )
+        : undefined,
+      index: fileIndex,
+      fuse: fileFuse,
+    }),
+    [enableFileMentions, fileData, fileFuse, fileIndex, fileSourceKind, t]
+  );
+
+  const issuePrSource = React.useMemo<MentionCategorySources['issuePr']>(
+    () => ({
+      enabled: enableIssueMentions,
+      status:
+        issuePrData.status === 'error'
+          ? 'error'
+          : issuePrData.status === 'loading' && !issuePrData.entry
+            ? 'loading'
+            : 'ready',
+      message: !repoFullName
+        ? t('mention.issuePr.selectRepo', 'Select a repo to mention issues/PRs.')
+        : issuePrData.status === 'error'
+          ? (issuePrData.error ?? t('mention.issuePr.loadError', 'Failed to load issues and PRs.'))
+          : undefined,
+      suggestions: issuePrSuggestions,
+      createFuse: createIssuePrFuse,
+    }),
+    [createIssuePrFuse, enableIssueMentions, issuePrData, issuePrSuggestions, repoFullName, t]
+  );
+
+  const skillSource = React.useMemo<MentionCategorySources['skill']>(
+    () => ({
+      enabled: enableSkillMentions,
+      status:
+        skillState.status === 'error' && skillItems.length === 0
+          ? 'error'
+          : skillState.status === 'loading' && skillItems.length === 0
+            ? 'loading'
+            : 'ready',
+      message:
+        skillState.status === 'error' && skillItems.length === 0
+          ? (skillState.error ??
+            t('workspace.projects.skills.mention.error', 'Failed to load skills.'))
+          : undefined,
+      items: skillItems,
+      allowedDirs: allowedSkillDirs,
+    }),
+    [allowedSkillDirs, enableSkillMentions, skillItems, skillState, t]
+  );
+
+  const sessionSource = React.useMemo<MentionCategorySources['session']>(
+    () => ({ enabled: sessionItems.length > 0, items: sessionItems }),
+    [sessionItems]
+  );
+
+  const commandSource = React.useMemo<MentionCategorySources['command']>(
+    () => ({ enabled: enableCommandMentions, commands: availableCommands ?? [] }),
+    [availableCommands, enableCommandMentions]
+  );
+
+  const categories = useMentionCategories(
+    React.useMemo(
+      () => ({
+        file: fileSource,
+        issuePr: issuePrSource,
+        skill: skillSource,
+        session: sessionSource,
+        command: commandSource,
+      }),
+      [commandSource, fileSource, issuePrSource, sessionSource, skillSource]
+    )
+  );
+
+  // Ask the provider to list a directory the user has drilled into but that was
+  // never expanded, so the second level fills in instead of showing nothing.
+  const requestedLazyDirectoriesRef = React.useRef<Set<string>>(new Set());
   const lazyDirectoryIdByToken = React.useMemo(() => {
     const ids = new Map<string, string>();
     for (const entry of fileData.entry?.lazyDirectories ?? []) {
@@ -173,174 +237,16 @@ function FileMentionMenu({
     }
     return ids;
   }, [fileData.entry]);
-
-  const fileFuseCtor = useFileFuseCtor(
-    context.open && trigger === '@' && fileSuggestionIndex !== null
-  );
-
-  const fileFuse = React.useMemo(() => {
-    if (!fileFuseCtor || !fileSuggestionIndex) return null;
-    try {
-      return new fileFuseCtor(fileSuggestionIndex.allSuggestions, getFuseOptions());
-    } catch {
-      return null;
-    }
-  }, [fileFuseCtor, fileSuggestionIndex]);
-
-  const fileIndexed = React.useMemo(() => {
-    if (!fileSuggestionIndex || trigger !== '@') return [];
-    return getSuggestions(fileSuggestionIndex, fileTerm, fileFuse);
-  }, [fileSuggestionIndex, fileTerm, fileFuse, trigger]);
-  const requestedLazyDirectoriesRef = React.useRef<Set<string>>(new Set());
-  const {
-    open: mentionMenuOpen,
-    highlightedItem,
-    getEnabledItems,
-    onHighlightedItemChange,
-  } = context;
+  const search = context.filterStore.search;
   React.useEffect(() => {
-    if (!context.open || trigger !== '@' || !onLazyDirectoryOpen) return;
-    const directoryId = lazyDirectoryIdByToken.get(fileTerm.trim());
+    if (!active || !onLazyDirectoryOpen) return;
+    const directoryId = lazyDirectoryIdByToken.get(search.trim());
     if (!directoryId || requestedLazyDirectoriesRef.current.has(directoryId)) return;
     requestedLazyDirectoriesRef.current.add(directoryId);
     onLazyDirectoryOpen(directoryId);
-  }, [context.open, fileTerm, lazyDirectoryIdByToken, onLazyDirectoryOpen, trigger]);
+  }, [active, lazyDirectoryIdByToken, onLazyDirectoryOpen, search]);
 
-  // Auto-highlight first item
-  React.useEffect(() => {
-    let frameId: number | null = null;
-    if (mentionMenuOpen && !highlightedItem && trigger === '@') {
-      const items = getEnabledItems();
-      if (items.length) {
-        frameId = requestAnimationFrame(() => {
-          const first = items[0] ?? null;
-          if (first) onHighlightedItemChange(first);
-        });
-      }
-    }
-    return () => {
-      if (frameId !== null) {
-        cancelAnimationFrame(frameId);
-      }
-    };
-  }, [
-    fileIndexed,
-    getEnabledItems,
-    highlightedItem,
-    mentionMenuOpen,
-    onHighlightedItemChange,
-    trigger,
-  ]);
-
-  const analyticsBase = React.useMemo(() => ({ workspaceId, surface }), [workspaceId, surface]);
-
-  // One `menu_open` per open of the @file menu (tier B). Reset when it closes.
-  const menuOpenTrackedRef = React.useRef(false);
-  React.useEffect(() => {
-    if (!context.open || trigger !== '@') {
-      menuOpenTrackedRef.current = false;
-      return;
-    }
-    if (menuOpenTrackedRef.current) return;
-    menuOpenTrackedRef.current = true;
-    captureMentionFileMenuOpen(postHog, analyticsBase, {
-      sourceKind,
-      status: fileData.status,
-      itemsCount:
-        (fileData.entry?.paths.length ?? 0) + (fileData.entry?.lazyDirectories?.length ?? 0),
-    });
-  }, [analyticsBase, context.open, fileData.entry, fileData.status, postHog, sourceKind, trigger]);
-
-  // Empty-state once results settle (not while loading/erroring). Debounced and
-  // emitted at most once per empty-results episode so typing does not flood
-  // PostHog with one event per query.
-  const emptyTrackedForOpenRef = React.useRef(false);
-  React.useEffect(() => {
-    if (!context.open || trigger !== '@') {
-      emptyTrackedForOpenRef.current = false;
-      return undefined;
-    }
-    if (fileData.status === 'loading' || fileData.status === 'error') return undefined;
-    if (fileIndexed.length > 0) {
-      emptyTrackedForOpenRef.current = false;
-      return undefined;
-    }
-    if (emptyTrackedForOpenRef.current) return undefined;
-    const timeoutId = window.setTimeout(() => {
-      emptyTrackedForOpenRef.current = true;
-      captureMentionFileMenuEmpty(postHog, analyticsBase, {
-        sourceKind,
-        termLength: fileTerm.length,
-      });
-    }, 750);
-    return () => window.clearTimeout(timeoutId);
-  }, [
-    analyticsBase,
-    context.open,
-    fileData.status,
-    fileIndexed.length,
-    fileTerm,
-    postHog,
-    sourceKind,
-    trigger,
-  ]);
-
-  // Render based on trigger
-  if (trigger === '@') {
-    return (
-      <MentionContent className="w-max max-w-[min(var(--mention-input-width),calc(100vw-2rem))]">
-        {fileData.status === 'loading' && !fileData.entry ? (
-          <FileMentionLoadingSkeleton />
-        ) : fileData.status === 'error' ? (
-          <div className="px-2 py-1.5 text-sm text-destructive">
-            {fileData.error ?? 'Failed to load files.'}
-          </div>
-        ) : fileData.entry && fileData.entry.truncated ? (
-          <div className="px-2 pt-2 pb-1 text-xs text-muted-foreground">
-            {sourceKind === 'github'
-              ? 'Repo is very large; GitHub returned a truncated file list.'
-              : 'Project is very large; local file list was truncated.'}
-          </div>
-        ) : null}
-
-        {fileIndexed.length > 0 ? (
-          <div className="scrollbar-pro max-h-[260px] overflow-auto overflow-x-auto">
-            {fileIndexed.map((item, index) => {
-              const token = item.token;
-              return (
-                <MentionItem
-                  key={token}
-                  value={token}
-                  label={token}
-                  onMentionSelect={() => {
-                    captureMentionFileSelect(postHog, analyticsBase, {
-                      kind: item.kind,
-                      rank: index,
-                      termLength: fileTerm.length,
-                      sourceKind,
-                    });
-                  }}
-                >
-                  {item.kind === 'dir' ? (
-                    <FolderIcon folderPath={item.path} className="h-4 w-4 shrink-0 opacity-80" />
-                  ) : (
-                    <FileIcon filePath={item.path} className="h-4 w-4 shrink-0 opacity-80" />
-                  )}
-                  <div className="min-w-0 whitespace-nowrap font-mono text-sm leading-5">
-                    {token}
-                  </div>
-                </MentionItem>
-              );
-            })}
-          </div>
-        ) : fileData.status !== 'loading' && fileData.status !== 'error' ? (
-          <div className="px-2 py-1.5 text-sm text-muted-foreground">No results</div>
-        ) : null}
-      </MentionContent>
-    );
-  }
-
-  return null;
+  return <MentionTwoLevelMenu categories={categories} surface={surface} />;
 }
 
 // ============================================================================
@@ -358,39 +264,37 @@ function FileMentionHydrator({
   getKnownPaths: () => Set<string>;
   enabled: boolean;
 }) {
-  const context = useMentionContext('FileMentionHydrator');
-  const initialTextRef = React.useRef(text);
-  const hydratedRef = React.useRef(false);
+  const hydrate = React.useCallback(
+    (value: string) => {
+      const knownPaths = getKnownPaths();
+      return knownPaths.size === 0 ? null : hydrateFileMentionsFromText(value, knownPaths);
+    },
+    [getKnownPaths]
+  );
+  useMentionHydration('FileMentionHydrator', { text, enabled, hydrate });
 
-  React.useEffect(() => {
-    if (!enabled) return;
-    if (hydratedRef.current) return;
-    const initialText = initialTextRef.current;
-    if (!initialText) return;
-    if (text !== initialText) return;
-    if (context.open) return;
-    const knownPaths = getKnownPaths();
-    if (knownPaths.size === 0) return;
+  return null;
+}
 
-    const hydrated = hydrateFileMentionsFromText(initialText, knownPaths);
-    if (hydrated.mentions.length === 0) return;
-
-    hydratedRef.current = true;
-    context.onMentionsChange((prev) => {
-      const merged = [...prev, ...hydrated.mentions].sort((a, b) => a.start - b.start);
-      const seen = new Set<string>();
-      return merged.filter((m) => {
-        const key = `${m.start}:${m.end}:${m.value}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-    });
-    context.onValueChange((prev) => {
-      const next = new Set([...(prev ?? []), ...hydrated.values]);
-      return Array.from(next);
-    });
-  }, [context, enabled, getKnownPaths, text]);
+function SessionMentionHydrator({
+  text,
+  items,
+  enabled,
+}: {
+  text: string;
+  items: readonly SessionMentionItem[];
+  enabled: boolean;
+}) {
+  const hydrate = React.useCallback(
+    (value: string) =>
+      // Reading the slug cache parses localStorage, so only pay for it once the
+      // draft actually carries the anchor.
+      value.includes(SESSION_MENTION_PREFIX)
+        ? hydrateSessionMentionsFromText(value, resolveSessionMentionIds(items))
+        : null,
+    [items]
+  );
+  useMentionHydration('SessionMentionHydrator', { text, enabled, hydrate });
 
   return null;
 }
@@ -411,8 +315,8 @@ export interface CombinedMentionTextareaProps extends Omit<
   skillAgent?: SkillMentionAgent;
   /** Entry point for mention analytics (spec §8e). Defaults to 'unknown'. */
   mentionSurface?: MentionSurface;
-  /** `$` menu placement; landing uses caret/default positioning. */
-  skillMentionPlacement?: SkillMentionMenuPlacement;
+  /** Dropped from the `@session:` category — a session never references itself. */
+  currentSessionId?: string | null;
   value: string;
   onValueChange: (value: string) => void;
   containerClassName?: string;
@@ -435,7 +339,7 @@ export const CombinedMentionTextarea = React.forwardRef<
       availableCommands,
       skillAgent,
       mentionSurface = 'unknown',
-      skillMentionPlacement,
+      currentSessionId,
       value,
       onValueChange,
       containerClassName,
@@ -515,6 +419,8 @@ export const CombinedMentionTextarea = React.forwardRef<
       },
       [initializeLazyDirectory]
     );
+    const sessionItems = useSessionMentionItems(currentSessionId);
+
     const { skillState, skillItems, knownSkillTokens } = useMentionProjectSkills(
       mentionSource,
       skillsActive,
@@ -612,9 +518,10 @@ export const CombinedMentionTextarea = React.forwardRef<
     const isSlashOnly = !value || /^\/\S*$/.test(value);
     const triggers = React.useMemo(() => {
       const t: string[] = [];
-      if (enableFileMentions) t.push('@');
-      if (enableIssueMentions) t.push('#');
-      if (enableSkillMentions) t.push(SKILL_MENTION_TRIGGER);
+      // Every mention type is reached through `@`. `/` is the one exception: a
+      // slash command must own the whole prompt, so it never nests under a
+      // category and only fires on a slash-only composer.
+      if (enableFileMentions || enableIssueMentions || enableSkillMentions) t.push('@');
       if (enableCommandMentions && isSlashOnly) t.push('/');
       return t;
     }, [
@@ -664,6 +571,11 @@ export const CombinedMentionTextarea = React.forwardRef<
           getKnownPaths={getKnownFileTokens}
           enabled={enableFileMentions}
         />
+        <SessionMentionHydrator
+          text={value}
+          items={sessionItems}
+          enabled={sessionItems.length > 0}
+        />
         {enableSkillMentions ? (
           <SkillMentionHydrator
             text={value}
@@ -695,32 +607,23 @@ export const CombinedMentionTextarea = React.forwardRef<
           className={cn('resize-none', className)}
           {...props}
         />
-        <FileMentionMenu
-          sourceKind={fileSourceKind}
+        <TwoLevelMentionMenu
           fileData={fileData}
+          fileSourceKind={fileSourceKind}
+          enableFileMentions={enableFileMentions}
           onLazyDirectoryOpen={handleLazyDirectoryOpen}
+          enableIssueMentions={enableIssueMentions}
+          repoFullName={githubRepoFullName}
+          issuePrData={issuePrData}
+          enableSkillMentions={enableSkillMentions}
+          skillItems={skillItems}
+          skillState={skillState}
+          allowedSkillDirs={allowedSkillDirs}
+          enableCommandMentions={enableCommandMentions}
+          availableCommands={availableCommands}
+          sessionItems={sessionItems}
           surface={mentionSurface}
         />
-        {enableIssueMentions ? (
-          <IssuePrMentionMenu
-            repoFullName={githubRepoFullName}
-            isPublic={githubRepoIsPublic}
-            issuePrData={issuePrData}
-            surface={mentionSurface}
-          />
-        ) : null}
-        {enableCommandMentions && availableCommands ? (
-          <CommandSlashMentionMenu commands={availableCommands} surface={mentionSurface} />
-        ) : null}
-        {enableSkillMentions ? (
-          <SkillMentionMenu
-            skillItems={skillItems}
-            status={skillState.status}
-            error={skillState.error}
-            allowedDirs={allowedSkillDirs}
-            placement={skillMentionPlacement}
-          />
-        ) : null}
       </Mention>
     );
   }
