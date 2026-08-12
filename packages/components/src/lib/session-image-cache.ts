@@ -1,5 +1,6 @@
 import type { SessionId, WorkspaceId } from '@lody/shared';
 import type { SessionImageResizeFit } from '@lody/shared';
+import { SESSION_IMAGE_RESIZE_DEFAULT_WIDTH } from '@lody/shared';
 import {
   buildSessionImageDownloadUrl,
   buildSessionImageThumbnailUrl,
@@ -18,6 +19,10 @@ const imageCache = new Map<string, CacheEntry>();
 const inFlightCache = new Map<string, Promise<CacheEntry>>();
 const MAX_CACHE_BYTES = 200 * 1024 * 1024;
 const PERSISTENT_CACHE_NAME = 'lody-session-image-v1';
+// Advertise modern formats so the Worker thumbnail route can transcode to
+// AVIF/WebP. `fetch()` otherwise sends `Accept: */*`, which disables that
+// server-side negotiation and ships the larger original format.
+const SESSION_IMAGE_FETCH_ACCEPT = 'image/avif,image/webp,image/*,*/*';
 
 let totalCachedBytes = 0;
 
@@ -163,7 +168,7 @@ const getSessionImageCacheEntry = async (
   const requestUrl =
     variant === 'thumbnail'
       ? buildSessionImageThumbnailUrl(workspaceId, sessionId, imageId, {
-          width: thumbnailWidth ?? 512,
+          width: thumbnailWidth ?? SESSION_IMAGE_RESIZE_DEFAULT_WIDTH,
           height: thumbnailHeight,
           fit: thumbnailFit,
           quality: thumbnailQuality,
@@ -193,6 +198,7 @@ const getSessionImageCacheEntry = async (
       response = await fetch(requestUrl, {
         headers: {
           Authorization: `Bearer ${token}`,
+          Accept: SESSION_IMAGE_FETCH_ACCEPT,
         },
       });
     } catch (error) {
@@ -205,7 +211,7 @@ const getSessionImageCacheEntry = async (
       blob = await response.blob();
       shouldPersistRequestUrl = true;
     } else if (variant === 'thumbnail') {
-      // Fallback for environments where /cdn-cgi/image is unavailable.
+      // Fallback to the original image when the thumbnail transform is unavailable.
       const persistedOriginalBlob = await readBlobFromPersistentCache(originalUrl);
       if (persistedOriginalBlob) {
         blob = persistedOriginalBlob;

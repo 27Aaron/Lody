@@ -16,11 +16,11 @@ export const WORKSPACE_API_PATH_PREFIX = '/api/workspaces';
 export const SESSION_IMAGE_UPLOAD_API_PATH = '/session-images/upload';
 export const SESSION_IMAGE_OBJECT_PREFIX = 'session-images';
 export const SESSION_IMAGE_DOWNLOAD_CACHE_CONTROL = 'private, max-age=31536000, immutable';
-export const CLOUDFLARE_IMAGE_RESIZING_API_PATH_PREFIX = '/cdn-cgi/image/';
+export const SESSION_IMAGE_THUMBNAIL_API_SUFFIX = '/thumbnail';
 export const SESSION_IMAGE_PATH_SEGMENT_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const SESSION_IMAGE_RESIZE_MIN_DIMENSION = 16;
 const SESSION_IMAGE_RESIZE_MAX_DIMENSION = 4096;
-const SESSION_IMAGE_RESIZE_DEFAULT_WIDTH = 512;
+export const SESSION_IMAGE_RESIZE_DEFAULT_WIDTH = 512;
 const SESSION_IMAGE_RESIZE_MIN_QUALITY = 1;
 const SESSION_IMAGE_RESIZE_MAX_QUALITY = 100;
 const SESSION_IMAGE_RESIZE_DEFAULT_QUALITY = 85;
@@ -31,6 +31,13 @@ export type SessionImageThumbnailOptions = {
   height?: number;
   fit?: SessionImageResizeFit;
   quality?: number;
+};
+/** Fully normalized resize options — what both ends of the thumbnail wire agree on. */
+export type SessionImageResizeOptions = {
+  width: number;
+  height: number | undefined;
+  fit: SessionImageResizeFit;
+  quality: number;
 };
 
 const trimTrailingSlash = (url: string): string => {
@@ -66,18 +73,13 @@ const normalizeResizeQuality = (value: number | undefined): number => {
   );
 };
 
-const normalizeResizeFit = (fit: SessionImageResizeFit | undefined): SessionImageResizeFit => {
+const normalizeResizeFit = (
+  fit: SessionImageResizeFit | string | null | undefined
+): SessionImageResizeFit => {
   if (fit === 'cover' || fit === 'contain' || fit === 'scale-down') {
     return fit;
   }
   return 'scale-down';
-};
-
-const normalizeSourceImagePath = (sourceImagePath: string): string => {
-  if (sourceImagePath.startsWith('/')) {
-    return sourceImagePath;
-  }
-  return `/${sourceImagePath}`;
 };
 
 export const isValidSessionImagePathSegment = (value: string): boolean => {
@@ -102,43 +104,52 @@ export const buildSessionImageApiUrl = (apiBaseUrl: string, apiPath: string): st
   return `${trimTrailingSlash(apiBaseUrl)}${apiPath}`;
 };
 
-export const buildCloudflareImageResizingApiPath = (
-  sourceImagePath: string,
-  options: SessionImageThumbnailOptions
-): string => {
+/**
+ * Clamp caller-supplied resize options. The client normalizes so the thumbnail
+ * URL is a stable cache key; the Worker re-normalizes the same way because the
+ * query string is untrusted input to a paid transform.
+ */
+const normalizeThumbnailOptions = (options: {
+  width?: number;
+  height?: number;
+  fit?: SessionImageResizeFit | string | null;
+  quality?: number;
+}): SessionImageResizeOptions => {
   const width = normalizeResizeDimension(options.width, SESSION_IMAGE_RESIZE_DEFAULT_WIDTH);
-  const height =
-    typeof options.height === 'number'
-      ? normalizeResizeDimension(options.height, width)
-      : undefined;
-  const fit = normalizeResizeFit(options.fit);
-  const quality = normalizeResizeQuality(options.quality);
-
-  const directives = [
-    `width=${width}`,
-    ...(height !== undefined ? [`height=${height}`] : []),
-    `fit=${fit}`,
-    `quality=${quality}`,
-    'format=auto',
-    'metadata=none',
-  ];
-
-  return `${CLOUDFLARE_IMAGE_RESIZING_API_PATH_PREFIX}${directives.join(',')}${normalizeSourceImagePath(sourceImagePath)}`;
+  return {
+    width,
+    height:
+      typeof options.height === 'number'
+        ? normalizeResizeDimension(options.height, width)
+        : undefined,
+    fit: normalizeResizeFit(options.fit),
+    quality: normalizeResizeQuality(options.quality),
+  };
 };
 
-export const unwrapCloudflareImageResizingApiPath = (apiPath: string): string | null => {
-  if (!apiPath.startsWith(CLOUDFLARE_IMAGE_RESIZING_API_PATH_PREFIX)) {
-    return null;
+const readNumberSearchParam = (searchParams: URLSearchParams, key: string): number | undefined => {
+  const rawValue = searchParams.get(key);
+  if (rawValue === null || rawValue.trim() === '') {
+    return undefined;
   }
+  const value = Number(rawValue);
+  return Number.isFinite(value) ? value : undefined;
+};
 
-  const remainder = apiPath.slice(CLOUDFLARE_IMAGE_RESIZING_API_PATH_PREFIX.length);
-  const sourcePathStartIndex = remainder.indexOf('/');
-  if (sourcePathStartIndex <= 0) {
-    return null;
-  }
-
-  const sourcePath = remainder.slice(sourcePathStartIndex);
-  return sourcePath === '/' ? null : sourcePath;
+/** Inverse of {@link getSessionImageThumbnailApiPath}'s query string. */
+export const parseSessionImageThumbnailOptions = (
+  searchParams: URLSearchParams
+): SessionImageResizeOptions => {
+  return normalizeThumbnailOptions({
+    width: readNumberSearchParam(searchParams, 'width'),
+    // Absent height means "keep the aspect ratio"; a present but unparseable
+    // height falls back to the width, matching the builder.
+    height: searchParams.has('height')
+      ? (readNumberSearchParam(searchParams, 'height') ?? Number.NaN)
+      : undefined,
+    fit: searchParams.get('fit'),
+    quality: readNumberSearchParam(searchParams, 'quality'),
+  });
 };
 
 export const getSessionImageThumbnailApiPath = (
@@ -147,8 +158,19 @@ export const getSessionImageThumbnailApiPath = (
   imageId: string,
   options: SessionImageThumbnailOptions
 ): string => {
-  const sourcePath = getSessionImageDownloadApiPath(workspaceId, sessionId, imageId);
-  return buildCloudflareImageResizingApiPath(sourcePath, options);
+  const { width, height, fit, quality } = normalizeThumbnailOptions(options);
+  const searchParams = new URLSearchParams();
+  searchParams.set('width', String(width));
+  if (height !== undefined) {
+    searchParams.set('height', String(height));
+  }
+  searchParams.set('fit', fit);
+  searchParams.set('quality', String(quality));
+  return `${getSessionImageDownloadApiPath(
+    workspaceId,
+    sessionId,
+    imageId
+  )}${SESSION_IMAGE_THUMBNAIL_API_SUFFIX}?${searchParams.toString()}`;
 };
 
 export const buildSessionImageObjectKey = (
