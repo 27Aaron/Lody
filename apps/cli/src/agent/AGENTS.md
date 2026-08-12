@@ -113,8 +113,13 @@ arrive: context/message-flow.md "Upstream".
   `session_info_update`; `AgentClient` forwards those titles and `MessageHandler`
   stores them only after `sanitizeLodyInternalInstructions`. It must not start
   `title-generator.ts`'s isolated ACP session. Builtin Codex still uses the
-  isolated generator because its adapter emits the first user prompt as a
-  fallback title when Codex has no explicit thread name. The shared
+  isolated generator, but its adapter tags every pushed title with
+  `_meta.codex.titleSource`: accept only `explicit` thread names and ignore its
+  first-prompt `fallback`. Codex title-agent chunks require
+  `_meta.codex.phase === 'final_answer'`; untyped chunks, provider error/warning
+  payloads, and internal-instruction tails are not title candidates. Each isolated
+  run owns and removes a unique temp directory, and concurrent session-title /
+  branch-name work reuses one in-flight result. The shared
   `usesAcpProvidedSessionTitle()` predicate hides obsolete provider title
   settings only for Claude. Other providers use `title-generator.ts` /
   `response-utils.ts` for session titles.

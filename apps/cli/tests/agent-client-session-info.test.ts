@@ -52,10 +52,36 @@ describe('AgentClient session title updates', () => {
     expect(onUpdateMessage).toHaveBeenCalledTimes(1);
   });
 
-  it('ignores Codex session_info_update prompt fallback titles', async () => {
+  it('forwards explicitly named Codex threads', async () => {
     const { client, onSessionTitleUpdate } = createTestClient('codex');
 
-    await client.sessionUpdate(sessionInfoNotification({ title: 'first prompt fallback' }));
+    await client.sessionUpdate(
+      sessionInfoNotification({
+        title: '  Diagnose title generation  ',
+        _meta: { codex: { titleSource: 'explicit' } },
+      })
+    );
+
+    expect(onSessionTitleUpdate).toHaveBeenCalledWith('Diagnose title generation');
+  });
+
+  it('ignores source-tagged Codex prompt fallback titles', async () => {
+    const { client, onSessionTitleUpdate } = createTestClient('codex');
+
+    await client.sessionUpdate(
+      sessionInfoNotification({
+        title: 'first prompt fallback',
+        _meta: { codex: { titleSource: 'fallback' } },
+      })
+    );
+
+    expect(onSessionTitleUpdate).not.toHaveBeenCalled();
+  });
+
+  it('ignores untyped Codex titles from older adapters', async () => {
+    const { client, onSessionTitleUpdate } = createTestClient('codex');
+
+    await client.sessionUpdate(sessionInfoNotification({ title: 'unknown source' }));
 
     expect(onSessionTitleUpdate).not.toHaveBeenCalled();
   });

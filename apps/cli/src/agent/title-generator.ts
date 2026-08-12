@@ -15,6 +15,7 @@ import {
   type CustomAcpLaunchSpec,
   type TitleGenerationConfig,
   computeTitleGenerationDefaults,
+  sanitizeLodyInternalInstructions,
 } from '@lody/shared';
 import type { Logger } from '@/utils/logger';
 import type { TerminalManager } from '@/session/terminal-manager';
@@ -135,7 +136,8 @@ export const extractTitleFromAgentResponse = (response: unknown): string | null 
   extractTextFromAgentResponse(response);
 
 export const extractTitleChunkFromNotification = (
-  notification: AcpSessionNotification
+  notification: AcpSessionNotification,
+  agentType?: AgentType
 ): string | null => {
   const update = notification.update;
   if (update.sessionUpdate !== 'agent_message_chunk') {
@@ -147,6 +149,17 @@ export const extractTitleChunkFromNotification = (
   }
 
   const codexMeta = update._meta?.['codex'];
+  if (agentType === 'codex') {
+    if (
+      !codexMeta ||
+      typeof codexMeta !== 'object' ||
+      !('phase' in codexMeta) ||
+      codexMeta.phase !== 'final_answer'
+    ) {
+      return null;
+    }
+    return content.text;
+  }
   if (
     codexMeta &&
     typeof codexMeta === 'object' &&
@@ -181,6 +194,51 @@ export const sanitizeTitle = (candidate?: string | null): string | null => {
 
   if (!withoutMarkdown) return null;
   return withoutMarkdown.slice(0, 80);
+};
+
+const looksLikeProviderControlPayload = (candidate: string): boolean => {
+  const trimmed = candidate.trim();
+  if (
+    /^\{\s*['"]?(?:type|status|error)['"]?\s*:/i.test(trimmed) ||
+    /["']type["']\s*:\s*["'](?:error|warning)["']/i.test(trimmed) ||
+    /\binvalid_request_error\b/i.test(trimmed) ||
+    /^HTTP\s+[45]\d\d\b/i.test(trimmed) ||
+    /^(?:internal server error|bad request|too many requests)\s*(?:[:({-]|$)/i.test(trimmed) ||
+    /^(?:error|warning|failed|failure)\s*(?:[:{]|\[)/i.test(trimmed)
+  ) {
+    return true;
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return false;
+    }
+    const record = parsed as Record<string, unknown>;
+    return (
+      record.type === 'error' ||
+      record.type === 'warning' ||
+      (typeof record.status === 'number' && record.status >= 400) ||
+      typeof record.error === 'string' ||
+      (typeof record.error === 'object' && record.error !== null)
+    );
+  } catch {
+    return false;
+  }
+};
+
+export const sanitizeGeneratedTitle = (candidate?: string | null): string | null => {
+  if (!candidate) {
+    return null;
+  }
+  const withoutInternalInstructions = sanitizeLodyInternalInstructions(candidate);
+  if (
+    !withoutInternalInstructions ||
+    looksLikeProviderControlPayload(withoutInternalInstructions)
+  ) {
+    return null;
+  }
+  return sanitizeTitle(withoutInternalInstructions);
 };
 
 const ensureWorkdirIsGitRepo = async (workdir: string, logger: Logger): Promise<boolean> => {
@@ -243,11 +301,8 @@ export type GenerateTitleOptions = {
 export const generateTitleIsolated = async (
   options: GenerateTitleOptions
 ): Promise<string | null> => {
-  const workdir = path.join(os.tmpdir(), 'lody-title-agent');
-  fs.mkdirSync(workdir, { recursive: true });
-  if (options.agentType === 'codex' && !(await ensureWorkdirIsGitRepo(workdir, options.logger))) {
-    return sanitizeTitle(options.taskPrompt);
-  }
+  const fallbackTitle = sanitizeGeneratedTitle(options.taskPrompt);
+  const workdir = fs.mkdtempSync(path.join(os.tmpdir(), 'lody-title-agent-'));
 
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -268,7 +323,7 @@ export const generateTitleIsolated = async (
       terminalManager: noopTerminalManager,
       terminalEnabled: false,
       onUpdateMessage: (msg) => {
-        const text = extractTitleChunkFromNotification(msg);
+        const text = extractTitleChunkFromNotification(msg, options.agentType);
         if (text) {
           collectedText += text;
         }
@@ -321,17 +376,17 @@ export const generateTitleIsolated = async (
         await sleep(100);
       }
 
-      const fromStream = sanitizeTitle(collectedText);
+      const fromStream = sanitizeGeneratedTitle(collectedText);
       if (fromStream) {
         return fromStream;
       }
 
-      const rawTitle = extractTextFromAgentResponse(response) ?? options.taskPrompt;
-      const sanitized = sanitizeTitle(rawTitle);
+      const rawTitle = extractTextFromAgentResponse(response);
+      const sanitized = sanitizeGeneratedTitle(rawTitle);
       if (sanitized) {
         return sanitized;
       }
-      return sanitizeTitle(options.taskPrompt);
+      return fallbackTitle;
     } finally {
       await shutdownLocalAcpAgent({
         agentProcess,
@@ -343,19 +398,24 @@ export const generateTitleIsolated = async (
     }
   };
 
-  let lastError: unknown = null;
   try {
-    const title = await tryGenerateWithArgs([]);
-    if (title) {
-      return title;
+    if (options.agentType === 'codex' && !(await ensureWorkdirIsGitRepo(workdir, options.logger))) {
+      return fallbackTitle;
     }
-  } catch (error) {
-    options.logger.debug('Failed to generate title with args:', error);
-    lastError = error;
-  }
 
-  if (lastError) {
-    throw lastError;
+    try {
+      return (await tryGenerateWithArgs([])) ?? fallbackTitle;
+    } catch (error) {
+      options.logger.debug('Failed to generate title with args:', error);
+      return fallbackTitle;
+    }
+  } finally {
+    try {
+      fs.rmSync(workdir, { recursive: true, force: true });
+    } catch (error) {
+      options.logger.debug(
+        `[title-generator] Failed to remove temporary workdir ${workdir}: ${formatErrorMessage(error)}`
+      );
+    }
   }
-  return null;
 };

@@ -800,7 +800,7 @@ export class MessageHandler {
   private pendingProcessLifecycleAction: MachineProcessLifecycleAction | null = null;
   private readonly store = new SessionTransientStore();
   private sessionActivePresence!: SessionActivePresenceController;
-  private readonly titleGenerationInFlight = new Set<SessionId>();
+  private readonly titleGenerationInFlight = new Map<SessionId, Promise<string | null>>();
   // Note: titleGenerationInFlight, archiveInFlight, deleteInFlight are self-cleaning
   // and stay as independent tracking. All other per-session state lives in this.store.
   private archiveWatchHandle: RepoWatchHandle | null = null;
@@ -8905,11 +8905,19 @@ export class MessageHandler {
     if (usesAcpProvidedSessionTitle(cliType, agentType)) {
       return;
     }
-    if (this.titleGenerationInFlight.has(sessionId)) {
+    const existingGeneration = this.titleGenerationInFlight.get(sessionId);
+    if (existingGeneration) {
+      try {
+        await existingGeneration;
+      } catch (error) {
+        this.logger.debug(
+          `[${sessionId}] Existing session title generation failed: ${formatErrorMessage(error)}`
+        );
+      }
       return;
     }
-    this.titleGenerationInFlight.add(sessionId);
-    try {
+
+    const generation = (async (): Promise<string | null> => {
       const sessionDoc = await this.workspaceDocument.getOrCreateSessionDoc(sessionId);
       const meta = await sessionDoc.getMetaState();
       const existingTitle = meta?.title?.trim();
@@ -8918,7 +8926,7 @@ export class MessageHandler {
         this.logger.debug(
           `[${sessionId}] Skipping session title generation because title already set: ${existingTitle}`
         );
-        return;
+        return meta?.titleSource === 'generated' ? existingTitle : null;
       }
 
       this.logger.debug(`[${sessionId}] Generating session title because title is missing`);
@@ -8936,7 +8944,7 @@ export class MessageHandler {
       });
       if (!title) {
         this.logger.debug(`[${sessionId}] Session title generation returned empty result`);
-        return;
+        return null;
       }
       // Conditional write: a title may have landed while generation was in flight
       // (agent-pushed title, user rename); only a draft may still be replaced.
@@ -8945,15 +8953,24 @@ export class MessageHandler {
         this.logger.debug(
           `[${sessionId}] Skipping generated title because title changed while generation was in flight`
         );
-        return;
+      } else {
+        this.logger.debug(`[${sessionId}] Session title stored in metadata: ${title}`);
       }
-      this.logger.debug(`[${sessionId}] Session title stored in metadata: ${title}`);
+      // The generated value is still safe to reuse for a branch name even when a
+      // concurrent user rename prevented it from being written as the session title.
+      return title;
+    })();
+    this.titleGenerationInFlight.set(sessionId, generation);
+    try {
+      await generation;
     } catch (error) {
       this.logger.debug(
         `[${sessionId}] Failed to generate/store session title: ${formatErrorMessage(error)}`
       );
     } finally {
-      this.titleGenerationInFlight.delete(sessionId);
+      if (this.titleGenerationInFlight.get(sessionId) === generation) {
+        this.titleGenerationInFlight.delete(sessionId);
+      }
     }
   }
 
@@ -9573,11 +9590,16 @@ export class MessageHandler {
     let metaCustomAcp: CustomAcpLaunchSpec | undefined;
     let metaRuntimeOverrides: BuiltinRuntimeOverrides | undefined;
     let metaAgentConfigId: AgentConfigId | undefined;
+    let reusableTitlePromise: Promise<string | null> | undefined;
     try {
       const sessionDoc = await this.workspaceDocument.getOrCreateSessionDoc(sessionId);
       const meta = await sessionDoc.getMetaState();
       metaBranchName = meta?.branchName?.trim() || null;
       metaAgentConfigId = meta?.agentConfigId;
+      const generatedMetaTitle = meta?.titleSource === 'generated' ? meta.title?.trim() : '';
+      reusableTitlePromise = generatedMetaTitle
+        ? Promise.resolve(generatedMetaTitle)
+        : this.titleGenerationInFlight.get(sessionId);
       const agentConfig = metaAgentConfigId
         ? await this.workspaceDocument.getAgentConfigById(metaAgentConfigId)
         : null;
@@ -9610,7 +9632,8 @@ export class MessageHandler {
       20_000,
       resolvedTitleConfig,
       metaCustomAcp,
-      metaRuntimeOverrides
+      metaRuntimeOverrides,
+      reusableTitlePromise
     );
     if (!branchName) {
       this.logger.debug(`[${sessionId}] Skipping branch rename: name generation timed out`);
@@ -9651,7 +9674,8 @@ export class MessageHandler {
     timeoutMs: number,
     titleConfig?: TitleGenerationConfig,
     customAcp?: CustomAcpLaunchSpec,
-    runtimeOverrides?: BuiltinRuntimeOverrides
+    runtimeOverrides?: BuiltinRuntimeOverrides,
+    reusableTitlePromise?: Promise<string | null>
   ): Promise<string | null> {
     let timeoutHandle: NodeJS.Timeout | null = null;
     const timeoutPromise = new Promise<null>((resolve) => {
@@ -9659,16 +9683,18 @@ export class MessageHandler {
     });
 
     const namePromise = (async (): Promise<string> => {
-      const title = await generateTitleIsolated({
-        cliType,
-        agentType,
-        customAcp,
-        runtimeOverrides,
-        taskPrompt,
-        logger: this.logger,
-        env,
-        titleConfig,
-      });
+      const title = reusableTitlePromise
+        ? await reusableTitlePromise
+        : await generateTitleIsolated({
+            cliType,
+            agentType,
+            customAcp,
+            runtimeOverrides,
+            taskPrompt,
+            logger: this.logger,
+            env,
+            titleConfig,
+          });
       const base = title ?? taskPrompt;
       return ensureValidBranchName(base, 'task');
     })();

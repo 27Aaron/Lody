@@ -374,6 +374,10 @@ const CodexSessionWarningSchema = z.object({
   }),
 });
 
+const CodexSessionTitleSchema = z.object({
+  titleSource: z.enum(['explicit', 'fallback', 'unset', 'unknown']),
+});
+
 export type AgentSessionWarning = z.infer<typeof CodexSessionWarningSchema>['warning'];
 
 const CodexProposedPlanParamsSchema = z.object({
@@ -1307,17 +1311,25 @@ export class AgentClient implements acp.Client {
     });
   }
 
-  /** Forward titles from builtin adapters that own session title generation. */
+  /** Forward native titles only when their source is authoritative. */
   private handleAgentSessionTitleUpdate(notification: AcpSessionNotification): void {
-    if (
-      !usesAcpProvidedSessionTitle(
-        this.options.agentConfig?.cliType,
-        this.options.agentConfig?.agentType
-      ) ||
-      notification.update.sessionUpdate !== 'session_info_update'
-    ) {
+    if (notification.update.sessionUpdate !== 'session_info_update') {
       return;
     }
+
+    const ownsTitleGeneration = usesAcpProvidedSessionTitle(
+      this.options.agentConfig?.cliType,
+      this.options.agentConfig?.agentType
+    );
+    const codexTitleMeta = this.isCodexAgent()
+      ? CodexSessionTitleSchema.safeParse(notification.update._meta?.codex)
+      : null;
+    const isExplicitCodexTitle =
+      codexTitleMeta?.success === true && codexTitleMeta.data.titleSource === 'explicit';
+    if (!ownsTitleGeneration && !isExplicitCodexTitle) {
+      return;
+    }
+
     const title =
       typeof notification.update.title === 'string' ? notification.update.title.trim() : '';
     if (!title) {

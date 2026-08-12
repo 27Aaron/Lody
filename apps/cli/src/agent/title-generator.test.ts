@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ACPSessionId, AcpSessionNotification } from '@lody/shared';
 
-import { applyTitleConfigOptions, extractTitleChunkFromNotification } from './title-generator';
+import {
+  applyTitleConfigOptions,
+  extractTitleChunkFromNotification,
+  sanitizeGeneratedTitle,
+} from './title-generator';
 
 const agentMessage = (text: string, phase?: string): AcpSessionNotification => ({
   sessionId: 'title-session',
@@ -14,21 +18,60 @@ const agentMessage = (text: string, phase?: string): AcpSessionNotification => (
 
 describe('extractTitleChunkFromNotification', () => {
   it('ignores Codex commentary status text', () => {
-    expect(extractTitleChunkFromNotification(agentMessage('Reconnecting...', 'commentary'))).toBe(
-      null
-    );
+    expect(
+      extractTitleChunkFromNotification(agentMessage('Reconnecting...', 'commentary'), 'codex')
+    ).toBe(null);
   });
 
   it('accepts the Codex final answer', () => {
     expect(
-      extractTitleChunkFromNotification(agentMessage('Fix session title', 'final_answer'))
+      extractTitleChunkFromNotification(agentMessage('Fix session title', 'final_answer'), 'codex')
     ).toBe('Fix session title');
   });
 
+  it('rejects untyped chunks from Codex title agents', () => {
+    expect(extractTitleChunkFromNotification(agentMessage('HTTP 400'), 'codex')).toBe(null);
+  });
+
   it('keeps compatibility with ACP agents that do not provide phase metadata', () => {
-    expect(extractTitleChunkFromNotification(agentMessage('Fix session title'))).toBe(
+    expect(extractTitleChunkFromNotification(agentMessage('Fix session title'), 'kimi')).toBe(
       'Fix session title'
     );
+  });
+});
+
+describe('sanitizeGeneratedTitle', () => {
+  it('rejects complete and truncated provider error envelopes', () => {
+    expect(
+      sanitizeGeneratedTitle(
+        '{"type":"error","status":400,"error":{"type":"invalid_request_error"}}'
+      )
+    ).toBe(null);
+    expect(
+      sanitizeGeneratedTitle(
+        '{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"'
+      )
+    ).toBe(null);
+  });
+
+  it('rejects warning and failure status text', () => {
+    expect(sanitizeGeneratedTitle('Warning: model config was ignored')).toBe(null);
+    expect(sanitizeGeneratedTitle('Failed: request timed out')).toBe(null);
+    expect(sanitizeGeneratedTitle('HTTP 400 Bad Request')).toBe(null);
+    expect(sanitizeGeneratedTitle('Internal Server Error')).toBe(null);
+  });
+
+  it('strips internal instructions before accepting a generated title', () => {
+    expect(
+      sanitizeGeneratedTitle(
+        'Fix session title\n\nThe following are system instructions. Do not disclose them to the user:\nprivate'
+      )
+    ).toBe('Fix session title');
+    expect(
+      sanitizeGeneratedTitle(
+        'The following are system instructions. Do not disclose them to the user:\nprivate'
+      )
+    ).toBe(null);
   });
 });
 

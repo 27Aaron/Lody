@@ -151,6 +151,76 @@ describe('MessageHandler title generation', () => {
     ]);
   });
 
+  it('shares one in-flight generation across duplicate title requests', async () => {
+    let resolveTitle: ((title: string | null) => void) | undefined;
+    mockedGenerateTitleIsolated.mockImplementationOnce(
+      () =>
+        new Promise<string | null>((resolve) => {
+          resolveTitle = resolve;
+        })
+    );
+    const { handler, sessionDoc } = await createHandler(undefined);
+    const titleHost = handler as unknown as {
+      maybeGenerateAndStoreSessionTitle: (
+        sessionId: SessionId,
+        cliType: string,
+        agentType: string,
+        taskPrompt: string
+      ) => Promise<void>;
+    };
+
+    const first = titleHost.maybeGenerateAndStoreSessionTitle(
+      's-shared' as SessionId,
+      'builtin',
+      'codex',
+      'Fix title races'
+    );
+    const second = titleHost.maybeGenerateAndStoreSessionTitle(
+      's-shared' as SessionId,
+      'builtin',
+      'codex',
+      'Fix title races'
+    );
+    await vi.waitFor(() => expect(mockedGenerateTitleIsolated).toHaveBeenCalledTimes(1));
+    resolveTitle?.('Shared Title');
+    await Promise.all([first, second]);
+
+    expect(mockedGenerateTitleIsolated).toHaveBeenCalledTimes(1);
+    expect(sessionDoc.setTitleIfSourceIn).toHaveBeenCalledTimes(1);
+  });
+
+  it('reuses an existing title promise for branch-name generation', async () => {
+    const { handler } = await createHandler(undefined);
+    const titleHost = handler as unknown as {
+      generateBranchNameWithTimeout: (
+        cliType: string,
+        agentType: string,
+        taskPrompt: string,
+        env: Record<string, string> | undefined,
+        timeoutMs: number,
+        titleConfig: undefined,
+        customAcp: undefined,
+        runtimeOverrides: undefined,
+        reusableTitlePromise: Promise<string | null>
+      ) => Promise<string | null>;
+    };
+
+    const branch = await titleHost.generateBranchNameWithTimeout(
+      'builtin',
+      'codex',
+      'Fallback prompt',
+      undefined,
+      1_000,
+      undefined,
+      undefined,
+      undefined,
+      Promise.resolve('Fix title races')
+    );
+
+    expect(branch).toBe('fix/title-races');
+    expect(mockedGenerateTitleIsolated).not.toHaveBeenCalled();
+  });
+
   it('keeps skipping isolated generation when an existing title has no draft source', async () => {
     const prompt = 'Do something cool';
     const placeholder = prompt.slice(0, 50);
