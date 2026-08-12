@@ -50,7 +50,7 @@ import { Textarea, type TextareaProps } from '@/ui/textarea';
 import { getFilesFromDataTransfer, hasFileTransfer } from '@/lib/file-drop';
 import {
   getChatComposerPromptPlaceholderKey,
-  hasChatComposerFileMentionHints,
+  hasChatComposerMentionHints,
 } from '@/lib/chat-composer-placeholder';
 import { Kbd } from '@/components/commands/kbd';
 import { commands, formatKeyBinding } from '@/lib/commands';
@@ -287,12 +287,10 @@ export function ChatComposer({
   const pastedTextEditorLabel = t('composer.pastedTextEditorLabel', 'Edit pasted text');
   const resolvedPromptPlaceholder =
     promptPlaceholder ??
-    // On mobile the full "'/' commands, '@' files, '#' issues, '$' skills"
-    // hint wraps to two lines and eats the composer; keep just the '@' hint
-    // (and only when file mentions are actually available).
+    // On mobile, keep the hint to one trigger so it stays on one line.
     (isMobile
-      ? hasChatComposerFileMentionHints(mentionSource)
-        ? t('composer.promptPlaceholder.mobile', "Press '@' for files.")
+      ? hasChatComposerMentionHints(mentionSource)
+        ? t('composer.promptPlaceholder.mobile', "Press '@' for mentions.")
         : t('composer.promptPlaceholder.base')
       : t(getChatComposerPromptPlaceholderKey({ mentionSource, availableCommands })));
   const numberFormatter = useMemo(() => new Intl.NumberFormat(intlLocale), [intlLocale]);

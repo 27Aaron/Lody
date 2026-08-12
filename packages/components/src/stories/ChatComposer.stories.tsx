@@ -88,8 +88,7 @@ const samplePastedText = [
   '- Preserve the full text when the message is submitted.',
 ].join('\n');
 
-const samplePromptPlaceholder =
-  "Press '/' for commands, '@' for files, '#' for issues/PRs, '$' for skills.";
+const samplePromptPlaceholder = "Press '/' for commands, '@' for mentions.";
 
 // Inline SVG data-URI thumbnails so image attachment cards render without any
 // network/fetch mock (the composer just needs a non-empty previewUrl).

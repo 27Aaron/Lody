@@ -18,10 +18,8 @@ import type {
 } from '@/components/shared/acp-selector-options';
 import { getPastedTextCharacterCount, type PastedTextDraft } from '@/lib/pasted-text-draft';
 
-const samplePromptPlaceholder =
-  "Press '/' for commands, '@' for files, '#' for issues/PRs, '$' for skills.";
-const sampleZhCnPromptPlaceholder =
-  "按 '/' 使用命令，'@' 提及文件，'#' 提及 Issue/PR，'$' 提及 skills。";
+const samplePromptPlaceholder = "Press '/' for commands, '@' for mentions.";
+const sampleZhCnPromptPlaceholder = "按 '/' 使用命令，'@' 添加提及。";
 
 const meta = {
   title: 'Chat/ChatLandingView',

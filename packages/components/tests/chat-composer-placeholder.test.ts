@@ -2,8 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   getChatComposerPromptPlaceholderKey,
-  hasChatComposerFileMentionHints,
-  hasChatComposerIssuePrMentionHints,
+  hasChatComposerMentionHints,
 } from '../src/lib/chat-composer-placeholder';
 import type { MentionProjectSource } from '../src/components/mentions/mention-project-file-source';
 import type { AcpCommandSummary, LocalProjectId, MachineId, WorkspaceId } from '@lody/shared';
@@ -39,28 +38,26 @@ describe('chat composer placeholder hints', () => {
     );
   });
 
-  it('adds file hints for local project sources', () => {
-    expect(hasChatComposerFileMentionHints(localSource)).toBe(true);
-    expect(hasChatComposerIssuePrMentionHints(localSource)).toBe(false);
+  it('adds mention hints for local project sources', () => {
+    expect(hasChatComposerMentionHints(localSource)).toBe(true);
     expect(getChatComposerPromptPlaceholderKey({ mentionSource: localSource })).toBe(
-      'composer.promptPlaceholder.files'
+      'composer.promptPlaceholder.mentions'
     );
   });
 
-  it('adds GitHub issue and PR hints for GitHub-backed sources', () => {
-    expect(hasChatComposerFileMentionHints(githubSource)).toBe(true);
-    expect(hasChatComposerIssuePrMentionHints(githubSource)).toBe(true);
+  it('uses the same mention hint for GitHub-backed sources', () => {
+    expect(hasChatComposerMentionHints(githubSource)).toBe(true);
     expect(getChatComposerPromptPlaceholderKey({ mentionSource: githubSource })).toBe(
-      'composer.promptPlaceholder.filesIssues'
+      'composer.promptPlaceholder.mentions'
     );
   });
 
-  it('combines command, file, and GitHub issue/PR hints', () => {
+  it('combines slash command and mention hints', () => {
     expect(
       getChatComposerPromptPlaceholderKey({
         mentionSource: localGithubSource,
         availableCommands: commands,
       })
-    ).toBe('composer.promptPlaceholder.commandsFilesIssues');
+    ).toBe('composer.promptPlaceholder.commandsMentions');
   });
 });

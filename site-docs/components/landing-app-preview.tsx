@@ -1184,7 +1184,7 @@ const copy: Record<LandingLocale, PreviewCopy> = {
       // 1:1 with the app's rotating landing heading (`chat.heading2`).
       title: 'What should we work on?',
       prompt: 'Generate a photo of a jellyfish floating in deep blue water.',
-      placeholder: "Press '/' for commands, '@' for files, '#' for issues/PRs.",
+      placeholder: "Press '/' for commands, '@' for mentions.",
     },
     mobile: {
       allChats: 'All chats',
@@ -1365,7 +1365,7 @@ const copy: Record<LandingLocale, PreviewCopy> = {
       // 1:1 with the app's rotating landing heading (`chat.heading2`).
       title: '今天想做点什么？',
       prompt: '生成一张水母漂浮在深蓝色海水里的照片。',
-      placeholder: "按 '/' 使用命令，'@' 提及文件，'#' 提及 Issue/PR。",
+      placeholder: "按 '/' 使用命令，'@' 添加提及。",
     },
     mobile: {
       allChats: '全部对话',
