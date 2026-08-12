@@ -50,7 +50,7 @@ import { Textarea, type TextareaProps } from '@/ui/textarea';
 import { getFilesFromDataTransfer, hasFileTransfer } from '@/lib/file-drop';
 import {
   getChatComposerPromptPlaceholderKey,
-  hasChatComposerMentionHints,
+  getChatComposerMobilePromptPlaceholderKey,
 } from '@/lib/chat-composer-placeholder';
 import { Kbd } from '@/components/commands/kbd';
 import { commands, formatKeyBinding } from '@/lib/commands';
@@ -287,12 +287,15 @@ export function ChatComposer({
   const pastedTextEditorLabel = t('composer.pastedTextEditorLabel', 'Edit pasted text');
   const resolvedPromptPlaceholder =
     promptPlaceholder ??
-    // On mobile, keep the hint to one trigger so it stays on one line.
     (isMobile
-      ? hasChatComposerMentionHints(mentionSource)
-        ? t('composer.promptPlaceholder.mobile', "Press '@' for mentions.")
-        : t('composer.promptPlaceholder.base')
-      : t(getChatComposerPromptPlaceholderKey({ mentionSource, availableCommands })));
+      ? t(getChatComposerMobilePromptPlaceholderKey({ mentionSource, skillAgent }))
+      : t(
+          getChatComposerPromptPlaceholderKey({
+            mentionSource,
+            availableCommands,
+            skillAgent,
+          })
+        ));
   const numberFormatter = useMemo(() => new Intl.NumberFormat(intlLocale), [intlLocale]);
   const previewPastedTextDraft =
     pastedTextDrafts.find((item) => item.id === previewPastedTextDraftId) ?? null;

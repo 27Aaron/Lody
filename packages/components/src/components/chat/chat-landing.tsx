@@ -3684,7 +3684,7 @@ function WorkspaceChatLanding({
     promptValue: prompt,
   });
   const promptPlaceholder = t(
-    getChatComposerPromptPlaceholderKey({ mentionSource, availableCommands })
+    getChatComposerPromptPlaceholderKey({ mentionSource, availableCommands, skillAgent })
   );
   const issuePrRepoFullName =
     contextType === 'local' ? selectedLocalProjectGithubRepoFullName : selectedRepo;

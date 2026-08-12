@@ -5,6 +5,7 @@ import {
   buildIssuePrCandidates,
   getCategoryNavigateText,
   selectMentionMenuView,
+  selectMentionMenuViewForTrigger,
   toFileCandidate,
   toIssuePrCandidate,
   type MentionCandidate,
@@ -128,6 +129,18 @@ describe('selectMentionMenuView', () => {
 
   it('builds the drill-down text a category row inserts', () => {
     expect(getCategoryNavigateText({ namespace: 'issue' })).toBe('@issue:');
+  });
+
+  it('opens skills directly from the retained $ trigger', () => {
+    const skill = makeCategory('skill', 'skill', 'Skills', ['review']);
+    skill.directTrigger = '$';
+
+    const view = selectMentionMenuViewForTrigger([skill], '$', 'rev');
+
+    expect(view?.level).toBe('category');
+    if (view?.level !== 'category') throw new Error('expected category');
+    expect(view.category.id).toBe('skill');
+    expect(view.candidates.map((entry) => entry.value)).toEqual(['review']);
   });
 });
 

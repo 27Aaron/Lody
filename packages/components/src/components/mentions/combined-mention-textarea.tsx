@@ -437,8 +437,8 @@ export const CombinedMentionTextarea = React.forwardRef<
     // doesn't kick a skills RPC on every mount. Two things ask: the menu, when a
     // query reaches the Skills category (`onActivate` below), and a draft that
     // already contains a `$` token, which the hydrator must highlight without
-    // anyone opening a menu. `$` no longer registers a trigger, so the draft
-    // scan alone would leave `@skill:` permanently empty.
+    // anyone opening a menu. Both the direct `$` trigger and the `@skill:`
+    // category route activate the same lazy scan.
     const [skillsRequested, setSkillsRequested] = React.useState(false);
     const activateSkills = React.useCallback(() => setSkillsRequested(true), []);
     const skillsActive =
@@ -557,13 +557,14 @@ export const CombinedMentionTextarea = React.forwardRef<
     const isSlashOnly = !value || /^\/\S*$/.test(value);
     const triggers = React.useMemo(() => {
       const t: string[] = [];
-      // Every mention type is reached through `@`. `/` is the one exception: a
-      // slash command must own the whole prompt, so it never nests under a
-      // category and only fires on a slash-only composer.
+      // Every mention type is reachable through `@`; skills also retain their
+      // direct `$` entry point, and slash commands retain `/` because they must
+      // own the whole prompt.
       if (enableAtMentions) t.push('@');
+      if (enableSkillMentions) t.push(SKILL_MENTION_TRIGGER);
       if (enableCommandMentions && isSlashOnly) t.push('/');
       return t;
-    }, [enableAtMentions, enableCommandMentions, isSlashOnly]);
+    }, [enableAtMentions, enableCommandMentions, enableSkillMentions, isSlashOnly]);
 
     if (!enableMentions) {
       const textarea = (

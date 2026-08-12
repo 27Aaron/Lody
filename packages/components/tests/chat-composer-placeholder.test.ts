@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  getChatComposerMobilePromptPlaceholderKey,
   getChatComposerPromptPlaceholderKey,
   hasChatComposerMentionHints,
+  hasChatComposerSkillHints,
 } from '../src/lib/chat-composer-placeholder';
 import type { MentionProjectSource } from '../src/components/mentions/mention-project-file-source';
 import type { AcpCommandSummary, LocalProjectId, MachineId, WorkspaceId } from '@lody/shared';
@@ -40,15 +42,28 @@ describe('chat composer placeholder hints', () => {
 
   it('adds mention hints for local project sources', () => {
     expect(hasChatComposerMentionHints(localSource)).toBe(true);
+    expect(hasChatComposerSkillHints(localSource)).toBe(true);
     expect(getChatComposerPromptPlaceholderKey({ mentionSource: localSource })).toBe(
-      'composer.promptPlaceholder.mentions'
+      'composer.promptPlaceholder.mentionsSkills'
     );
   });
 
   it('uses the same mention hint for GitHub-backed sources', () => {
     expect(hasChatComposerMentionHints(githubSource)).toBe(true);
     expect(getChatComposerPromptPlaceholderKey({ mentionSource: githubSource })).toBe(
-      'composer.promptPlaceholder.mentions'
+      'composer.promptPlaceholder.mentionsSkills'
+    );
+  });
+
+  it('adds a skill-only hint for a plain-agent chat with a machine', () => {
+    const skillAgent = { machineId: 'machine-1' };
+    expect(hasChatComposerMentionHints()).toBe(false);
+    expect(hasChatComposerSkillHints(undefined, skillAgent)).toBe(true);
+    expect(getChatComposerPromptPlaceholderKey({ skillAgent })).toBe(
+      'composer.promptPlaceholder.skills'
+    );
+    expect(getChatComposerMobilePromptPlaceholderKey({ skillAgent })).toBe(
+      'composer.promptPlaceholder.mobileSkills'
     );
   });
 
@@ -58,6 +73,12 @@ describe('chat composer placeholder hints', () => {
         mentionSource: localGithubSource,
         availableCommands: commands,
       })
-    ).toBe('composer.promptPlaceholder.commandsMentions');
+    ).toBe('composer.promptPlaceholder.commandsMentionsSkills');
+  });
+
+  it('combines mention and skill hints on mobile', () => {
+    expect(getChatComposerMobilePromptPlaceholderKey({ mentionSource: localSource })).toBe(
+      'composer.promptPlaceholder.mobileMentionsSkills'
+    );
   });
 });

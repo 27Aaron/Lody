@@ -4,11 +4,11 @@ Product-level mention sources built on `src/ui/mention`.
 
 ## Invariants
 
-- `@` is the only menu trigger. Every mention type is reached through the
-  single two-level menu; `/` is the one exception and still opens commands
-  directly, because a slash command must own the whole prompt. `#` and `$` no
-  longer open a menu — but their hydrators stay, so a hand-typed or pasted
-  `#123` / `$token` is still highlighted and still expands before send.
+- `@` reaches every mention type through the two-level menu. Skills also retain
+  their direct `$` menu for compatibility, and `/` still opens commands
+  directly because a slash command must own the whole prompt. `#` does not open
+  a menu, but its hydrator remains so hand-typed or pasted `#123` is highlighted
+  and expands before send.
 - Desktop mention menus should render through `MentionContent` and cap width with
   `var(--mention-input-width)` so menus stay inside the composer/input range.
 - `$` skill tokens must remain whitespace-free; hydration scans from `$` to the
@@ -46,9 +46,12 @@ Product-level mention sources built on `src/ui/mention`.
 - Every category caps its candidate count. A row is a registered collection item
   that arrow-key movement walks, so an uncapped source degrades navigation, not
   just render time.
-- Lazy work is `MentionCategory.activation`; `selectMentionViewActivations` says
-  which sources a view needs (scoped and aggregate do; the category index does
-  not). The menu owns only "once per menu-open cycle", no source-specific rule.
+- Lazy work is `MentionCategory.activation`; category navigation starts its
+  destination synchronously through `MentionItem.onMentionNavigate`, while
+  `selectMentionViewActivations` covers typed/pasted prefixes, direct triggers,
+  and aggregate views. It says which sources a view needs (scoped and aggregate
+  do; the category index does not). Both routes share the menu's "once per
+  menu-open cycle" latch; the menu owns no source-specific rule.
   Categories on one source share its `sourceKey`, so the pair activates once
   despite `activate` being an identity-churning callback. Skills activate this
   way too; the draft-contains-`$` scan remains only for the hydrator.
@@ -63,6 +66,9 @@ Product-level mention sources built on `src/ui/mention`.
   registration and mounting `<Mention>`. Every source with its own `enabled`
   rule (sessions: having any) belongs there too, or the composer falls back to a
   plain textarea and drops that type.
+- Composer placeholder hints advertise `$` only when the same project-source or
+  machine-source conditions enable Skill mentions. Plain-agent chats with a
+  machine can therefore advertise `$` without falsely advertising `@`.
 - `@session:` is the only type whose displayed text differs from what the agent
   receives: the composer holds `@session:<title-slug>`, the mention range holds
   the real `sessionId`, and `useMentionPromptExpansion` rewrites the token into
@@ -86,8 +92,11 @@ Product-level mention sources built on `src/ui/mention`.
 - A candidate describes its side panel through the neutral
   `MentionCandidateDetail` fields, not its own component, so one pane serves
   every category. The pane is desktop-only: the docked mobile strip is too
-  narrow and has no hover to preview with. Its fields render verbatim, so a
-  source must put i18n'd text in them — never a raw enum such as a skill scope.
+  narrow and has no hover to preview with. It keeps a fixed height and reserves
+  a stable scrollbar gutter so switching between short and overflowing
+  descriptions changes neither the menu height nor text width. Its fields
+  render verbatim, so a source must put i18n'd text in them — never a raw enum
+  such as a skill scope.
 - Locale files are flat dotted-key maps: i18next runs `keySeparator: false`, so
   a nested block never resolves and silently falls back to the inline default.
 - `@` directory candidates must carry both `navigateText` (`@dir/`, descend) and

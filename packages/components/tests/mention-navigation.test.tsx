@@ -16,6 +16,7 @@ type ItemSpec = {
   label?: string;
   insertText?: string;
   navigateText?: string;
+  onMentionNavigate?: () => void;
   kind?: ItemData['kind'];
 };
 
@@ -65,6 +66,7 @@ function Harness({ items, initialValue }: { items: ItemSpec[]; initialValue: str
           label={item.label ?? item.value}
           insertText={item.insertText}
           navigateText={item.navigateText}
+          onMentionNavigate={item.onMentionNavigate}
           kind={item.kind}
         >
           {item.value}
@@ -167,6 +169,50 @@ describe('Mention navigation and insertion', () => {
     expect(latest.mentions).toEqual([]);
     expect(latest.values).toEqual([]);
     expect(latest.open).toBe(true);
+  });
+
+  it('starts destination work synchronously when selecting a navigation item', () => {
+    let navigations = 0;
+    render(
+      [
+        {
+          value: 'skill',
+          label: 'Skills',
+          navigateText: '@skill:',
+          onMentionNavigate: () => {
+            navigations += 1;
+          },
+        },
+      ],
+      '@'
+    );
+
+    commit('skill', 0);
+
+    expect(navigations).toBe(1);
+    expect(latest.inputValue).toBe('@skill:');
+  });
+
+  it('does not start destination work when a navigation item is force-committed', () => {
+    let navigations = 0;
+    render(
+      [
+        {
+          value: 'src/',
+          navigateText: '@src/',
+          insertText: '@src',
+          onMentionNavigate: () => {
+            navigations += 1;
+          },
+        },
+      ],
+      '@src/'
+    );
+
+    commit('src/', 0, { commit: true });
+
+    expect(navigations).toBe(0);
+    expect(latest.inputValue).toBe('@src ');
   });
 
   it('commits a navigation item through insertText when commit is requested', () => {

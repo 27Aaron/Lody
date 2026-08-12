@@ -14,6 +14,9 @@ Shared mention primitive used by composer autocomplete surfaces.
   commits through `insertText`. Directory drill-down is one caller of this
   contract, not a primitive special case — the primitive must not infer
   navigation from a trailing `/`.
+- Navigation items may use `onMentionNavigate` to synchronously start work for
+  their destination. It fires for mouse and keyboard navigation, but never for
+  a forced commit of the same item.
 - Backspace/ArrowLeft pop a `<namespace>:` drill-down prefix back to the bare
   trigger in one keystroke (`isMentionNavigationPrefix`); path drill-downs are
   excluded so Backspace still walks a path one character at a time.
@@ -21,7 +24,7 @@ Shared mention primitive used by composer autocomplete surfaces.
 - The pop-back itself is `context.onNavigateBack()`, owned by the root next to
   `onMentionAdd`: it has to interleave the controlled value commit with caret
   restoration, so a menu's own Back affordance calls it rather than restaging the
-  transaction. Callers decide only *when* it applies.
+  transaction. Callers decide only _when_ it applies.
 - `mention-trigger.ts` is the single owner of the `<namespace>:` grammar
   (`parseMentionNamespaceSearch`). The menu resolves its level from the same
   parse Backspace pops from, so the two cannot disagree about what is a

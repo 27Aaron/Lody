@@ -19,7 +19,8 @@ import type { MentionProjectSource } from '@/components/mentions/mention-project
 import { useMentionHydration } from '@/components/mentions/mention-hydration';
 
 /**
- * `$`-triggered skill mention (phase 2 of docs/project-skills.md).
+ * Skill mentions, reachable directly through `$` and through the `@` category
+ * menu (phase 2 of docs/project-skills.md).
  *
  * Reuses the same discovery/SWR core as the Skills display tab via
  * `useProjectSkills`: the mention reads the CURRENT session project's skills
@@ -312,10 +313,10 @@ export function hydrateSkillMentionsFromText(
 }
 
 /** Collapse the project + global SWR states into the single status/error the
-   `$` menu renders. `idle` (a disabled source — e.g. global skipped for a local
-   chat, or project skipped for a plain-agent chat) is ignored so the menu
-   reflects whichever scopes are actually fetching. */
-function mergeMentionSkillState(
+   skill menu renders. `idle` (a disabled source — e.g. global skipped for a
+   local chat, or project skipped for a plain-agent chat) is ignored so the
+   menu reflects whichever scopes are actually fetching. */
+export function mergeMentionSkillState(
   states: ReadonlyArray<{ status: ProjectSkillsStatus; error?: string }>
 ): { status: ProjectSkillsStatus; error?: string } {
   const active = states.filter((state) => state.status !== 'idle');
@@ -328,7 +329,11 @@ function mergeMentionSkillState(
   if (active.some((state) => state.status === 'refreshing')) {
     return { status: 'refreshing' };
   }
-  if (active.every((state) => state.status === 'error')) {
+  // A successful empty scope must not hide another scope's failure. The menu
+  // decides below whether discovered items are sufficient to remain usable;
+  // with zero items this error becomes an actionable message instead of the
+  // misleading "No results" state.
+  if (active.some((state) => state.status === 'error')) {
     return { status: 'error', error: active.find((state) => state.error)?.error };
   }
   return { status: 'ready' };
@@ -346,9 +351,9 @@ function mergeMentionSkillState(
  *   the separate global fetch because its own scan already includes that
  *   machine's globals (avoids double-listing).
  *
- * Gated by `enabled` so we only scan/fetch once the user actually engages the
- * `$` trigger (or a draft already contains a `$` token), mirroring the display
- * tab's lazy SWR.
+ * Gated by `enabled` so we only scan/fetch once the user actually engages a
+ * skill-menu route (or a draft already contains a `$` token), mirroring the
+ * display tab's lazy SWR.
  */
 export function useMentionProjectSkills(
   source: MentionProjectSource | undefined,

@@ -25,11 +25,8 @@ import {
 import { parseMentionNamespaceSearch } from '@/ui/mention/mention-trigger';
 import type { MentionKind } from '@/ui/mention/index';
 
-/**
- * The single composer trigger. Every category is reached through `@`; the
- * per-type markers (`#`, `$`, `/`) survive only as the text a committed
- * candidate writes, so the prompt an agent receives is unchanged.
- */
+/** The shared category-menu trigger. Skills and commands also retain their
+ * direct `$` and `/` entry points. */
 export const MENTION_TRIGGER = '@';
 
 /** Per-category cap when one query is answered across every category. */
@@ -93,8 +90,8 @@ export type MentionCategory = {
   namespace: string;
   /**
    * A trigger character that opens this category directly, bypassing the
-   * category list. Only `/` keeps one: a slash command must own the whole
-   * prompt, so it never nests under a category.
+   * category list. Skills retain `$` for compatibility and commands retain `/`
+   * because a slash command must own the whole prompt.
    */
   directTrigger?: string;
   label: string;
@@ -570,6 +567,7 @@ export function useMentionCategories(sources: MentionCategorySources): MentionCa
       categories.push({
         id: 'skill',
         namespace: 'skill',
+        directTrigger: SKILL_MENTION_TRIGGER,
         label: t('mention.category.skill.label', 'Skills'),
         icon: 'skill',
         ...sourceCategoryFields('skill', skill),

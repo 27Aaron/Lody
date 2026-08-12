@@ -50,12 +50,24 @@ export function useMentionCategoryActivation(
   categories: readonly MentionCategory[]
 ) {
   const shouldActivateSource = useFireOncePerCycle<MentionSourceKey>(open);
+  const activateCategory = React.useCallback(
+    (category: MentionCategory) => {
+      const activation = category.activation;
+      if (!open || !activation || !shouldActivateSource(activation.sourceKey)) return;
+      activation.activate();
+    },
+    [open, shouldActivateSource]
+  );
+
   React.useEffect(() => {
     if (!open) return;
-    for (const { sourceKey, activate } of selectMentionViewActivations(view, categories)) {
-      if (shouldActivateSource(sourceKey)) activate();
+    for (const activation of selectMentionViewActivations(view, categories)) {
+      if (!shouldActivateSource(activation.sourceKey)) continue;
+      activation.activate();
     }
   }, [categories, open, shouldActivateSource, view]);
+
+  return activateCategory;
 }
 
 function CandidateIcon({
@@ -89,12 +101,22 @@ function CandidateIcon({
 
 const ICON_CLASS = 'h-4 w-4 shrink-0 opacity-70';
 
-function CategoryRow({ category }: { category: MentionCategory }) {
+function CategoryRow({
+  category,
+  onNavigate,
+}: {
+  category: MentionCategory;
+  onNavigate?: (category: MentionCategory) => void;
+}) {
   return (
     <MentionItem
       value={`category:${category.id}`}
       label={category.label}
       navigateText={getCategoryNavigateText(category)}
+      // Navigation-item selection does not commit a mention. Start its lazy
+      // source synchronously, through the same once-per-open latch used by the
+      // view-derived fallback for typed/pasted `@skill:` prefixes.
+      onMentionNavigate={onNavigate ? () => onNavigate(category) : undefined}
     >
       <CandidateIcon icon={category.icon} className={ICON_CLASS} />
       <span className="min-w-0 flex-1 truncate text-sm font-medium">{category.label}</span>
@@ -148,7 +170,7 @@ function CandidateRow({
  */
 function CandidateDetailPane({ detail }: { detail: MentionCandidateDetail }) {
   return (
-    <div className="scrollbar-pro max-h-[320px] w-[248px] shrink-0 overflow-y-auto border-l border-border px-3 py-2.5">
+    <div className="scrollbar-pro h-[320px] w-[248px] shrink-0 overflow-y-auto border-l border-border px-3 py-2.5 [scrollbar-gutter:stable]">
       <p className="truncate text-sm font-semibold text-foreground">{detail.title}</p>
       {detail.badges?.length ? (
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
@@ -237,12 +259,14 @@ export function MentionTwoLevelMenuBody({
   view,
   onBack,
   showBack,
+  onCategoryNavigate,
   onCandidateSelect,
   detail,
 }: {
   view: MentionMenuView;
   onBack: () => void;
   showBack: boolean;
+  onCategoryNavigate?: (category: MentionCategory) => void;
   onCandidateSelect?: (category: MentionCategory, rank: number) => void;
   /** Side panel for the highlighted candidate; omitted on mobile. */
   detail?: MentionCandidateDetail | null;
@@ -263,7 +287,7 @@ export function MentionTwoLevelMenuBody({
       return (
         <div className="scrollbar-pro max-h-[300px] overflow-y-auto">
           {view.categories.map((category) => (
-            <CategoryRow key={category.id} category={category} />
+            <CategoryRow key={category.id} category={category} onNavigate={onCategoryNavigate} />
           ))}
         </div>
       );
@@ -276,7 +300,7 @@ export function MentionTwoLevelMenuBody({
       return (
         <div className="scrollbar-pro max-h-[320px] overflow-y-auto">
           {view.categories.map((category) => (
-            <CategoryRow key={category.id} category={category} />
+            <CategoryRow key={category.id} category={category} onNavigate={onCategoryNavigate} />
           ))}
           {view.groups.map((group) => (
             <React.Fragment key={group.category.id}>
@@ -348,7 +372,7 @@ export function MentionTwoLevelMenu({
     [categories, open, search, trigger]
   );
 
-  useMentionCategoryActivation(open, view, categories);
+  const activateCategory = useMentionCategoryActivation(open, view, categories);
 
   // Highlight the first row whenever the level or result set changes, so Enter
   // always has a target. Keyed so typing does not re-highlight on every render.
@@ -457,6 +481,7 @@ export function MentionTwoLevelMenu({
         view={view}
         onBack={handleBack}
         showBack={showBack}
+        onCategoryNavigate={activateCategory}
         onCandidateSelect={handleCandidateSelect}
         detail={detail}
       />

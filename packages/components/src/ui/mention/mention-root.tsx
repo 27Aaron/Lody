@@ -33,6 +33,8 @@ interface ItemData {
   value: string;
   disabled: boolean;
   onMentionSelect?: () => void;
+  /** Called synchronously when this item is used as a navigation step. */
+  onMentionNavigate?: () => void;
 
   /**
    * Literal text written into the input when this item is committed.
@@ -463,7 +465,12 @@ const MentionRoot = React.forwardRef<RootElement, MentionRootProps>((props, forw
       });
 
       setInputValue(newValue);
-      if (!isNavigating) {
+      if (isNavigating) {
+        // Start work required by the destination before React commits the
+        // rewritten trigger text. View-derived activation remains as a fallback
+        // for typed/pasted navigation prefixes and direct triggers.
+        selectedItem?.onMentionNavigate?.();
+      } else {
         selectedItem?.onMentionSelect?.();
         setValue((prev) => {
           const next = [...(prev ?? [])];

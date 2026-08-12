@@ -130,9 +130,17 @@ describe('CombinedMentionTextarea mention enablement and activation', () => {
     await render({ value: '', skillAgent: { machineId: 'machine-1' } });
     expect(skillScanEnabled).not.toContain(true);
 
-    // `$` no longer registers a trigger, so this `@` route is the only way a
-    // user reaches skills — it must be what starts the scan.
+    // Typed/pasted namespace prefixes still activate their lazy source.
     await typeInto('@skill:');
+
+    expect(skillScanEnabled).toContain(true);
+  });
+
+  it('retains $ as a direct skill-menu trigger', async () => {
+    await render({ value: '', skillAgent: { machineId: 'machine-1' } });
+    expect(skillScanEnabled).not.toContain(true);
+
+    await typeInto('$');
 
     expect(skillScanEnabled).toContain(true);
   });

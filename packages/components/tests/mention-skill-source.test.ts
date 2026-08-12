@@ -5,6 +5,7 @@ import {
   expandSkillMentionsInText,
   getSkillMentionToken,
   hydrateSkillMentionsFromText,
+  mergeMentionSkillState,
   selectSkillMentionCandidates,
 } from '../src/components/mentions/mention-skill-source';
 
@@ -69,6 +70,26 @@ describe('getSkillMentionToken', () => {
     expect(
       getSkillMentionToken({ name: 'Deep Research', relativePath: '.agents/skills/deep/SKILL.md' })
     ).toBe('deep');
+  });
+});
+
+describe('mergeMentionSkillState', () => {
+  it('does not let an empty successful scope hide another scope failure', () => {
+    expect(
+      mergeMentionSkillState([
+        { status: 'ready' },
+        { status: 'error', error: 'Global skill scan failed' },
+      ])
+    ).toEqual({ status: 'error', error: 'Global skill scan failed' });
+  });
+
+  it('keeps loading and refreshing ahead of a settled scope error', () => {
+    expect(
+      mergeMentionSkillState([{ status: 'loading' }, { status: 'error', error: 'failed' }])
+    ).toEqual({ status: 'loading' });
+    expect(
+      mergeMentionSkillState([{ status: 'refreshing' }, { status: 'error', error: 'failed' }])
+    ).toEqual({ status: 'refreshing' });
   });
 });
 
