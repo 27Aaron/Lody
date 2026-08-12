@@ -5,6 +5,7 @@ import {
   githubFetchCheckRuns,
   githubFetchFileAtCommit,
   githubFetchFileBytesAtCommit,
+  githubFetchIssuesAndPRs,
   githubFetchPRIssueComments,
   githubFetchPRReviewComments,
   githubFetchProjectSkillsAtCommit,
@@ -223,5 +224,95 @@ description: Checks diffs
     ]);
     expect(result.contentFingerprint).toBe('commit-sha');
     expect(result.treeTruncated).toBe(false);
+  });
+});
+
+describe('githubFetchIssuesAndPRs', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function issuesPageResponse(numbers: number[]) {
+    return new Response(
+      JSON.stringify(
+        numbers.map((number) => ({
+          number,
+          html_url: `https://github.com/owner/repo/issues/${number}`,
+          title: `Issue ${number}`,
+          state: 'open',
+          updated_at: `2026-07-${String(number).padStart(2, '0')}T00:00:00.000Z`,
+        }))
+      )
+    );
+  }
+
+  it('requests both pages concurrently', async () => {
+    const startedPages: number[] = [];
+    let bothStarted = () => {};
+    // Neither request may settle until both have started, so the call can only
+    // finish if the two pages really are in flight together.
+    const gate = new Promise<void>((resolve) => {
+      bothStarted = resolve;
+    });
+
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const page = Number(new URL(String(input)).searchParams.get('page'));
+      startedPages.push(page);
+      if (startedPages.length === 2) bothStarted();
+      await gate;
+      return issuesPageResponse(page === 1 ? [3, 2] : [1]);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const items = await githubFetchIssuesAndPRs('token', 'owner/repo');
+
+    expect([...startedPages].sort()).toEqual([1, 2]);
+    expect(items.map((item) => item.number)).toEqual([3, 2, 1]);
+  });
+
+  it('dedupes across pages and keeps the most recently updated copy', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const page = Number(new URL(String(input)).searchParams.get('page'));
+      if (page === 1) {
+        return new Response(
+          JSON.stringify([
+            {
+              number: 7,
+              html_url: 'https://github.com/owner/repo/issues/7',
+              title: 'Stale copy',
+              state: 'open',
+              updated_at: '2026-07-01T00:00:00.000Z',
+            },
+          ])
+        );
+      }
+      return new Response(
+        JSON.stringify([
+          {
+            number: 7,
+            html_url: 'https://github.com/owner/repo/issues/7',
+            title: 'Fresh copy',
+            state: 'open',
+            updated_at: '2026-07-09T00:00:00.000Z',
+          },
+          {
+            number: 8,
+            html_url: 'https://github.com/owner/repo/pull/8',
+            title: 'A pull request',
+            state: 'open',
+            updated_at: '2026-07-02T00:00:00.000Z',
+            pull_request: { url: 'https://api.github.com/repos/owner/repo/pulls/8' },
+          },
+        ])
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const items = await githubFetchIssuesAndPRs('token', 'owner/repo');
+
+    expect(items).toEqual([
+      expect.objectContaining({ number: 7, title: 'Fresh copy', type: 'issue' }),
+      expect.objectContaining({ number: 8, type: 'pr' }),
+    ]);
   });
 });

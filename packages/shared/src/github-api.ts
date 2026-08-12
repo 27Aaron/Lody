@@ -1683,21 +1683,24 @@ export async function githubFetchIssuesAndPRs(
   repoFullName: string
 ): Promise<GitHubIssueOrPR[]> {
   const CACHE_MAX_ITEMS = 200;
+
+  // The two pages are independent, and the dedupe/sort below does not care what
+  // order they arrive in — so serializing them only doubled the latency the
+  // mention menu waits through.
+  const pages = await Promise.all(
+    [1, 2].map((page) => {
+      const url = new URL(`https://api.github.com/repos/${repoFullName}/issues`);
+      url.searchParams.set('state', 'open');
+      url.searchParams.set('per_page', '100');
+      url.searchParams.set('sort', 'updated');
+      url.searchParams.set('direction', 'desc');
+      url.searchParams.set('page', String(page));
+      return fetchGithubJson(url.toString(), token, GithubMentionIssuesResponseSchema);
+    })
+  );
+
   const all: GitHubIssueOrPR[] = [];
-
-  for (const page of [1, 2]) {
-    const url = new URL(`https://api.github.com/repos/${repoFullName}/issues`);
-    url.searchParams.set('state', 'open');
-    url.searchParams.set('per_page', '100');
-    url.searchParams.set('sort', 'updated');
-    url.searchParams.set('direction', 'desc');
-    url.searchParams.set('page', String(page));
-
-    const pageItems = await fetchGithubJson(
-      url.toString(),
-      token,
-      GithubMentionIssuesResponseSchema
-    );
+  for (const pageItems of pages) {
     for (const item of pageItems) {
       if (item.state !== 'open') continue;
       const type: 'issue' | 'pr' = item.pull_request ? 'pr' : 'issue';

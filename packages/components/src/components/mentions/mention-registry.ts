@@ -78,6 +78,15 @@ export type MentionCandidate = {
   detail?: MentionCandidateDetail;
 };
 
+export type MentionCategoryActivation = {
+  /**
+   * Identifies the backing source. Categories fed by one source share a key, so
+   * the menu starts that source's work once however many of them are queried.
+   */
+  sourceKey: MentionSourceKey;
+  activate: () => void;
+};
+
 export type MentionCategory = {
   id: MentionCategoryId;
   /** The `<namespace>:` segment of the drill-down prefix. */
@@ -91,6 +100,8 @@ export type MentionCategory = {
   label: string;
   icon: MentionIcon;
   status: MentionCategoryStatus;
+  /** Lazy work this category needs before it can answer. */
+  activation?: MentionCategoryActivation;
   /** Rendered instead of rows: an error, or "select a repo first". */
   message?: string;
   /** Rendered above the rows, e.g. the truncated-file-list warning. */
@@ -140,6 +151,24 @@ export function getMentionViewCandidates(view: MentionMenuView | null): MentionC
   if (view.level === 'category') return view.candidates;
   if (view.level === 'aggregate') return view.groups.flatMap((group) => group.candidates);
   return [];
+}
+
+/**
+ * The lazy sources a view needs, one entry per source. A scoped view touches
+ * its one category; an aggregate query asks every category, so it needs them
+ * all; the first-level category index queries nothing and so activates nothing.
+ */
+export function selectMentionViewActivations(
+  view: MentionMenuView | null,
+  categories: readonly MentionCategory[]
+): MentionCategoryActivation[] {
+  const queried =
+    view?.level === 'category' ? [view.category] : view?.level === 'aggregate' ? categories : [];
+  const bySource = new Map<MentionSourceKey, MentionCategoryActivation>();
+  for (const category of queried) {
+    if (category.activation) bySource.set(category.activation.sourceKey, category.activation);
+  }
+  return [...bySource.values()];
 }
 
 function matchesCategoryName(category: MentionCategory, term: string): boolean {
@@ -427,7 +456,22 @@ type SourceState = {
   enabled: boolean;
   status?: MentionCategoryStatus;
   message?: string;
+  /** Starts this source's lazy work. Shared by every category it feeds. */
+  onActivate?: () => void;
 };
+
+/**
+ * The fields a category copies verbatim from its source. Spread at every
+ * `categories.push` so a new `SourceState` field reaches all of them at once —
+ * forgetting one is invisible until that single category misbehaves.
+ */
+function sourceCategoryFields(sourceKey: MentionSourceKey, source: SourceState) {
+  return {
+    status: source.status ?? 'ready',
+    message: source.message,
+    activation: source.onActivate ? { sourceKey, activate: source.onActivate } : undefined,
+  };
+}
 
 export type MentionCategorySources = {
   file?: SourceState & {
@@ -455,6 +499,8 @@ export type MentionCategorySources = {
     items: readonly SessionMentionItem[];
   };
 };
+
+export type MentionSourceKey = keyof MentionCategorySources;
 
 /**
  * The enabled mention categories, in first-level display order. Files lead
@@ -494,8 +540,7 @@ export function useMentionCategories(sources: MentionCategorySources): MentionCa
         namespace: 'file',
         label: t('mention.category.file.label', 'Files'),
         icon: 'file',
-        status: file.status ?? 'ready',
-        message: file.message,
+        ...sourceCategoryFields('file', file),
         notice: file.notice,
         getCandidates: (term, limit) => buildFileCandidates(file.index, term, file.fuse, limit),
       });
@@ -507,8 +552,7 @@ export function useMentionCategories(sources: MentionCategorySources): MentionCa
         namespace: 'issue',
         label: t('mention.category.issue.label', 'Issues'),
         icon: 'issue',
-        status: issuePr.status ?? 'ready',
-        message: issuePr.message,
+        ...sourceCategoryFields('issuePr', issuePr),
         getCandidates: (term, limit) =>
           buildIssuePrCandidates(issueSuggestions, term, issueFuse, limit),
       });
@@ -517,8 +561,7 @@ export function useMentionCategories(sources: MentionCategorySources): MentionCa
         namespace: 'pr',
         label: t('mention.category.pr.label', 'Pull Requests'),
         icon: 'pr',
-        status: issuePr.status ?? 'ready',
-        message: issuePr.message,
+        ...sourceCategoryFields('issuePr', issuePr),
         getCandidates: (term, limit) => buildIssuePrCandidates(prSuggestions, term, prFuse, limit),
       });
     }
@@ -529,8 +572,7 @@ export function useMentionCategories(sources: MentionCategorySources): MentionCa
         namespace: 'skill',
         label: t('mention.category.skill.label', 'Skills'),
         icon: 'skill',
-        status: skill.status ?? 'ready',
-        message: skill.message,
+        ...sourceCategoryFields('skill', skill),
         getCandidates: (term, limit) =>
           buildSkillCandidates(
             skill.items,
@@ -560,8 +602,7 @@ export function useMentionCategories(sources: MentionCategorySources): MentionCa
         namespace: 'session',
         label: t('mention.category.session.label', 'Sessions'),
         icon: 'session',
-        status: session.status ?? 'ready',
-        message: session.message,
+        ...sourceCategoryFields('session', session),
         getCandidates: (term, limit) =>
           buildSessionCandidates(
             session.items,
@@ -579,8 +620,7 @@ export function useMentionCategories(sources: MentionCategorySources): MentionCa
         directTrigger: '/',
         label: t('mention.category.command.label', 'Commands'),
         icon: 'command',
-        status: command.status ?? 'ready',
-        message: command.message,
+        ...sourceCategoryFields('command', command),
         getCandidates: (term, limit) => buildCommandCandidates(command.commands, term, limit),
       });
     }

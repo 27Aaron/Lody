@@ -236,9 +236,13 @@ const MentionContent = React.forwardRef<ContentElement, MentionContentProps>(
       align: rtlAwareAlign,
       alignOffset,
       arrowPadding,
+      // `inputBoundary` is null until the first measure. It must degrade to
+      // `undefined` (no boundary, positioner default) — floating-ui reads a
+      // non-element boundary as a rect and dereferences it.
       collisionBoundary:
         collisionBoundary ??
-        (inputBoundary as AnchorPositionerProps['collisionBoundary'] | undefined),
+        (inputBoundary as AnchorPositionerProps['collisionBoundary'] | undefined) ??
+        undefined,
       collisionPadding,
       sticky,
       strategy,

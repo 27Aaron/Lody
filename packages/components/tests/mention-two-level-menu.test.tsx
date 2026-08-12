@@ -6,9 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Mention, MentionInput, useMentionContext } from '../src/ui/mention';
 import type { Mention as MentionRange } from '../src/ui/mention/mention-root';
-import { MentionTwoLevelMenuBody } from '../src/components/mentions/mention-two-level-menu';
+import {
+  MentionTwoLevelMenuBody,
+  useMentionCategoryActivation,
+} from '../src/components/mentions/mention-two-level-menu';
 import {
   selectMentionMenuView,
+  selectMentionMenuViewForTrigger,
   toSkillCandidate,
   type MentionCandidate,
   type MentionCandidateDetail,
@@ -114,6 +118,42 @@ function Harness({
   );
 }
 
+function ActivationHarness({
+  open,
+  search,
+  categories,
+}: {
+  open: boolean;
+  search: string;
+  categories: MentionCategory[];
+}) {
+  // Derived exactly as MentionTwoLevelMenu does, so the harness cannot pass on
+  // a view the real menu would never produce.
+  const view = open ? selectMentionMenuViewForTrigger(categories, '@', search) : null;
+  useMentionCategoryActivation(open, view, categories);
+  return null;
+}
+
+/** The shared-source pair the menu must activate once: Issues and PRs. */
+function makeIssuePrActivationCategories() {
+  const activate = vi.fn();
+  const activation = { sourceKey: 'issuePr' as const, activate };
+  const categories = makeCategories();
+  const issue = categories.find((category) => category.id === 'issue');
+  if (!issue) throw new Error('makeCategories must include the issue category');
+  issue.activation = activation;
+  categories.push({
+    id: 'pr',
+    namespace: 'pr',
+    label: 'Pull Requests',
+    icon: 'pr',
+    status: 'ready',
+    activation,
+    getCandidates: () => [],
+  });
+  return { categories, activate };
+}
+
 describe('MentionTwoLevelMenuBody', () => {
   let root: Root | undefined;
   let container: HTMLDivElement | undefined;
@@ -155,6 +195,12 @@ describe('MentionTwoLevelMenuBody', () => {
       input.setSelectionRange(initialValue.length, initialValue.length);
     });
     return input;
+  }
+
+  function renderActivation(open: boolean, search: string, categories: MentionCategory[]) {
+    act(() => {
+      root?.render(<ActivationHarness open={open} search={search} categories={categories} />);
+    });
   }
 
   function rowTitles() {
@@ -241,6 +287,53 @@ describe('MentionTwoLevelMenuBody', () => {
     render('@issue:', makeCategories(), null);
 
     expect(container?.querySelector('dl')).toBeNull();
+  });
+
+  it('does not activate lazy sources from the first-level category index', () => {
+    const { categories, activate } = makeIssuePrActivationCategories();
+
+    renderActivation(true, '', categories);
+
+    expect(activate).not.toHaveBeenCalled();
+  });
+
+  it('activates the source for a scoped category', () => {
+    const { categories, activate } = makeIssuePrActivationCategories();
+
+    renderActivation(true, 'issue:', categories);
+
+    expect(activate).toHaveBeenCalledOnce();
+  });
+
+  it('activates a shared source only once per menu-open cycle', () => {
+    const { categories, activate } = makeIssuePrActivationCategories();
+
+    renderActivation(true, 'issue:', categories);
+    renderActivation(true, 'pr:', categories);
+
+    expect(activate).toHaveBeenCalledOnce();
+
+    renderActivation(false, '', categories);
+    renderActivation(true, 'pr:', categories);
+    expect(activate).toHaveBeenCalledTimes(2);
+  });
+
+  it('activates a source whose callback identity changed, keyed by its source', () => {
+    const { categories } = makeIssuePrActivationCategories();
+    const rebuilt = vi.fn();
+    // `refresh` is a `useCallback`; a new identity for the same source must not
+    // look like a second source to activate.
+    for (const category of categories) {
+      if (category.activation) category.activation = { sourceKey: 'issuePr', activate: rebuilt };
+    }
+
+    renderActivation(true, 'issue:', categories);
+    for (const category of categories) {
+      if (category.activation) category.activation = { sourceKey: 'issuePr', activate: rebuilt };
+    }
+    renderActivation(true, 'pr:', categories);
+
+    expect(rebuilt).toHaveBeenCalledOnce();
   });
 });
 

@@ -57,6 +57,15 @@ import { Textarea, type TextareaProps } from '@/ui/textarea';
 // ============================================================================
 
 /**
+ * Whether a lazy source has nothing to show yet. `idle` is "nobody has asked",
+ * and rendering the category is exactly what asks — so an unasked source reads
+ * as loading, never as "No results".
+ */
+function isLazySourceLoading(status: string, hasData: boolean) {
+  return (status === 'loading' || status === 'idle') && !hasData;
+}
+
+/**
  * Builds the mention registry from the composer's already-fetched data and
  * renders the single `@` menu. Lives inside `<Mention>` so Fuse loading stays
  * keyed to the menu actually being open.
@@ -72,9 +81,11 @@ function TwoLevelMentionMenu({
   enableSkillMentions,
   skillItems,
   skillState,
+  onSkillsActivate,
   allowedSkillDirs,
   enableCommandMentions,
   availableCommands,
+  enableSessionMentions,
   sessionItems,
   surface,
 }: {
@@ -88,9 +99,12 @@ function TwoLevelMentionMenu({
   enableSkillMentions: boolean;
   skillItems: SkillMentionItem[];
   skillState: { status: string; error?: string };
+  /** Starts the skills scan; the composer keeps it off until something asks. */
+  onSkillsActivate: () => void;
   allowedSkillDirs: ReadonlySet<string> | null;
   enableCommandMentions: boolean;
   availableCommands?: AcpCommandSummary[];
+  enableSessionMentions: boolean;
   sessionItems: SessionMentionItem[];
   surface: MentionSurface;
 }) {
@@ -163,13 +177,21 @@ function TwoLevelMentionMenu({
     [enableFileMentions, fileData, fileFuse, fileIndex, fileSourceKind, t]
   );
 
+  // `refresh` is async, but `onActivate` is fire-and-forget (`() => void`).
+  // Wrap once so the promise is explicitly discarded while keeping a stable
+  // identity — the source memo lists it as a dependency.
+  const refreshIssuePr = issuePrData.refresh;
+  const activateIssuePr = React.useCallback(() => {
+    void refreshIssuePr();
+  }, [refreshIssuePr]);
+
   const issuePrSource = React.useMemo<MentionCategorySources['issuePr']>(
     () => ({
       enabled: enableIssueMentions,
       status:
         issuePrData.status === 'error'
           ? 'error'
-          : issuePrData.status === 'loading' && !issuePrData.entry
+          : isLazySourceLoading(issuePrData.status, Boolean(issuePrData.entry))
             ? 'loading'
             : 'ready',
       message: !repoFullName
@@ -177,10 +199,19 @@ function TwoLevelMentionMenu({
         : issuePrData.status === 'error'
           ? (issuePrData.error ?? t('mention.issuePr.loadError', 'Failed to load issues and PRs.'))
           : undefined,
+      onActivate: activateIssuePr,
       suggestions: issuePrSuggestions,
       createFuse: createIssuePrFuse,
     }),
-    [createIssuePrFuse, enableIssueMentions, issuePrData, issuePrSuggestions, repoFullName, t]
+    [
+      activateIssuePr,
+      createIssuePrFuse,
+      enableIssueMentions,
+      issuePrData,
+      issuePrSuggestions,
+      repoFullName,
+      t,
+    ]
   );
 
   const skillSource = React.useMemo<MentionCategorySources['skill']>(
@@ -189,7 +220,7 @@ function TwoLevelMentionMenu({
       status:
         skillState.status === 'error' && skillItems.length === 0
           ? 'error'
-          : skillState.status === 'loading' && skillItems.length === 0
+          : isLazySourceLoading(skillState.status, skillItems.length > 0)
             ? 'loading'
             : 'ready',
       message:
@@ -197,15 +228,16 @@ function TwoLevelMentionMenu({
           ? (skillState.error ??
             t('workspace.projects.skills.mention.error', 'Failed to load skills.'))
           : undefined,
+      onActivate: onSkillsActivate,
       items: skillItems,
       allowedDirs: allowedSkillDirs,
     }),
-    [allowedSkillDirs, enableSkillMentions, skillItems, skillState, t]
+    [allowedSkillDirs, enableSkillMentions, onSkillsActivate, skillItems, skillState, t]
   );
 
   const sessionSource = React.useMemo<MentionCategorySources['session']>(
-    () => ({ enabled: sessionItems.length > 0, items: sessionItems }),
-    [sessionItems]
+    () => ({ enabled: enableSessionMentions, items: sessionItems }),
+    [enableSessionMentions, sessionItems]
   );
 
   const commandSource = React.useMemo<MentionCategorySources['command']>(
@@ -401,11 +433,16 @@ export const CombinedMentionTextarea = React.forwardRef<
     // Enable `$` when there are project skills OR a known machine whose global
     // skills we can list (so GitHub / plain-agent chats still offer skills).
     const enableSkillMentions = hasProjectSkillSource || Boolean(skillGlobalMachineId);
-    // Only scan/fetch skills once the user actually engages the `$` trigger (or
-    // a draft already contains one), so the composer doesn't kick a skills RPC
-    // on every mount. The trigger is still registered below so typing `$` opens
-    // the menu (which then shows a brief loading state on first use).
-    const skillsActive = enableSkillMentions && value.includes(SKILL_MENTION_TRIGGER);
+    // Only scan/fetch skills once they are actually asked for, so the composer
+    // doesn't kick a skills RPC on every mount. Two things ask: the menu, when a
+    // query reaches the Skills category (`onActivate` below), and a draft that
+    // already contains a `$` token, which the hydrator must highlight without
+    // anyone opening a menu. `$` no longer registers a trigger, so the draft
+    // scan alone would leave `@skill:` permanently empty.
+    const [skillsRequested, setSkillsRequested] = React.useState(false);
+    const activateSkills = React.useCallback(() => setSkillsRequested(true), []);
+    const skillsActive =
+      enableSkillMentions && (skillsRequested || value.includes(SKILL_MENTION_TRIGGER));
 
     const { fileData, initializeLazyDirectory, getKnownFileTokens } =
       useMentionProjectFiles(mentionSource);
@@ -508,11 +545,13 @@ export const CombinedMentionTextarea = React.forwardRef<
     const enableCommandMentions = Boolean(availableCommands && availableCommands.length > 0);
     const hasExternalMentionSupport =
       externalMentions.length > 0 || Boolean(onExternalMentionsChange) || Boolean(onMentionClick);
-    const enableMentions =
-      enableFileMentions ||
-      enableCommandMentions ||
-      enableSkillMentions ||
-      hasExternalMentionSupport;
+    // One list of what `@` can reach, so registering the trigger and mounting
+    // the mention tree can never disagree about a type. They drifted once
+    // already: a composer with only issues rendered a plain textarea.
+    const enableSessionMentions = sessionItems.length > 0;
+    const enableAtMentions =
+      enableFileMentions || enableIssueMentions || enableSkillMentions || enableSessionMentions;
+    const enableMentions = enableAtMentions || enableCommandMentions || hasExternalMentionSupport;
 
     // `/` trigger is only active when the entire input is a slash command (e.g. "" or "/review")
     const isSlashOnly = !value || /^\/\S*$/.test(value);
@@ -521,16 +560,10 @@ export const CombinedMentionTextarea = React.forwardRef<
       // Every mention type is reached through `@`. `/` is the one exception: a
       // slash command must own the whole prompt, so it never nests under a
       // category and only fires on a slash-only composer.
-      if (enableFileMentions || enableIssueMentions || enableSkillMentions) t.push('@');
+      if (enableAtMentions) t.push('@');
       if (enableCommandMentions && isSlashOnly) t.push('/');
       return t;
-    }, [
-      enableFileMentions,
-      enableIssueMentions,
-      enableSkillMentions,
-      enableCommandMentions,
-      isSlashOnly,
-    ]);
+    }, [enableAtMentions, enableCommandMentions, isSlashOnly]);
 
     if (!enableMentions) {
       const textarea = (
@@ -571,11 +604,7 @@ export const CombinedMentionTextarea = React.forwardRef<
           getKnownPaths={getKnownFileTokens}
           enabled={enableFileMentions}
         />
-        <SessionMentionHydrator
-          text={value}
-          items={sessionItems}
-          enabled={sessionItems.length > 0}
-        />
+        <SessionMentionHydrator text={value} items={sessionItems} enabled={enableSessionMentions} />
         {enableSkillMentions ? (
           <SkillMentionHydrator
             text={value}
@@ -618,9 +647,11 @@ export const CombinedMentionTextarea = React.forwardRef<
           enableSkillMentions={enableSkillMentions}
           skillItems={skillItems}
           skillState={skillState}
+          onSkillsActivate={activateSkills}
           allowedSkillDirs={allowedSkillDirs}
           enableCommandMentions={enableCommandMentions}
           availableCommands={availableCommands}
+          enableSessionMentions={enableSessionMentions}
           sessionItems={sessionItems}
           surface={mentionSurface}
         />

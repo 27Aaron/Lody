@@ -13,18 +13,16 @@ Product-level mention sources built on `src/ui/mention`.
   `var(--mention-input-width)` so menus stay inside the composer/input range.
 - `$` skill tokens must remain whitespace-free; hydration scans from `$` to the
   next whitespace.
-- `$` skill candidates come from `useProjectSkills`, not Codex's runtime
-  skill registry. The same CLI `list-global-skills` home scan returns two scopes:
-  `global` (user-authored, over `ALL_KNOWN_GLOBAL_SKILL_DIRS`) and `system`
-  (agent built-ins, over `ALL_KNOWN_SYSTEM_SKILL_DIRS` — e.g. codex
-  `~/.codex/skills/.system`). Both are filtered by the selected provider's dirs
-  (`getRegisteredGlobalSkillDirs` + `getRegisteredSystemSkillDirs`).
-  `~/.agents/skills` is a provider-specific alias, not a universal fallback;
-  only providers with verified support include it in `getRegisteredGlobalSkillDirs`.
-  The scanner supports flat `~/<agent>/skills/<skill>/SKILL.md` and catalog-layout
-  `~/<agent>/skills/<category>/<skill>/SKILL.md`; plugin cache paths outside the
-  provider's registered global root still do not appear unless their scan dirs are
-  explicitly added.
+- `$` skill candidates come from `useProjectSkills`, not Codex's runtime skill
+  registry. One CLI `list-global-skills` home scan returns two scopes: `global`
+  (user-authored, over `ALL_KNOWN_GLOBAL_SKILL_DIRS`) and `system` (agent
+  built-ins, over `ALL_KNOWN_SYSTEM_SKILL_DIRS`, e.g. `~/.codex/skills/.system`),
+  each filtered by the provider's `getRegisteredGlobalSkillDirs` /
+  `getRegisteredSystemSkillDirs`. `~/.agents/skills` is a provider-specific
+  alias, not a universal fallback: only providers with verified support register
+  it. The scanner handles flat `~/<agent>/skills/<skill>/SKILL.md` and catalog
+  `~/<agent>/skills/<category>/<skill>/SKILL.md`; paths outside the provider's
+  registered roots (e.g. plugin caches) appear only once their dirs are added.
 - Before send, known `$` skill tokens are expanded in prompt text to
   `use /token [Skill Path](path)`. Project skills use their project-relative
   `SKILL.md` path; home-scoped (`global` + `system`) skills use the CLI-provided
@@ -48,6 +46,23 @@ Product-level mention sources built on `src/ui/mention`.
 - Every category caps its candidate count. A row is a registered collection item
   that arrow-key movement walks, so an uncapped source degrades navigation, not
   just render time.
+- Lazy work is `MentionCategory.activation`; `selectMentionViewActivations` says
+  which sources a view needs (scoped and aggregate do; the category index does
+  not). The menu owns only "once per menu-open cycle", no source-specific rule.
+  Categories on one source share its `sourceKey`, so the pair activates once
+  despite `activate` being an identity-churning callback. Skills activate this
+  way too; the draft-contains-`$` scan remains only for the hydrator.
+- Activation means "make sure this is loaded", not "revalidate": an aggregate
+  query activates every category, so an unconditional refetch bills a mention
+  aimed elsewhere. Issues/PRs gate on `ISSUE_PR_FRESH_FOR_MS`; explicit gestures
+  pass `refresh({ force: true })`. The fetch timestamp rides on the cached entry,
+  like the file source's `fetchedAt`, so it survives the IndexedDB round trip —
+  beside it, every reload would look unfetched and refetch on the first `@`. An
+  unasked source reports `loading`, not `ready` with zero rows.
+- `enableAtMentions` is the one list of what `@` reaches, gating both trigger
+  registration and mounting `<Mention>`. Every source with its own `enabled`
+  rule (sessions: having any) belongs there too, or the composer falls back to a
+  plain textarea and drops that type.
 - `@session:` is the only type whose displayed text differs from what the agent
   receives: the composer holds `@session:<title-slug>`, the mention range holds
   the real `sessionId`, and `useMentionPromptExpansion` rewrites the token into
@@ -64,18 +79,17 @@ Product-level mention sources built on `src/ui/mention`.
   while an agent streams, and `setItem` blocks.
 - `useSessionMentionItems` is the single owner of the mentionable-session list.
   The composer and `useMentionPromptExpansion` are both mounted on a session
-  screen, so deriving the items separately re-slugged every visible session twice
-  per tick.
-- `useMentionPromptExpansion` is the single before-send text transform. There are
-  exactly two send paths, so per-type expansion hooks must compose here rather
-  than being wired into both by hand.
-- A candidate describes its side panel through the neutral `MentionCandidateDetail`
-  fields, not its own component, so one pane serves every category. The pane is
-  desktop-only: the docked mobile strip is too narrow and has no hover to preview
-  with. Those fields are rendered verbatim, so a source must put i18n'd text in
-  them — never a raw enum value such as a skill scope.
-- Locale files are flat dotted-key maps — i18next runs with `keySeparator: false`,
-  so a nested block never resolves and silently falls back to the inline default.
+  screen, so deriving items separately re-slugged every visible session twice a
+  tick.
+- `useMentionPromptExpansion` is the single before-send text transform. With two
+  send paths, per-type expansion hooks must compose here, not be wired into both.
+- A candidate describes its side panel through the neutral
+  `MentionCandidateDetail` fields, not its own component, so one pane serves
+  every category. The pane is desktop-only: the docked mobile strip is too
+  narrow and has no hover to preview with. Its fields render verbatim, so a
+  source must put i18n'd text in them — never a raw enum such as a skill scope.
+- Locale files are flat dotted-key maps: i18next runs `keySeparator: false`, so
+  a nested block never resolves and silently falls back to the inline default.
 - `@` directory candidates must carry both `navigateText` (`@dir/`, descend) and
   `insertText` (`@dir`, commit without the trailing slash). The primitive no
   longer infers drill-down from a trailing `/`, so dropping either prop silently
@@ -90,20 +104,20 @@ Product-level mention sources built on `src/ui/mention`.
 - `mention-registry.ts` holds the two-level menu contract: category definitions,
   candidate building, and `selectMentionMenuView`.
 - `mention-two-level-menu.tsx` renders that contract as the single `@` menu and
-  owns the `menu_open` -> `category_enter` -> `select` funnel. `category_enter`
-  is reported from the resolved view, not a row callback: a navigation item
-  never fires `onMentionSelect`, and the keyboard route must count too.
+  owns the activation latch and the `menu_open` -> `category_enter` -> `select`
+  funnel, both through `hooks/use-fire-once` rather than private refs.
+  `category_enter` is reported from the resolved view, not a row callback: a
+  navigation item never fires `onMentionSelect`, and the keyboard route counts.
 - `mention-session-source.ts` owns `@session:` slugs, candidates, the slug -> id
   cache, hydration, and the before-send expansion.
 - `mention-expansion.ts` composes every before-send transform into one hook.
 - `mention-hydration.ts` owns the hydrate-the-initial-text-once effect and the
   range merge every source shares; a source supplies only its `hydrate`.
-- `mention-fuse.ts` owns the shared, module-cached `fuse.js` import.
-- The menu must not load Fuse or rebuild provider entries from per-render
-  derived objects. Keep Fuse constructor loading module-cached and keyed by menu
-  activation; reuse provider file entries when paths/lazy dirs are unchanged.
-  Activation is latched, so closing the menu must not drop the constructor and
-  force every caller to rebuild its index on the next `@`.
+- `mention-fuse.ts` owns the shared, module-cached `fuse.js` import. Keep it
+  module-cached and keyed by menu activation, and reuse provider file entries
+  when paths/lazy dirs are unchanged — the menu must not rebuild either from
+  per-render derived objects. The keying is latched, so closing the menu must
+  not drop the constructor and re-index everything on the next `@`.
 - `issue-pr-hash-mention.tsx` provides cached GitHub issue/PR lookup, ranking,
   hydration, and post-insert title hints.
 - `mention-skill-source.tsx` provides `$` skill discovery, provider directory

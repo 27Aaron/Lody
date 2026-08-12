@@ -13,6 +13,7 @@ import {
   Terminal,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useFireOnKeyChange, useFireOncePerCycle } from '@/hooks/use-fire-once';
 import { FileIcon, FolderIcon } from '@/components/icons/file-icons';
 import { MentionContent, MentionItem, useMentionContext } from '@/ui/mention';
 import { useIsMentionMobile } from '@/ui/mention/mention-mobile-content';
@@ -20,11 +21,13 @@ import {
   getCategoryNavigateText,
   getMentionViewCandidates,
   selectMentionMenuViewForTrigger,
+  selectMentionViewActivations,
   type MentionCandidate,
   type MentionCandidateDetail,
   type MentionCategory,
   type MentionIcon,
   type MentionMenuView,
+  type MentionSourceKey,
 } from '@/components/mentions/mention-registry';
 import {
   captureMentionCategoryEnter,
@@ -32,6 +35,28 @@ import {
   captureMentionSelect,
   type MentionSurface,
 } from '@/components/mentions/mention-analytics';
+
+/**
+ * Starts each lazy source the open menu needs, at most once while it stays
+ * open; leaving and reopening starts a new refresh cycle. Which sources a view
+ * needs is `selectMentionViewActivations`' decision — the menu only owns the
+ * once-per-open policy and learns nothing about any individual source.
+ *
+ * Exported for tests; `MentionTwoLevelMenu` below is the only caller.
+ */
+export function useMentionCategoryActivation(
+  open: boolean,
+  view: MentionMenuView | null,
+  categories: readonly MentionCategory[]
+) {
+  const shouldActivateSource = useFireOncePerCycle<MentionSourceKey>(open);
+  React.useEffect(() => {
+    if (!open) return;
+    for (const { sourceKey, activate } of selectMentionViewActivations(view, categories)) {
+      if (shouldActivateSource(sourceKey)) activate();
+    }
+  }, [categories, open, shouldActivateSource, view]);
+}
 
 function CandidateIcon({
   icon,
@@ -323,6 +348,8 @@ export function MentionTwoLevelMenu({
     [categories, open, search, trigger]
   );
 
+  useMentionCategoryActivation(open, view, categories);
+
   // Highlight the first row whenever the level or result set changes, so Enter
   // always has a target. Keyed so typing does not re-highlight on every render.
   const highlightKey =
@@ -333,22 +360,19 @@ export function MentionTwoLevelMenu({
         : view.level === 'aggregate'
           ? `aggregate:${view.term}:${view.groups.length}`
           : `category:${view.category.id}:${view.term}:${view.candidates.length}`;
-  const lastHighlightKeyRef = React.useRef<string | null>(null);
+  const shouldHighlightFirst = useFireOnKeyChange<string | null>();
   const { getEnabledItems, onHighlightedItemChange } = context;
   React.useEffect(() => {
-    if (highlightKey === null) {
-      lastHighlightKeyRef.current = null;
-      return;
-    }
-    if (lastHighlightKeyRef.current === highlightKey) return;
-    lastHighlightKeyRef.current = highlightKey;
+    // Called first so closing the menu (`null`) is recorded as the previous key
+    // and reopening on the same view highlights again.
+    if (!shouldHighlightFirst(highlightKey) || highlightKey === null) return;
     const items = getEnabledItems();
     if (!items.length) return;
     requestAnimationFrame(() => {
       const first = getEnabledItems()[0] ?? null;
       if (first) onHighlightedItemChange(first);
     });
-  }, [getEnabledItems, highlightKey, onHighlightedItemChange]);
+  }, [getEnabledItems, highlightKey, onHighlightedItemChange, shouldHighlightFirst]);
 
   // The click equivalent of the primitive's Backspace/ArrowLeft contract; mobile
   // has no Backspace habit, so the second level always carries a visible way
@@ -376,40 +400,31 @@ export function MentionTwoLevelMenu({
   const analyticsBase = React.useMemo(() => ({ workspaceId, surface }), [surface, workspaceId]);
 
   // One `menu_open` per open, reset when it closes.
-  const menuOpenTrackedRef = React.useRef(false);
+  const shouldReportMenuOpen = useFireOncePerCycle<'menu-open'>(open);
   React.useEffect(() => {
-    if (!open) {
-      menuOpenTrackedRef.current = false;
-      return;
-    }
-    if (menuOpenTrackedRef.current) return;
-    menuOpenTrackedRef.current = true;
+    if (!open || !shouldReportMenuOpen('menu-open')) return;
     captureMentionMenuOpen(postHog, analyticsBase, {
       level: view?.level ?? 'none',
       categoryCount: categories.length,
     });
-  }, [analyticsBase, categories.length, open, postHog, view?.level]);
+  }, [analyticsBase, categories.length, open, postHog, shouldReportMenuOpen, view?.level]);
 
   // The first-to-second-level step. Reported from the resolved view rather than
   // the row callback: a navigation item never fires `onMentionSelect`, and this
-  // also covers the keyboard route into a category.
-  const enteredCategoryRef = React.useRef<string | null>(null);
+  // also covers the keyboard route into a category. Leaving a category and
+  // coming back is a real second entry, so this is key-change and not once-only.
+  const shouldReportCategoryEnter = useFireOnKeyChange<string | null>();
   const scopedCategoryId = view?.level === 'category' ? view.category.id : null;
   const scopedTermLength = view?.level === 'category' ? view.term.length : 0;
   React.useEffect(() => {
-    if (!scopedCategoryId) {
-      enteredCategoryRef.current = null;
-      return;
-    }
-    if (enteredCategoryRef.current === scopedCategoryId) return;
-    enteredCategoryRef.current = scopedCategoryId;
+    if (!shouldReportCategoryEnter(scopedCategoryId) || !scopedCategoryId) return;
     captureMentionCategoryEnter(postHog, analyticsBase, {
       category: scopedCategoryId,
       termLength: scopedTermLength,
     });
     // `scopedTermLength` is read at entry only; it must not re-fire on typing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [analyticsBase, postHog, scopedCategoryId]);
+  }, [analyticsBase, postHog, scopedCategoryId, shouldReportCategoryEnter]);
 
   const handleCandidateSelect = React.useCallback(
     (category: MentionCategory, rank: number) => {

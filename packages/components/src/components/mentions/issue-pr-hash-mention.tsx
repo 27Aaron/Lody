@@ -29,6 +29,13 @@ type IssueOrPR = {
 type RepoIssuesAndPRsResult = {
   repoFullName: string;
   items: IssueOrPR[];
+  /**
+   * When this snapshot was fetched. Lives on the entry, not beside it, so it
+   * survives the IndexedDB round trip — a parallel map would make every reload
+   * look unfetched. Absent on entries persisted before the field existed, which
+   * read as stale.
+   */
+  fetchedAtMs?: number;
 };
 
 export type ItemSuggestion = {
@@ -60,7 +67,8 @@ export type IssuePrMentionData = {
 };
 
 type UseRepoIssuesAndPRsResult = IssuePrMentionData & {
-  refresh: () => Promise<void>;
+  /** Loads the list if it is missing or stale. `force` revalidates regardless. */
+  refresh: (options?: { force?: boolean }) => Promise<void>;
 };
 
 // ============================================================================
@@ -75,6 +83,28 @@ const DB_VERSION = 1;
 const issuePrMemoryCache = new Map<string, RepoIssuesAndPRsResult>();
 const issuePrInFlightRequests = new Map<string, Promise<RepoIssuesAndPRsResult>>();
 const issuePrCacheListeners = new Map<string, Set<(entry: RepoIssuesAndPRsResult) => void>>();
+
+/**
+ * How long a completed fetch stays authoritative.
+ *
+ * `refresh` is the mention menu's activation callback, and an aggregate `@`
+ * query activates every category — so without this, typing `@src/foo.ts` in a
+ * GitHub-backed chat re-downloaded two pages of 100 full issue objects. The
+ * in-flight map only collapses *concurrent* callers, never consecutive ones.
+ * Activation means "make sure the list is loaded"; an explicit `{ force: true }`
+ * is what means "revalidate now".
+ */
+const ISSUE_PR_FRESH_FOR_MS = 5 * 60_000;
+
+function isIssuePrEntryFresh(entry: RepoIssuesAndPRsResult, now: number) {
+  return entry.fetchedAtMs !== undefined && now - entry.fetchedAtMs < ISSUE_PR_FRESH_FOR_MS;
+}
+
+/** Test seam: a fresh module gets a cold cache, but jsdom shares one per file. */
+export function __resetIssuePrFetchFreshnessForTests() {
+  issuePrMemoryCache.clear();
+  issuePrInFlightRequests.clear();
+}
 
 // ============================================================================
 // Analytics
@@ -370,6 +400,7 @@ function toRepoIssuesAndPRsResult(
 ): RepoIssuesAndPRsResult {
   return {
     repoFullName,
+    fetchedAtMs: Date.now(),
     items: items.map((i) => ({
       number: i.number,
       url: i.url,
@@ -391,92 +422,101 @@ export function useRepoIssuesAndPRs(
     status: 'idle',
   });
 
-  const refresh = React.useCallback(async () => {
-    if (!workspaceId || !repoFullName) return;
+  const refresh = React.useCallback(
+    async (options?: { force?: boolean }) => {
+      if (!workspaceId || !repoFullName) return;
 
-    const workspaceIdValue = workspaceId;
-    const repoFullNameValue = repoFullName;
-    const isPublicValue = isPublic ?? false;
-    const repoAnalyticsId = getRepoAnalyticsId(repoFullNameValue, isPublicValue);
-    const key = getCacheKey(workspaceIdValue, repoFullNameValue);
+      const workspaceIdValue = workspaceId;
+      const repoFullNameValue = repoFullName;
+      const isPublicValue = isPublic ?? false;
+      const repoAnalyticsId = getRepoAnalyticsId(repoFullNameValue, isPublicValue);
+      const key = getCacheKey(workspaceIdValue, repoFullNameValue);
 
-    setData((prev) => ({
-      entry: prev.entry,
-      status: prev.entry ? 'refreshing' : 'loading',
-      error: undefined,
-    }));
-
-    const existingRequest = issuePrInFlightRequests.get(key);
-    if (existingRequest) {
-      try {
-        const entry = await existingRequest;
-        setData({ entry, status: 'ready' });
-      } catch (err) {
-        const message = toErrorMessage(err);
-        setData((prev) => {
-          if (prev.entry) {
-            return { entry: prev.entry, status: 'ready' };
-          }
-          return { entry: null, status: 'error', error: message };
-        });
+      const cached = issuePrMemoryCache.get(key);
+      if (!options?.force && cached && isIssuePrEntryFresh(cached, Date.now())) {
+        setData((prev) => (prev.entry === cached ? prev : { entry: cached, status: 'ready' }));
+        return;
       }
-      return;
-    }
 
-    const fetchStart = Date.now();
-    const source = 'github-direct';
-    capturePostHogEvent(postHog, 'mention/issue_pr/fetch_start', {
-      workspace_id: workspaceIdValue,
-      source,
-      repo: repoAnalyticsId,
-      repoIsPublic: isPublicValue,
-      online: getIsOnline(),
-    });
-
-    const request = (async () => {
-      const items = await withGitHubTokenRetry(workspaceIdValue, repoFullNameValue, (token) =>
-        githubFetchIssuesAndPRs(token, repoFullNameValue)
-      );
-      const entry = toRepoIssuesAndPRsResult(repoFullNameValue, items);
-      publishIssuePrCacheEntry(key, entry);
-      capturePostHogEvent(postHog, 'mention/issue_pr/fetch_success', {
-        workspace_id: workspaceIdValue,
-        source,
-        repo: repoAnalyticsId,
-        repoIsPublic: isPublicValue,
-        durationMs: Date.now() - fetchStart,
-        itemsCount: entry.items.length,
-        online: getIsOnline(),
-      });
-      return entry;
-    })();
-
-    issuePrInFlightRequests.set(key, request);
-
-    try {
-      await request;
-    } catch (err) {
-      const message = toErrorMessage(err);
       setData((prev) => ({
         entry: prev.entry,
-        status: 'error',
-        error: message,
+        status: prev.entry ? 'refreshing' : 'loading',
+        error: undefined,
       }));
-      // `error` was silently stripped by the denylist (spec §2.3). Send a
-      // normalized `error_code` enum instead — never the raw message.
-      capturePostHogEvent(postHog, 'mention/issue_pr/fetch_error', {
+
+      const existingRequest = issuePrInFlightRequests.get(key);
+      if (existingRequest) {
+        try {
+          const entry = await existingRequest;
+          setData({ entry, status: 'ready' });
+        } catch (err) {
+          const message = toErrorMessage(err);
+          setData((prev) => {
+            if (prev.entry) {
+              return { entry: prev.entry, status: 'ready' };
+            }
+            return { entry: null, status: 'error', error: message };
+          });
+        }
+        return;
+      }
+
+      const fetchStart = Date.now();
+      const source = 'github-direct';
+      capturePostHogEvent(postHog, 'mention/issue_pr/fetch_start', {
         workspace_id: workspaceIdValue,
         source,
         repo: repoAnalyticsId,
         repoIsPublic: isPublicValue,
-        durationMs: Date.now() - fetchStart,
-        error_code: normalizeGithubFetchErrorCode(err),
         online: getIsOnline(),
       });
-    } finally {
-      issuePrInFlightRequests.delete(key);
-    }
-  }, [isPublic, postHog, repoFullName, workspaceId]);
+
+      const request = (async () => {
+        const items = await withGitHubTokenRetry(workspaceIdValue, repoFullNameValue, (token) =>
+          githubFetchIssuesAndPRs(token, repoFullNameValue)
+        );
+        const entry = toRepoIssuesAndPRsResult(repoFullNameValue, items);
+        publishIssuePrCacheEntry(key, entry);
+        capturePostHogEvent(postHog, 'mention/issue_pr/fetch_success', {
+          workspace_id: workspaceIdValue,
+          source,
+          repo: repoAnalyticsId,
+          repoIsPublic: isPublicValue,
+          durationMs: Date.now() - fetchStart,
+          itemsCount: entry.items.length,
+          online: getIsOnline(),
+        });
+        return entry;
+      })();
+
+      issuePrInFlightRequests.set(key, request);
+
+      try {
+        await request;
+      } catch (err) {
+        const message = toErrorMessage(err);
+        setData((prev) => ({
+          entry: prev.entry,
+          status: 'error',
+          error: message,
+        }));
+        // `error` was silently stripped by the denylist (spec §2.3). Send a
+        // normalized `error_code` enum instead — never the raw message.
+        capturePostHogEvent(postHog, 'mention/issue_pr/fetch_error', {
+          workspace_id: workspaceIdValue,
+          source,
+          repo: repoAnalyticsId,
+          repoIsPublic: isPublicValue,
+          durationMs: Date.now() - fetchStart,
+          error_code: normalizeGithubFetchErrorCode(err),
+          online: getIsOnline(),
+        });
+      } finally {
+        issuePrInFlightRequests.delete(key);
+      }
+    },
+    [isPublic, postHog, repoFullName, workspaceId]
+  );
 
   React.useEffect(() => {
     if (!workspaceId || !repoFullName) {
@@ -520,10 +560,10 @@ export function useRepoIssuesAndPRs(
     };
   }, [isPublic, postHog, refresh, repoFullName, workspaceId]);
 
-  return {
-    ...data,
-    refresh,
-  };
+  // Stable between renders: the menu keys its issue/PR slices and Fuse indexes
+  // off this object, so a fresh one per keystroke re-partitions the cached list
+  // and rebuilds both indexes while the user is only typing.
+  return React.useMemo(() => ({ ...data, refresh }), [data, refresh]);
 }
 
 /**
