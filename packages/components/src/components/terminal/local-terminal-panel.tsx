@@ -1,13 +1,22 @@
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import { useAtomValue } from 'jotai';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import '@xterm/xterm/css/xterm.css';
 import './terminal-scrollbars.css';
 
 import { terminalFontFamilyAtom, terminalFontSizeAtom } from '@/atoms';
+import { formatKeyBinding, isMac } from '@/lib/commands';
 import { observeResizeOnAnimationFrame } from '@/lib/resize-observer';
 import { cn } from '@/lib/utils';
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuShortcut,
+  ContextMenuTrigger,
+} from '@/ui/context-menu';
 import { useActiveVSCodeThemeId, useResolvedTheme } from '../../theme-provider';
 import type { TerminalChannel } from './terminal-channel';
 import {
@@ -49,9 +58,12 @@ export function LocalTerminalPanel({
   onExit,
   className,
 }: LocalTerminalPanelProps) {
+  const { t: translate } = useTranslation();
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const [hasSelection, setHasSelection] = useState(false);
+  const copyShortcutLabel = formatKeyBinding(isMac() ? 'cmd+c' : 'ctrl+shift+c');
   const terminalFontFamily = useAtomValue(terminalFontFamilyAtom);
   const terminalFontSize = useAtomValue(terminalFontSizeAtom);
   const terminalFontFamilyRef = useRef(terminalFontFamily);
@@ -97,6 +109,23 @@ export function LocalTerminalPanel({
       fitAddonRef.current = fitAddon;
       t.loadAddon(fitAddon);
       t.open(host);
+      t.attachCustomKeyEventHandler((event) => {
+        const isCopyShortcut =
+          event.type === 'keydown' &&
+          event.ctrlKey &&
+          event.shiftKey &&
+          !event.altKey &&
+          !event.metaKey &&
+          (event.code === 'KeyC' || event.key.toLowerCase() === 'c');
+        if (!isCopyShortcut || !t.hasSelection()) return true;
+
+        // Preserve Ctrl+C for SIGINT; only the explicit desktop-terminal copy
+        // chord is intercepted, and only while xterm owns a selection.
+        event.preventDefault();
+        event.stopPropagation();
+        channel.writeClipboardText(t.getSelection());
+        return false;
+      });
 
       const safeFit = () => {
         try {
@@ -218,10 +247,42 @@ export function LocalTerminalPanel({
     term.options.theme = buildTerminalTheme(host);
   }, [resolvedTheme, activeVSCodeThemeId]);
 
+  const copySelection = () => {
+    const term = termRef.current;
+    if (term?.hasSelection() !== true) return;
+    channel.writeClipboardText(term.getSelection());
+    queueMicrotask(() => term.focus());
+  };
+
+  const pasteClipboard = () => {
+    const term = termRef.current;
+    if (!term) return;
+    const text = channel.readClipboardText();
+    if (text) term.paste(text);
+    queueMicrotask(() => term.focus());
+  };
+
   return (
-    <div
-      ref={hostRef}
-      className={cn('lody-terminal-panel h-full w-full overflow-hidden', className)}
-    />
+    <ContextMenu
+      onOpenChange={(open) => {
+        if (open) setHasSelection(termRef.current?.hasSelection() ?? false);
+      }}
+    >
+      <ContextMenuTrigger asChild>
+        <div
+          ref={hostRef}
+          className={cn('lody-terminal-panel h-full w-full overflow-hidden', className)}
+        />
+      </ContextMenuTrigger>
+      <ContextMenuContent className="min-w-40">
+        <ContextMenuItem disabled={!hasSelection} onSelect={copySelection}>
+          {translate('common.copy', 'Copy')}
+          <ContextMenuShortcut>{copyShortcutLabel}</ContextMenuShortcut>
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={pasteClipboard}>
+          {translate('common.paste', 'Paste')}
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }

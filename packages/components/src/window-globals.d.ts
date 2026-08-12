@@ -170,6 +170,8 @@ declare global {
         resize: (terminalId: string, cols: number, rows: number) => void;
         close: (terminalId: string) => void;
         closeSession: (sessionId: string) => void;
+        readClipboardText: () => string;
+        writeClipboardText: (text: string) => void;
         onData: (handler: (event: TerminalDataEvent) => void) => () => void;
         onExit: (handler: (event: TerminalExitEvent) => void) => () => void;
         onTitle: (handler: (event: TerminalTitleEvent) => void) => () => void;

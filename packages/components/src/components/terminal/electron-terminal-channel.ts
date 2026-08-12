@@ -42,6 +42,14 @@ export class ElectronTerminalChannel implements TerminalChannel {
     this.api.closeSession(sessionId);
   }
 
+  readClipboardText(): string {
+    return this.api.readClipboardText();
+  }
+
+  writeClipboardText(text: string): void {
+    this.api.writeClipboardText(text);
+  }
+
   onData(handler: (event: TerminalDataEvent) => void): Unsubscribe {
     return this.api.onData(handler);
   }

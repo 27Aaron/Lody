@@ -489,6 +489,7 @@
   "common.connected": "已连接到同步服务器",
   "common.copied": "已复制",
   "common.copy": "复制",
+  "common.paste": "粘贴",
   "common.dismiss": "忽略",
   "common.copyCode": "复制代码",
   "common.create": "创建",

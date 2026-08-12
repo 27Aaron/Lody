@@ -32,6 +32,10 @@ export interface TerminalChannel {
   close(terminalId: string): void;
   /** Close and kill every terminal owned by the session. */
   closeSession(sessionId: string): void;
+  /** Read plain text from the host system clipboard. */
+  readClipboardText(): string;
+  /** Write plain text to the host system clipboard. */
+  writeClipboardText(text: string): void;
 
   onData(handler: (event: TerminalDataEvent) => void): Unsubscribe;
   onExit(handler: (event: TerminalExitEvent) => void): Unsubscribe;

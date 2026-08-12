@@ -33,6 +33,8 @@ class EmptyTerminalChannel implements TerminalChannel {
   resize = vi.fn();
   close = vi.fn();
   closeSession = vi.fn();
+  readClipboardText = vi.fn(() => '');
+  writeClipboardText = vi.fn();
 
   onData(_handler: (event: TerminalDataEvent) => void): Unsubscribe {
     return () => {};

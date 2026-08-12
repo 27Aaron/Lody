@@ -489,6 +489,7 @@
   "common.connected": "Connected to sync server",
   "common.copied": "Copied",
   "common.copy": "Copy",
+  "common.paste": "Paste",
   "common.dismiss": "Dismiss",
   "common.copyCode": "Copy code",
   "common.create": "Create",

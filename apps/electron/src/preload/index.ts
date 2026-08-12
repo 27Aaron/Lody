@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { clipboard, contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import { setupRenderer } from '@better-auth/electron/preload'
 import { randomUUID } from 'node:crypto'
@@ -346,6 +346,8 @@ const api = {
     closeSession: (sessionId: string) => {
       ipcRenderer.send('lodyTerminal:closeSession', { sessionId })
     },
+    readClipboardText: () => clipboard.readText(),
+    writeClipboardText: (text: string) => clipboard.writeText(text),
     onData: (handler: (event: TerminalDataEvent) => void) =>
       subscribeTerminalEvent('data', handler),
     onExit: (handler: (event: TerminalExitEvent) => void) =>
