@@ -91,6 +91,9 @@ mobile surfaces.
 - Presence is merged by origin. For an origin represented by the local plane, the local
   snapshot is authoritative, including absence; do not resurrect cleared presence from
   a lagging replica.
+- Doc-metadata bootstrap and the live repo watch overlap by design: merge per field
+  with live winning (`mergeBootstrapMetaCache`), never letting the snapshot undo an
+  archive already applied live.
 
 ## Code Collab
 

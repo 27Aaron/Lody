@@ -498,22 +498,6 @@ export const docMetaSubscriptionAtom = atomEffect((get, set) => {
   const existenceEpochByDocId = new Map<string, number>();
   const existenceStateByDocId = new Map<string, DocExistenceState>();
   const fullMetaFetchEpochByDocId = new Map<string, number>();
-  void buildDocMetaCache(runtime.repo).then((cache) => {
-    if (cancelled) return;
-    // Bootstrap scan and live repo events run concurrently. Merge per field so a
-    // later partial live patch cannot clobber complete metadata already present
-    // in the flock snapshot, and respect existence changes observed during bootstrap.
-    set(sessionMetaCacheAtom, (prev) =>
-      mergeBootstrapMetaCache(cache.sessions, prev, existenceStateByDocId)
-    );
-    set(machineMetaCacheAtom, (prev) =>
-      mergeBootstrapMetaCache(cache.machines, prev, existenceStateByDocId)
-    );
-    set(agentConfigMetaCacheAtom, (prev) =>
-      mergeBootstrapMetaCache(cache.agents, prev, existenceStateByDocId)
-    );
-    set(docMetaCacheReadyAtom, true);
-  });
 
   const clearCachedDocMeta = (docId: string) => {
     if (isSessionDocRoomId(docId)) {
@@ -785,6 +769,25 @@ export const docMetaSubscriptionAtom = atomEffect((get, set) => {
     },
     { kinds: ['doc-metadata', 'doc-existence-changed'] as string[] as never }
   );
+
+  // Started after the watch above so the live subscription covers the whole scan
+  // window. The scan and live events overlap regardless, so merge per field: a
+  // later partial live patch must not clobber complete metadata already present in
+  // the flock snapshot, and a resolving snapshot must not undo an archive/restore
+  // already observed live.
+  void buildDocMetaCache(runtime.repo).then((cache) => {
+    if (cancelled) return;
+    set(sessionMetaCacheAtom, (prev) =>
+      mergeBootstrapMetaCache(cache.sessions, prev, existenceStateByDocId)
+    );
+    set(machineMetaCacheAtom, (prev) =>
+      mergeBootstrapMetaCache(cache.machines, prev, existenceStateByDocId)
+    );
+    set(agentConfigMetaCacheAtom, (prev) =>
+      mergeBootstrapMetaCache(cache.agents, prev, existenceStateByDocId)
+    );
+    set(docMetaCacheReadyAtom, true);
+  });
 
   return () => {
     cancelled = true;
