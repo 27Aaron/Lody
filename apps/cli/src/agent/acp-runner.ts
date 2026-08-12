@@ -10,6 +10,7 @@ import {
   type RequestPermissionResponse,
 } from '@agentclientprotocol/sdk';
 import { v4 as uuidV4 } from 'uuid';
+import { z } from 'zod';
 
 import type { Logger } from '@/utils/logger';
 import type { TerminalManager } from '@/session/terminal-manager';
@@ -279,6 +280,61 @@ export type StartLocalAcpAgentOptions = {
   spawnImpl?: typeof spawn;
 };
 
+const CodexConfigOverrideSchema = z.record(z.string(), z.unknown());
+
+function prepareCodexHomeEnv(
+  options: Pick<StartLocalAcpAgentOptions, 'cliType' | 'agentType' | 'workdir'>,
+  baseEnv: NodeJS.ProcessEnv
+): {
+  env: NodeJS.ProcessEnv;
+  isTitleAgentCodexRun: boolean;
+  shouldUseWorkdirCodexHome: boolean;
+} {
+  const isBuiltinCodex = options.cliType === 'builtin' && options.agentType === 'codex';
+  const isTitleAgentCodexRun = isBuiltinCodex && baseEnv.LODY_TITLE_AGENT === '1';
+  const shouldUseWorkdirCodexHome =
+    isBuiltinCodex && !baseEnv.CODEX_HOME && (baseEnv.LODY_E2E === '1' || isTitleAgentCodexRun);
+
+  return {
+    env: shouldUseWorkdirCodexHome
+      ? { ...baseEnv, CODEX_HOME: path.join(options.workdir, '.codex') }
+      : baseEnv,
+    isTitleAgentCodexRun,
+    shouldUseWorkdirCodexHome,
+  };
+}
+
+function withTitleAgentCodexConfig(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const existingConfig = env.CODEX_CONFIG
+    ? CodexConfigOverrideSchema.parse(JSON.parse(env.CODEX_CONFIG))
+    : {};
+
+  return {
+    ...env,
+    CODEX_CONFIG: JSON.stringify({
+      ...existingConfig,
+      project_doc_max_bytes: 0,
+      include_environment_context: false,
+      skills: {
+        include_instructions: false,
+        bundled: { enabled: false },
+      },
+    }),
+  };
+}
+
+function copyTitleAgentCodexConfig(sourcePath: string, destinationPath: string): void {
+  if (fs.existsSync(sourcePath)) {
+    fs.copyFileSync(sourcePath, destinationPath);
+  }
+}
+
+export const __test__ = {
+  copyTitleAgentCodexConfig,
+  prepareCodexHomeEnv,
+  withTitleAgentCodexConfig,
+};
+
 export const startLocalAcpAgent = async (options: StartLocalAcpAgentOptions) => {
   options.signal?.throwIfAborted();
   // Async resolve so registry agents distributed as a platform binary are
@@ -308,30 +364,24 @@ export const startLocalAcpAgent = async (options: StartLocalAcpAgentOptions) => 
   };
 
   const baseEnv = withoutElectronBootstrapCredentials(options.env ?? process.env);
-  // Codex CLI reads config from `~/.codex` by default. For E2E-style runs we want deterministic,
-  // repo-local config to avoid picking up the user's global Codex profile (which can add prompts
-  // and slow down the run). Codex supports overriding the home directory via `CODEX_HOME`.
+  // Codex CLI reads config from `~/.codex` by default. E2E and title-agent runs use a temporary,
+  // repo-local Codex home so their rollout/history state stays isolated. A title agent copies the
+  // user's config into that home because custom model-provider routing and authentication must stay
+  // together; title-specific restrictions are then applied through the adapter's per-session
+  // CODEX_CONFIG overlay.
   //
   // Docs: Codex checks the "Codex home" dir (default `~/.codex`, overridable with `CODEX_HOME`)
   // for `config.toml` and other profile state.
-  const shouldUseWorkdirCodexHome =
-    options.cliType === 'builtin' &&
-    options.agentType === 'codex' &&
-    !baseEnv.CODEX_HOME &&
-    (baseEnv.LODY_E2E === '1' || baseEnv.LODY_TITLE_AGENT === '1');
-
-  const env = shouldUseWorkdirCodexHome
-    ? {
-        ...baseEnv,
-        CODEX_HOME: path.join(options.workdir, '.codex'),
-      }
-    : baseEnv;
+  const { env, isTitleAgentCodexRun, shouldUseWorkdirCodexHome } = prepareCodexHomeEnv(
+    options,
+    baseEnv
+  );
   // Spawning ACP agents from a GUI/daemon launch inherits a minimal PATH that
   // omits user tool dirs, so resolve the login-shell env and overlay it before
   // merging the agent-specific env. withDefaultAcpPathEntries still runs as a
   // last-resort fallback for environments where the shell probe yields nothing.
   const loginShellEnv = await getLoginShellEnv();
-  const envWithAcpStartup = withoutElectronBootstrapCredentials(
+  const mergedStartupEnv = withoutElectronBootstrapCredentials(
     withLodyNpmCacheForNpx(
       launch.command,
       withDefaultAcpPathEntries(
@@ -340,27 +390,16 @@ export const startLocalAcpAgent = async (options: StartLocalAcpAgentOptions) => 
       )
     )
   );
+  const envWithAcpStartup = isTitleAgentCodexRun
+    ? withTitleAgentCodexConfig(mergedStartupEnv)
+    : mergedStartupEnv;
 
   const keepCodexHome = env.LODY_KEEP_CODEX_HOME === '1';
   const defaultCodexHome = path.join(os.homedir(), '.codex');
   const defaultAuthPath = path.join(defaultCodexHome, 'auth.json');
+  const defaultConfigPath = path.join(defaultCodexHome, 'config.toml');
   const localAuthPath = env.CODEX_HOME ? path.join(env.CODEX_HOME, 'auth.json') : null;
-  const isTitleAgentRun = baseEnv.LODY_TITLE_AGENT === '1';
-
-  // Codex config for isolated title-generation runs: keep the title agent's
-  // context minimal and deterministic. No skills (avoids skill-budget warnings
-  // and shrinks the system prompt), no project docs (AGENTS.md), and no
-  // environment-context injection into the recorded user message.
-  const TITLE_AGENT_CODEX_CONFIG_TOML = `project_doc_max_bytes = 0
-include_environment_context = false
-
-[skills]
-include_instructions = false
-
-[skills.bundled]
-enabled = false
-`;
-
+  const localConfigPath = env.CODEX_HOME ? path.join(env.CODEX_HOME, 'config.toml') : null;
   // One spawn + startup attempt. Self-contained so the npx self-heal path can retry it
   // cleanly: the codex CODEX_HOME setup/cleanup lives inside, so a failed attempt's
   // teardown does not leak into the retry.
@@ -371,11 +410,10 @@ enabled = false
   ) => {
     options.signal?.throwIfAborted();
     lastStderrTail = '';
-    let copiedAuth = false;
     if (shouldUseWorkdirCodexHome) {
       fs.mkdirSync(env.CODEX_HOME!, { recursive: true });
-      if (isTitleAgentRun) {
-        fs.writeFileSync(path.join(env.CODEX_HOME!, 'config.toml'), TITLE_AGENT_CODEX_CONFIG_TOML);
+      if (isTitleAgentCodexRun && localConfigPath && fs.existsSync(defaultConfigPath)) {
+        copyTitleAgentCodexConfig(defaultConfigPath, localConfigPath);
       }
       // Codex often expects `auth.json` in CODEX_HOME even when running via ACP in tests.
       // Copy it from the user's default Codex home if it exists, then delete it on exit to
@@ -383,12 +421,22 @@ enabled = false
       if (localAuthPath && fs.existsSync(defaultAuthPath) && !fs.existsSync(localAuthPath)) {
         try {
           fs.copyFileSync(defaultAuthPath, localAuthPath);
-          copiedAuth = true;
         } catch {
           // Best-effort: let Codex fail with a clear auth error if copy is not possible.
         }
       }
     }
+
+    const cleanupCodexHome = () => {
+      if (!shouldUseWorkdirCodexHome || !env.CODEX_HOME || keepCodexHome) {
+        return;
+      }
+      try {
+        fs.rmSync(env.CODEX_HOME, { recursive: true, force: true });
+      } catch {
+        // ignore
+      }
+    };
 
     captureAcpSpawnStarted(spawnAnalyticsProps);
     let agentProcess: ChildProcess;
@@ -405,9 +453,12 @@ enabled = false
     } catch (error) {
       // Synchronous spawn failure (e.g. spawnImpl throws). Async ENOENT/EACCES
       // surface later via the startup monitor and are captured in the catch below.
+      cleanupCodexHome();
       captureAcpSpawnFailed({ ...spawnAnalyticsProps, reason: classifyCliSpawnReason(error) });
       throw error;
     }
+    agentProcess.once('exit', cleanupCodexHome);
+    agentProcess.once('error', cleanupCodexHome);
     options.logger.debug(
       `[acp-startup] spawned ACP process (cliType=${options.cliType} agentType=${options.agentType} workdir=${options.workdir})`
     );
@@ -452,21 +503,6 @@ enabled = false
         getStderrTail: () => stderrTail,
       }
     );
-
-    if (shouldUseWorkdirCodexHome && env.CODEX_HOME && !keepCodexHome) {
-      const cleanup = () => {
-        try {
-          if (copiedAuth && localAuthPath) {
-            fs.rmSync(localAuthPath, { force: true });
-          }
-          fs.rmSync(env.CODEX_HOME!, { recursive: true, force: true });
-        } catch {
-          // ignore
-        }
-      };
-      agentProcess.once('exit', cleanup);
-      agentProcess.once('error', cleanup);
-    }
 
     // Create streams with proper buffering and backpressure handling.
     // See utils/stream.ts for details on race condition and backpressure fixes.
