@@ -27,6 +27,8 @@ export interface LocalLoroDataPlaneSocketServerConfig {
   // Resolves the per-workspace sync engine. Returns null when the workspace has
   // no running runtime (the client gets an error and can retry after bootstrap).
   getWorkspaceServer: (workspaceId: string) => LocalLoroDataPlaneServer | null;
+  /** Override the protocol frame limit for focused transport tests. */
+  maxFrameBytes?: number;
 }
 
 let dataPlaneServer: net.Server | null = null;
@@ -99,7 +101,7 @@ async function startInner(config: LocalLoroDataPlaneSocketServerConfig): Promise
           .then(() => handleMessage(config, connection, touchedEngines, message))
           .catch((error) => logMessageHandlingError(config.logger, error));
       },
-      maxBufferBytes: LOCAL_LORO_DATA_PLANE_MAX_FRAME_BYTES,
+      maxBufferBytes: config.maxFrameBytes ?? LOCAL_LORO_DATA_PLANE_MAX_FRAME_BYTES,
       // Defense-in-depth only (compliant senders enforce the frame budget and
       // surface a terminal room error instead of writing): report and keep the
       // connection alive — destroying the socket would take down every room of

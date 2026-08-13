@@ -49,6 +49,7 @@ const logger: Logger = {
 } as unknown as Logger;
 
 const WORKSPACE_ID = 'ws-f6';
+const TEST_MAX_FRAME_BYTES = 64 * 1024;
 
 // The socket path is derived from os.homedir(); redirect
 // HOME to a temp dir so the test can never collide with a real running daemon.
@@ -168,6 +169,7 @@ describe('local Loro data-plane socket server — F6 regression', () => {
     await startLocalLoroDataPlaneServer({
       logger,
       getWorkspaceServer: (workspaceId) => (workspaceId === WORKSPACE_ID ? engine : null),
+      maxFrameBytes: TEST_MAX_FRAME_BYTES,
     });
   });
 
@@ -198,24 +200,28 @@ describe('local Loro data-plane socket server — F6 regression', () => {
       await client.writeLine(joinLine('join-1', 'doc-1'));
       expect(await client.outcomeForRequest('join-1', 5_000)).toBe('joined');
 
-      // One >32MB frame from a NON-COMPLIANT sender (a compliant v3 sender
-      // enforces the payload budget and never writes this). The bytes never
-      // reach JSON parsing: the framing buffer overflows first, so placeholder
-      // base64 content is sufficient and faithful.
+      // A frame over the injected test limit from a NON-COMPLIANT sender. The
+      // production limit remains 32MB; lowering it here exercises the same
+      // splitter overflow and real socket behavior without allocating/writing
+      // 33MB. The bytes never reach JSON parsing, so placeholder base64 is
+      // sufficient and faithful.
       const prefix =
         `{"type":"update","protocolVersion":${LOCAL_LORO_DATA_PLANE_PROTOCOL_VERSION},` +
         `"workspaceId":"${WORKSPACE_ID}","peerId":"renderer:f6",` +
         `"room":{"scope":"doc","docId":"doc-1"},` +
         `"payload":{"kind":"doc-update","dataBase64":"`;
       await client.writeRaw(prefix);
-      const chunk = 'A'.repeat(1024 * 1024);
-      for (let mb = 0; mb < 33 && !socket.destroyed; mb += 1) {
-        await client.writeRaw(chunk);
-      }
+      await client.writeRaw('A'.repeat(TEST_MAX_FRAME_BYTES));
       await client.writeRaw('"}}\n');
 
-      // Give the server a moment to react to the overflow.
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await vi.waitFor(
+        () => {
+          expect(client.messages).toContainEqual(
+            expect.objectContaining({ type: 'error', code: 'payload_too_large' })
+          );
+        },
+        { timeout: 5_000 }
+      );
 
       // R4-required behavior: the connection survives the oversized frame (the
       // splitter discards it and the server answers with a protocol error), so

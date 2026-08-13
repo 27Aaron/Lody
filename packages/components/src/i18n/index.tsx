@@ -119,7 +119,7 @@ export const initI18n = async (language: string) => {
         defaultNS,
         ns: [defaultNS],
         keySeparator: false,
-        debug: import.meta.env.DEV,
+        debug: import.meta.env.DEV && import.meta.env.MODE !== 'test',
         resources,
         backend: [],
         interpolation: {

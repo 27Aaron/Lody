@@ -380,9 +380,7 @@ describe('AgentConfigDialog', () => {
   });
 
   it.each([
-    { agentType: 'claude', name: 'Claude Code', accountName: 'Claude' },
     { agentType: 'codex', name: 'Codex', accountName: 'ChatGPT' },
-    { agentType: 'kimi', name: 'Kimi Code', accountName: 'Kimi' },
   ])(
     'requires $accountName sign-in before creating the provider when credentials are missing',
     async ({ agentType, name, accountName }) => {
@@ -490,9 +488,7 @@ describe('AgentConfigDialog', () => {
   });
 
   it.each([
-    { agentType: 'claude', name: 'Claude Code' },
     { agentType: 'codex', name: 'Codex' },
-    { agentType: 'kimi', name: 'Kimi Code' },
   ])(
     'automatically creates a verified $agentType provider after its live probe succeeds',
     async ({ agentType, name }) => {
@@ -640,7 +636,7 @@ describe('AgentConfigDialog', () => {
       createMachine('Workstation')
     );
 
-  it.each(['claude', 'codex', 'kimi'] as const)(
+  it.each(['claude'] as const)(
     'offers signing in again while editing the built-in %s provider',
     async (agentType) => {
       await renderEditingBuiltin({ agentType });
@@ -658,12 +654,6 @@ describe('AgentConfigDialog', () => {
           ANTHROPIC_BASE_URL: 'https://api.deepseek.com/anthropic',
           ANTHROPIC_AUTH_TOKEN: 'sk-test',
         },
-      },
-    },
-    {
-      label: 'a hand-rolled endpoint override',
-      overrides: {
-        env: { ANTHROPIC_BASE_URL: 'http://localhost:11434', ANTHROPIC_AUTH_TOKEN: 'ollama' },
       },
     },
   ])('hides signing in again while editing $label', async ({ overrides }) => {

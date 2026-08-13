@@ -12,6 +12,9 @@ export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts', 'tests/**/*.test.tsx'],
     environment: 'node',
+    // Keep diagnostics from failing tests while avoiding the substantial I/O
+    // produced by expected logs from hundreds of passing files.
+    silent: 'passed-only',
     // This suite has hundreds of small files. Reusing worker threads avoids a
     // child-process startup per file; two workers also outperformed four on CI-sized hosts.
     pool: 'threads',

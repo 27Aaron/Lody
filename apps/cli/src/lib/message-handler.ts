@@ -7800,6 +7800,11 @@ export class MessageHandler {
           );
           return;
         }
+        // Revocation/offline transitions deliberately abort the upload. Do not
+        // pay a retry delay when this task is no longer authorized to retry.
+        if (this.sessionFileBackfillStopped || !this.remoteBackfillEnabled) {
+          return;
+        }
         await delay(sessionFileBackfillDelayMs(attempt));
       }
     }
