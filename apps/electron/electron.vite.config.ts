@@ -12,7 +12,6 @@ import {
 } from '../../packages/components/vite-wasm-workarounds'
 import { injectPreviewPublicBaseDomain } from '../../scripts/preview-public-base-domain.mjs'
 import { mermaidLazyBoundaryGuardPlugin } from '../../packages/components/vite-mermaid-lazy-boundary-guard'
-import topLevelAwait from '../../packages/components/vite-top-level-await-fixed'
 
 function getGitCommitHash(): string {
   try {
@@ -157,7 +156,7 @@ export default defineConfig(({ mode }) => {
       },
       worker: {
         format: 'es',
-        plugins: () => [loroCrdtWasmUrlWorkaround(), wasm(), topLevelAwait()]
+        plugins: () => [loroCrdtWasmUrlWorkaround(), wasm()]
       },
       optimizeDeps: {
         exclude: ['@loro-dev/streams-crdt', '@loro-dev/streams-crdt/zstd']
@@ -196,7 +195,6 @@ export default defineConfig(({ mode }) => {
         loroCrdtWasmUrlWorkaround(),
         react(),
         wasm(),
-        topLevelAwait(),
         mermaidLazyBoundaryGuardPlugin()
       ]
     }

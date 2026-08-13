@@ -43,6 +43,10 @@ Root `AGENTS.md` also applies.
 
 ## Renderer and window integration
 
+- Electron 39's Chromium supports native top-level await. Keep renderer and module
+  worker builds on native TLA; do not add `vite-plugin-top-level-await` or an
+  equivalent full-bundle AST compatibility rewrite. Reprocessing Rollup's complete
+  output graph materially increases production renderer peak memory.
 - Generic update metadata may carry localized Markdown under
   `vendor.lodyChangelog.locales.{en,zh_CN}` in addition to the standard English
   `releaseNotes` fallback. Main validates and bounds those remote strings before
