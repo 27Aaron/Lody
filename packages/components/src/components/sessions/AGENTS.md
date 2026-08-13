@@ -549,6 +549,16 @@ Code Collab file surfaces (data chain: [packages/components/AGENTS.md](../../../
   scroll re-renders, which needs `pruneExpandedFileTreeIds` to return its input
   Set on a no-op prune (watcher ticks churn `data`) and icon factories to cache by
   resolved icon name. Coverage: `tests/file-tree-virtual-rows.test.tsx`.
+  **Expanded folders + selected row are the user's intent and outlive the
+  component.** The side panel shows one tab at a time, so opening a file unmounts
+  the tree; component-local state collapsed every folder on the way back. State
+  lives in `lib/file-tree-view-state.ts`, keyed per tree (`viewStateKey`,
+  `session-files:<sessionId>` from `session-detail.tsx`), memory-only and LRU
+  bounded; an unkeyed tree stays ephemeral. `pruneExpandedFileTreeIds` therefore
+  applies to the RENDERED set only — pruning the stored set would drop every
+  nested folder each time the provider rebuilds the tree, because a lazy
+  directory carries no children until it is initialized. Coverage:
+  `tests/file-tree-view-state.test.tsx`.
 - **Viewers are intentionally NOT code-split** (file viewer, diff viewer, diff
   panel, inner Monaco/Markdown are static imports). Code-splitting only pays off
   over a network; in the local Electron bundle a lazy `import()` adds no benefit

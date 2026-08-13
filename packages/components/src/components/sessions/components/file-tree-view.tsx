@@ -24,6 +24,12 @@ import {
   type VirtualFileTreeRow as VirtualFileTreeRowModel,
 } from '@/lib/file-tree-virtualization';
 import {
+  EMPTY_FILE_TREE_VIEW_STATE,
+  readFileTreeViewState,
+  writeFileTreeViewState,
+  type FileTreeViewState,
+} from '@/lib/file-tree-view-state';
+import {
   resolveSessionLocalFileSource,
   resolveSessionLocalProjectRootPath,
   resolveSessionRepoFullName,
@@ -55,6 +61,10 @@ interface FileTreeViewProps {
   // not carry per-file modified state in live mode). Omitted by Storybook /
   // playground callers, which fall back to the tree's own `modified` flags.
   changedFilePaths?: readonly string[];
+  // Identifies this tree so its expanded folders and selected row survive an
+  // unmount (the side panel swaps the Files tab out for a file/diff viewer).
+  // Callers that stay mounted can omit it and keep component-local state.
+  viewStateKey?: string;
 }
 
 type ControlledFileTreeViewProps = Omit<FileTreeViewProps, 'session' | 'autoCodeCollab'>;
@@ -152,21 +162,66 @@ const useChangedFilePathSet = (
 ): ReadonlySet<string> | undefined =>
   useMemo(() => (changedFilePaths ? new Set(changedFilePaths) : undefined), [changedFilePaths]);
 
+/**
+ * View state that survives an unmount when the caller supplies a `viewStateKey`.
+ *
+ * The tree is unmounted whenever another side-panel tab is selected, so keeping
+ * the expanded set purely in component state collapsed every folder on the way
+ * back. Falls back to plain component state when no key is given.
+ */
+function useFileTreeViewState(
+  viewStateKey: string | undefined
+): [FileTreeViewState, (update: (current: FileTreeViewState) => FileTreeViewState) => void] {
+  const [tracked, setTracked] = useState<{
+    readonly key: string | undefined;
+    readonly value: FileTreeViewState;
+  }>(() => ({ key: viewStateKey, value: readFileTreeViewState(viewStateKey) }));
+
+  // Render-phase resync: an in-place key change (session switch) must adopt that
+  // tree's own state instead of carrying the previous tree's expanded folders.
+  const value = tracked.key === viewStateKey ? tracked.value : readFileTreeViewState(viewStateKey);
+  if (tracked.key !== viewStateKey) {
+    setTracked({ key: viewStateKey, value });
+  }
+
+  useEffect(() => {
+    if (tracked.value === EMPTY_FILE_TREE_VIEW_STATE) return;
+    writeFileTreeViewState(tracked.key, tracked.value);
+  }, [tracked]);
+
+  const update = useCallback((next: (current: FileTreeViewState) => FileTreeViewState) => {
+    setTracked((current) => {
+      const nextValue = next(current.value);
+      if (nextValue === current.value) return current;
+      return { key: current.key, value: nextValue };
+    });
+  }, []);
+
+  return [value, update];
+}
+
 function VirtualFileTree({
   data,
   viewportRef,
+  viewStateKey,
 }: {
   readonly data: readonly TreeDataItem[];
   readonly viewportRef: RefObject<HTMLDivElement | null>;
+  readonly viewStateKey?: string;
 }) {
-  const [expandedIds, setExpandedIds] = useState<ReadonlySet<string>>(() => new Set());
-  const [selectedId, setSelectedId] = useState<string | undefined>();
+  const [viewState, updateViewState] = useFileTreeViewState(viewStateKey);
+  const selectedId = viewState.selectedId;
 
-  useEffect(() => {
-    // `pruneExpandedFileTreeIds` returns the same reference when nothing was
-    // pruned, so a churning `data` reference does not schedule a real update.
-    setExpandedIds((current) => pruneExpandedFileTreeIds(current, data));
-  }, [data]);
+  // Prune for RENDERING only. The stored set is the user's intent and must keep
+  // ids the current tree cannot resolve yet: a lazily loaded directory is empty
+  // until it is initialized, so trimming the state itself would silently drop
+  // every nested folder each time the tree is rebuilt from the provider.
+  // `pruneExpandedFileTreeIds` returns the same reference on a no-op prune, so a
+  // churning `data` reference does not force an extra flatten.
+  const expandedIds = useMemo(
+    () => pruneExpandedFileTreeIds(viewState.expandedIds, data),
+    [data, viewState.expandedIds]
+  );
 
   const rows = useMemo(() => flattenVisibleFileTreeRows(data, expandedIds), [data, expandedIds]);
   const getVirtualItemKey = useCallback((index: number) => rows[index]?.item.id ?? index, [rows]);
@@ -214,17 +269,29 @@ function VirtualFileTree({
     });
   }, [renderMode, rows.length]);
 
-  const toggleDirectory = useCallback((itemId: string) => {
-    setExpandedIds((current) => {
-      const next = new Set(current);
-      if (next.has(itemId)) {
-        next.delete(itemId);
-      } else {
-        next.add(itemId);
-      }
-      return next;
-    });
-  }, []);
+  const toggleDirectory = useCallback(
+    (itemId: string) => {
+      updateViewState((current) => {
+        const nextExpandedIds = new Set(current.expandedIds);
+        if (nextExpandedIds.has(itemId)) {
+          nextExpandedIds.delete(itemId);
+        } else {
+          nextExpandedIds.add(itemId);
+        }
+        return { ...current, expandedIds: nextExpandedIds };
+      });
+    },
+    [updateViewState]
+  );
+
+  const selectRow = useCallback(
+    (itemId: string) => {
+      updateViewState((current) =>
+        current.selectedId === itemId ? current : { ...current, selectedId: itemId }
+      );
+    },
+    [updateViewState]
+  );
 
   if (!shouldVirtualizeRows) {
     return (
@@ -234,7 +301,7 @@ function VirtualFileTree({
             key={row.item.id}
             row={row}
             selected={selectedId === row.item.id}
-            onSelect={setSelectedId}
+            onSelect={selectRow}
             onToggleDirectory={toggleDirectory}
           />
         ))}
@@ -261,7 +328,7 @@ function VirtualFileTree({
             selected={selectedId === row.item.id}
             virtualStart={virtualItem.start}
             virtualSize={virtualItem.size}
-            onSelect={setSelectedId}
+            onSelect={selectRow}
             onToggleDirectory={toggleDirectory}
           />
         );
@@ -377,6 +444,7 @@ function ControlledFileTreeView({
   fileProviderPending,
   fileProviderMessage,
   changedFilePaths,
+  viewStateKey,
 }: ControlledFileTreeViewProps) {
   const { t } = useTranslation();
   const scrollViewportRef = useRef<HTMLDivElement | null>(null);
@@ -464,7 +532,11 @@ function ControlledFileTreeView({
   return (
     <ScrollArea className="h-full" viewportRef={scrollViewportRef}>
       <div className="p-1">
-        <VirtualFileTree data={fileTreeData} viewportRef={scrollViewportRef} />
+        <VirtualFileTree
+          data={fileTreeData}
+          viewportRef={scrollViewportRef}
+          viewStateKey={viewStateKey}
+        />
       </div>
     </ScrollArea>
   );
@@ -491,6 +563,7 @@ const AutoFileTreeView = ({
   fileProviderMessage,
   autoCodeCollab = true,
   changedFilePaths,
+  viewStateKey,
 }: FileTreeViewProps) => {
   const { t } = useTranslation();
   const scrollViewportRef = useRef<HTMLDivElement | null>(null);
@@ -778,7 +851,11 @@ const AutoFileTreeView = ({
   return (
     <ScrollArea className="h-full" viewportRef={scrollViewportRef}>
       <div className="p-1">
-        <VirtualFileTree data={fileTreeData} viewportRef={scrollViewportRef} />
+        <VirtualFileTree
+          data={fileTreeData}
+          viewportRef={scrollViewportRef}
+          viewStateKey={viewStateKey}
+        />
 
         {shouldUseLocalFileList && localListTruncated ? (
           <div className="pt-2 text-xs text-muted-foreground">{localTruncatedLabel}</div>

@@ -4953,6 +4953,9 @@ const SessionDetail = ({
         fileProviderMessage={activeSessionFileProviderMessage}
         autoCodeCollab={false}
         changedFilePaths={changeFilePaths}
+        // Opening a file selects its viewer tab, which unmounts this tree. Key
+        // its expanded folders per session so returning to Files restores them.
+        viewStateKey={`session-files:${activeSession.id}`}
       />
     ) : activeSidebarTab === 'pr' && latestPr && repoFullName && latestPrNumber ? (
       <PrTabContainer
