@@ -185,10 +185,6 @@ vi.mock('loro-repo/transport/streams', () => ({
 vi.mock('@loro-dev/streams-crdt/loro', () => ({
   StreamsCrdt: class StreamsCrdt {},
   createLoroDocAdapter: vi.fn(() => ({})),
-  createStreamUrl: vi.fn(
-    ({ baseUrl, bucketId, streamId }: { baseUrl: string; bucketId: string; streamId: string }) =>
-      `${baseUrl.replace(/\/+$/g, '')}/ds/${bucketId}/${encodeURIComponent(streamId)}`
-  ),
 }));
 
 vi.mock('../src/providers/resilient-remote-cursor-store', () => ({

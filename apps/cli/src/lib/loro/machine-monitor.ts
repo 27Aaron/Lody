@@ -1,7 +1,6 @@
 import {
   EphemeralStoreAdaptor,
   EphemeralStreamCrdt,
-  createStreamUrl,
   type EphemeralStreamSubscription,
 } from '@loro-dev/streams-crdt/loro';
 import { EphemeralStore, type Value } from 'loro-crdt';
@@ -11,6 +10,7 @@ import {
   LODY_MACHINE_MONITOR_UNIX_SAMPLE_MS,
   LODY_MACHINE_MONITOR_WINDOWS_SAMPLE_MS,
   LORO_STREAMS_BUCKET_ID,
+  createLoroStreamUrl,
   getLoroMetaStreamId,
   getLoroStreamsPresenceBaseUrl,
   getMachineMonitorSnapshotKey,
@@ -100,7 +100,7 @@ export class CliMachineMonitorRuntime {
 
   attachStreams(streamsOptions: CliMachineMonitorStreamsOptions): void {
     if (this.started || this.stopped || this.transport) return;
-    const durableStreamUrl = createStreamUrl({
+    const durableStreamUrl = createLoroStreamUrl({
       bucketId: LORO_STREAMS_BUCKET_ID,
       streamId: getLoroMetaStreamId(this.options.workspaceId),
       baseUrl: getLoroStreamsPresenceBaseUrl(streamsOptions.streamsBaseUrl),

@@ -244,6 +244,42 @@ export const getLoroStreamsShardUrls = (
   };
 };
 
+const MAX_LORO_STREAMS_RESOURCE_ID_BYTES = 512;
+const loroStreamsResourceIdEncoder = new TextEncoder();
+
+// Durable Streams path-segment rules (formerly enforced by the removed
+// `createStreamUrl` in @loro-dev/streams-crdt <=0.14): non-empty UTF-8,
+// bounded, and no "/", NUL, or ".." so a segment cannot escape its path slot.
+const isValidLoroStreamsResourceId = (id: string): boolean =>
+  id.length > 0 &&
+  loroStreamsResourceIdEncoder.encode(id).byteLength <= MAX_LORO_STREAMS_RESOURCE_ID_BYTES &&
+  !id.includes('/') &&
+  !id.includes('\0') &&
+  !id.includes('..');
+
+/**
+ * Builds a Durable Streams HTTP URL for one `(bucketId, streamId)` pair.
+ *
+ * `@loro-dev/streams-crdt@0.15` removed its `createStreamUrl` export — URL
+ * building is caller-owned there now. Unlike the removed helper, `baseUrl`
+ * is required: callers must always target their configured gateway, never a
+ * library default host.
+ */
+export const createLoroStreamUrl = (input: {
+  bucketId: string;
+  streamId: string;
+  baseUrl: string;
+}): string => {
+  const baseUrl = input.baseUrl.replace(/\/+$/g, '');
+  if (!isValidLoroStreamsResourceId(input.bucketId)) {
+    throw new Error(`invalid Loro Streams bucketId: ${JSON.stringify(input.bucketId)}`);
+  }
+  if (!isValidLoroStreamsResourceId(input.streamId)) {
+    throw new Error(`invalid Loro Streams streamId: ${JSON.stringify(input.streamId)}`);
+  }
+  return `${baseUrl}/ds/${encodeURIComponent(input.bucketId)}/${encodeURIComponent(input.streamId)}`;
+};
+
 export const getLoroStreamsRemoteCursorUrlAliases = (streamUrl: string): string[] => {
   try {
     const url = new URL(streamUrl);

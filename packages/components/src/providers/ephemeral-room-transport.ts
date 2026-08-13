@@ -1,12 +1,12 @@
 import {
   EphemeralStoreAdaptor,
   EphemeralStreamCrdt,
-  createStreamUrl,
   type EphemeralStreamSubscription,
 } from '@loro-dev/streams-crdt/loro';
 import type { EphemeralStore } from 'loro-crdt';
 import {
   LORO_STREAMS_BUCKET_ID,
+  createLoroStreamUrl,
   getLoroMetaStreamId,
   getLoroStreamsPresenceBaseUrl,
   pickLoroStreamsPresenceShardId,
@@ -106,7 +106,7 @@ export abstract class EphemeralRoomTransport<
   start(args: { baseUrl: string; auth: EphemeralRoomAuthCallback }): void {
     void this.teardownResources(`failed to close previous ${this.roomLabel}`);
     const generation = (this.generation += 1);
-    const durableStreamUrl = createStreamUrl({
+    const durableStreamUrl = createLoroStreamUrl({
       bucketId: LORO_STREAMS_BUCKET_ID,
       streamId: getLoroMetaStreamId(this.options.workspaceId),
       baseUrl: getLoroStreamsPresenceBaseUrl(args.baseUrl, this.presenceShardId),

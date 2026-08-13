@@ -26,17 +26,24 @@
  * Note: a Streams re-join happens to flush foreign ops too, because join
  * catch-up uses the UNFILTERED export
  * (`performInitialJoinSync` → `exportUpdates(cursor.serverLowerBoundVersion)`,
- * streams-crdt dist/stream-id-*.js:2837-2850) — "stuck until restart, then appears".
+ * streams-crdt dist/stream-id-*.js:3059-3078) — "stuck until restart, then
+ * appears". Since streams-crdt 0.15.1 two more unfiltered append paths exist
+ * (both scoped to an apply-incomplete wedge, neither a live relay): the
+ * initial-join salvage (`salvageLocalBacklogOnIncompleteInitialSync`) and the
+ * degraded pending flush drain queued LOCAL batches while remote apply is
+ * wedged. The live up-link stays author-scoped — the invariant these tests
+ * pin is unchanged.
  *
- * Production call sites pinned by these tests (shipped dists):
+ * Production call sites pinned by these tests (shipped dists,
+ * @loro-dev/streams-crdt 0.15.1):
  *  - loro-repo dist/transport/streams.js:4,27,644,738 —
  *    `createFlockAdapter(patchFlockExportJson(flock))` builds the meta/flock-doc
  *    Streams sessions; the wrapper only special-cases an empty `from`, keeping the
  *    `peerId` filter intact.
- *  - @loro-dev/streams-crdt dist/flock.js:131-147 — live drain:
+ *  - @loro-dev/streams-crdt dist/flock.js:131-149 — live drain:
  *    `flock.subscribe(batch => { if (batch.source !== 'local') return; ...
  *    flock.exportJson({ from: lastExportedVersion, peerId: flock.peerId() }) ... })`.
- *  - @loro-dev/streams-crdt dist/loro.js:224-231 — doc live drain:
+ *  - @loro-dev/streams-crdt dist/loro.js:223-232 — doc live drain:
  *    `doc.subscribeLocalUpdates(update => listener({ updates: [update], ... }))`.
  *  - CLI import side that makes the renderer ops "foreign":
  *    packages/shared/src/local-loro-data-plane-server.ts handleUpdate →

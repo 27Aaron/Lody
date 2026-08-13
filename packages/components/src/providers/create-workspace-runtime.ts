@@ -1,7 +1,7 @@
 import { LoroRepo, type RepoRoomSubscription, type RepoWatchHandle } from 'loro-repo';
 import { IndexedDBStorageAdaptor } from 'loro-repo/storage/indexeddb';
 import { StreamsTransportAdapter } from 'loro-repo/transport/streams';
-import { StreamsCrdt, createLoroDocAdapter, createStreamUrl } from '@loro-dev/streams-crdt/loro';
+import { StreamsCrdt, createLoroDocAdapter } from '@loro-dev/streams-crdt/loro';
 import type { PlatformSyncMode } from '@lody/platform';
 import {
   createLoroStreamsJsonStreamClient,
@@ -18,6 +18,7 @@ import {
   getTaskRoomId,
   taskDocSchema,
   TASK_ORDER_MIN_KEY,
+  createLoroStreamUrl,
   getLoroMetaStreamId,
   getLoroStreamIdForDocId,
   getLoroStreamsBaseUrl,
@@ -662,7 +663,7 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
 
     metaRemoteCursorInvalidated = true;
     const metaStreamId = getLoroMetaStreamId(workspaceId);
-    const metaStreamUrl = createStreamUrl({
+    const metaStreamUrl = createLoroStreamUrl({
       bucketId: LORO_STREAMS_BUCKET_ID,
       streamId: metaStreamId,
       baseUrl: transportStreamsBaseUrl ?? getStreamsBaseUrlForProvider(streamsTokenProvider),
@@ -3509,7 +3510,7 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
 
     const attemptCreate = async (): Promise<void> => {
       const transport = new StreamsCrdt({
-        streamUrl: createStreamUrl({
+        streamUrl: createLoroStreamUrl({
           bucketId: LORO_STREAMS_BUCKET_ID,
           streamId,
           baseUrl: streamsBaseUrl,
