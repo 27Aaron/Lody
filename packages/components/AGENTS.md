@@ -100,6 +100,19 @@ mobile surfaces.
 - The owner-session file-index Flock is the file-tree and All Changes source. Machine
   RPC handles exact file content, save, LSP, and diff requests; it is not the file-index
   source of truth.
+- **Opening a file to preview it is NOT a Code Collab operation.** `openFile` goes
+  through `file/preview` (File Preview v3), which the machine answers with a plain
+  read — no workspace watch, no All Changes recompute, no Flock publish. It handles
+  text and binary (PNG/JPEG/…) alike and is size-limited on the machine. So the file
+  index is a HINT here, never a gate: a `binary` entry carries no `unavailableReason`
+  (or the tree row goes unclickable via `canOpen` in
+  `session-file-provider-view-model.ts`), and a path the index has never seen — an
+  agent-produced temporary file, say — is still sent to the machine. Binary results
+  must not enter the text open cache; that cache backs `save-text` conflict detection.
+- Preview READS a wider path set than `save-text` WRITES (writes stay inside the session
+  workspace). So a result with `external: true` must be forced readonly regardless of
+  what the index says — otherwise the editor shows a Save button for a file the machine
+  will refuse, and the user loses the edit at save time.
 - File-index rows must pass the shared Zod helpers. Preserve structured lazy-directory
   entries so `@file` completion can initialize a directory before refreshing results.
 - Turn-scoped diffs come from the CLI-local evidence store. Do not synthesize them from
