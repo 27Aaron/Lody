@@ -6,6 +6,7 @@ import { ndJsonStream, type Stream } from '@agentclientprotocol/sdk';
 import type { SessionInfo } from '@agentclientprotocol/sdk';
 
 import { spawnAcpProcess } from '@/agent/acp-runner';
+import { withAcpSessionStartSlot } from '@/agent/acp-session-start-gate';
 import { getLoginShellEnv } from '@/agent/login-shell-env';
 import {
   mergeACPProcessEnv,
@@ -149,53 +150,63 @@ async function createHistoryAcpConnection(args: {
     mergeLoginShellEnv(launch.env, loginShellEnv),
     args.provider.agentType
   );
-  const agentProcess = spawnAcpProcess({
-    cliType: args.provider.cliType,
-    agentType: args.provider.agentType,
-    workdir: args.workdir,
-    env,
-    command: launch.command,
-    args: launch.args,
-  });
+  return await withAcpSessionStartSlot(
+    {
+      label: `${getProviderLabel(args.provider)}-history-sync`,
+      logger: args.logger,
+    },
+    async () => {
+      const agentProcess = spawnAcpProcess({
+        cliType: args.provider.cliType,
+        agentType: args.provider.agentType,
+        workdir: args.workdir,
+        env,
+        command: launch.command,
+        args: launch.args,
+      });
 
-  agentProcess.stderr?.setEncoding('utf8');
-  agentProcess.stderr?.on('data', (chunk: string) => {
-    if (!chunk) return;
-    args.logger.debug(
-      `[${getProviderLabel(args.provider)}-history-sync] ACP stderr: ${chunk.slice(0, 1200)}`
-    );
-  });
+      agentProcess.stderr?.setEncoding('utf8');
+      agentProcess.stderr?.on('data', (chunk: string) => {
+        if (!chunk) return;
+        args.logger.debug(
+          `[${getProviderLabel(args.provider)}-history-sync] ACP stderr: ${chunk.slice(0, 1200)}`
+        );
+      });
 
-  if (!agentProcess.stdout || !agentProcess.stdin) {
-    await terminateChildProcess(agentProcess);
-    throw new Error(`${getProviderLabel(args.provider)} ACP process did not expose stdio streams`);
-  }
+      if (!agentProcess.stdout || !agentProcess.stdin) {
+        await terminateChildProcess(agentProcess);
+        throw new Error(
+          `${getProviderLabel(args.provider)} ACP process did not expose stdio streams`
+        );
+      }
 
-  const output = createStdoutReadableStream(agentProcess.stdout);
-  const input = createStdinWritableStream(agentProcess.stdin);
-  const stream: Stream = ndJsonStream(input, output);
-  const collector = new AcpReplayCollectorClient();
-  const connection = new acp.ClientSideConnection(() => collector, stream);
+      const output = createStdoutReadableStream(agentProcess.stdout);
+      const input = createStdinWritableStream(agentProcess.stdin);
+      const stream: Stream = ndJsonStream(input, output);
+      const collector = new AcpReplayCollectorClient();
+      const connection = new acp.ClientSideConnection(() => collector, stream);
 
-  try {
-    const initResponse = await withTimeout(
-      connection.initialize({
-        protocolVersion: acp.PROTOCOL_VERSION,
-        clientCapabilities: {
-          terminal: false,
-          fs: {
-            readTextFile: false,
-            writeTextFile: false,
-          },
-        },
-      }),
-      `${getProviderLabel(args.provider)} ACP initialize`
-    );
-    return { agentProcess, connection, collector, initResponse };
-  } catch (error) {
-    await terminateChildProcess(agentProcess);
-    throw error;
-  }
+      try {
+        const initResponse = await withTimeout(
+          connection.initialize({
+            protocolVersion: acp.PROTOCOL_VERSION,
+            clientCapabilities: {
+              terminal: false,
+              fs: {
+                readTextFile: false,
+                writeTextFile: false,
+              },
+            },
+          }),
+          `${getProviderLabel(args.provider)} ACP initialize`
+        );
+        return { agentProcess, connection, collector, initResponse };
+      } catch (error) {
+        await terminateChildProcess(agentProcess);
+        throw error;
+      }
+    }
+  );
 }
 
 async function resolveCatalogQueryPaths(rootPath: string): Promise<string[]> {

@@ -15,6 +15,7 @@ import { ndJsonStream } from '@agentclientprotocol/sdk';
 import * as fs from 'fs';
 import type { AcpStartupTimeoutOptions, AgentClient } from '@/agent/agent-client';
 import { createAcpClient } from '@/agent/acp-runner';
+import { withAcpSessionStartSlot } from '@/agent/acp-session-start-gate';
 import {
   AcpStartupProcessError,
   AcpStartupProcessExitError,
@@ -663,16 +664,24 @@ export class Session extends EventEmitter<SessionEvents> implements ISession {
     };
 
     try {
-      return await runNpxStartupWithRecovery({
-        command: callbacks.command,
-        args: callbacks.args ?? [],
-        env,
-        logger: this.logger,
-        logPrefix: `[${this.sessionId}]`,
-        attempt: ({ startupTimeouts }) => attemptCreateAgent(startupTimeouts),
-        cleanupFailedAttempt,
-        getStderrTail: () => lastStderrTail,
-      });
+      return await withAcpSessionStartSlot(
+        {
+          label: this.sessionId,
+          logger: this.logger,
+          abortSignal: callbacks.abortSignal,
+        },
+        async () =>
+          await runNpxStartupWithRecovery({
+            command: callbacks.command,
+            args: callbacks.args ?? [],
+            env,
+            logger: this.logger,
+            logPrefix: `[${this.sessionId}]`,
+            attempt: ({ startupTimeouts }) => attemptCreateAgent(startupTimeouts),
+            cleanupFailedAttempt,
+            getStderrTail: () => lastStderrTail,
+          })
+      );
     } catch (error) {
       await cleanupFailedAttempt();
       throw error;

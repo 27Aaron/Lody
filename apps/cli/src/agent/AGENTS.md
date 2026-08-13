@@ -34,7 +34,14 @@ arrive: context/message-flow.md "Upstream".
   answer before giving up on the upstream turn's response: the Codex adapter drains
   session notifications before refusing, so the turn's response routinely wins that
   race and would otherwise mask the refusal.
-- `acp-runner.ts` — process spawn/restart around the client.
+- `acp-runner.ts` — process spawn/restart around the client. Spawn + initialize +
+  `newSession`/`loadSession` share `acp-session-start-gate.ts` (default 2,
+  `LODY_MAX_CONCURRENT_ACP_SESSION_STARTS`). Unbounded concurrent Codex starts
+  each spawn a lody.exe adapter, a Codex app-server, and a lody.exe MCP child;
+  they contend on `~/.codex` and freeze every in-flight session until Lody
+  restarts. Do not add another ACP start path that bypasses the gate.
+- `acp-session-start-gate.ts` — process-wide start semaphore used by
+  `Session.createAgent`, `startLocalAcpAgent`, and history-catalog ACP spawn.
 - `setting.ts` — launch resolution. Builtin Claude/Codex/Kimi/Grok require
   `resolveACPProcessLaunchAsync()` because they may install Lody-managed native
   or Node-package runtimes and then spawn bundled adapter entries.

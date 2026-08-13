@@ -113,7 +113,9 @@ delegation proofs or a shared-machine gate without a new product and security de
   committed PR-compare writer above; unresolved project state and incomplete
   All Changes line stats must skip instead of overwriting a trustworthy total.
 - `session-manager.ts` / `session.ts` — session/process lifecycle, workdirs and
-  worktrees. Child tab sessions must reuse the parent workspace directory: local/GitHub
+  worktrees. `Session.createAgent` acquires the shared ACP start gate before
+  spawn so a parent session cannot restore or start many Codex children at once.
+  Child tab sessions must reuse the parent workspace directory: local/GitHub
   parents reconstruct via workdir/worktree data, and chat-only parents fall back to the
   parent's default `~/.lody/chats/<parentSessionId>` path when the parent process is no
   longer in memory. Do not write per-session workspace paths into `MachineMeta`; the

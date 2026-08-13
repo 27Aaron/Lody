@@ -65,6 +65,7 @@ import {
   resolveAcpLauncher,
 } from './acp-analytics';
 import { withoutElectronBootstrapCredentials } from '@/electron-bootstrap-env';
+import { withAcpSessionStartSlot } from './acp-session-start-gate';
 
 export type CreateAcpClientOptions = {
   stream: Stream;
@@ -573,15 +574,23 @@ export const startLocalAcpAgent = async (options: StartLocalAcpAgentOptions) => 
     }
   };
 
-  return runNpxStartupWithRecovery({
-    command: launch.command,
-    args: launch.args,
-    env: envWithAcpStartup,
-    logger: options.logger,
-    logPrefix: '[acp-startup]',
-    attempt: ({ args, startupTimeouts }) => attemptStart(args, startupTimeouts),
-    getStderrTail: () => lastStderrTail,
-  });
+  return await withAcpSessionStartSlot(
+    {
+      label: `acp-startup:${options.agentType}`,
+      logger: options.logger,
+      abortSignal: options.signal,
+    },
+    async () =>
+      await runNpxStartupWithRecovery({
+        command: launch.command,
+        args: launch.args,
+        env: envWithAcpStartup,
+        logger: options.logger,
+        logPrefix: '[acp-startup]',
+        attempt: ({ args, startupTimeouts }) => attemptStart(args, startupTimeouts),
+        getStderrTail: () => lastStderrTail,
+      })
+  );
 };
 
 export type ShutdownLocalAcpAgentOptions = {
