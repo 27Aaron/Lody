@@ -485,14 +485,39 @@ describe('SessionGCManager', () => {
       expect(result.hadMemoryPressure).toBe(true);
     });
 
-    it('treats low commit headroom as memory pressure on windows', async () => {
-      const manager = createManager();
+    it('reclaims but does not refuse when the windows page file can still grow', async () => {
+      // The default system-managed page file: commit sits right under the CURRENT limit, which
+      // Windows simply raises. Refusing here is the false positive this branch exists to prevent.
+      const manager = createManager(undefined, 'win32');
       mockedGetMemoryPressureSnapshot.mockResolvedValue({
         availableMemoryBytes: 4 * 1024 * 1024 * 1024,
         effectiveMemoryLimitBytes: 32 * 1024 * 1024 * 1024,
         availableCommitBytes: 256 * 1024 * 1024,
         commitLimitBytes: 40 * 1024 * 1024 * 1024,
         committedBytes: 39.75 * 1024 * 1024 * 1024,
+        commitGrowthBytes: 60 * 1024 * 1024 * 1024,
+        effectiveAvailableCommitBytes: 60.25 * 1024 * 1024 * 1024,
+      });
+
+      const result = await manager.evictForMemoryPressure();
+
+      expect(result.hadMemoryPressure).toBe(true);
+      expect(result.stillUnderPressure).toBe(false);
+      expect(result.pressureReason).toBe('commit');
+      expect(result.commitThresholdBytes).toBe(1024 * 1024 * 1024);
+      expect(result.commitGrowthBytes).toBe(60 * 1024 * 1024 * 1024);
+    });
+
+    it('refuses on windows once the commit limit can no longer grow', async () => {
+      const manager = createManager(undefined, 'win32');
+      mockedGetMemoryPressureSnapshot.mockResolvedValue({
+        availableMemoryBytes: 4 * 1024 * 1024 * 1024,
+        effectiveMemoryLimitBytes: 32 * 1024 * 1024 * 1024,
+        availableCommitBytes: 256 * 1024 * 1024,
+        commitLimitBytes: 40 * 1024 * 1024 * 1024,
+        committedBytes: 39.75 * 1024 * 1024 * 1024,
+        commitGrowthBytes: 0,
+        effectiveAvailableCommitBytes: 256 * 1024 * 1024,
       });
 
       const result = await manager.evictForMemoryPressure();
@@ -505,31 +530,30 @@ describe('SessionGCManager', () => {
     });
 
     it('evicts idle sessions to recover commit headroom on windows', async () => {
-      const manager = createManager();
+      const manager = createManager(undefined, 'win32');
       const s1 = 'session-1' as SessionId;
       sessionActivities.set(s1, Date.now() - 60000);
 
+      const exhausted = {
+        availableMemoryBytes: 4 * 1024 * 1024 * 1024,
+        effectiveMemoryLimitBytes: 32 * 1024 * 1024 * 1024,
+        availableCommitBytes: 256 * 1024 * 1024,
+        commitLimitBytes: 40 * 1024 * 1024 * 1024,
+        committedBytes: 39.75 * 1024 * 1024 * 1024,
+        commitGrowthBytes: 0,
+        effectiveAvailableCommitBytes: 256 * 1024 * 1024,
+      };
       mockedGetMemoryPressureSnapshot
-        .mockResolvedValueOnce({
-          availableMemoryBytes: 4 * 1024 * 1024 * 1024,
-          effectiveMemoryLimitBytes: 32 * 1024 * 1024 * 1024,
-          availableCommitBytes: 256 * 1024 * 1024,
-          commitLimitBytes: 40 * 1024 * 1024 * 1024,
-          committedBytes: 39.75 * 1024 * 1024 * 1024,
-        })
-        .mockResolvedValueOnce({
-          availableMemoryBytes: 4 * 1024 * 1024 * 1024,
-          effectiveMemoryLimitBytes: 32 * 1024 * 1024 * 1024,
-          availableCommitBytes: 256 * 1024 * 1024,
-          commitLimitBytes: 40 * 1024 * 1024 * 1024,
-          committedBytes: 39.75 * 1024 * 1024 * 1024,
-        })
+        .mockResolvedValueOnce(exhausted)
+        .mockResolvedValueOnce(exhausted)
         .mockResolvedValueOnce({
           availableMemoryBytes: 4 * 1024 * 1024 * 1024,
           effectiveMemoryLimitBytes: 32 * 1024 * 1024 * 1024,
           availableCommitBytes: 2 * 1024 * 1024 * 1024,
           commitLimitBytes: 40 * 1024 * 1024 * 1024,
           committedBytes: 38 * 1024 * 1024 * 1024,
+          commitGrowthBytes: 0,
+          effectiveAvailableCommitBytes: 2 * 1024 * 1024 * 1024,
         });
 
       const result = await manager.evictForMemoryPressure();
@@ -783,30 +807,86 @@ describe('SessionGCManager', () => {
     });
 
     describe('win32', () => {
-      it('reports commit pressure on its own', () => {
+      // A machine with the DEFAULT system-managed page file: commit charge is right up against
+      // the current limit, and the current limit is not where the machine ends.
+      const growable = {
+        availableMemoryBytes: 4 * GB,
+        effectiveMemoryLimitBytes: 32 * GB,
+        availableCommitBytes: 100 * 1024 * 1024,
+        commitLimitBytes: 40 * GB,
+        committedBytes: 40 * GB - 100 * 1024 * 1024,
+        commitGrowthBytes: 60 * GB,
+        effectiveAvailableCommitBytes: 60 * GB + 100 * 1024 * 1024,
+      };
+
+      it('reclaims but does not refuse while the page file can still grow', () => {
+        expect(evaluateMemoryPressure(growable, thresholds('win32'))).toEqual({
+          evict: true,
+          block: false,
+          reason: 'commit',
+        });
+      });
+
+      it('refuses only once the commit limit has nowhere left to go', () => {
         expect(
           evaluateMemoryPressure(
             {
-              availableMemoryBytes: 4 * GB,
-              effectiveMemoryLimitBytes: 32 * GB,
-              availableCommitBytes: 100 * 1024 * 1024,
+              ...growable,
+              commitGrowthBytes: 0,
+              effectiveAvailableCommitBytes: growable.availableCommitBytes,
             },
             thresholds('win32')
           )
         ).toEqual({ evict: true, block: true, reason: 'commit' });
       });
 
-      it('reports both when physical and commit are exhausted', () => {
+      it('never refuses on physical availability alone', () => {
+        // Windows trims working sets and leans on the standby list rather than failing. Low
+        // `AvailableBytes` is worth reclaiming idle sessions over, never worth failing a turn.
+        expect(
+          evaluateMemoryPressure(
+            { availableMemoryBytes: 500 * 1024 * 1024, effectiveMemoryLimitBytes: 32 * GB },
+            thresholds('win32')
+          )
+        ).toEqual({ evict: true, block: false, reason: 'physical' });
+      });
+
+      it('names both terms when physical is low and commit is exhausted', () => {
         expect(
           evaluateMemoryPressure(
             {
+              ...growable,
               availableMemoryBytes: 500 * 1024 * 1024,
-              effectiveMemoryLimitBytes: 32 * GB,
-              availableCommitBytes: 100 * 1024 * 1024,
+              commitGrowthBytes: 0,
+              effectiveAvailableCommitBytes: growable.availableCommitBytes,
             },
             thresholds('win32')
           )
         ).toEqual({ evict: true, block: true, reason: 'physical_and_commit' });
+      });
+
+      it('fails open when the probe returned nothing at all', () => {
+        // A `powershell.exe` timeout must not become a refused turn.
+        expect(
+          evaluateMemoryPressure(
+            { availableMemoryBytes: 4 * GB, effectiveMemoryLimitBytes: 32 * GB },
+            thresholds('win32')
+          )
+        ).toEqual({ evict: false, block: false, reason: null });
+      });
+
+      it('reclaims but does not refuse when page file growth is undetermined', () => {
+        // Commit headroom read fine, but the page file or its volume did not. Undetermined is
+        // not the same as zero: without positive evidence that the limit is stuck, refusing
+        // would be the original bug wearing a different hat.
+        const { commitGrowthBytes, effectiveAvailableCommitBytes, ...undetermined } = growable;
+        expect(commitGrowthBytes).toBeDefined();
+        expect(effectiveAvailableCommitBytes).toBeDefined();
+        expect(evaluateMemoryPressure(undetermined, thresholds('win32'))).toEqual({
+          evict: true,
+          block: false,
+          reason: 'commit',
+        });
       });
     });
   });

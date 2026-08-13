@@ -171,8 +171,32 @@ control-plane path is DEPRECATED; do not add functionality to it.
   cache/slab (`computeCgroupReclaimableBytes`), and because that estimate deliberately excludes
   `active_file` it is only allowed to RECLAIM on its own — refusing a turn additionally requires a
   real stall (`memory.pressure` some avg10, or a hard-headroom floor on kernels without PSI). Host
-  `MemAvailable` needs no such corroboration; it is already reclaim-aware. Windows likewise: its
-  `AvailableBytes` already counts the standby list, and its commit limit is a genuine hard ceiling.
+  `MemAvailable` needs no such corroboration; it is already reclaim-aware.
+  On **Windows the commit limit is NOT a hard ceiling** — with the default system-managed page
+  file it is `RAM + current page file size`, and Microsoft documents that Windows grows the page
+  file once commit charge hits 90% of the limit, so a healthy machine sits permanently a few
+  hundred MB under its CURRENT limit. `utils/memory.ts` therefore measures the page file
+  configuration too (`computeWindowsCommitGrowthBytes`, pure/testable) and refuses only on
+  `effectiveAvailableCommitBytes = availableCommit + growth`; raw commit headroom and low
+  `AvailableBytes` may only RECLAIM. The documented system-managed ceiling is
+  `min(max(3 x RAM, 4GB), volume size / 8)` and **the volume/8 term is load-bearing** — it binds on
+  small disks, i.e. exactly the machines that do run out of commit. Growth is `number | null`:
+  `null` means UNDETERMINED (unreported volume, or an empty page file enumeration on a machine
+  whose commit limit exceeds RAM) and drops `effectiveAvailableCommitBytes` so the check fails
+  open. Never collapse `null` to `0` — that manufactures a hard ceiling out of a failed probe.
+  Physical availability never refuses on Windows at all: the Memory Manager trims working sets and
+  pages out rather than failing, which is why Chromium/.NET/SQL Server all treat physical pressure
+  as a shed-caches signal only. `os.freemem()` is the physical number (libuv returns
+  `ullAvailPhys`, i.e. free + zero + standby) — do not add a probe for it.
+  Commit comes from `powershell.exe`, preferring the documented `\Memory\Commit Limit` /
+  `\Memory\Committed Bytes` perf counters and falling back to `Win32_OperatingSystem`
+  (`TotalVirtualMemorySize`/`FreeVirtualMemory` are `ullTotalPageFile`/`ullAvailPageFile` in
+  practice, but the CIM docs do not say so — hence fallback, not primary). Timeout is 5s because a
+  1s budget expired exactly on the loaded machines it exists to measure, and a failed probe fails
+  OPEN as on macOS. That probe is a PROCESS SPAWN, so it is cached for 30s and the sampler only
+  bypasses the cache via `refresh()`/`getMemoryPressureSnapshot({ force: true })` — the paths about
+  to act. Do not make the periodic sweep force it: at the monitor's 5s cadence that is ~17k
+  `powershell.exe` launches a day on an idle daemon.
   Two more rules, both learned from a false refusal: never act on the CACHED sample (force a
   refresh once anything looks like pressure), and re-check with a short delay before failing a turn
   (`pressureRecheckAttempts`) because reclaim returns cache in milliseconds. Eviction is bounded

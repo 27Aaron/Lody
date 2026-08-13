@@ -1893,18 +1893,27 @@ export class SessionExecutionService {
     }
 
     const mb = (bytes: number) => `${Math.round(bytes / 1024 / 1024)}MB`;
+
+    // Windows refuses on commit only, and only once the page file can no longer grow. Quoting
+    // physical availability there would name a number that was not the reason.
+    if (
+      result.effectiveAvailableCommitBytes !== undefined &&
+      result.commitThresholdBytes !== undefined
+    ) {
+      return (
+        'The machine has run out of committable memory: ' +
+        `${mb(result.availableCommitBytes ?? 0)} below the commit limit plus ` +
+        `${mb(result.commitGrowthBytes ?? 0)} the page file can still grow, against a safety ` +
+        `margin of ${mb(result.commitThresholdBytes)}. The turn was not started; close some ` +
+        'programs, or raise the page file maximum, and retry.'
+      );
+    }
+
     const availableMb = mb(result.availableMemoryBytes);
     // Deliberately NOT "required to start a turn": the threshold is a safety margin the machine
     // should keep free, not a measurement of what a turn costs. Quoting it as a requirement sent
     // people hunting for 2.6GB that nothing was ever going to allocate.
     const marginMb = mb(result.thresholdBytes);
-    const commitText =
-      result.availableCommitBytes !== undefined &&
-      (result.pressureReason === 'commit' || result.pressureReason === 'physical_and_commit') &&
-      result.commitThresholdBytes !== undefined
-        ? ` Commit headroom is ${mb(result.availableCommitBytes)} ` +
-          `(safety margin: ${mb(result.commitThresholdBytes)}).`
-        : '';
 
     // Under a cgroup, one total explains nothing — the operator needs to see which term is
     // binding, and how much of `memory.current` is just page cache.
@@ -1923,14 +1932,14 @@ export class SessionExecutionService {
         `cgroup ${cgroup.path}: ${mb(cgroup.currentBytes)} of ${mb(cgroup.maxBytes)} used, ` +
         `${mb(cgroup.hardHeadroomBytes)} unused plus ${mb(cgroup.reclaimableBytes)} reclaimable ` +
         `cache/slab; ${hostText}safety margin ${marginMb}. ` +
-        `The turn was not started; free memory and retry.${commitText}`
+        'The turn was not started; free memory and retry.'
       );
     }
 
     return (
       `The machine is under memory pressure (${availableMb} available, ` +
       `safety margin ${marginMb}). The turn was not started; ` +
-      `free memory and retry.${commitText}`
+      'free memory and retry.'
     );
   }
 

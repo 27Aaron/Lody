@@ -38,9 +38,12 @@ import type { MemoryPressureSnapshotSource } from '@/monitor/memory-pressure-sam
  *   a turn. Byte-based estimates are NOT used here and must not be reintroduced as a fallback:
  *   they cannot see compressor headroom, which is where most of a Mac's reclaimable memory is,
  *   and they consequently report pressure on perfectly healthy machines.
- * - **Linux/Windows** keep the byte thresholds. There the limits are real and hard — a cgroup
- *   `memory.max` overrun is an OOM kill and a Windows commit-limit overrun is an allocation
- *   failure — so refusing early is correct.
+ * - **Linux** keeps the byte thresholds. There the limits are real and hard — a cgroup
+ *   `memory.max` overrun is an OOM kill — so refusing early is correct.
+ * - **Windows** refuses only on COMMIT, and only once the commit limit can no longer move.
+ *   Low available physical memory is not fatal on Windows (the Memory Manager trims working
+ *   sets and pages out), and the commit limit itself grows with a system-managed page file, so
+ *   neither raw number is grounds for failing a user's turn on its own.
  */
 
 export interface SessionGCConfig {
@@ -123,6 +126,10 @@ export interface MemoryPressureEvictionResult {
   commitThresholdBytes?: number;
   commitLimitBytes?: number;
   committedBytes?: number;
+  /** Windows only; what the page file can still add to the commit limit. */
+  commitGrowthBytes?: number;
+  /** Windows only; the number the refusal was actually made on. */
+  effectiveAvailableCommitBytes?: number;
 }
 
 function readEnvNumber(key: string, fallback: number): number {
@@ -200,6 +207,44 @@ export interface MemoryPressureThresholds {
 }
 
 /**
+ * Windows: reclaim on either byte term, but refuse ONLY when commit is exhausted and the commit
+ * limit itself has nowhere left to go.
+ *
+ * `CommitLimit - CommitCharge` is not headroom on this platform. With the default system-managed
+ * page file the limit grows on demand, so a healthy machine sits permanently a few hundred MB
+ * under its CURRENT limit; `effectiveAvailableCommitBytes` adds back what the page file can still
+ * grow (see `utils/memory.ts`). Low `AvailableBytes` is not a refusal signal either: Windows trims
+ * working sets and pages out rather than failing an allocation. A failed probe leaves both commit
+ * terms absent and therefore fails open, as on macOS.
+ */
+function evaluateWindowsMemoryPressure(
+  snapshot: MemoryPressureSnapshot,
+  thresholds: MemoryPressureThresholds
+): MemoryPressureVerdict {
+  const physicalLow = snapshot.availableMemoryBytes < thresholds.thresholdBytes;
+  const commitLow =
+    snapshot.availableCommitBytes !== undefined &&
+    snapshot.availableCommitBytes < thresholds.commitThresholdBytes;
+  const commitExhausted =
+    snapshot.effectiveAvailableCommitBytes !== undefined &&
+    snapshot.effectiveAvailableCommitBytes < thresholds.commitThresholdBytes;
+
+  if (commitExhausted) {
+    return { evict: true, block: true, reason: physicalLow ? 'physical_and_commit' : 'commit' };
+  }
+
+  const reason: MemoryPressureReason | null =
+    physicalLow && commitLow
+      ? 'physical_and_commit'
+      : physicalLow
+        ? 'physical'
+        : commitLow
+          ? 'commit'
+          : null;
+  return { evict: reason !== null, block: false, reason };
+}
+
+/**
  * Decide, from one memory sample, whether to reclaim idle sessions and whether to refuse a turn.
  *
  * Pure — the platform is an explicit input so every branch is testable everywhere.
@@ -220,9 +265,9 @@ export function evaluateMemoryPressure(
     return { evict: false, block: false, reason: null };
   }
 
-  const commitPressure =
-    snapshot.availableCommitBytes !== undefined &&
-    snapshot.availableCommitBytes < thresholds.commitThresholdBytes;
+  if (thresholds.platform === 'win32') {
+    return evaluateWindowsMemoryPressure(snapshot, thresholds);
+  }
 
   const cgroup = snapshot.cgroup;
   if (cgroup) {
@@ -251,26 +296,15 @@ export function evaluateMemoryPressure(
       // Worth reclaiming idle sessions — invisible to the user — but not worth refusing a turn.
       return { evict: true, block: false, reason: 'cgroup_low_headroom' };
     }
-    if (commitPressure) {
-      return { evict: true, block: true, reason: 'commit' };
-    }
     return { evict: false, block: false, reason: null };
   }
 
   const physicalPressure = snapshot.availableMemoryBytes < thresholds.thresholdBytes;
+  const reason: MemoryPressureReason | null = physicalPressure ? 'physical' : null;
 
-  const reason: MemoryPressureReason | null =
-    physicalPressure && commitPressure
-      ? 'physical_and_commit'
-      : physicalPressure
-        ? 'physical'
-        : commitPressure
-          ? 'commit'
-          : null;
-
-  // No cgroup limit: on Linux this is `MemAvailable`, which already credits reclaimable cache,
-  // and on Windows it is `AvailableBytes`, which already credits the standby list. Both are
-  // trustworthy enough to refuse on. The Windows commit limit is a genuine hard ceiling.
+  // No cgroup limit: this is Linux `MemAvailable`, which already credits reclaimable cache and
+  // is therefore trustworthy enough to refuse on. (Windows returned above; it does not share
+  // this branch, because its equivalent number is not a refusal signal.)
   return { evict: reason !== null, block: reason !== null, reason };
 }
 
@@ -292,7 +326,11 @@ export class SessionGCManager {
     const pressureSignal =
       this.platform === 'darwin'
         ? 'kern.memorystatus_vm_pressure_level'
-        : `available<${Math.round(this.config.memoryThresholdBytes / 1024 / 1024)}MB`;
+        : this.platform === 'win32'
+          ? `commit+pagefile-growth<${Math.round(
+              getWindowsCommitThresholdBytes(this.config.memoryThresholdBytes) / 1024 / 1024
+            )}MB`
+          : `available<${Math.round(this.config.memoryThresholdBytes / 1024 / 1024)}MB`;
     this.deps.logger.debug(
       `[GC] Starting session GC (interval=${this.config.sweepIntervalMs}ms, ` +
         `idleTimeout=${this.config.idleTimeoutMs}ms, ` +
@@ -519,6 +557,13 @@ export class SessionGCManager {
             commitThresholdBytes,
             commitLimitBytes: snapshot.commitLimitBytes,
             committedBytes: snapshot.committedBytes,
+            // Both stay absent when page file growth could not be determined.
+            ...(snapshot.commitGrowthBytes !== undefined
+              ? { commitGrowthBytes: snapshot.commitGrowthBytes }
+              : {}),
+            ...(snapshot.effectiveAvailableCommitBytes !== undefined
+              ? { effectiveAvailableCommitBytes: snapshot.effectiveAvailableCommitBytes }
+              : {}),
           }
         : {}),
     };
@@ -540,9 +585,9 @@ export class SessionGCManager {
       return `kernel pressure level ${snapshot.memoryPressureLevel}`;
     }
 
+    const mb = (bytes: number) => Math.round(bytes / 1024 / 1024);
     const cgroup = snapshot.cgroup;
     if (cgroup) {
-      const mb = (bytes: number) => Math.round(bytes / 1024 / 1024);
       return (
         `cgroup ${cgroup.path}: hard headroom ${mb(cgroup.hardHeadroomBytes)}MB + ` +
         `reclaimable ${mb(cgroup.reclaimableBytes)}MB (of ${mb(cgroup.stat.activeFileBytes)}MB ` +
@@ -552,10 +597,18 @@ export class SessionGCManager {
       );
     }
 
+    // The growth term is the whole reason this platform stopped refusing healthy machines, so
+    // it is logged next to the raw headroom rather than folded silently into one total.
+    // "unknown" is a distinct state from 0 and must read that way: it means the probe could not
+    // rule growth out, which is why no turn was refused.
+    const growthText =
+      snapshot.commitGrowthBytes !== undefined
+        ? `${mb(snapshot.commitGrowthBytes)}MB page file growth`
+        : 'page file growth unknown';
     const commitText =
       snapshot.availableCommitBytes !== undefined
-        ? `, commit headroom ${Math.round(snapshot.availableCommitBytes / 1024 / 1024)}MB ` +
-          `(threshold: ${Math.round(commitThresholdBytes / 1024 / 1024)}MB)`
+        ? `, commit headroom ${mb(snapshot.availableCommitBytes)}MB + ${growthText} ` +
+          `(threshold: ${mb(commitThresholdBytes)}MB)`
         : '';
     return (
       `${Math.round(snapshot.availableMemoryBytes / 1024 / 1024)}MB available ` +
