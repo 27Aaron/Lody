@@ -17,14 +17,30 @@ arrive: context/message-flow.md "Upstream".
   `controlMethod: _session/goal`; normalize neutral `limited` to the legacy durable
   `blocked` status so older readers can consume mixed-version history without
   inventing a provider-specific limit reason.
-  Its built-in `lody` stdio MCP config is an explicit environment allowlist, not
-  ordinary child-process inheritance. Keep the public CLI deployment endpoints
-  (`LODY_AUTH_URL`, `LODY_AUTH_SITE_URL`, `LODY_SERVER_URL`) in that config so
+  The built-in `lody` MCP server has TWO transports. Agents whose initialize
+  response advertises `mcpCapabilities.http` get a shared HTTP endpoint served
+  by ONE host subprocess per daemon (`src/mcp/lody-mcp-http-host.ts`, supervised
+  by `src/mcp/lody-mcp-http-server.ts`); everything else keeps the per-session
+  stdio entry. INVARIANT: MCP tools must not run inside the daemon process —
+  they do synchronous SQLite work (`orchestration/operation-store.ts` restricts
+  that to subprocess boundaries) and one-shot workspace-manager work that would
+  stall the daemon event loop. The supervisor keeps token+port stable across
+  host restarts because sessions bake the endpoint into their MCP config at
+  creation; while the host is down, new sessions silently fall back to stdio.
+  HTTP security: loopback bind + bearer token, and on Linux the peer socket's
+  uid is proven via `/proc/net/tcp{,6}` (full four-tuple + ESTABLISHED) and an
+  unprovable peer is REJECTED — the token leaks through the agent runtime's
+  `/proc` cmdline there, so fail-open would void it. The host refuses to start
+  when `/proc/net/tcp` is unreadable. `LODY_MCP_HTTP_DISABLED=1` forces stdio.
+  The stdio config remains an explicit environment allowlist, not ordinary
+  child-process inheritance. Keep the public CLI deployment endpoints
+  (`LODY_AUTH_URL`, `LODY_AUTH_SITE_URL`, `LODY_SERVER_URL`) in the stdio config so
   cloud MCP session orchestration uses the same deployment as the daemon; local
   platform assembly clears those values before agent startup, so a local child
-  cannot inherit Lody cloud endpoints. Never add
-  CLI credentials or other secrets; the MCP subprocess loads the daemon owner's
-  local credential through the existing CLI auth path.
+  cannot inherit Lody cloud endpoints (the HTTP host inherits the daemon's own
+  environment directly). Never add CLI credentials or other secrets to the
+  stdio config; MCP processes load the daemon owner's local credential through
+  the existing CLI auth path.
   Builtin DeepSeek Harness mounts this stdio server per ACP session through the
   extension's native `dsh-mcp-client` bridge. Keep passing the same config on
   initial and replacement sessions; the bridge owns namespace collision handling

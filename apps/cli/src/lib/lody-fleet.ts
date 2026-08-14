@@ -29,6 +29,7 @@ import {
   startLocalIpcSocketServers,
   stopLocalIpcSocketServers,
 } from '@/lib/local-ipc-socket-server';
+import { startLodyMcpHttpServer, stopLodyMcpHttpServer } from '@/mcp/lody-mcp-http-server';
 import type { LocalProbeConfig } from '@/lib/local-probe';
 import type { LocalSessionControlConfig } from '@/lib/local-session-control';
 import { startLocalTerminalServer, stopLocalTerminalServer } from '@/lib/local-terminal-server';
@@ -297,6 +298,10 @@ export class LodyFleet {
           getWorkspaceServer: (workspaceId) => this.getWorkspaceLoroDataPlaneServer(workspaceId),
         });
       }),
+      traceAsync(this.logger, 'startup.mcp_http', undefined, async () => {
+        // Never fatal: on failure agents keep the per-session stdio MCP entry.
+        await startLodyMcpHttpServer({ logger: this.logger });
+      }),
     ]);
 
     // Start the PR poller BEFORE any workspace runtime can connect: the
@@ -538,6 +543,7 @@ export class LodyFleet {
       stopLocalIpcSocketServers(),
       stopLocalTerminalServer(),
       stopLocalLoroDataPlaneServer(),
+      stopLodyMcpHttpServer(),
     ]);
 
     for (const timer of this.retryTimers.values()) {

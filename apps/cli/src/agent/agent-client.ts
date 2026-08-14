@@ -28,6 +28,8 @@ import {
   getServerNow,
 } from '@lody/shared';
 import { getLocalControlSocketPath } from '@lody/shared/node/local-ipc';
+import { getLodyMcpHttpEndpoint } from '@/mcp/lody-mcp-http-server';
+import { buildLodyMcpHttpHeaders } from '@/mcp/lody-mcp-http-protocol';
 import { TerminalManager } from '@/session/terminal-manager';
 import { reportError } from 'src/utils/telemetry';
 import { formatErrorMessage } from '@/utils/format-error';
@@ -577,6 +579,7 @@ export class AgentClient implements acp.Client {
   private acpSessionId: string | null = null;
   private supportsResume = false;
   private supportsLoadSession = false;
+  private supportsHttpMcp = false;
   private supportsClose = false;
   private supportsFork = false;
   private supportsForkAtTurn = false;
@@ -616,10 +619,35 @@ export class AgentClient implements acp.Client {
     )}`;
   }
 
-  private buildMcpServers(workdir: string) {
+  private buildMcpServers(workdir: string): acp.McpServer[] {
     if (!this.options.workspaceId || !this.options.machineId) {
       return [];
     }
+
+    // Agents that advertise `mcpCapabilities.http` use the shared MCP HTTP
+    // host (one subprocess per daemon): same tool surface, instead of a full
+    // per-session CLI Node subprocess that only proxies back to the daemon.
+    // Anything else (and a daemon whose host is down or gave up) keeps the
+    // stdio entry below.
+    if (this.supportsHttpMcp) {
+      const endpoint = getLodyMcpHttpEndpoint();
+      if (endpoint) {
+        return [
+          {
+            type: 'http',
+            name: 'lody',
+            url: endpoint.url,
+            headers: buildLodyMcpHttpHeaders(endpoint, {
+              sessionId: this.options.sessionId,
+              workspaceId: this.options.workspaceId,
+              machineId: this.options.machineId,
+              workdir,
+            }),
+          },
+        ];
+      }
+    }
+
     const cliEntrypoint = process.argv[1];
     if (!cliEntrypoint) {
       return [];
@@ -1494,6 +1522,7 @@ export class AgentClient implements acp.Client {
 
     const resumeCapability = initResponse.agentCapabilities?.sessionCapabilities?.resume;
     this.supportsResume = !!resumeCapability;
+    this.supportsHttpMcp = initResponse.agentCapabilities?.mcpCapabilities?.http === true;
     captureAcpProtocolInitCompleted({
       ...startupAnalyticsProps,
       initDurationMs,

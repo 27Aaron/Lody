@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -834,15 +835,33 @@ const readRequiredEnv = (...names: string[]): string => {
   return value;
 };
 
-const getSessionContext = () => ({
-  machineId: readRequiredEnv('LODY_MCP_MACHINE_ID', 'LODY_PREVIEW_MCP_MACHINE_ID'),
-  workspaceId: readRequiredEnv('LODY_MCP_WORKSPACE_ID', 'LODY_PREVIEW_MCP_WORKSPACE_ID'),
-  sessionId: SessionIdSchema.parse(
-    readRequiredEnv('LODY_MCP_SESSION_ID', 'LODY_PREVIEW_MCP_SESSION_ID')
-  ),
-  localControlSocketPath: readOptionalEnv('LODY_MCP_SOCKET_PATH', 'LODY_PREVIEW_MCP_SOCKET_PATH'),
-  workdir: readOptionalEnv('LODY_MCP_WORKDIR', 'LODY_PREVIEW_MCP_WORKDIR') ?? process.cwd(),
-});
+export interface McpSessionContext {
+  machineId: string;
+  workspaceId: string;
+  sessionId: SessionId;
+  localControlSocketPath: string | undefined;
+  workdir: string;
+}
+
+// The stdio entrypoint is a dedicated per-session process, so its context can
+// live in environment variables. The daemon-hosted HTTP transport serves many
+// sessions from one process, so each request runs inside this storage instead;
+// the env read below is the stdio fallback only.
+const mcpSessionContextStorage = new AsyncLocalStorage<McpSessionContext>();
+
+export const runWithMcpSessionContext = <T>(context: McpSessionContext, fn: () => T): T =>
+  mcpSessionContextStorage.run(context, fn);
+
+const getSessionContext = (): McpSessionContext =>
+  mcpSessionContextStorage.getStore() ?? {
+    machineId: readRequiredEnv('LODY_MCP_MACHINE_ID', 'LODY_PREVIEW_MCP_MACHINE_ID'),
+    workspaceId: readRequiredEnv('LODY_MCP_WORKSPACE_ID', 'LODY_PREVIEW_MCP_WORKSPACE_ID'),
+    sessionId: SessionIdSchema.parse(
+      readRequiredEnv('LODY_MCP_SESSION_ID', 'LODY_PREVIEW_MCP_SESSION_ID')
+    ),
+    localControlSocketPath: readOptionalEnv('LODY_MCP_SOCKET_PATH', 'LODY_PREVIEW_MCP_SOCKET_PATH'),
+    workdir: readOptionalEnv('LODY_MCP_WORKDIR', 'LODY_PREVIEW_MCP_WORKDIR') ?? process.cwd(),
+  };
 
 // One connection for the whole MCP server process, opened without the
 // maintenance writes (the daemon-side coordinator owns those). Per-call
@@ -1541,7 +1560,7 @@ const buildSessionList = async (input: SessionListToolInput): Promise<unknown> =
       execution: SessionExecutionSnapshot;
     }> = [];
     const readChunkSize = MAX_MCP_STATUS_BATCH_SIZE;
-    for (let offset = 0; offset < candidates.length && matches.length <= limit;) {
+    for (let offset = 0; offset < candidates.length && matches.length <= limit; ) {
       const chunk = candidates.slice(offset, offset + readChunkSize);
       offset += chunk.length;
       const liveStatuses = await readSessionLiveStatusesMany({
@@ -3493,7 +3512,7 @@ export const __lodyMcpServerInternals = {
   SESSION_CONTROL_TIMEOUT_MS,
 };
 
-export async function runLodyMcpServer(): Promise<void> {
+export function buildLodyMcpServer(): McpServer {
   const server = new McpServer({
     name: 'lody',
     version: '0.1.0',
@@ -4481,5 +4500,9 @@ export async function runLodyMcpServer(): Promise<void> {
     }
   );
 
-  await server.connect(new StdioServerTransport());
+  return server;
+}
+
+export async function runLodyMcpServer(): Promise<void> {
+  await buildLodyMcpServer().connect(new StdioServerTransport());
 }
