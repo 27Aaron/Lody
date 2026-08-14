@@ -1220,27 +1220,11 @@ export const SessionChatStreamView = forwardRef<
       return undefined;
     }, [virtualRows]);
 
-    // Compute a lightweight signal that changes when the last message's content
-    // grows during streaming. Without this, contentChangeKey only reflects
-    // items.length (which stays the same during streaming) and the auto-scroll
-    // useEffect never fires — leaving scroll-to-bottom entirely dependent on
-    // the ResizeObserver, which can miss updates with virtual list internals.
-    const contentSignal = useMemo(() => {
-      const lastItem = items[items.length - 1];
-      if (lastItem?.type !== 'message') return 0;
-      return lastItem.message.items.reduce((n, item) => {
-        if (item.type === 'text' || item.type === 'thought') return n + item.text.length;
-        if (item.type === 'tool_call') return n + (item.content?.length ?? 0);
-        return n + 1;
-      }, 0);
-    }, [items]);
-
     const { isSticky, scrollToBottom, handleScroll } = useStickyScroll({
       sessionId,
       vlistRef,
       scrollRootRef,
       itemCount: virtualRows.length + (shouldShowAgentActivity ? 1 : 0),
-      contentChangeKey: `${virtualRows.length}-${shouldShowAgentActivity}-${contentSignal}-${conversationFontSize}`,
       scrollContainerClass: 'chat-scrollbar',
       onAtBottomChange,
       suppressAutoScrollRef: autoScrollSuppressedRef,

@@ -5,11 +5,6 @@ const SCROLL_EPSILON = 1;
 
 export type ScrollElementLike = Pick<HTMLElement, 'clientHeight' | 'scrollHeight' | 'scrollTop'>;
 
-export interface StickyScrollMetrics {
-  scrollOffset: number;
-  distanceFromBottom: number;
-}
-
 /**
  * Get the underlying scroll DOM element from a VList handle.
  *
@@ -53,23 +48,6 @@ export function getScrollBottomPaddingOffset(scrollElement: HTMLElement | null):
   }
   const paddingBottom = Number.parseFloat(getComputedStyle(scrollElement).paddingBottom);
   return Number.isFinite(paddingBottom) ? Math.max(0, paddingBottom) : 0;
-}
-
-export function getStickyScrollMetrics(options: {
-  scrollElement: ScrollElementLike | null;
-  vlist: Pick<VListHandle, 'scrollSize' | 'viewportSize'>;
-  fallbackOffset: number;
-}): StickyScrollMetrics {
-  const { scrollElement, vlist, fallbackOffset } = options;
-  const scrollOffset = scrollElement?.scrollTop ?? fallbackOffset;
-  const distanceFromBottom = scrollElement
-    ? getScrollElementDistanceFromBottom(scrollElement)
-    : Math.max(0, vlist.scrollSize - scrollOffset - vlist.viewportSize);
-
-  return {
-    scrollOffset,
-    distanceFromBottom,
-  };
 }
 
 export function scrollViewportToRealBottom(options: {

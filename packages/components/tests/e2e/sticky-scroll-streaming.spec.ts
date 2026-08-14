@@ -49,9 +49,9 @@ async function injectResizeObserverDelay(page: import('@playwright/test').Page, 
  * Verifies that the scroll container stays stuck to the bottom while the
  * StreamingSimulation story appends chunks to the last assistant message.
  *
- * Without the contentSignal fix, a 50ms ResizeObserver delay causes the scroll
- * to drift from the bottom. With the fix, the React-driven auto-scroll fires
- * on every content change, keeping the view pinned.
+ * The sticky-scroll controller follows the virtual content element's measured
+ * growth. Delaying ResizeObserver exercises the same asynchronous measurement
+ * gap that occurs when Virtua is busy remeasuring a long row.
  */
 test('scroll stays at bottom during streaming (with simulated RO delay)', async ({ browser }) => {
   const context = await browser.newContext({ viewport: { width: 1024, height: 600 } });
@@ -182,40 +182,49 @@ test('scroll stays at bottom during streaming (no delay)', async ({ page }) => {
  * Verifies that the user can unstick by scrolling up with the mouse wheel,
  * and that the "scroll to latest" button appears and re-sticks when clicked.
  */
-test('scroll-to-latest button re-sticks after user scrolls up', async ({ page }) => {
+test('a small upward wheel escapes streaming follow until the user re-sticks', async ({ page }) => {
   await page.goto(STORY_URL);
 
   const story = page.getByTestId('session-conversation-story');
   await expect(story).toHaveAttribute('data-stream-phase', 'streaming', { timeout: 15_000 });
-  await page.waitForTimeout(2_000);
+  await page.waitForTimeout(1_500);
 
   const scrollContainer = page.locator('.chat-scrollbar');
   const box = await scrollContainer.boundingBox();
   if (!box) throw new Error('scroll container not visible');
 
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-  for (let i = 0; i < 20; i++) {
-    await page.mouse.wheel(0, -200);
-    await page.waitForTimeout(30);
-  }
-
-  await page.waitForTimeout(500);
+  await page.mouse.wheel(0, -80);
 
   const btn = story.locator('button[aria-label*="croll"]');
+  await expect(btn).toBeVisible();
 
-  const buttonVisible = (await btn.count()) > 0 && (await btn.isVisible());
+  const escapedPosition = await scrollContainer.evaluate((el) => ({
+    scrollTop: el.scrollTop,
+    distance: Math.max(0, el.scrollHeight - el.scrollTop - el.clientHeight),
+  }));
+  expect(escapedPosition.distance).toBeGreaterThan(40);
 
-  if (buttonVisible) {
-    await btn.click();
-    await page.waitForTimeout(500);
-    const distanceAfterClick = await scrollContainer.evaluate((el) =>
-      Math.max(0, el.scrollHeight - el.scrollTop - el.clientHeight)
-    );
-    expect(distanceAfterClick).toBeLessThanOrEqual(40);
-  } else {
-    const distance = await scrollContainer.evaluate((el) =>
-      Math.max(0, el.scrollHeight - el.scrollTop - el.clientHeight)
-    );
-    expect(distance).toBeLessThanOrEqual(40);
-  }
+  const escapedAtChunk = Number(await story.getAttribute('data-stream-chunk'));
+  await expect
+    .poll(async () => Number(await story.getAttribute('data-stream-chunk')))
+    .toBeGreaterThan(escapedAtChunk);
+  await page.waitForTimeout(250);
+
+  const positionAfterMoreOutput = await scrollContainer.evaluate((el) => ({
+    scrollTop: el.scrollTop,
+    distance: Math.max(0, el.scrollHeight - el.scrollTop - el.clientHeight),
+  }));
+  expect(
+    Math.abs(positionAfterMoreOutput.scrollTop - escapedPosition.scrollTop)
+  ).toBeLessThanOrEqual(20);
+  expect(positionAfterMoreOutput.distance).toBeGreaterThan(40);
+  await expect(btn).toBeVisible();
+
+  await btn.click();
+  await page.waitForTimeout(500);
+  const distanceAfterClick = await scrollContainer.evaluate((el) =>
+    Math.max(0, el.scrollHeight - el.scrollTop - el.clientHeight)
+  );
+  expect(distanceAfterClick).toBeLessThanOrEqual(40);
 });
