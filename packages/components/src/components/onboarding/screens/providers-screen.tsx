@@ -5,9 +5,10 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { CheckCircle2, ChevronDown, ChevronUp, Loader2, Plus, Trash2, XCircle } from 'lucide-react';
 import {
   REGISTRY_ACP_AGENTS,
-  getManagedBuiltinRuntimeByAgentType,
+  getBuiltinAgentByAgentType,
   type AgentBrandId,
   type BuiltinAgentType,
+  type ManagedBuiltinAgentType,
   type AgentConfigCliType,
   type AgentConfigId,
   type AgentConfigMeta,
@@ -53,7 +54,6 @@ import { REGISTRY_AGENT_ICON_SVGS } from '@/components/icons/registry-agent-icon
 import {
   AgentConfigDialog,
   buildPresetCreateForm,
-  DEEPSEEK_CLAUDE_PRESET_ID,
   GLM_CLAUDE_PRESET_ID,
   MIMO_CLAUDE_PRESET_ID,
   MINIMAX_CLAUDE_PRESET_ID,
@@ -119,7 +119,7 @@ function presetShowcase(presetId: string, label: string, brandId: AgentBrandId):
 
 /**
  * Always-visible brands beneath the Add button — makes it obvious Lody runs far
- * more than the two built-ins. Curated to ~two rows; the DeepSeek preset shows
+ * more than the two built-ins. Curated to ~two rows; DeepSeek Harness shows
  * here, the other presets live under "其他". Each maps to a
  * {@link REGISTRY_ACP_AGENTS} entry or a preset, so the icon and the quick-add
  * prefill share one source of truth.
@@ -135,7 +135,7 @@ const FEATURED_SHOWCASE_AGENTS: ShowcaseAgent[] = [
   registryShowcase('pi-acp', 'Pi'),
   registryShowcase('factory-droid', 'Factory Droid'),
   registryShowcase('github-copilot-cli', 'GitHub Copilot'),
-  presetShowcase(DEEPSEEK_CLAUDE_PRESET_ID, 'DeepSeek', 'deepseek'),
+  builtinShowcase('deepseek', 'DeepSeek'),
 ];
 
 const FEATURED_SHOWCASE_REGISTRY_IDS = new Set(
@@ -483,7 +483,7 @@ interface ProvidersScreenProps {
   onBack: () => void;
   onSkip: () => void;
   onNext: () => void;
-  onManagedRuntimeSelected: (agentType: BuiltinAgentType) => void;
+  onManagedRuntimeSelected: (agentType: ManagedBuiltinAgentType) => void;
 }
 
 export function ProvidersScreen({
@@ -837,8 +837,7 @@ export function ProvidersScreen({
                 cliType: 'builtin',
                 agentType: pick.agentType,
                 name:
-                  getManagedBuiltinRuntimeByAgentType(pick.agentType)?.displayName ??
-                  pick.agentType,
+                  getBuiltinAgentByAgentType(pick.agentType)?.displayName ?? pick.agentType,
               },
             });
             return;

@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { Bot, SquareTerminal } from 'lucide-react';
 import {
   REGISTRY_ACP_AGENTS,
+  getBuiltinAgentByAgentType,
   resolveAgentBrandId,
   type AgentBrandId,
   type AgentConfigCliType,
@@ -24,10 +25,7 @@ export function getAgentDisplayName(
 ): string | null {
   if (!cliType || !agentType) return null;
   if (cliType === 'builtin') {
-    if (agentType === 'kimi') return 'Kimi Code';
-    if (agentType === 'grok') return 'Grok';
-    if (agentType === 'claude') return 'Claude Code';
-    if (agentType === 'codex') return 'Codex';
+    return getBuiltinAgentByAgentType(agentType)?.displayName ?? agentType;
   }
   // Custom agentTypes are per-config uuid slugs; the config's `name` is the
   // real display name, which callers with access to the config should prefer.
@@ -98,6 +96,7 @@ export function AgentIcon({
     }
     if (agentType === 'claude') return <AnthropicIcon className={cls} />;
     if (agentType === 'codex') return <OpenAIIcon className={cls} />;
+    if (agentType === 'deepseek') return <DeepSeekIcon className={cls} />;
     if (agentType === 'grok') {
       const grokRaw = REGISTRY_AGENT_ICON_SVGS['grok-build'];
       if (grokRaw) {

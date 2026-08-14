@@ -162,8 +162,9 @@ embedded` lazy-imported from `../tasks/tasks-workspace.tsx` (`embedded`
   (`[agent icon] model · reasoning · [mode face] · plan/fast`; mode face =
   `permission-mode-face.tsx`, classified by `@lody/shared`
   `classifyPermissionModeFace`), and opens `mobile-run-config-sheet.tsx`
-  (Agent/Model/Interaction/Reasoning/Permission/Plan/Fast rows; Agent/Model/
-  Interaction/Reasoning/Permission use coordinated inline pickers; explicit
+  (Agent/Model/Interaction/Reasoning/Permission/Plan/Fast rows plus
+  provider-defined select rows; Agent/Model/Interaction/Reasoning/Permission and
+  provider-defined selects use coordinated inline pickers; explicit
   permission selectors take precedence over legacy ACP modes; closing the sheet must not restore
   focus to the composer). New-chat scopes agents via `allowedMachineIds` from
   the selected machine and leaves agent unlocked; in-session locks agent once

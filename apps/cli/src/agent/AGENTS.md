@@ -25,6 +25,10 @@ arrive: context/message-flow.md "Upstream".
   cannot inherit Lody cloud endpoints. Never add
   CLI credentials or other secrets; the MCP subprocess loads the daemon owner's
   local credential through the existing CLI auth path.
+  Builtin DeepSeek Harness mounts this stdio server per ACP session through the
+  extension's native `dsh-mcp-client` bridge. Keep passing the same config on
+  initial and replacement sessions; the bridge owns namespace collision handling
+  and releases the MCP child with `session/close` or Agent teardown.
   Acknowledged steer is inject-or-refuse, and `AgentSteerNotDeliveredError` marks
   ONLY the provable refusal: a local pre-write failure, or the agent's own
   JSON-RPC `invalid request` answer. A closed connection, a dead agent process, or
@@ -42,9 +46,27 @@ arrive: context/message-flow.md "Upstream".
   restarts. Do not add another ACP start path that bypasses the gate.
 - `acp-session-start-gate.ts` — process-wide start semaphore used by
   `Session.createAgent`, `startLocalAcpAgent`, and history-catalog ACP spawn.
-- `setting.ts` — launch resolution. Builtin Claude/Codex/Kimi/Grok require
-  `resolveACPProcessLaunchAsync()` because they may install Lody-managed native
-  or Node-package runtimes and then spawn bundled adapter entries.
+- `setting.ts` — launch resolution. Every builtin requires
+  `resolveACPProcessLaunchAsync()`: Claude/Codex/Kimi/Grok may install Lody-managed
+  native or Node-package runtimes, while DeepSeek Harness publishes an immutable
+  Cordis composition before its npx launch.
+- `deepseek-harness-runtime.ts` is the standard Harness-home (`DSH_HOME`, then `~/.dsh`),
+  atomic-config, and npx launch wrapper around the `packages/acp-extension-dsh` submodule. It
+  publishes Lody's versioned ACP composition beside (without replacing) user Harness config and
+  launches the pinned explicit package closure through `dsh-acp-demo`; do not replace it with the
+  all-in-one `@deepseek-ai/dsh` package while that package's unpublished telemetry dependency makes
+  fresh installs fail. CLI production and dev builds copy the extension's pinned official presets
+  beside `deepseek-acp.js`; the generated roster also discovers `$DSH_HOME/.agent-presets`. The
+  adapter must
+  apply model and reasoning selection through the Agent-scoped request waterfall, permissions
+  through Harness permission presets, and `agent_preset` through `AgentPresets.mount/recompose`;
+  do not implement selectors as UI-only state. Presets may change only before the first prompt.
+  ACP stdio/HTTP MCP servers are mounted dynamically per Agent and therefore belong in the
+  extension adapter, not the immutable host composition.
+  Credentials remain in the agent config environment (`DEEPSEEK_API_KEY`, optional
+  `DEEPSEEK_BASE_URL`); never write them into the generated config. This is not a
+  managed runtime and must not enter runtime download, prefetch, override, or
+  interactive-auth flows.
 - `managed-agent-runtime.ts` — pinned Codex/Claude Code/Grok native and Kimi Node-package `.tar.zst`
   artifacts, checksums, resumable downloads, the active installation profile's
   `agent-binaries` layout, and best-effort `bin` symlinks for complete native CLIs.
@@ -99,12 +121,14 @@ arrive: context/message-flow.md "Upstream".
   agent startup. Automatic `_npx`/`_cacache` cleanup is only allowed for that
   Lody-owned cache, never arbitrary user npm caches.
 - `acp-capabilities.ts` / `acp-startup-monitor.ts` / `acp-analytics.ts` — capability
-  cache, startup health, analytics. Default builtin Codex/Claude/Kimi/Grok capabilities
+  cache, startup health, analytics. Default managed builtin Codex/Claude/Kimi/Grok capabilities
   come from `getStaticBuiltinAcpCapabilities()` in `@lody/shared` only for
   `cliType: 'builtin'` without runtime overrides, so onboarding/settings/chat can
   render mode/model/config options without spawning adapters or downloading
-  managed runtimes. Registry/custom agents and builtin runtime overrides still
-  need the actual ACP agent. `machine/acp-capabilities-refresh` is always a real
+  managed runtimes. DeepSeek's static entry mirrors the bundled adapter's model,
+  reasoning-effort, and permission selectors. Registry/custom agents and builtin
+  runtime overrides still need the actual ACP agent.
+  `machine/acp-capabilities-refresh` is always a real
   runtime probe: it disables static builtin capabilities, goes through
   `ensureRuntime()` for managed runtimes, then writes the machine capability
   cache keyed by `agentConfigId`. Its cancellation signal crosses native auth status,

@@ -268,6 +268,13 @@ export function TaskAgentRunConfigMenu({
   );
 
   const modelConfigSelector = ordered.modelSelectors[0] as AcpSelectConfigOptionSelector | undefined;
+  const extraSelectSelectors = useMemo(
+    () =>
+      ordered.otherSelectors.filter(
+        (selector): selector is AcpSelectConfigOptionSelector => selector.type === 'select'
+      ),
+    [ordered.otherSelectors]
+  );
   const modelPickerOptions = useMemo(
     () => (modelOptions.length > 0 ? modelOptions : (modelConfigSelector?.options ?? [])),
     [modelConfigSelector, modelOptions]
@@ -618,6 +625,37 @@ export function TaskAgentRunConfigMenu({
             ) : null}
           </DropdownMenuSubContent>
         </DropdownMenuSub>
+
+        {extraSelectSelectors.map((selector) => {
+          const selectedValue =
+            (resolveConfigOptionValue(
+              selector,
+              value?.configOptionValues?.[selector.configId]
+            ) as string) ?? null;
+          const selectedLabel =
+            selector.options.find((option) => option.value === selectedValue)?.label ??
+            selectedValue;
+          return (
+            <DropdownMenuSub key={selector.configId}>
+              <ValueSubTrigger label={selector.label} value={selectedLabel} />
+              <DropdownMenuSubContent
+                className={tasksMenuClassName('max-w-80')}
+                style={tasksMenuSurfaceStyle}
+              >
+                {selector.options.map((option) => (
+                  <OptionItem
+                    key={option.value}
+                    label={option.label}
+                    description={option.description}
+                    selected={option.value === selectedValue}
+                    disabled={option.disabled || !value?.agentConfigId}
+                    onSelect={() => patchConfigOption(selector.configId, option.value)}
+                  />
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          );
+        })}
 
         {modelPickerOptions.length > 0 ? (
           <DropdownMenuSub>

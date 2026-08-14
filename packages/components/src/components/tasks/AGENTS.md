@@ -62,6 +62,8 @@ starts now and a Task for work recorded for later.
   `ProjectRef` conversion in `task-project-key.ts`; do not fork project search or
   ranking for Tasks.
 - Unknown owners render a neutral user icon, never a raw user id.
+- Task Agent run configuration must render provider-defined ACP select options in
+  addition to the known model/reasoning/permission buckets.
 - Task surface tokens may customize the light theme only. Dark mode aliases global
   popover/border/hover tokens so themes such as Vesper stay intact.
 

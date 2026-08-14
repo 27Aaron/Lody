@@ -8,7 +8,7 @@
  * instead, so the provider's login flow can neither be started usefully nor
  * change anything about that config.
  */
-import { isBuiltinAgentType, type AgentConfigCliType } from './ai';
+import { isManagedBuiltinAgentType, type AgentConfigCliType } from './ai';
 import { isAgentBrandId, type AgentBrandId } from './agent-brand';
 
 /**
@@ -58,7 +58,7 @@ export const supportsBuiltinAuthentication = (input: {
 }): boolean => {
   if (input.cliType !== 'builtin') return false;
   const agentType = input.agentType;
-  if (!agentType || !isBuiltinAgentType(agentType)) return false;
+  if (!agentType || !isManagedBuiltinAgentType(agentType)) return false;
   if (hasBuiltinEnvAuthentication(agentType, input.env)) return false;
   // A persisted brand marks a preset routed through a third-party provider even
   // when its env vars have since been edited away. Only the persisted marker is

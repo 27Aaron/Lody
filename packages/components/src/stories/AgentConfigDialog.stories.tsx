@@ -167,6 +167,30 @@ function DeepSeekPresetWrapper() {
   );
 }
 
+function DeepSeekHarnessWrapper() {
+  const [open, setOpen] = useState(true);
+  return (
+    <AgentConfigDialog
+      open={open}
+      onOpenChange={setOpen}
+      mode={{
+        kind: 'create',
+        initialForm: {
+          name: 'DeepSeek Harness',
+          cliType: 'builtin',
+          agentType: 'deepseek',
+          env: {
+            DEEPSEEK_API_KEY: 'sk-storybook-demo-token',
+          },
+        },
+      }}
+      machine={makeMachineWithClaudeCaps()}
+      onSubmit={async () => {}}
+      onRefreshCapabilities={refreshCapabilities}
+    />
+  );
+}
+
 function MiMoPresetWrapper() {
   const [open, setOpen] = useState(true);
   return (
@@ -282,6 +306,10 @@ export const EditEnvCredentialProvider: Story = {
 
 export const DeepSeekPreset: Story = {
   render: () => <DeepSeekPresetWrapper />,
+};
+
+export const DeepSeekHarness: Story = {
+  render: () => <DeepSeekHarnessWrapper />,
 };
 
 export const MiMoPreset: Story = {

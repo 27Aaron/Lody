@@ -34,6 +34,9 @@ Root `AGENTS.md` also applies.
 - Run desktop development from the repository root with `pnpm start:local`. It must
   rebuild the embedded CLI and local renderer before launching the bundled CLI; do
   not reuse production/cloud artifacts.
+- Cloud desktop development must likewise build and sync the CLI before
+  `electron-vite dev`; the direct `apps/cli/dist` lookup is only a missing-staging
+  fallback and must not let an older `resources/cli` shadow a fresh build.
 - `local-platform:get-snapshot` atomically supplies the persistent `local:*` user and
   the single `lw_*` workspace from the CLI catalog. Do not split this into independent
   fallbacks. A missing catalog means provisioning; malformed identities or multiple
@@ -82,8 +85,9 @@ Root `AGENTS.md` also applies.
   `ELECTRON_RUN_AS_NODE` when it exists. On packaged macOS, omitting it launches a
   second GUI app instead of Node.
 - Electron Builder ignores nested staged `node_modules`. `eb-after-pack.mjs` must copy
-  them into `app.asar.unpacked`, then probe CLI `--help`, node-pty loading, and a real
-  in-memory SQLite database before signing.
+  them into `app.asar.unpacked`, assert the DeepSeek adapter plus all four pinned
+  presets, then probe CLI `--help`, node-pty loading, and a real in-memory SQLite
+  database before signing.
 - Keep `better-sqlite3 >= 13.0.2`, CLI `engines.node >= 22.14.0`, the first-import
   guard in `sqlite-runtime-support.ts`, and its tests aligned. Older Node versions can
   segfault while loading the N-API 10 binding. Linux armv7 is unsupported.

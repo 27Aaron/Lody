@@ -17,7 +17,7 @@ import {
   CliType,
   getManagedBuiltinRuntimeByAgentType,
   getManagedBuiltinRuntimeByRuntimeName,
-  isBuiltinAgentType,
+  isManagedBuiltinAgentType,
   RepoId,
   SessionContextWindowUsage,
   WorkspaceId,
@@ -1200,7 +1200,7 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
       },
       onRateLimitUpdate: (limits: UsageData) => {
         dispatchEvent(() => {
-          if (config.agentCliType === 'builtin' && isBuiltinAgentType(config.agentType)) {
+          if (config.agentCliType === 'builtin' && isManagedBuiltinAgentType(config.agentType)) {
             this.emit('onRateLimitUpdate', this.machineId, config.agentType, limits);
           }
         });

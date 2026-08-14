@@ -10,6 +10,12 @@ import type { PermissionOutcome } from './message';
 import type { AgentConfigId, SessionId } from './ids';
 import type { MinimalVisualAnnotationAnchor } from './visual-annotation-types';
 import type { WorktreeScriptPhase } from './project';
+import {
+  DEEPSEEK_HARNESS_AGENT_PRESETS,
+  DEEPSEEK_HARNESS_MODELS,
+  DEEPSEEK_HARNESS_PERMISSION_MODES,
+  DEEPSEEK_HARNESS_REASONING_OPTIONS,
+} from './deepseek-harness';
 
 export const MANAGED_BUILTIN_RUNTIMES = [
   { runtimeName: 'kimi-code', agentType: 'kimi', displayName: 'Kimi Code' },
@@ -20,9 +26,18 @@ export const MANAGED_BUILTIN_RUNTIMES = [
 
 export type ManagedBuiltinRuntime = (typeof MANAGED_BUILTIN_RUNTIMES)[number];
 export type ManagedBuiltinRuntimeName = ManagedBuiltinRuntime['runtimeName'];
-export type BuiltinCliType = ManagedBuiltinRuntime['agentType'];
+export type ManagedBuiltinAgentType = ManagedBuiltinRuntime['agentType'];
+/** Legacy installed-CLI detection only covers Lody-managed builtin runtimes. */
+export type BuiltinCliType = ManagedBuiltinAgentType;
 export type CliType = BuiltinCliType;
-export type BuiltinAgentType = BuiltinCliType;
+
+export const BUILTIN_AGENTS = [
+  ...MANAGED_BUILTIN_RUNTIMES.map(({ agentType, displayName }) => ({ agentType, displayName })),
+  { agentType: 'deepseek', displayName: 'DeepSeek Harness' },
+] as const;
+
+export type BuiltinAgent = (typeof BUILTIN_AGENTS)[number];
+export type BuiltinAgentType = BuiltinAgent['agentType'];
 export type AgentConfigCliType = 'builtin' | 'registry' | 'custom';
 export type AgentType = string;
 
@@ -347,6 +362,14 @@ export const getAcpCapabilityCacheStaleReason = (
 };
 
 export const isBuiltinAgentType = (agentType: string): agentType is BuiltinAgentType =>
+  BUILTIN_AGENTS.some((agent) => agent.agentType === agentType);
+
+export const getBuiltinAgentByAgentType = (agentType: string): BuiltinAgent | undefined =>
+  BUILTIN_AGENTS.find((agent) => agent.agentType === agentType);
+
+export const isManagedBuiltinAgentType = (
+  agentType: string
+): agentType is ManagedBuiltinAgentType =>
   MANAGED_BUILTIN_RUNTIMES.some((runtime) => runtime.agentType === agentType);
 
 export const getManagedBuiltinRuntimeByAgentType = (
@@ -373,12 +396,13 @@ const BUILTIN_DEFAULT_MODE_IDS: Record<BuiltinAgentType, string> = {
   grok: 'agent',
   claude: 'auto',
   codex: CODEX_AUTO_REVIEW_MODE_ID,
+  deepseek: 'workspace-write',
 };
 
 /**
- * Lody-owned mode default for builtin agents when a turn has no persisted
- * selection. Capability-aware callers should use it only when the adapter
- * offers the returned mode.
+ * Lody-owned mode default for builtin agents when a turn has no
+ * persisted selection. Capability-aware callers should use it only when the
+ * adapter offers the returned mode.
  */
 export const getBuiltinDefaultModeId = (
   cliType: AgentConfigCliType | null | undefined,
@@ -387,6 +411,53 @@ export const getBuiltinDefaultModeId = (
   cliType === 'builtin' && agentType && isBuiltinAgentType(agentType)
     ? BUILTIN_DEFAULT_MODE_IDS[agentType]
     : undefined;
+
+const DEEPSEEK_HARNESS_CONFIG_OPTIONS: AcpConfigOptionSummary[] = [
+  {
+    id: 'mode',
+    name: 'Permission',
+    description: 'Sandbox and approval policy for the session',
+    category: 'mode',
+    type: 'select',
+    currentValue: BUILTIN_DEFAULT_MODE_IDS.deepseek,
+    options: DEEPSEEK_HARNESS_PERMISSION_MODES.map((mode) => ({
+      value: mode.id,
+      name: mode.name,
+      description: mode.description,
+    })),
+  },
+  {
+    id: 'agent_preset',
+    name: 'Agent preset',
+    description: 'Tools, prompt, and capabilities composed for the session',
+    category: 'agent_preset',
+    type: 'select',
+    currentValue: 'standard',
+    options: DEEPSEEK_HARNESS_AGENT_PRESETS.map((preset) => ({ ...preset })),
+  },
+  {
+    id: 'model',
+    name: 'Model',
+    description: 'DeepSeek model used for the session',
+    category: 'model',
+    type: 'select',
+    currentValue: 'deepseek-v4-pro',
+    options: DEEPSEEK_HARNESS_MODELS.map((model) => ({
+      value: model.modelId,
+      name: model.name,
+      description: model.description,
+    })),
+  },
+  {
+    id: 'reasoning_effort',
+    name: 'Reasoning effort',
+    description: 'How much reasoning effort the model should use',
+    category: 'thought_level',
+    type: 'select',
+    currentValue: 'max',
+    options: DEEPSEEK_HARNESS_REASONING_OPTIONS.map((option) => ({ ...option })),
+  },
+];
 
 const CODEX_STATIC_MODES: StaticBuiltinAcpCapabilities['modes'] = [
   {
@@ -587,6 +658,7 @@ export function classifyPermissionModeFace(modeId: string | null | undefined): P
     case 'agent-auto-review':
       return { kind: 'auto', tone: 'neutral', render: 'auto-label' };
     case 'agent-full-access':
+    case 'danger-full-access':
       return { kind: 'full-access', tone: 'warning', render: 'icon' };
     // Claude (CLAUDE_STATIC_MODES)
     case 'auto':
@@ -822,6 +894,11 @@ const STATIC_BUILTIN_ACP_CAPABILITIES: Record<BuiltinAgentType, StaticBuiltinAcp
     modes: GROK_STATIC_MODES,
     models: GROK_STATIC_MODELS,
     configOptions: GROK_STATIC_CONFIG_OPTIONS,
+  },
+  deepseek: {
+    modes: DEEPSEEK_HARNESS_PERMISSION_MODES.map((mode) => ({ ...mode })),
+    models: DEEPSEEK_HARNESS_MODELS.map((model) => ({ ...model })),
+    configOptions: DEEPSEEK_HARNESS_CONFIG_OPTIONS,
   },
 };
 

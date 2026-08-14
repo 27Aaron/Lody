@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useAtomValue } from 'jotai';
-import type { BuiltinAgentType } from '@lody/shared';
+import type { ManagedBuiltinAgentType } from '@lody/shared';
 import { activeWorkspaceRuntimeAtom } from '@/atoms/runtime';
 import { currentWorkspaceIdAtom } from '@/atoms/workspace-context';
 import { localCliStartingAtom, localMachineIdAtom } from '@/atoms/local-probe';
@@ -10,9 +10,11 @@ const BUILTIN_BACKGROUND_PREFETCH_AGENT_TYPES = [
   'kimi',
   'codex',
   'claude',
-] as const satisfies readonly BuiltinAgentType[];
+] as const satisfies readonly ManagedBuiltinAgentType[];
 
-function resolvePrefetchOrder(preferredAgentType: BuiltinAgentType | null): BuiltinAgentType[] {
+function resolvePrefetchOrder(
+  preferredAgentType: ManagedBuiltinAgentType | null
+): ManagedBuiltinAgentType[] {
   if (preferredAgentType === null) return [...BUILTIN_BACKGROUND_PREFETCH_AGENT_TYPES];
   return [
     preferredAgentType,
@@ -22,13 +24,13 @@ function resolvePrefetchOrder(preferredAgentType: BuiltinAgentType | null): Buil
   ];
 }
 
-type PrefetchTask = (agentType: BuiltinAgentType) => Promise<void>;
-type PrefetchErrorHandler = (agentType: BuiltinAgentType, error: unknown) => void;
+type PrefetchTask = (agentType: ManagedBuiltinAgentType) => Promise<void>;
+type PrefetchErrorHandler = (agentType: ManagedBuiltinAgentType, error: unknown) => void;
 
 type PrefetchScopeState = {
-  readonly completed: Set<BuiltinAgentType>;
-  pending: BuiltinAgentType[];
-  running: BuiltinAgentType | null;
+  readonly completed: Set<ManagedBuiltinAgentType>;
+  pending: ManagedBuiltinAgentType[];
+  running: ManagedBuiltinAgentType | null;
   owner: symbol | null;
   task: PrefetchTask | null;
   onError: PrefetchErrorHandler | null;
@@ -39,12 +41,12 @@ class OnboardingBuiltinRuntimePrefetchScheduler {
 
   schedule(
     scopeKey: string,
-    order: readonly BuiltinAgentType[],
+    order: readonly ManagedBuiltinAgentType[],
     task: PrefetchTask,
     onError?: PrefetchErrorHandler
   ): { dispose: () => void } {
     const state = this.scopes.get(scopeKey) ?? {
-      completed: new Set<BuiltinAgentType>(),
+      completed: new Set<ManagedBuiltinAgentType>(),
       pending: [],
       running: null,
       owner: null,
@@ -115,7 +117,9 @@ export const __onboardingBuiltinRuntimePrefetchForTests = {
  * serial across effect restarts. Selecting a provider reorders work that has
  * not started; the current download is allowed to finish first.
  */
-export function useOnboardingBuiltinRuntimePrefetch(preferredAgentType: BuiltinAgentType | null) {
+export function useOnboardingBuiltinRuntimePrefetch(
+  preferredAgentType: ManagedBuiltinAgentType | null
+) {
   const runtime = useAtomValue(activeWorkspaceRuntimeAtom);
   const workspaceId = useAtomValue(currentWorkspaceIdAtom);
   const localMachineId = useAtomValue(localMachineIdAtom);

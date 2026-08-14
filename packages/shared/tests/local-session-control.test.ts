@@ -35,6 +35,25 @@ describe('local session control node validators', () => {
     expect(isLocalSessionControlRequestCjs(request)).toBe(true);
   });
 
+  it('accepts builtin DeepSeek Harness sessions in TS and CJS validators', () => {
+    const request = {
+      type: 'session/create',
+      sessionId: 'session-deepseek',
+      machineId: 'machine-1',
+      workspaceId: 'workspace-1',
+      acpSessionConfig: {
+        cliType: 'builtin',
+        agentType: 'deepseek',
+        prompt: 'hello',
+      },
+      userId: 'user-1',
+      userName: 'Test User',
+      userEmail: 'test@example.com',
+    };
+    expect(isLocalSessionControlRequest(request)).toBe(true);
+    expect(isLocalSessionControlRequestCjs(request)).toBe(true);
+  });
+
   it('keeps ACP authentication messages in sync across TS and CJS validators', () => {
     const request = {
       type: 'machine/acp-authenticate',

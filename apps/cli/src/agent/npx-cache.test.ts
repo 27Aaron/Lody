@@ -168,6 +168,22 @@ describe('parseNpxPackageSpecFromArgs', () => {
     });
     expect(parseNpxPackageSpecFromArgs(['--prefer-online', 'pkg@1.0.0'])).toBeUndefined();
   });
+
+  it('reads the first package selector from a composed npx launch', () => {
+    expect(
+      parseNpxPackageSpecFromArgs([
+        '--prefer-offline',
+        '-y',
+        '--package',
+        '@deepseek-ai/dsh-acp-demo@0.1.0-rc.6',
+        '--package=@deepseek-ai/dsh-llm-deepseek@0.1.0-rc.6',
+        'dsh-acp-demo',
+      ])
+    ).toEqual({
+      name: '@deepseek-ai/dsh-acp-demo',
+      version: '0.1.0-rc.6',
+    });
+  });
 });
 
 describe('isLikelyBrokenNpxInstall', () => {

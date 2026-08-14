@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { BuiltinAgentType } from '@lody/shared';
+import type { ManagedBuiltinAgentType } from '@lody/shared';
 
 import { __onboardingBuiltinRuntimePrefetchForTests as prefetch } from '../src/components/onboarding/use-onboarding-builtin-runtime-prefetch';
 
@@ -25,8 +25,8 @@ describe('onboarding builtin runtime prefetch scheduling', () => {
     const kimiStarted = createDeferred();
     const kimiFinished = createDeferred();
     const codexStarted = createDeferred();
-    const starts: BuiltinAgentType[] = [];
-    const runTask = async (agentType: BuiltinAgentType): Promise<void> => {
+    const starts: ManagedBuiltinAgentType[] = [];
+    const runTask = async (agentType: ManagedBuiltinAgentType): Promise<void> => {
       starts.push(agentType);
       if (agentType === 'kimi') {
         kimiStarted.resolve();

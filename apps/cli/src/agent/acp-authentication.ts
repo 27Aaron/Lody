@@ -11,7 +11,7 @@ import type {
 import {
   getManagedBuiltinRuntimeByAgentType,
   hasBuiltinEnvAuthentication,
-  isBuiltinAgentType,
+  isManagedBuiltinAgentType,
 } from '@lody/shared';
 
 import { withoutElectronBootstrapCredentials } from '@/electron-bootstrap-env';
@@ -175,7 +175,7 @@ export async function probeBuiltinAuthentication(
   options: ProbeBuiltinAuthenticationOptions
 ): Promise<BuiltinAuthenticationProbeResult> {
   options.signal?.throwIfAborted();
-  if (options.cliType !== 'builtin' || !isBuiltinAgentType(options.agentType)) {
+  if (options.cliType !== 'builtin' || !isManagedBuiltinAgentType(options.agentType)) {
     return { status: 'unknown' };
   }
   if (
@@ -315,7 +315,7 @@ export class AcpAuthenticationManager {
     env?: Record<string, string>;
     onProgress?: (event: AcpAuthenticationProgressEvent) => void;
   }): Promise<AcpAuthenticationResult> {
-    if (options.cliType !== 'builtin' || !isBuiltinAgentType(options.agentType)) {
+    if (options.cliType !== 'builtin' || !isManagedBuiltinAgentType(options.agentType)) {
       return {
         success: false,
         disposition: 'error',

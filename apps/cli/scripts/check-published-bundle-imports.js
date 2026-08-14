@@ -93,6 +93,7 @@ if (violations.length > 0) {
 }
 
 checkPublishedRuntimeDependencies();
+runDeepSeekAdapterBundleSmoke();
 runGrokAdapterBundleSmoke();
 runPublishedRuntimeSmoke();
 runWorkspaceWatchWorkerSmoke();
@@ -266,6 +267,43 @@ function checkExactPublishedRuntimeDependencies(publishedDependencyBlocks) {
     '\nUse exact versions so the published CLI resolves the same dependency build that was tested.'
   );
   process.exit(1);
+}
+
+function runDeepSeekAdapterBundleSmoke() {
+  const adapterPath = path.join(distDir, 'deepseek-acp.js');
+  if (!fs.existsSync(adapterPath)) {
+    console.error(`Published CLI DeepSeek adapter is missing: ${adapterPath}`);
+    process.exit(1);
+  }
+
+  for (const presetId of ['standard', 'code', 'minimal', 'cordis']) {
+    const presetPath = path.join(distDir, 'deepseek-agent-presets', presetId, 'agent.cordis.yml');
+    if (!fs.existsSync(presetPath)) {
+      console.error(`Published CLI DeepSeek preset is missing: ${presetPath}`);
+      process.exit(1);
+    }
+  }
+
+  const smokeScript = `
+const adapter = await import(${JSON.stringify(pathToFileURL(adapterPath).href)});
+if (adapter.name !== 'acp-extension-dsh') process.exit(2);
+if (typeof adapter.apply !== 'function') process.exit(3);
+if (!Array.isArray(adapter.inject) || !adapter.inject.includes('permissionPresets')) process.exit(4);
+`;
+  try {
+    execFileSync(process.execPath, ['--input-type=module', '--eval', smokeScript], {
+      cwd: cliRoot,
+      encoding: 'utf8',
+      stdio: 'pipe',
+    });
+  } catch (error) {
+    console.error('Published CLI DeepSeek adapter bundle smoke failed.');
+    if (error && typeof error === 'object') {
+      if ('stdout' in error && error.stdout) console.error(String(error.stdout));
+      if ('stderr' in error && error.stderr) console.error(String(error.stderr));
+    }
+    process.exit(1);
+  }
 }
 
 function runGrokAdapterBundleSmoke() {

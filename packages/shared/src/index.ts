@@ -18,6 +18,7 @@ export type {
 } from './ids';
 export * from './message';
 export * from './ai';
+export * from './deepseek-harness';
 export * from './acp-run-config';
 export * from './image-file-types';
 export * from './custom-acp-command';

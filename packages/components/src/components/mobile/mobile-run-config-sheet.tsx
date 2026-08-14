@@ -141,7 +141,15 @@ function MobileRunConfigSheetRows({
     thoughtLevelSelectors,
     planModeSelectors,
     fastModeSelectors,
+    otherSelectors,
   } = useMemo(() => orderAcpConfigOptionSelectors(configOptionSelectors), [configOptionSelectors]);
+  const extraSelectSelectors = useMemo(
+    () =>
+      otherSelectors.filter(
+        (selector): selector is AcpSelectConfigOptionSelector => selector.type === 'select'
+      ),
+    [otherSelectors]
+  );
 
   /* ── Agent (options scoped by allowedMachineIds when provided) ── */
   const agentOptions = useMemo<MobileInlinePickerOption<string>[]>(() => {
@@ -348,6 +356,40 @@ function MobileRunConfigSheetRows({
           />
         </RunConfigRow>
       ) : null}
+
+      {extraSelectSelectors.map((selector) => {
+        const selectedValue =
+          (resolveConfigOptionValue(selector, configOptionValues?.[selector.configId]) as string) ??
+          null;
+        const pickerOptions: MobileInlinePickerOption<string>[] = selector.options.map(
+          (option) => ({
+            value: option.value,
+            label: option.label,
+            searchText: option.label,
+            description: option.description,
+            disabled: option.disabled,
+          })
+        );
+        const selectedLabel =
+          pickerOptions.find((option) => option.value === selectedValue)?.label ?? selectedValue;
+        const locked = selector.configId === 'agent_preset' && agentLocked;
+        return (
+          <RunConfigRow key={selector.configId} label={selector.label}>
+            <MobileInlinePicker<string>
+              id={`run-config-${selector.configId}`}
+              value={selectedValue}
+              onChange={(nextValue) =>
+                onConfigOptionChange?.(selector.configId, nextValue as AcpConfigOptionValue)
+              }
+              options={pickerOptions}
+              ariaLabel={selector.label}
+              searchable={pickerOptions.length > 5}
+              disabled={locked}
+              triggerContent={<span className="truncate">{selectedLabel ?? selector.label}</span>}
+            />
+          </RunConfigRow>
+        );
+      })}
 
       {modelPickerOptions.length > 0 ? (
         <RunConfigRow label={modelRowLabel}>

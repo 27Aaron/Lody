@@ -371,7 +371,10 @@ function isACPSessionConfig(value: unknown): boolean {
   // import the ESM runtime table. Keep this literal aligned with ai.ts and the
   // TS/CJS parity test.
   const isBuiltinAgentType =
-    agentType === 'claude' || agentType === 'codex' || agentType === 'kimi';
+    agentType === 'claude' ||
+    agentType === 'codex' ||
+    agentType === 'kimi' ||
+    agentType === 'deepseek';
   if (
     typeof value.prompt !== 'string' ||
     (cliType === 'builtin' && !isBuiltinAgentType) ||

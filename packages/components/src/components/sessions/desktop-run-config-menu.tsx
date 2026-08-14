@@ -109,9 +109,17 @@ function OptionItem({
 }
 
 /* Submenu row: label left, current value + chevron right. */
-function ValueSubTrigger({ label, value }: { label: string; value: string | null }) {
+function ValueSubTrigger({
+  label,
+  value,
+  disabled = false,
+}: {
+  label: string;
+  value: string | null;
+  disabled?: boolean;
+}) {
   return (
-    <DropdownMenuSubTrigger className="pr-1.5">
+    <DropdownMenuSubTrigger className="pr-1.5" disabled={disabled}>
       <span className="min-w-0 flex-1 truncate">{label}</span>
       <span className="ml-4 max-w-36 truncate text-xs text-muted-foreground">{value}</span>
     </DropdownMenuSubTrigger>
@@ -349,7 +357,15 @@ export function DesktopRunConfigMenu({
     thoughtLevelSelectors,
     planModeSelectors,
     fastModeSelectors,
+    otherSelectors,
   } = useMemo(() => orderAcpConfigOptionSelectors(configOptionSelectors), [configOptionSelectors]);
+  const extraSelectSelectors = useMemo(
+    () =>
+      otherSelectors.filter(
+        (selector): selector is AcpSelectConfigOptionSelector => selector.type === 'select'
+      ),
+    [otherSelectors]
+  );
 
   /* Agent options follow the caller's machine scope. On chat landing the
      explicit machine picker owns that scope, including GitHub/no-project drafts. */
@@ -448,6 +464,7 @@ export function DesktopRunConfigMenu({
     agentOptions.length > 0 ||
     selectedAgentConfig != null ||
     modelPickerOptions.length > 0 ||
+    extraSelectSelectors.length > 0 ||
     interactionSelector != null ||
     thinkingSelector != null ||
     planSelector != null ||
@@ -564,6 +581,40 @@ export function DesktopRunConfigMenu({
             </DropdownMenuSub>
           )
         ) : null}
+
+        {extraSelectSelectors.map((selector) => {
+          const selectedValue =
+            (resolveConfigOptionValue(
+              selector,
+              configOptionValues?.[selector.configId]
+            ) as string) ?? null;
+          const selectedLabel =
+            selector.options.find((option) => option.value === selectedValue)?.label ??
+            selectedValue;
+          const locked = selector.configId === 'agent_preset' && agentLocked;
+          return (
+            <DropdownMenuSub key={selector.configId}>
+              <ValueSubTrigger label={selector.label} value={selectedLabel} disabled={locked} />
+              <DropdownMenuSubContent>
+                {selector.options.map((option) => (
+                  <OptionItem
+                    key={option.value}
+                    label={option.label}
+                    description={option.description}
+                    selected={option.value === selectedValue}
+                    disabled={option.disabled || locked}
+                    onSelect={() =>
+                      onConfigOptionChange?.(
+                        selector.configId,
+                        option.value as AcpConfigOptionValue
+                      )
+                    }
+                  />
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          );
+        })}
 
         {modelPickerOptions.length > 0 ? (
           <DropdownMenuSub>

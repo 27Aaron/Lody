@@ -112,6 +112,15 @@ const setNativeTextAreaValue = (element: HTMLTextAreaElement, value: string): vo
   element.dispatchEvent(new Event('input', { bubbles: true }));
 };
 
+const setNativeInputValue = (element: HTMLInputElement, value: string): void => {
+  const valueSetter = Object.getOwnPropertyDescriptor(
+    window.HTMLInputElement.prototype,
+    'value'
+  )?.set;
+  valueSetter?.call(element, value);
+  element.dispatchEvent(new Event('input', { bubbles: true }));
+};
+
 describe('AgentConfigDialog', () => {
   let root: Root | undefined;
   let container: HTMLDivElement | undefined;
@@ -192,13 +201,14 @@ describe('AgentConfigDialog', () => {
     expect(getSelectedOption()?.textContent).toContain('Kimi Code');
     expect(
       getOptionButtons()
-        .slice(0, 4)
+        .slice(0, 5)
         .map((option) => option.textContent)
     ).toEqual([
       expect.stringContaining('Kimi Code'),
       expect.stringContaining('Grok'),
       expect.stringContaining('Claude'),
       expect.stringContaining('Codex'),
+      expect.stringContaining('DeepSeek Harness'),
     ]);
 
     await act(async () => {
@@ -237,6 +247,71 @@ describe('AgentConfigDialog', () => {
     await vi.waitFor(() => {
       expect(onManagedRuntimeSelected).toHaveBeenLastCalledWith('claude');
     });
+  });
+
+  it('collects the DeepSeek API Key directly and keeps Harness out of managed runtime setup', async () => {
+    const onManagedRuntimeSelected = vi.fn();
+    const onCheckBinaryStatus = vi.fn(async () => ({ status: 'not-installed' as const }));
+    const onSubmit = vi.fn(async (_payload: AgentConfigSubmitPayload) => {});
+    await renderDialog(
+      {
+        kind: 'create',
+        initialForm: {
+          name: 'DeepSeek Harness',
+          cliType: 'builtin',
+          agentType: 'deepseek',
+        },
+      },
+      createMachine('Workstation'),
+      onSubmit,
+      onCheckBinaryStatus,
+      undefined,
+      onManagedRuntimeSelected
+    );
+
+    expect(onManagedRuntimeSelected).not.toHaveBeenCalled();
+    expect(onCheckBinaryStatus).not.toHaveBeenCalled();
+    const apiKeyInput = document.body.querySelector<HTMLInputElement>('#deepseek-api-key');
+    expect(apiKeyInput?.type).toBe('password');
+    const createButton = Array.from(document.body.querySelectorAll('button')).find(
+      (button) => button.textContent?.trim() === 'Create'
+    );
+    expect(createButton?.disabled).toBe(true);
+
+    await act(async () => {
+      setNativeInputValue(apiKeyInput!, 'sk-deepseek-test');
+    });
+
+    const environmentSection = Array.from(document.body.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('Additional environment variables')
+    );
+    await act(async () => {
+      environmentSection?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(document.body.textContent).toContain(
+      'Optional: set DEEPSEEK_BASE_URL here to use a compatible endpoint.'
+    );
+    const envTextArea = Array.from(
+      document.body.querySelectorAll<HTMLTextAreaElement>('textarea')
+    ).at(-1);
+    expect(envTextArea?.value).not.toContain('DEEPSEEK_API_KEY');
+    await act(async () => {
+      setNativeTextAreaValue(envTextArea!, 'DEEPSEEK_BASE_URL=https://api.deepseek.com');
+    });
+    await act(async () => {
+      createButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cliType: 'builtin',
+        agentType: 'deepseek',
+        env: {
+          DEEPSEEK_API_KEY: 'sk-deepseek-test',
+          DEEPSEEK_BASE_URL: 'https://api.deepseek.com',
+        },
+      })
+    );
   });
 
   it('keeps the draft config id stable when create mode props are recreated', async () => {
@@ -379,9 +454,7 @@ describe('AgentConfigDialog', () => {
     expect(onRefreshCapabilities).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { agentType: 'codex', name: 'Codex', accountName: 'ChatGPT' },
-  ])(
+  it.each([{ agentType: 'codex', name: 'Codex', accountName: 'ChatGPT' }])(
     'requires $accountName sign-in before creating the provider when credentials are missing',
     async ({ agentType, name, accountName }) => {
       const onSubmit = vi.fn(async () => {});
@@ -487,9 +560,7 @@ describe('AgentConfigDialog', () => {
     expect(onRefreshCapabilities).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    { agentType: 'codex', name: 'Codex' },
-  ])(
+  it.each([{ agentType: 'codex', name: 'Codex' }])(
     'automatically creates a verified $agentType provider after its live probe succeeds',
     async ({ agentType, name }) => {
       const onSubmit = vi.fn(async () => {});

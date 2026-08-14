@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import { useAtom, useSetAtom } from 'jotai';
 import { usePostHog } from '@posthog/react';
-import type { BuiltinAgentType } from '@lody/shared';
+import type { ManagedBuiltinAgentType } from '@lody/shared';
 import {
   desktopOnboardingActiveAtom,
   desktopOnboardingCompletedAtom,
@@ -24,9 +24,8 @@ export function OnboardingOverlay() {
   const setActive = useSetAtom(desktopOnboardingActiveAtom);
   const setCompleted = useSetAtom(desktopOnboardingCompletedAtom);
   const [persistedPhase, setPersistedPhase] = useAtom(desktopOnboardingPhaseAtom);
-  const [preferredBuiltinRuntime, setPreferredBuiltinRuntime] = useState<BuiltinAgentType | null>(
-    null
-  );
+  const [preferredBuiltinRuntime, setPreferredBuiltinRuntime] =
+    useState<ManagedBuiltinAgentType | null>(null);
   const postHog = usePostHog();
   useOnboardingBuiltinRuntimePrefetch(preferredBuiltinRuntime);
   // A persisted phase pointing at a step this platform does not have (e.g. a

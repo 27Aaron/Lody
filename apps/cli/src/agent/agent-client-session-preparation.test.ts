@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SessionId } from '@lody/shared';
+import type { MachineId, SessionId, WorkspaceId } from '@lody/shared';
 import type { Logger } from '@/utils/logger';
 
 const connectionMocks = vi.hoisted(() => ({
@@ -129,6 +129,38 @@ describe('AgentClient session preparation gate', () => {
       cwd: '/workdir',
       mcpServers: [],
       _meta: { clientIdentifier: 'lody:session-grok' },
+    });
+  });
+
+  it('injects Lody MCP into DeepSeek Harness sessions', async () => {
+    const client = new AgentClient({
+      logger: createLogger(),
+      sessionId: 'session-deepseek' as SessionId,
+      workspaceId: 'workspace-1' as WorkspaceId,
+      machineId: 'machine-1' as MachineId,
+      terminalManager: {} as never,
+      agentConfig: { cliType: 'builtin', agentType: 'deepseek' },
+      onUpdateMessage: vi.fn(),
+      onRequestPermission: vi.fn(),
+    });
+
+    await client.startSession({} as never, '/workdir');
+
+    expect(connectionMocks.newSession).toHaveBeenCalledWith({
+      cwd: '/workdir',
+      mcpServers: [
+        expect.objectContaining({
+          name: 'lody',
+          command: process.execPath,
+          args: expect.arrayContaining(['__internal', 'lody-mcp-server']),
+          env: expect.arrayContaining([
+            { name: 'LODY_MCP_SESSION_ID', value: 'session-deepseek' },
+            { name: 'LODY_MCP_WORKSPACE_ID', value: 'workspace-1' },
+            { name: 'LODY_MCP_MACHINE_ID', value: 'machine-1' },
+            { name: 'LODY_MCP_WORKDIR', value: '/workdir' },
+          ]),
+        }),
+      ],
     });
   });
 

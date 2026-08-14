@@ -323,9 +323,14 @@ Terminal output history is bounded separately from agent execution output. Read
 context/terminal-output-lifecycle.md before
 changing ACP terminal notification handling or history compaction.
 
-Builtin Claude/Codex use bundled adapters plus managed native runtimes; builtin Kimi
-launches its managed Node package directly. `src/agent/setting.ts` resolves all three
-through `src/agent/managed-agent-runtime.ts`. See
+Builtin Claude/Codex/Grok use bundled adapters plus managed native runtimes; builtin Kimi
+launches its managed Node package directly. `src/agent/setting.ts` resolves those four
+through `src/agent/managed-agent-runtime.ts`. Builtin DeepSeek Harness is deliberately not
+a managed runtime: `src/agent/deepseek-harness-runtime.ts` consumes the pinned profile from
+the `packages/acp-extension-dsh` submodule, launches it through Lody's isolated npx cache,
+and loads the bundled `deepseek-acp.js` adapter. The extension owns the ACP model,
+reasoning-effort, and permission selectors while Harness
+continues to own model execution, sandbox enforcement, and one-shot approvals. See
 managed runtime context and the
 builtin extension checklist.
 
@@ -344,6 +349,8 @@ Adapter bugs/behaviors should be fixed in their package sources first:
   https://github.com/loro-dev/acp-extension-claude
 - `codex` → `packages/acp-extension-codex`, source:
   https://github.com/loro-dev/acp-extension-codex
+- `deepseek` → `packages/acp-extension-dsh`, source:
+  https://github.com/LodyAI/acp-extension-dsh
 
 Both adapters ship from these workspace sources; debug behavior there first.
 

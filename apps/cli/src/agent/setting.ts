@@ -11,6 +11,7 @@ import {
   getBuiltinRuntimeOverrideSourceVersionSuffix,
   getRegistryAcpLaunchKind,
   isBuiltinAgentType,
+  isManagedBuiltinAgentType,
   REGISTRY_ACP_AGENTS,
   type RegistryAcpAgent,
   type RegistryNpxDistribution,
@@ -30,6 +31,10 @@ import {
   KIMI_CODE_VERSION,
   type ManagedRuntimeProgressCallback,
 } from '@/agent/managed-agent-runtime';
+import {
+  DEEPSEEK_HARNESS_CAPABILITY_SOURCE_VERSION,
+  resolveDeepSeekHarnessProcessLaunch,
+} from '@/agent/deepseek-harness-runtime';
 
 export interface ACPSetting {
   packageName: string;
@@ -167,7 +172,7 @@ export function resolveBuiltinACPSetting(agentType: string): ResolvedACPSetting 
 
   const builtinType = agentType;
   throw new Error(
-    `Builtin ${builtinType} requires resolveACPProcessLaunchAsync because it may install a managed runtime`
+    `Builtin ${builtinType} requires resolveACPProcessLaunchAsync because launch preparation is asynchronous`
   );
 }
 
@@ -195,6 +200,9 @@ export function getAcpCapabilitySourceVersion(input: ResolveACPSettingInput): st
       }
       if (input.agentType === 'grok') {
         return `${BUILTIN_GROK_CAPABILITY_SOURCE_VERSION}${runtimeOverrideSuffix}`;
+      }
+      if (input.agentType === 'deepseek') {
+        return DEEPSEEK_HARNESS_CAPABILITY_SOURCE_VERSION;
       }
     }
     return `builtin:${input.agentType}:unknown`;
@@ -317,7 +325,9 @@ function trimRuntimeOverride(value: string | undefined): string | undefined {
   return trimmed ? resolve(expandHomePath(trimmed)) : undefined;
 }
 
-function resolveCliAdapterEntry(adapter: 'claude-acp' | 'codex-acp' | 'grok-acp'): string[] {
+function resolveCliAdapterEntry(
+  adapter: 'claude-acp' | 'codex-acp' | 'deepseek-acp' | 'grok-acp'
+): [string] {
   const argvEntry = process.argv[1] ? resolve(process.argv[1]) : undefined;
   const candidates: string[] = [];
   if (argvEntry) {
@@ -339,6 +349,16 @@ async function resolveBuiltinACPProcessLaunch(
 ): Promise<ResolvedACPProcessLaunch> {
   if (!isBuiltinAgentType(input.agentType)) {
     throw new Error(`Unsupported builtin ACP type: ${input.agentType}`);
+  }
+  if (input.agentType === 'deepseek') {
+    const [adapterPath] = resolveCliAdapterEntry('deepseek-acp');
+    return await resolveDeepSeekHarnessProcessLaunch({
+      adapterPath,
+      extraArgs: input.extraArgs,
+    });
+  }
+  if (!isManagedBuiltinAgentType(input.agentType)) {
+    throw new Error(`Unsupported managed builtin ACP type: ${input.agentType}`);
   }
   if (input.agentType === 'kimi') {
     const overridePath = trimRuntimeOverride(input.runtimeOverrides?.kimiPath);
@@ -419,7 +439,7 @@ async function resolveBuiltinACPProcessLaunch(
 export async function resolveBuiltinAuthenticationProcessLaunch(
   input: ResolveBuiltinAuthenticationProcessLaunchInput
 ): Promise<ResolvedACPProcessLaunch | null> {
-  if (input.cliType !== 'builtin' || !isBuiltinAgentType(input.agentType)) {
+  if (input.cliType !== 'builtin' || !isManagedBuiltinAgentType(input.agentType)) {
     throw new Error(`Unsupported builtin authentication type: ${input.agentType}`);
   }
 

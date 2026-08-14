@@ -293,6 +293,9 @@ importers:
       acp-extension-core:
         specifier: workspace:*
         version: link:../../packages/acp-extension-core
+      acp-extension-dsh:
+        specifier: workspace:*
+        version: link:../../packages/acp-extension-dsh
       acp-extension-grok:
         specifier: workspace:*
         version: link:../../packages/acp-extension-grok
@@ -637,6 +640,28 @@ importers:
         version: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(jsdom@26.1.0)(vite@8.1.5(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.23.7)(yaml@2.8.2))
 
   packages/acp-extension-core: {}
+
+  packages/acp-extension-dsh:
+    dependencies:
+      '@agentclientprotocol/sdk':
+        specifier: 1.3.0
+        version: 1.3.0(zod@4.3.6)
+      zod:
+        specifier: 4.3.6
+        version: 4.3.6
+    devDependencies:
+      '@types/node':
+        specifier: ^24.10.1
+        version: 24.10.12
+      prettier:
+        specifier: ^3.6.2
+        version: 3.8.1
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.12)(jiti@2.6.1)(jsdom@26.1.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.23.7)(yaml@2.8.2)
 
   packages/acp-extension-grok: {}
 
@@ -1321,6 +1346,9 @@ importers:
       acp-extension-core:
         specifier: workspace:*
         version: link:../acp-extension-core
+      acp-extension-dsh:
+        specifier: workspace:*
+        version: link:../acp-extension-dsh
       better-auth:
         specifier: 'catalog:'
         version: 1.5.5(1ca6e121930035675bdee65cd1bfa5ae)

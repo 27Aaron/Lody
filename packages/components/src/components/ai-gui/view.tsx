@@ -52,7 +52,7 @@ import {
   type WorkspaceId,
   getSessionLaunchConfigLegacyFields,
   getSessionRoomId,
-  isBuiltinAgentType,
+  isManagedBuiltinAgentType,
   type CommentReferencePayload,
   type VisualAnnotationReferencePayload,
   sanitizeGoalObjective,
@@ -1948,7 +1948,7 @@ const ChatFailedNoticeView = ({
       ) : null}
       {meta?.reason === 'acp_auth_required' &&
       sessionMeta?.cliType === 'builtin' &&
-      isBuiltinAgentType(sessionMeta.agentType) ? (
+      isManagedBuiltinAgentType(sessionMeta.agentType) ? (
         <AcpAuthenticationPanel
           machineId={sessionMeta.machineId}
           configId={sessionMeta.agentConfigId}
