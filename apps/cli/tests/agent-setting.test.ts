@@ -125,7 +125,7 @@ describe('resolveBuiltinACPSetting', () => {
       expect(config).toContain("name: '@deepseek-ai/dsh-session-persistence-jsonl'");
       expect(config).toContain("name: '@deepseek-ai/dsh-session-checkpoint-policy'");
       expect(config).toContain("name: '@deepseek-ai/dsh-session-query-sqlite'");
-      expect(config).toContain('compression: none');
+      expect(config).toContain('compression: zstd');
       expect(config).toContain('mode: workspace-write');
       expect(config).toContain("name: '@deepseek-ai/dsh-permission-presets'");
       expect(config).toContain('reasoningEffort: max');

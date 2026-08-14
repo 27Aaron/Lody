@@ -37,14 +37,21 @@ CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 
 [参考文档](https://api-docs.deepseek.com/zh-cn/guides/anthropic_api)
 
-### DeepSeek Reasonix
+### DeepSeek Harness
 
-如果希望使用 DeepSeek 原生 ACP Runtime，可以新建 Agent Config 并选择 **DeepSeek Reasonix**
-预设。粘贴 DeepSeek API Token 后，Lody 会将其保存为 `DEEPSEEK_API_KEY`，并通过 ACP 启动
-Reasonix。
+Lody 内置 **DeepSeek Harness** ACP Provider。新建 Agent Config、选择 DeepSeek Harness 并粘贴
+DeepSeek API Token 即可；Lody 会将其保存为 `DEEPSEEK_API_KEY`，无需另外安装 standalone
+`dsh` 命令。
 
-这个预设与 **DeepSeek over Claude Code** 不同；后者是通过 DeepSeek 的 Anthropic 兼容接口运行
-Claude Code。
+Lody 遵循标准的 `DSH_HOME` 路径，因此单独安装的 `dsh` 可能与 Lody 共用
+`~/.dsh/sessions`。Harness 要求一个 session root 只能使用一种压缩格式：对于空 root 或已有
+压缩工件的 root，Lody 使用上游默认的 `zstd`；对于仅包含旧版未压缩工件的 root，Lody 继续使用
+`none`。如果 root 同时存在 `session.jsonl` 和 `session.jsonl.zstd`，Lody 会在启动 Harness 前
+停止，并保持所有工件不变。请先备份并将整个 root 迁移成同一种格式，或为 Lody 使用独立的
+`DSH_HOME`。
+
+共用 root 只表示两个安装可以共存，并不表示它们的 ACP session 可以互相恢复。这个 Provider 与
+**DeepSeek over Claude Code** 不同；后者通过 DeepSeek 的 Anthropic 兼容接口运行 Claude Code。
 
 ## Kimi
 

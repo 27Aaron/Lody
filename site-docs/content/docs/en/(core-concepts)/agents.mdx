@@ -42,14 +42,22 @@ CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 
 [Reference docs](https://api-docs.deepseek.com/zh-cn/guides/anthropic_api)
 
-### DeepSeek Reasonix
+### DeepSeek Harness
 
-For a DeepSeek-native ACP runtime, create an Agent Config and choose the **DeepSeek Reasonix**
-preset. Paste a DeepSeek API token; Lody stores it as `DEEPSEEK_API_KEY` and starts Reasonix through
-ACP.
+Lody includes **DeepSeek Harness** as a built-in ACP provider. Create an Agent Config, choose
+DeepSeek Harness, and paste a DeepSeek API token. Lody stores it as `DEEPSEEK_API_KEY`; you do not
+need to install the standalone `dsh` command.
 
-This preset is separate from **DeepSeek over Claude Code**, which routes Claude Code through
-DeepSeek's Anthropic-compatible endpoint.
+Lody follows the standard `DSH_HOME` location, so a separately installed `dsh` may share the same
+`~/.dsh/sessions` root. Harness requires one compression format per root. Lody uses upstream's
+`zstd` default for empty or compressed roots and preserves `none` for an existing raw-only root. If
+both `session.jsonl` and `session.jsonl.zstd` artifacts exist, Lody stops before launching Harness
+and leaves every artifact unchanged. Back up and migrate the root to one format, or launch Lody
+with a separate `DSH_HOME`.
+
+Sharing the root permits the two installations to coexist; it does not make their ACP sessions
+interchangeable. This provider is separate from **DeepSeek over Claude Code**, which routes Claude
+Code through DeepSeek's Anthropic-compatible endpoint.
 
 ## Kimi
 

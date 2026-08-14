@@ -1943,6 +1943,11 @@ const ChatFailedNoticeView = ({
           'sessions.systemNotices.chatFailed.acpUpstreamApiError',
           'Upstream API error — you can retry your message'
         );
+      case 'acp_session_storage_incompatible':
+        return t(
+          'sessions.systemNotices.chatFailed.acpSessionStorageIncompatible',
+          'DeepSeek session storage uses incompatible compression — keep one format or use a separate DSH_HOME'
+        );
       case 'acp_resource_not_found':
         return t(
           'sessions.systemNotices.chatFailed.acpResourceNotFound',

@@ -1907,6 +1907,7 @@
   "sessions.systemNotices.chatFailed.acpResourceNotFound": "Agent resource not found",
   "sessions.systemNotices.chatFailed.acpUnknownError": "Agent error",
   "sessions.systemNotices.chatFailed.acpUpstreamApiError": "Upstream API error — you can retry your message",
+  "sessions.systemNotices.chatFailed.acpSessionStorageIncompatible": "DeepSeek session storage uses incompatible compression — keep one format or use a separate DSH_HOME",
   "sessions.systemNotices.chatFailed.agentDisconnected": "Agent disconnected unexpectedly",
   "sessions.systemNotices.chatFailed.agentTypeMismatch": "Agent type mismatch - session requires a different agent",
   "sessions.systemNotices.chatFailed.sessionArchived": "Session is archived and cannot receive new messages",

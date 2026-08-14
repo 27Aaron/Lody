@@ -83,6 +83,11 @@ arrive: context/message-flow.md "Upstream".
   `DEEPSEEK_BASE_URL`); never write them into the generated config. This is not a
   managed runtime and must not enter runtime download, prefetch, override, or
   interactive-auth flows.
+  Harness JSONL roots are single-encoding stores. Before publishing the profile,
+  inspect only the fixed artifact names: an empty or zstd root uses upstream's
+  `zstd`, a raw-only legacy root keeps `none`, and a mixed root fails with both
+  paths named. Detection and failure are read-only; never migrate, rename, or
+  delete user session artifacts during launch or cleanup.
 - `managed-agent-runtime.ts` — pinned Codex/Claude Code/Grok native and Kimi Node-package `.tar.zst`
   artifacts, checksums, resumable downloads, the active installation profile's
   `agent-binaries` layout, and best-effort `bin` symlinks for complete native CLIs.

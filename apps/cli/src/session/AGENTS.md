@@ -99,6 +99,9 @@ delegation proofs or a shared-machine gate without a new product and security de
   the ACP session once before retrying the same prompt, but only when no ACP output
   has buffered/flushed for that assistant turn; after visible output, never replay
   the user prompt automatically.
+  DeepSeek Harness persistence compression mismatches are a distinct
+  `acp_session_storage_incompatible` failure, not a generic internal error; keep
+  matching narrow to the backend's artifact/compression diagnostic.
   Code Collab v1 turn markers and history fileDiff capture were removed. v2 may
   persist exact per-turn path/add/del caches derived from the CLI-local ACP evidence
   store after ACP finalization; diff content still comes only from the CLI store.
