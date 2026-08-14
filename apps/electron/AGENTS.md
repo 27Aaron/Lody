@@ -50,6 +50,11 @@ Root `AGENTS.md` also applies.
   worker builds on native TLA; do not add `vite-plugin-top-level-await` or an
   equivalent full-bundle AST compatibility rewrite. Reprocessing Rollup's complete
   output graph materially increases production renderer peak memory.
+- Linux window identity is one contract: the composition's packaged `desktopName`,
+  electron-builder's `syncDesktopName`, the pre-ready `app.setDesktopName` value,
+  and the AppImage runtime desktop entry must all resolve to the same desktop-file
+  basename. KDE uses that identity to associate Wayland/X11 windows with the
+  installed icon.
 - Generic update metadata may carry localized Markdown under
   `vendor.lodyChangelog.locales.{en,zh_CN}` in addition to the standard English
   `releaseNotes` fallback. Main validates and bounds those remote strings before

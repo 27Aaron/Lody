@@ -1,6 +1,7 @@
 {
   "name": "@lody/electron",
   "productName": "Lody",
+  "desktopName": "dev.loro.lody.oss.desktop",
   "private": true,
   "version": "0.76.0",
   "description": "Lody Desktop - Electron app",

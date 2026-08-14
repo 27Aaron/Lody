@@ -81,6 +81,7 @@ dmg:
 linux:
   icon: build/icon.png
   executableName: lodyOssDesktop
+  syncDesktopName: true
   target:
     - AppImage
     - snap

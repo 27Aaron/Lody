@@ -65,6 +65,7 @@ if (
 
 const LODY_PROTOCOL = desktopInstallationProfile.desktopProtocol
 const PRODUCT_NAME = desktopInstallationProfile.desktopProductName
+const DESKTOP_FILE_NAME = `${desktopInstallationProfile.desktopAppId}.desktop`
 const DEEP_LINK_DEBUG_PREFIX = '[electron-auth-debug]'
 
 function logDeepLinkDebug(message: string, meta?: Record<string, unknown>): void {
@@ -76,6 +77,14 @@ function logDeepLinkDebug(message: string, meta?: Record<string, unknown>): void
 }
 
 app.setName(PRODUCT_NAME)
+if (process.platform === 'linux') {
+  // KDE resolves task-manager icons through the desktop file whose basename
+  // matches the Wayland app_id / X11 WM_CLASS. Keep this dynamic because the
+  // cloud and local desktop compositions intentionally use different IDs.
+  // Electron 39 implements this API, but its bundled declaration omits it.
+  const linuxApp = app as typeof app & { setDesktopName(name: string): void }
+  linuxApp.setDesktopName(DESKTOP_FILE_NAME)
+}
 if (!isLocalPlatform()) {
   installElectronMainErrorReporting()
 }
@@ -125,6 +134,8 @@ function createGlobalShortcutsService(iconPath: string): GlobalShortcutsService 
 registerLodyProtocolClient({
   protocol: LODY_PROTOCOL,
   productName: PRODUCT_NAME,
+  desktopFileName: DESKTOP_FILE_NAME,
+  iconPath: icon,
   log: logDeepLinkDebug
 })
 
