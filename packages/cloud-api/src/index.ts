@@ -74,6 +74,8 @@ export type OperationGitHubTokenResult =
   | { success: false; errorCode: GitHubTokenErrorCode; errorMessage: string };
 
 export type UsageRange = 'month' | 'day' | 'week' | 'total';
+/** Requested timeline bucket size. The server validates which sizes each range supports. */
+export type UsageTimelineGranularity = 'hour' | 'day';
 export type UsageSummary = {
   workspaceId: string;
   range: UsageRange;
@@ -86,22 +88,33 @@ export type UsageSummary = {
   }>;
 };
 
+export type UsageTimelineBucket = {
+  bucketStartMs: number;
+  bucketLabel: string;
+  tokens: number;
+  costUSD: number;
+  byModel: Array<{ modelId: string; tokens: number; costUSD: number }>;
+  byUser: Array<{ userId: string; tokens: number; costUSD: number }>;
+};
+
+/** Token-type split of a range total. Optional: not every deployment reports it. */
+export type UsageTokenBreakdown = {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
+  reasoningOutputTokens: number;
+};
+
 export type UsageTimeline = {
   workspaceId: string;
   range: UsageRange;
   startMs: number;
   endMs: number;
   bucketSizeMs: number;
-  totals: { tokens: number; costUSD: number };
+  totals: { tokens: number; costUSD: number; breakdown?: UsageTokenBreakdown };
   users: Record<string, { name?: string; email?: string; image?: string | null }>;
-  buckets: Array<{
-    bucketStartMs: number;
-    bucketLabel: string;
-    tokens: number;
-    costUSD: number;
-    byModel: Array<{ modelId: string; tokens: number; costUSD: number }>;
-    byUser: Array<{ userId: string; tokens: number; costUSD: number }>;
-  }>;
+  buckets: UsageTimelineBucket[];
 };
 
 export type UsageCalendar = {
@@ -551,7 +564,10 @@ export type CloudApi = {
   };
   usage: {
     getWorkspaceUsageSummary: Query<{ workspaceId: string; range: UsageRange }, UsageSummary>;
-    getWorkspaceUsageTimeline: Query<{ workspaceId: string; range: UsageRange }, UsageTimeline>;
+    getWorkspaceUsageTimeline: Query<
+      { workspaceId: string; range: UsageRange; granularity?: UsageTimelineGranularity },
+      UsageTimeline
+    >;
     getWorkspaceUsageCalendar: Query<{ workspaceId: string }, UsageCalendar>;
     getWorkspaceUsageDay: Query<{ workspaceId: string; dayStartMs: number }, UsageDay>;
     getWorkspaceUsageSummaryBundleFromCliToken: Query<

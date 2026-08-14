@@ -22,6 +22,14 @@ export type SettingsUsageTimelineData = {
   totals: {
     tokens: number;
     costUSD: number;
+    /** Token-type split of the range. Absent when the deployment does not report it. */
+    breakdown?: {
+      inputTokens: number;
+      outputTokens: number;
+      cacheReadInputTokens: number;
+      cacheCreationInputTokens: number;
+      reasoningOutputTokens: number;
+    };
   };
   users?: Record<
     string,
@@ -31,14 +39,16 @@ export type SettingsUsageTimelineData = {
       image?: string | null;
     }
   >;
-  buckets: Array<{
-    bucketStartMs: number;
-    bucketLabel: string;
-    tokens: number;
-    costUSD: number;
-    byModel: Array<{ modelId: string; tokens: number; costUSD: number }>;
-    byUser: Array<{ userId: string; tokens: number; costUSD: number }>;
-  }>;
+  buckets: SettingsUsageTimelineBucket[];
+};
+
+export type SettingsUsageTimelineBucket = {
+  bucketStartMs: number;
+  bucketLabel: string;
+  tokens: number;
+  costUSD: number;
+  byModel: Array<{ modelId: string; tokens: number; costUSD: number }>;
+  byUser: Array<{ userId: string; tokens: number; costUSD: number }>;
 };
 
 export type SettingsUsageCalendarData = {
@@ -119,11 +129,11 @@ export function SettingsDataCacheProvider({ children }: { children: ReactNode })
   // Preload all stats ranges once at settings-root level to avoid re-fetch when switching tabs.
   const dayUsage = useCloudQuery(
     cloudOperations.usage.getWorkspaceUsageTimeline,
-    workspaceId ? { workspaceId, range: 'day' } : 'skip'
+    workspaceId ? { workspaceId, range: 'day', granularity: 'hour' } : 'skip'
   ) as SettingsUsageTimelineData | undefined;
   const weekUsage = useCloudQuery(
     cloudOperations.usage.getWorkspaceUsageTimeline,
-    workspaceId ? { workspaceId, range: 'week' } : 'skip'
+    workspaceId ? { workspaceId, range: 'week', granularity: 'hour' } : 'skip'
   ) as SettingsUsageTimelineData | undefined;
   const monthUsage = useCloudQuery(
     cloudOperations.usage.getWorkspaceUsageTimeline,

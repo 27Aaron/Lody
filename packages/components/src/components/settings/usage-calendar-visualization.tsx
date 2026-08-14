@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from 'react';
 import NumberFlow from '@number-flow/react';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
@@ -24,7 +25,6 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import lodyLogo from '@/assets/lody-icon.png';
 import { Avatar, AvatarFallback, AvatarImage } from '@/ui/avatar';
 import { Button } from '@/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/ui/popover';
@@ -32,7 +32,13 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/ui/tooltip';
 import { toIntlLocale } from '@/lib/intl-locale';
 import { cn } from '@/lib/utils';
 import { ModelBrandIcon } from '@/components/icons/model-brand-icon';
-import type { SettingsUsageCalendarData, SettingsUsageDayData } from './settings-data-cache';
+import { stripRecommended } from '@/components/shared/acp-selector-options';
+import type {
+  SettingsUsageCalendarData,
+  SettingsUsageDayData,
+  SettingsUsageTimelineBucket,
+  SettingsUsageTimelineData,
+} from './settings-data-cache';
 import {
   createUsageCalendarModel,
   createUsageHeatScale,
@@ -62,10 +68,6 @@ type UsageShareCardPreview = {
   url: string;
 };
 
-// Blue skyline columns, matching the heatmap's `--chart-1` ramp. Three.js cannot
-// read CSS variables, so the levels are literal; the luminance steps mirror the
-// GitHub-style progression these replaced.
-const LEVEL_COLORS = ['#30363d', '#12305c', '#1e5aa8', '#3b82f6', '#7cb6ff'];
 // Export generation remains available in code while the settings UI focuses on the active views.
 const SHOW_SKYLINE_EXPORTS = false;
 // Share card is hidden while its ticket art is being reworked. The renderer, the
@@ -84,8 +86,20 @@ const FUTURE_DAY_COLOR = 'hsl(var(--muted-foreground) / 0.05)';
 
 function formatTokens(value: number): string {
   const abs = Math.abs(value);
-  if (abs >= 1_000_000) return `${(value / 1_000_000).toFixed(abs >= 100_000_000 ? 0 : 1)}M`;
-  if (abs >= 1_000) return `${(value / 1_000).toFixed(abs >= 100_000 ? 0 : 1)}K`;
+  if (abs >= 1_000_000) {
+    const fractionDigits = abs >= 100_000_000 ? 0 : 1;
+    return `${new Intl.NumberFormat(undefined, {
+      minimumFractionDigits: fractionDigits,
+      maximumFractionDigits: fractionDigits,
+    }).format(value / 1_000_000)}M`;
+  }
+  if (abs >= 1_000) {
+    const fractionDigits = abs >= 100_000 ? 0 : 1;
+    return `${new Intl.NumberFormat(undefined, {
+      minimumFractionDigits: fractionDigits,
+      maximumFractionDigits: fractionDigits,
+    }).format(value / 1_000)}K`;
+  }
   return new Intl.NumberFormat().format(Math.round(value));
 }
 
@@ -180,6 +194,13 @@ function useCalendarFormats() {
     () => ({
       month: new Intl.DateTimeFormat(locale, { month: 'short', timeZone: 'UTC' }),
       weekday: new Intl.DateTimeFormat(locale, { weekday: 'short', timeZone: 'UTC' }),
+      /** Compact span endpoints such as "Jul 20"; the year lives in the range label. */
+      dayShort: new Intl.DateTimeFormat(locale, {
+        month: 'short',
+        day: 'numeric',
+        timeZone: 'UTC',
+      }),
+      dayOfMonth: new Intl.DateTimeFormat(locale, { day: 'numeric', timeZone: 'UTC' }),
       day: new Intl.DateTimeFormat(locale, {
         weekday: 'short',
         month: 'short',
@@ -234,6 +255,943 @@ function HeatLegend() {
   );
 }
 
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+
+/**
+ * The range panel keeps its blue deliberately quiet: even the densest hour stops
+ * short of the full-saturation chart blue, so a busy week reads as light rather
+ * than a solid slab. The year heatmap above still uses the full ramp — it has far
+ * more empty space to carry it.
+ */
+const RANGE_HEAT_FLOOR = 0.18;
+const RANGE_HEAT_CEILING = 0.92;
+const rangeHeatColor = (intensity: number) =>
+  heatColor(RANGE_HEAT_FLOOR + (RANGE_HEAT_CEILING - RANGE_HEAT_FLOOR) * intensity);
+const RANGE_EMPTY_COLOR = 'hsl(var(--muted-foreground) / 0.11)';
+
+/**
+ * Percentile-anchored so one spike hour cannot flatten a whole week; the gamma
+ * lifts the quiet-but-not-empty buckets that a linear ramp loses.
+ */
+function createRangeIntensity(values: number[]): (value: number) => number {
+  const active = values.filter((value) => value > 0).sort((a, b) => a - b);
+  const reference = active[Math.min(active.length - 1, Math.ceil((active.length - 1) * 0.9))] ?? 0;
+  return (value: number) =>
+    value > 0 && reference > 0 ? Math.min(1, value / reference) ** 0.62 : 0;
+}
+
+/** Per-track delay of the reveal sweep; the widest range (24 columns) lands in ~0.8s. */
+const RANGE_SWEEP_STEP_S = 0.022;
+const RANGE_SWEEP_EASE = [0.22, 1, 0.36, 1] as const;
+
+/**
+ * One track of the matrix — an hour column in 24h, a day row in 7d. The sweep is
+ * a blurred slide that resolves in order, which is what makes the ranges read as
+ * one object changing shape rather than three separate charts. Motion lives on
+ * the track, not on each of the 168 cells, so the blur stays cheap.
+ */
+function RangeSweep({
+  index,
+  reduced,
+  axis = 'column',
+  className,
+  children,
+}: {
+  index: number;
+  reduced: boolean;
+  axis?: 'column' | 'row';
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <motion.div
+      // Presentational: the wrapper only carries the sweep, so the grid still
+      // sees its cells directly.
+      role="presentation"
+      className={cn('min-w-0', className)}
+      initial={
+        reduced
+          ? false
+          : { opacity: 0, filter: 'blur(5px)', ...(axis === 'column' ? { y: 6 } : { x: -8 }) }
+      }
+      animate={{ opacity: 1, x: 0, y: 0, filter: 'blur(0px)' }}
+      transition={
+        reduced
+          ? { duration: 0 }
+          : { duration: 0.36, delay: index * RANGE_SWEEP_STEP_S, ease: RANGE_SWEEP_EASE }
+      }
+    >
+      {children}
+    </motion.div>
+  );
+}
+
+/** Hours are labelled every three; a label on all 24 becomes noise. */
+const HOUR_LABEL_STEP = 3;
+/** 24 hour tracks, shared by the 24h bars, the 7d dot rows, and the hour axis. */
+const HOUR_COLUMNS_CLASS = 'grid grid-cols-[repeat(24,minmax(0,1fr))] gap-[3px]';
+
+function hourLabel(hour: number): string {
+  return `${String(hour).padStart(2, '0')}:00`;
+}
+
+function HourAxis() {
+  return (
+    <div aria-hidden="true" className={cn(HOUR_COLUMNS_CLASS, 'mt-1.5')}>
+      {Array.from({ length: 24 }, (_, hour) => (
+        <span
+          key={hour}
+          className="text-center text-[9px] leading-none tabular-nums text-muted-foreground/60"
+        >
+          {hour % HOUR_LABEL_STEP === 0 ? String(hour).padStart(2, '0') : ''}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/** Tallest an hour bar gets; the 7d rows below are sized to land near the same block. */
+const DAY_BAR_TRACK_PX = 148;
+
+/**
+ * 24h: a skyline silhouette — one flat bar per hour standing on a baseline, no
+ * empty track behind it. Height carries magnitude and the fill's light carries
+ * share of the peak. Every bar opens the breakdown of the day it belongs to.
+ */
+function UsageDayMatrix({
+  buckets,
+  metric,
+  intensityOf,
+  reduced,
+  selectedCellMs,
+  onToggleDay,
+}: {
+  buckets: SettingsUsageTimelineBucket[];
+  metric: UsageCalendarMetric;
+  intensityOf: (value: number) => number;
+  reduced: boolean;
+  /** Exact hour bucket that opened the breakdown; only it carries the ring. */
+  selectedCellMs: number | null;
+  onToggleDay: (dayStartMs: number, cellMs: number, element: HTMLElement | null) => void;
+}) {
+  const maxValue = buckets.reduce(
+    (peak, bucket) => Math.max(peak, metric === 'tokens' ? bucket.tokens : bucket.costUSD),
+    0
+  );
+  // Roving tabindex: the 24 bars are one tab stop, arrow keys walk hours.
+  const cellRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const [focusIndex, setFocusIndex] = useState(0);
+  const focusCell = useCallback(
+    (index: number) => {
+      const next = Math.min(Math.max(index, 0), buckets.length - 1);
+      setFocusIndex(next);
+      cellRefs.current[next]?.focus();
+    },
+    [buckets.length]
+  );
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, index: number) => {
+    const deltas: Record<string, number> = { ArrowLeft: -1, ArrowRight: 1 };
+    const delta = deltas[event.key];
+    if (delta !== undefined) {
+      event.preventDefault();
+      focusCell(index + delta);
+      return;
+    }
+    if (event.key === 'Home' || event.key === 'End') {
+      event.preventDefault();
+      focusCell(event.key === 'Home' ? 0 : buckets.length - 1);
+    }
+  };
+
+  return (
+    <div>
+      <div className={HOUR_COLUMNS_CLASS} role="row">
+        {buckets.map((bucket, index) => {
+          const value = metric === 'tokens' ? bucket.tokens : bucket.costUSD;
+          const intensity = intensityOf(value);
+          const height = value > 0 && maxValue > 0 ? Math.max(7, (value / maxValue) * 100) : 0;
+          const label = `${bucket.bucketLabel} · ${formatMetric(value, metric)}`;
+          const dayStartMs = Math.floor(bucket.bucketStartMs / DAY_MS) * DAY_MS;
+          const selected = bucket.bucketStartMs === selectedCellMs;
+          return (
+            <RangeSweep key={bucket.bucketStartMs} index={index} reduced={reduced}>
+              <button
+                ref={(element) => {
+                  cellRefs.current[index] = element;
+                }}
+                type="button"
+                role="gridcell"
+                tabIndex={index === focusIndex ? 0 : -1}
+                title={label}
+                aria-label={label}
+                aria-selected={selected}
+                className={cn(
+                  // focus-visible:shadow-none opts out of the global inset
+                  // primary focus border; the bar carries the focus ring instead.
+                  'group relative flex w-full cursor-pointer items-end rounded-[3px] outline-none',
+                  'focus-visible:shadow-none',
+                  // The hover wash marks the whole column as a target, since an
+                  // empty hour has no bar to point at. No transition: hover
+                  // feedback should be instant.
+                  'hover:bg-muted-foreground/[0.06]'
+                )}
+                style={{ height: DAY_BAR_TRACK_PX }}
+                onClick={(event) =>
+                  onToggleDay(dayStartMs, bucket.bucketStartMs, event.currentTarget)
+                }
+                onKeyDown={(event) => onKeyDown(event, index)}
+                onFocus={() => setFocusIndex(index)}
+              >
+                {/* Ring lives on the bar, not the button: the global focus reset
+                    kills ring shadows on any focused element, so a ring on the
+                    button would vanish right after the click. */}
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    // Filter is excluded so the hover brightening is instant;
+                    // height and color still animate on a metric switch.
+                    'relative w-full rounded-t-[3px] transition-[height,background-color] duration-300 motion-reduce:transition-none',
+                    'group-hover:brightness-110 group-focus-visible:ring-2 group-focus-visible:ring-ring',
+                    selected && 'ring-1 ring-foreground'
+                  )}
+                  style={{
+                    height: `${height}%`,
+                    backgroundColor: rangeHeatColor(intensity),
+                  }}
+                />
+              </button>
+            </RangeSweep>
+          );
+        })}
+      </div>
+      <div aria-hidden="true" className="h-px w-full bg-border/70" />
+      <HourAxis />
+    </div>
+  );
+}
+
+/** Row pitch of the 7d grid, chosen so seven days land near the 24h bar block. */
+const WEEK_ROW_PX = 18;
+const WEEK_DOT_MIN_PX = 5;
+const WEEK_DOT_MAX_PX = 13;
+const WEEK_CELL_COUNT = 7 * 24;
+
+/**
+ * 7d: the same 24 hour tracks as the 24h view, stacked seven deep. Dots rather
+ * than tiles — a circle that grows and brightens with its hour keeps a quiet
+ * week readable as texture, where a full-bleed grid turns into a wall. Clicking
+ * a dot opens that day's breakdown.
+ */
+function UsageWeekMatrix({
+  timeline,
+  metric,
+  intensityOf,
+  reduced,
+  weekdayFormat,
+  dayOfMonthFormat,
+  selectedCellMs,
+  onToggleDay,
+}: {
+  timeline: SettingsUsageTimelineData;
+  metric: UsageCalendarMetric;
+  intensityOf: (value: number) => number;
+  reduced: boolean;
+  weekdayFormat: Intl.DateTimeFormat;
+  dayOfMonthFormat: Intl.DateTimeFormat;
+  /** Exact hour cell that opened the breakdown; only it carries the ring. */
+  selectedCellMs: number | null;
+  onToggleDay: (dayStartMs: number, cellMs: number, element: HTMLElement | null) => void;
+}) {
+  const startDayMs = Math.floor(timeline.startMs / DAY_MS) * DAY_MS;
+  const dayStarts = Array.from({ length: 7 }, (_, index) => startDayMs + index * DAY_MS);
+  const valuesByBucket = useMemo(() => {
+    const values = new Map<number, number>();
+    for (const bucket of timeline.buckets) {
+      values.set(bucket.bucketStartMs, metric === 'tokens' ? bucket.tokens : bucket.costUSD);
+    }
+    return values;
+  }, [metric, timeline.buckets]);
+
+  // Roving tabindex: the 7×24 grid is one tab stop, arrow keys walk cells.
+  const cellRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const [focusIndex, setFocusIndex] = useState(0);
+  const focusCell = useCallback((index: number) => {
+    const next = Math.min(Math.max(index, 0), WEEK_CELL_COUNT - 1);
+    setFocusIndex(next);
+    cellRefs.current[next]?.focus();
+  }, []);
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, index: number) => {
+    const deltas: Record<string, number> = {
+      ArrowUp: -24,
+      ArrowDown: 24,
+      ArrowLeft: -1,
+      ArrowRight: 1,
+    };
+    const delta = deltas[event.key];
+    if (delta !== undefined) {
+      event.preventDefault();
+      focusCell(index + delta);
+      return;
+    }
+    if (event.key === 'Home' || event.key === 'End') {
+      event.preventDefault();
+      focusCell(event.key === 'Home' ? 0 : WEEK_CELL_COUNT - 1);
+    }
+  };
+
+  return (
+    <div className="flex gap-2">
+      {/* Day gutter, outside the rows so the sweep cannot drag the labels. */}
+      <div aria-hidden="true" className="flex shrink-0 flex-col gap-[3px]">
+        {dayStarts.map((dayStartMs) => (
+          <span
+            key={dayStartMs}
+            className="flex items-center justify-end gap-1 text-[10px] leading-none text-muted-foreground"
+            style={{ height: WEEK_ROW_PX }}
+          >
+            <span>{weekdayFormat.format(new Date(dayStartMs))}</span>
+            <span className="tabular-nums text-muted-foreground/55">
+              {dayOfMonthFormat.format(new Date(dayStartMs))}
+            </span>
+          </span>
+        ))}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-col gap-[3px]">
+          {dayStarts.map((dayStartMs, dayIndex) => (
+            <RangeSweep key={dayStartMs} index={dayIndex} reduced={reduced} axis="row">
+              <div className={HOUR_COLUMNS_CLASS} role="row">
+                {Array.from({ length: 24 }, (_, hour) => {
+                  const cellIndex = dayIndex * 24 + hour;
+                  const cellMs = dayStartMs + hour * HOUR_MS;
+                  const value = valuesByBucket.get(cellMs) ?? 0;
+                  const intensity = intensityOf(value);
+                  const size =
+                    intensity > 0
+                      ? WEEK_DOT_MIN_PX + (WEEK_DOT_MAX_PX - WEEK_DOT_MIN_PX) * intensity
+                      : WEEK_DOT_MIN_PX - 1;
+                  const label = `${weekdayFormat.format(new Date(dayStartMs))} ${hourLabel(hour)} · ${formatMetric(value, metric)}`;
+                  const selected = cellMs === selectedCellMs;
+                  return (
+                    <button
+                      key={hour}
+                      ref={(element) => {
+                        cellRefs.current[cellIndex] = element;
+                      }}
+                      type="button"
+                      role="gridcell"
+                      tabIndex={cellIndex === focusIndex ? 0 : -1}
+                      title={label}
+                      aria-label={label}
+                      aria-selected={selected}
+                      // focus-visible:shadow-none opts out of the global inset
+                      // primary focus border; the dot carries the focus ring instead.
+                      className="group flex cursor-pointer items-center justify-center outline-none focus-visible:shadow-none"
+                      style={{ height: WEEK_ROW_PX }}
+                      onClick={(event) => onToggleDay(dayStartMs, cellMs, event.currentTarget)}
+                      onKeyDown={(event) => onKeyDown(event, cellIndex)}
+                      onFocus={() => setFocusIndex(cellIndex)}
+                    >
+                      <span
+                        aria-hidden="true"
+                        className={cn(
+                          'block rounded-full transition-[width,height,background-color,filter] duration-300 motion-reduce:transition-none',
+                          'group-hover:brightness-110 group-hover:ring-1 group-hover:ring-foreground/40',
+                          'group-focus-visible:ring-2 group-focus-visible:ring-ring',
+                          selected && 'ring-1 ring-foreground'
+                        )}
+                        style={{
+                          width: size,
+                          height: size,
+                          backgroundColor:
+                            intensity > 0 ? rangeHeatColor(intensity) : RANGE_EMPTY_COLOR,
+                        }}
+                      />
+                    </button>
+                  );
+                })}
+              </div>
+            </RangeSweep>
+          ))}
+        </div>
+        <HourAxis />
+      </div>
+    </div>
+  );
+}
+
+const COMPOSITION_SEGMENT_LIMIT = 5;
+const MODEL_SERIES_COLORS = ['#2563eb', '#3b82f6', '#60a5fa', '#93c5fd', '#bfdbfe'] as const;
+const MEMBER_SERIES_COLORS = ['#7c3aed', '#9333ea', '#a855f7', '#c084fc', '#e9d5ff'] as const;
+
+type UsageCompositionSegment = {
+  id: string;
+  label: string;
+  tokens: number;
+  share: number;
+};
+
+function createUsageCompositionSegments(
+  rows: Array<{ id: string; label: string; tokens: number }>,
+  otherLabel: string
+): UsageCompositionSegment[] {
+  const totals = new Map<string, { label: string; tokens: number }>();
+  for (const row of rows) {
+    if (!Number.isFinite(row.tokens) || row.tokens <= 0) continue;
+    const previous = totals.get(row.id);
+    totals.set(row.id, {
+      label: row.label,
+      tokens: (previous?.tokens ?? 0) + row.tokens,
+    });
+  }
+
+  const sorted = [...totals.entries()]
+    .map(([id, value]) => ({ id, ...value }))
+    .sort((a, b) => b.tokens - a.tokens || a.label.localeCompare(b.label));
+  const visible = sorted.slice(0, COMPOSITION_SEGMENT_LIMIT - 1);
+  const hidden = sorted.slice(COMPOSITION_SEGMENT_LIMIT - 1);
+  if (hidden.length > 0) {
+    visible.push({
+      id: '__other__',
+      label: otherLabel,
+      tokens: hidden.reduce((total, row) => total + row.tokens, 0),
+    });
+  }
+
+  const total = visible.reduce((sum, row) => sum + row.tokens, 0);
+  return visible.map((row) => ({ ...row, share: total > 0 ? row.tokens / total : 0 }));
+}
+
+/**
+ * A pair of 6px rules carries the by-model and by-member shares inside the
+ * panel's own text rhythm, under whichever matrix is on screen.
+ */
+function UsageCompositionBar({
+  label,
+  segments,
+  colors,
+  reduced,
+}: {
+  label: string;
+  segments: UsageCompositionSegment[];
+  colors: readonly string[];
+  reduced: boolean;
+}) {
+  return (
+    <div className="min-w-0">
+      <p className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/80">
+        {label}
+      </p>
+      <div className="mt-1.5 flex h-1.5 gap-px overflow-hidden rounded-full bg-muted-foreground/10">
+        {segments.map((segment, index) => (
+          <motion.span
+            key={segment.id}
+            title={`${segment.label} · ${Math.round(segment.share * 100)}%`}
+            className="h-full"
+            style={{ backgroundColor: colors[index % colors.length] }}
+            initial={reduced ? false : { width: 0 }}
+            animate={{ width: `${segment.share * 100}%` }}
+            transition={reduced ? { duration: 0 } : { duration: 0.5, ease: RANGE_SWEEP_EASE }}
+          />
+        ))}
+      </div>
+      <ul className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1">
+        {segments.map((segment, index) => (
+          <li key={segment.id} className="flex min-w-0 items-center gap-1 text-[10px]">
+            <span
+              aria-hidden="true"
+              className="size-1.5 shrink-0 rounded-full"
+              style={{ backgroundColor: colors[index % colors.length] }}
+            />
+            <span className="max-w-[8rem] truncate text-muted-foreground">{segment.label}</span>
+            <span className="tabular-nums text-foreground/70">
+              {Math.round(segment.share * 100)}%
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** By-model and by-member rules, shared by every range that has a timeline. */
+function UsageCompositionSummary({
+  timeline,
+  reduced,
+  className,
+}: {
+  timeline: SettingsUsageTimelineData;
+  reduced: boolean;
+  className?: string;
+}) {
+  const { t } = useTranslation();
+  const modelSegments = useMemo(
+    () =>
+      createUsageCompositionSegments(
+        timeline.buckets.flatMap((bucket) =>
+          bucket.byModel.map((row) => ({
+            id: row.modelId,
+            label: stripRecommended(row.modelId),
+            tokens: row.tokens,
+          }))
+        ),
+        t('workspace.usage.skyline.other')
+      ),
+    [t, timeline.buckets]
+  );
+  const memberSegments = useMemo(
+    () =>
+      createUsageCompositionSegments(
+        timeline.buckets.flatMap((bucket) =>
+          bucket.byUser.map((row) => ({
+            id: row.userId,
+            label:
+              timeline.users?.[row.userId]?.name ||
+              timeline.users?.[row.userId]?.email ||
+              row.userId,
+            tokens: row.tokens,
+          }))
+        ),
+        t('workspace.usage.skyline.other')
+      ),
+    [t, timeline.buckets, timeline.users]
+  );
+
+  return (
+    <div
+      className={cn(
+        'grid gap-x-6 gap-y-3 border-t border-border/50 pt-3 sm:grid-cols-2',
+        className
+      )}
+    >
+      <UsageCompositionBar
+        label={t('workspace.usage.byModel')}
+        segments={modelSegments}
+        colors={MODEL_SERIES_COLORS}
+        reduced={reduced}
+      />
+      <UsageCompositionBar
+        label={t('workspace.usage.byUser')}
+        segments={memberSegments}
+        colors={MEMBER_SERIES_COLORS}
+        reduced={reduced}
+      />
+    </div>
+  );
+}
+
+type UsageRingSegment = {
+  id: string;
+  label: string;
+  value: number;
+  share: number;
+  color: string;
+};
+
+/**
+ * Ring hues come from the chart palette so they follow the theme; three.js is
+ * the only place in this file that needs literal colours.
+ */
+const RING_COLORS = [
+  'hsl(var(--chart-1))',
+  'hsl(var(--chart-2))',
+  'hsl(var(--chart-3))',
+  'hsl(var(--chart-4))',
+  'hsl(var(--chart-5))',
+] as const;
+
+const RING_VIEWBOX = 168;
+const RING_RADIUS = 66;
+const RING_STROKE = 26;
+/** Tiny angular gap between donut slices so adjacent colours do not bleed. */
+const RING_SLICE_GAP = 0.006;
+
+/**
+ * Which composition the rings show. The token-type split is the intended one;
+ * it is optional on the timeline contract, so when the range carries no
+ * breakdown the rings show the model split and the caption says so. An empty
+ * ring stack would read as a broken panel.
+ */
+function useUsageRingComposition(timeline: SettingsUsageTimelineData | undefined): {
+  caption: string;
+  segments: UsageRingSegment[];
+} | null {
+  const { t } = useTranslation();
+  return useMemo(() => {
+    const breakdown = timeline?.totals.breakdown;
+    const typeRows = breakdown
+      ? [
+          {
+            id: 'cache',
+            label: t('workspace.usage.breakdown.cache'),
+            value: breakdown.cacheReadInputTokens + breakdown.cacheCreationInputTokens,
+          },
+          {
+            id: 'input',
+            label: t('workspace.usage.breakdown.input'),
+            value: breakdown.inputTokens,
+          },
+          {
+            id: 'output',
+            label: t('workspace.usage.breakdown.output'),
+            value: breakdown.outputTokens,
+          },
+          {
+            id: 'reasoning',
+            label: t('workspace.usage.breakdown.reasoning'),
+            value: breakdown.reasoningOutputTokens,
+          },
+        ].filter((row) => row.value > 0)
+      : [];
+    const typeTotal = typeRows.reduce((sum, row) => sum + row.value, 0);
+    if (typeTotal > 0) {
+      return {
+        caption: t('workspace.usage.breakdown.title'),
+        segments: typeRows.map((row, index) => ({
+          ...row,
+          share: row.value / typeTotal,
+          color: RING_COLORS[index % RING_COLORS.length]!,
+        })),
+      };
+    }
+
+    if (!timeline) return null;
+
+    return {
+      caption: t('workspace.usage.byModel'),
+      segments: createUsageCompositionSegments(
+        timeline.buckets.flatMap((bucket) =>
+          bucket.byModel.map((row) => ({
+            id: row.modelId,
+            label: stripRecommended(row.modelId),
+            tokens: row.tokens,
+          }))
+        ),
+        t('workspace.usage.skyline.other')
+      ).map((segment, index) => ({
+        id: segment.id,
+        label: segment.label,
+        value: segment.tokens,
+        share: segment.share,
+        color: RING_COLORS[index % RING_COLORS.length]!,
+      })),
+    };
+  }, [t, timeline]);
+}
+
+/**
+ * Single donut ring. The composition slices are arcs of one circle that tile the
+ * full 360° — pure share-of-total, with no per-slice track that would read as
+ * progress toward a goal that does not exist. The total sits in the middle,
+ * which is the number the panel is really about.
+ */
+function UsageTokenRings({
+  segments,
+  caption,
+  total,
+  totalLabel,
+  metric,
+  reduced,
+}: {
+  segments: UsageRingSegment[];
+  caption: string;
+  total: number;
+  totalLabel: string;
+  metric: UsageCalendarMetric;
+  reduced: boolean;
+}) {
+  const center = RING_VIEWBOX / 2;
+  const slices = useMemo(() => {
+    let start = 0;
+    return segments.map((segment) => {
+      const slice = { ...segment, start };
+      start += segment.share;
+      return slice;
+    });
+  }, [segments]);
+  return (
+    <div className="flex min-w-0 flex-col items-center">
+      <div className="relative w-[9.5rem] max-w-full sm:w-[10.5rem]">
+        <svg
+          viewBox={`0 0 ${RING_VIEWBOX} ${RING_VIEWBOX}`}
+          role="img"
+          aria-label={`${caption}: ${segments
+            .map((segment) => `${segment.label} ${Math.round(segment.share * 100)}%`)
+            .join(', ')}`}
+          className="w-full -rotate-90"
+        >
+          <circle
+            cx={center}
+            cy={center}
+            r={RING_RADIUS}
+            fill="none"
+            stroke="hsl(var(--muted-foreground))"
+            strokeOpacity={0.08}
+            strokeWidth={RING_STROKE}
+          />
+          {slices.map((slice, index) => (
+            // Each slice is a full circle rotated to its start angle, with
+            // pathLength drawing only its share of the circumference.
+            <g key={slice.id} transform={`rotate(${slice.start * 360} ${center} ${center})`}>
+              <motion.circle
+                cx={center}
+                cy={center}
+                r={RING_RADIUS}
+                fill="none"
+                stroke={slice.color}
+                strokeWidth={RING_STROKE}
+                initial={reduced ? false : { pathLength: 0 }}
+                animate={{
+                  pathLength: Math.max(0.004, slice.share - RING_SLICE_GAP),
+                }}
+                transition={
+                  reduced
+                    ? { duration: 0 }
+                    : { duration: 0.85, delay: 0.06 * index, ease: RANGE_SWEEP_EASE }
+                }
+              />
+            </g>
+          ))}
+        </svg>
+        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center px-10 text-center">
+          <span className="w-full truncate text-[15px] font-semibold leading-none tabular-nums tracking-tight text-foreground sm:text-base">
+            {metric === 'tokens' ? (
+              <NumberFlow
+                value={total}
+                format={{ notation: 'compact', maximumFractionDigits: 1 }}
+              />
+            ) : (
+              formatCost(total)
+            )}
+          </span>
+          <span className="mt-1 w-full truncate text-[9px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+            {totalLabel}
+          </span>
+        </div>
+      </div>
+
+      <p className="mt-3 w-full text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/80">
+        {caption}
+      </p>
+      <ul className="mt-1.5 grid w-full grid-cols-2 gap-x-3 gap-y-1">
+        {segments.map((segment) => (
+          <li key={segment.id} className="flex min-w-0 items-center gap-1 text-[10px]">
+            <span
+              aria-hidden="true"
+              className="size-1.5 shrink-0 rounded-full"
+              style={{ backgroundColor: segment.color }}
+            />
+            <span className="truncate text-muted-foreground">{segment.label}</span>
+            <span className="ml-auto shrink-0 tabular-nums text-foreground/70">
+              {Math.round(segment.share * 100)}%
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
+ * The hourly range view. 24h and 7d share one frame — the donut ring is a
+ * persistent sibling rendered by the parent, so switching between them only
+ * deforms the matrix. 30d and all-time hand off to the year skyline. Cells open
+ * the same day breakdown the heatmap offers; composition rules live in the
+ * metrics band.
+ */
+function UsageRangePanel({
+  timeline,
+  metric,
+  selectedDayMs,
+  onSelectDay,
+}: {
+  timeline: SettingsUsageTimelineData;
+  metric: UsageCalendarMetric;
+  selectedDayMs: number | null;
+  onSelectDay: (day: UsageSelectedDay | null) => void;
+}) {
+  const { t } = useTranslation();
+  const formats = useCalendarFormats();
+  const reduced = useReducedMotion() ?? false;
+  const rootRef = useRef<HTMLDivElement>(null);
+  const selectedCellRef = useRef<HTMLElement | null>(null);
+  const [selectedCellMs, setSelectedCellMs] = useState<number | null>(null);
+
+  const values = useMemo(
+    () => timeline.buckets.map((bucket) => (metric === 'tokens' ? bucket.tokens : bucket.costUSD)),
+    [metric, timeline.buckets]
+  );
+  const intensityOf = useMemo(() => createRangeIntensity(values), [values]);
+  const peakIndex = values.reduce(
+    (peak, value, index) => (value > (values[peak] ?? 0) ? index : peak),
+    0
+  );
+  const peakBucket = timeline.buckets[peakIndex];
+  const activeCount = values.filter((value) => value > 0).length;
+
+  const spanLabel =
+    timeline.range === 'day'
+      ? formats.day.format(new Date(timeline.startMs))
+      : `${formats.dayShort.format(new Date(timeline.startMs))} – ${formats.dayShort.format(
+          new Date(Math.max(timeline.startMs, timeline.endMs - DAY_MS))
+        )}`;
+
+  /** Caret x for a cell, in coordinates of the panel root the detail panel shares. */
+  const measureAnchorX = useCallback((element: HTMLElement | null) => {
+    const root = rootRef.current;
+    if (!element || !root) return 0;
+    const cellRect = element.getBoundingClientRect();
+    const rootRect = root.getBoundingClientRect();
+    return cellRect.left + cellRect.width / 2 - rootRect.left;
+  }, []);
+
+  const toggleDay = useCallback(
+    (dayStartMs: number, cellMs: number, element: HTMLElement | null) => {
+      // Only the very cell that opened the breakdown closes it again; any other
+      // cell switches the selection in place, even within the same day (in 24h
+      // every bar usually shares one day, so a day-level compare would close
+      // the panel on every second click).
+      if (cellMs === selectedCellMs) {
+        selectedCellRef.current = null;
+        setSelectedCellMs(null);
+        onSelectDay(null);
+        return;
+      }
+      selectedCellRef.current = element;
+      setSelectedCellMs(cellMs);
+      onSelectDay({ dayStartMs, anchorX: measureAnchorX(element) });
+    },
+    [measureAnchorX, onSelectDay, selectedCellMs]
+  );
+
+  // The ring marks the exact cell that opened the breakdown; it dies with the
+  // selection (e.g. when a range switch clears it from above).
+  useEffect(() => {
+    if (selectedDayMs === null) setSelectedCellMs(null);
+  }, [selectedDayMs]);
+
+  // The caret must follow its cell when the panel resizes.
+  useEffect(() => {
+    if (selectedDayMs === null) return undefined;
+    const root = rootRef.current;
+    if (!root) return undefined;
+    const sync = () => {
+      const element = selectedCellRef.current;
+      if (!element || !root.contains(element)) return;
+      onSelectDay({ dayStartMs: selectedDayMs, anchorX: measureAnchorX(element) });
+    };
+    const observer = new ResizeObserver(sync);
+    observer.observe(root);
+    return () => observer.disconnect();
+  }, [measureAnchorX, onSelectDay, selectedDayMs]);
+
+  const selectedDayTotal = useMemo(() => {
+    if (selectedDayMs === null) return null;
+    let total = 0;
+    for (const bucket of timeline.buckets) {
+      if (Math.floor(bucket.bucketStartMs / DAY_MS) * DAY_MS === selectedDayMs) {
+        total += metric === 'tokens' ? bucket.tokens : bucket.costUSD;
+      }
+    }
+    return total;
+  }, [metric, selectedDayMs, timeline.buckets]);
+
+  return (
+    <div ref={rootRef} className="min-w-0">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <p className="min-w-0 truncate text-[11px] tabular-nums text-muted-foreground">
+          {spanLabel}
+          <span className="text-muted-foreground/60">
+            {` · ${t('workspace.usage.skyline.activeIntervals')} ${activeCount}/${values.length}`}
+          </span>
+        </p>
+        <div className="flex shrink-0 items-center gap-3">
+          {peakBucket && (values[peakIndex] ?? 0) > 0 ? (
+            <p className="text-[11px] tabular-nums text-muted-foreground">
+              <span className="text-muted-foreground/60">{`${t('workspace.usage.skyline.peakInterval')} `}</span>
+              <span className="font-medium text-foreground">
+                {formatMetric(values[peakIndex] ?? 0, metric)}
+              </span>
+              <span className="text-muted-foreground/60">{` · ${peakBucket.bucketLabel}`}</span>
+            </p>
+          ) : null}
+          <HeatLegend />
+        </div>
+      </div>
+
+      {/* The donut ring lives outside this panel (and outside the range-switch
+          cross-fade) as its own column — only the matrix deforms on 24h <-> 7d. */}
+      <div className="mt-3">
+        {/* The frame keeps its height across ranges so the panel below it does
+            not jump while a range animates in. */}
+        <div
+          role="grid"
+          aria-label={t('workspace.usage.skyline.heatmap')}
+          className="relative min-h-[10.5rem] min-w-0"
+        >
+          <AnimatePresence mode="popLayout" initial={false}>
+            <motion.div
+              key={timeline.range}
+              initial={reduced ? false : { opacity: 0, filter: 'blur(6px)' }}
+              animate={{ opacity: 1, filter: 'blur(0px)' }}
+              exit={reduced ? { opacity: 0 } : { opacity: 0, filter: 'blur(6px)' }}
+              transition={{ duration: reduced ? 0 : 0.2, ease: 'easeOut' }}
+            >
+              {timeline.range === 'week' ? (
+                <UsageWeekMatrix
+                  timeline={timeline}
+                  metric={metric}
+                  intensityOf={intensityOf}
+                  reduced={reduced}
+                  weekdayFormat={formats.weekday}
+                  dayOfMonthFormat={formats.dayOfMonth}
+                  selectedCellMs={selectedCellMs}
+                  onToggleDay={toggleDay}
+                />
+              ) : (
+                <UsageDayMatrix
+                  buckets={timeline.buckets}
+                  metric={metric}
+                  intensityOf={intensityOf}
+                  reduced={reduced}
+                  selectedCellMs={selectedCellMs}
+                  onToggleDay={toggleDay}
+                />
+              )}
+            </motion.div>
+          </AnimatePresence>
+        </div>
+      </div>
+
+      {/* Fixed height, single line: the idle hint and the selected-day readout
+          trade places without resizing the panel. */}
+      <div className="mt-3 flex h-5 items-center">
+        <p
+          className="min-w-0 flex-1 truncate text-xs tabular-nums text-muted-foreground"
+          aria-live="polite"
+        >
+          {selectedDayMs !== null && selectedDayTotal !== null ? (
+            <>
+              {formats.day.format(new Date(selectedDayMs))}
+              {selectedDayTotal > 0
+                ? ` · ${formatMetric(selectedDayTotal, metric)}${
+                    metric === 'tokens' ? ` ${t('workspace.usage.tokens')}` : ''
+                  }`
+                : ` · ${t('workspace.usage.skyline.noUsage')}`}
+            </>
+          ) : (
+            <span className="inline-flex items-center gap-1.5">
+              <MousePointerClick className="h-3.5 w-3.5" aria-hidden="true" />
+              {t('workspace.usage.skyline.clickHint')}
+            </span>
+          )}
+        </p>
+      </div>
+    </div>
+  );
+}
+
 /**
  * Position only — the cell is resolved at render time so a metric switch cannot
  * stale it. Coordinates are relative to the heatmap root, not the scrolling
@@ -245,16 +1203,25 @@ type HeatmapTooltip = { left: number; top: number };
 /** A clicked day plus where its caret should sit, in heatmap-root coordinates. */
 export type UsageSelectedDay = { dayStartMs: number; anchorX: number };
 
+/** Opacity of a day that sits outside the selected window; it stays as context. */
+const OUT_OF_WINDOW_OPACITY = 0.3;
+
 function UsageHeatmap({
   model,
   metric,
   selectedDayMs,
   onSelectDay,
+  windowStartMs,
 }: {
   model: UsageCalendarModel;
   metric: UsageCalendarMetric;
   selectedDayMs: number | null;
   onSelectDay: (day: UsageSelectedDay | null) => void;
+  /**
+   * First day of the selected range. Earlier days stay on screen but recede, so
+   * 30d and all-time are the same skyline with a different day lit.
+   */
+  windowStartMs?: number;
 }) {
   const { t } = useTranslation();
   const formats = useCalendarFormats();
@@ -445,6 +1412,8 @@ function UsageHeatmap({
             >
               {model.cells.map((cell, index) => {
                 const intensity = cell.isFuture ? 0 : scale.intensity(cell.value);
+                const outsideWindow =
+                  windowStartMs !== undefined && cell.dayStartMs < windowStartMs;
                 return (
                   <button
                     key={cell.dayStartMs}
@@ -458,7 +1427,7 @@ function UsageHeatmap({
                     aria-selected={index === detailIndex}
                     className={cn(
                       'animate-usage-heatmap-cell aspect-square w-full rounded-[32%] outline-none',
-                      'transition-[filter] duration-150',
+                      'transition-[filter,opacity] duration-300 motion-reduce:transition-none',
                       !cell.isFuture &&
                         'hover:brightness-110 hover:ring-1 hover:ring-foreground/40',
                       'focus-visible:ring-2 focus-visible:ring-ring',
@@ -476,6 +1445,7 @@ function UsageHeatmap({
                         : intensity > 0
                           ? heatColor(intensity)
                           : EMPTY_DAY_COLOR,
+                      opacity: outsideWindow ? OUT_OF_WINDOW_OPACITY : 1,
                       animationDelay: `${cell.column * CELL_REVEAL_STAGGER_MS}ms`,
                     }}
                     onClick={() => toggleDay(index)}
@@ -810,6 +1780,7 @@ function FitCamera({
   width,
   depth,
   height,
+  centerX = 0,
   padding = 1,
   framing = 1,
   front = false,
@@ -817,6 +1788,7 @@ function FitCamera({
   width: number;
   depth: number;
   height: number;
+  centerX?: number;
   padding?: number;
   framing?: number;
   front?: boolean;
@@ -842,13 +1814,13 @@ function FitCamera({
     orthographic.top = frustumHeight / 2;
     orthographic.bottom = -frustumHeight / 2;
     orthographic.position.set(
-      front ? cameraDistance * 0.45 : cameraDistance,
+      centerX + (front ? cameraDistance * 0.45 : cameraDistance),
       cameraDistance * 0.72 + height,
       front ? -cameraDistance : cameraDistance
     );
-    orthographic.lookAt(0, height * 0.16, 0);
+    orthographic.lookAt(centerX, height * 0.16, 0);
     orthographic.updateProjectionMatrix();
-  }, [camera, depth, framing, front, height, padding, size.height, size.width, width]);
+  }, [camera, centerX, depth, framing, front, height, padding, size.height, size.width, width]);
   return null;
 }
 
@@ -869,75 +1841,6 @@ function SceneOrbitControls({ targetY }: { targetY: number }) {
 
   useFrame(() => controls.update());
   return null;
-}
-
-function UsageColumns({ model }: { model: UsageCalendarModel }) {
-  const meshRef = useRef<THREE.InstancedMesh>(null);
-  const dummy = useMemo(() => new THREE.Object3D(), []);
-  const color = useMemo(() => new THREE.Color(), []);
-  const activeCells = useMemo(
-    () => model.cells.filter((cell) => !cell.isFuture && cell.value > 0),
-    [model.cells]
-  );
-
-  useLayoutEffect(() => {
-    const mesh = meshRef.current;
-    if (!mesh) return;
-    mesh.count = activeCells.length;
-    for (const [index, cell] of activeCells.entries()) {
-      const height = getUsageColumnHeight(cell.value, model.maxValue, 'skyline');
-      dummy.position.set(
-        cell.column - (USAGE_CALENDAR_COLUMNS - 1) / 2,
-        height / 2,
-        cell.row - (USAGE_CALENDAR_ROWS - 1) / 2
-      );
-      dummy.scale.set(0.9, height, 0.9);
-      dummy.updateMatrix();
-      mesh.setMatrixAt(index, dummy.matrix);
-      color.set(LEVEL_COLORS[cell.level]);
-      mesh.setColorAt(index, color);
-    }
-    mesh.instanceMatrix.needsUpdate = true;
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-  }, [activeCells, color, dummy, model.maxValue]);
-
-  return (
-    <instancedMesh ref={meshRef} args={[undefined, undefined, Math.max(1, activeCells.length)]}>
-      <boxGeometry args={[1, 1, 1]} />
-      <meshStandardMaterial roughness={0.7} metalness={0.04} />
-    </instancedMesh>
-  );
-}
-
-function IsometricView({
-  model,
-  className,
-  framing,
-}: {
-  model: UsageCalendarModel;
-  className?: string;
-  framing?: number;
-}) {
-  const { t } = useTranslation();
-  return (
-    <div
-      aria-label={t('workspace.usage.skyline.isometric')}
-      className={cn('h-[300px] overflow-hidden rounded-md bg-muted/30 sm:h-[360px]', className)}
-    >
-      <Canvas orthographic dpr={[1, 2]} gl={{ alpha: true, antialias: true }}>
-        <ambientLight intensity={1.8} />
-        <directionalLight position={[22, 32, 18]} intensity={2.2} />
-        <directionalLight position={[-18, 12, -8]} intensity={0.55} color="#78c8ff" />
-        <FitCamera
-          width={USAGE_CALENDAR_COLUMNS}
-          depth={USAGE_CALENDAR_ROWS}
-          height={6}
-          framing={framing}
-        />
-        <UsageColumns model={model} />
-      </Canvas>
-    </div>
-  );
 }
 
 function SummaryStat({ label, value, detail }: { label: string; value: string; detail?: string }) {
@@ -999,6 +1902,71 @@ function UsageSummary({
       <SummaryStat
         label={t('workspace.usage.skyline.longestStreak')}
         value={String(model.longestStreak)}
+      />
+    </dl>
+  );
+}
+
+function UsageTimelineSummary({
+  timeline,
+  metric,
+}: {
+  timeline: SettingsUsageTimelineData;
+  metric: UsageCalendarMetric;
+}) {
+  const { t } = useTranslation();
+  const values = timeline.buckets.map((bucket) =>
+    metric === 'tokens' ? bucket.tokens : bucket.costUSD
+  );
+  const active = values.filter((value) => value > 0);
+  const peakIndex = values.reduce(
+    (peak, value, index) => (value > (values[peak] ?? 0) ? index : peak),
+    0
+  );
+  let currentStreak = 0;
+  for (let index = values.length - 1; index >= 0 && values[index]! > 0; index -= 1) {
+    currentStreak += 1;
+  }
+  let longestStreak = 0;
+  let streak = 0;
+  for (const value of values) {
+    streak = value > 0 ? streak + 1 : 0;
+    longestStreak = Math.max(longestStreak, streak);
+  }
+  const peakBucket = timeline.buckets[peakIndex];
+
+  return (
+    <dl className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3 lg:grid-cols-5">
+      <SummaryStat
+        label={t('workspace.usage.skyline.total')}
+        value={formatMetric(
+          metric === 'tokens' ? timeline.totals.tokens : timeline.totals.costUSD,
+          metric
+        )}
+      />
+      <SummaryStat
+        label={t('workspace.usage.skyline.averagePerInterval')}
+        value={formatMetric(
+          values.length > 0
+            ? (metric === 'tokens' ? timeline.totals.tokens : timeline.totals.costUSD) /
+                values.length
+            : 0,
+          metric
+        )}
+      />
+      <SummaryStat
+        label={t('workspace.usage.skyline.peakInterval')}
+        value={formatMetric(values[peakIndex] ?? 0, metric)}
+        detail={peakBucket?.bucketLabel ?? t('workspace.usage.skyline.noUsage')}
+      />
+      <SummaryStat
+        label={t('workspace.usage.skyline.activeIntervals')}
+        value={String(active.length)}
+        detail={t('workspace.usage.skyline.currentIntervalStreakDetail', { count: currentStreak })}
+      />
+      <SummaryStat
+        label={t('workspace.usage.skyline.longestStreak')}
+        value={String(longestStreak)}
       />
     </dl>
   );
@@ -1130,12 +2098,15 @@ function SkylineAscii({ content }: { content: string }) {
 
 export function UsageCalendarVisualization({
   calendar,
+  timeline,
   workspaceName,
   dayDetail,
   dayDetailLoading = false,
   onSelectedDayChange,
 }: {
   calendar: SettingsUsageCalendarData;
+  /** Selected-range timeline used for the compact skyline and 100% composition rings. */
+  timeline?: SettingsUsageTimelineData;
   workspaceName?: string;
   /** Breakdown for the currently selected day; the container owns the query. */
   dayDetail?: SettingsUsageDayData;
@@ -1157,6 +2128,15 @@ export function UsageCalendarVisualization({
   const tokenModel = useMemo(() => createUsageCalendarModel(calendar, 'tokens'), [calendar]);
   const costModel = useMemo(() => createUsageCalendarModel(calendar, 'costUSD'), [calendar]);
   const model = metric === 'tokens' ? tokenModel : costModel;
+  const reduced = useReducedMotion() ?? false;
+  /**
+   * 24h and 7d get the hourly range panel. 30d is the widest range and stays on
+   * the year skyline with its window lit, so 30d and all-time are one view.
+   */
+  const hourlyTimeline =
+    timeline && (timeline.range === 'day' || timeline.range === 'week') ? timeline : null;
+  const windowTimeline = timeline && timeline.range === 'month' ? timeline : null;
+  const rings = useUsageRingComposition(hourlyTimeline ?? undefined);
   const ascii = useMemo(() => createUsageSkylineAscii(tokenModel), [tokenModel]);
   const stem = fileStem(workspaceName || 'lody-usage');
 
@@ -1177,6 +2157,17 @@ export function UsageCalendarVisualization({
     },
     [onSelectedDayChange]
   );
+
+  // The hourly matrices remount on every range switch, which strands the caret
+  // anchor — a selection only survives 30d <-> all-time, where the heatmap
+  // re-measures its own cell.
+  const hourlyRange = hourlyTimeline?.range ?? null;
+  const previousHourlyRangeRef = useRef(hourlyRange);
+  useEffect(() => {
+    if (previousHourlyRangeRef.current === hourlyRange) return;
+    previousHourlyRangeRef.current = hourlyRange;
+    if (selectedDay) selectDay(null);
+  }, [hourlyRange, selectDay, selectedDay]);
 
   const copyAscii = async () => {
     try {
@@ -1269,7 +2260,11 @@ export function UsageCalendarVisualization({
             {t('workspace.usage.skyline.title')}
           </h3>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            {t('workspace.usage.skyline.subtitle')}
+            {hourlyTimeline
+              ? t(`workspace.usage.window.${hourlyTimeline.range}.long`)
+              : windowTimeline
+                ? t('workspace.usage.skyline.windowSubtitle')
+                : t('workspace.usage.skyline.subtitle')}
           </p>
         </div>
         <div className="flex items-center gap-1.5">
@@ -1345,17 +2340,87 @@ export function UsageCalendarVisualization({
       </header>
 
       <div className="p-4">
-        <UsageHeatmap
-          model={model}
-          metric={metric}
-          selectedDayMs={selectedDay?.dayStartMs ?? null}
-          onSelectDay={selectDay}
-        />
-        {/* Expanding a row height needs a definite value; the 0fr -> 1fr grid
-            track does it without measuring the panel. */}
+        {/* The donut ring is hourly-only chrome with its own fade; it never
+            joins the blur cross-fade of the matrix/heatmap container, it only
+            re-slices itself when the range's composition changes. One key for
+            both skyline ranges: 30d and all-time never unmount each other, so
+            widening the window only relights days in place. The hourly panel is
+            a different object — popLayout cross-fades the swap instead of
+            letting the old view vanish before the new one starts. */}
         <div
           className={cn(
-            'grid transition-[grid-template-rows,opacity] duration-300 ease-out motion-reduce:transition-none',
+            'relative min-w-0',
+            rings
+              ? 'grid items-center gap-x-6 gap-y-5 sm:grid-cols-[minmax(0,10.5rem)_minmax(0,1fr)]'
+              : ''
+          )}
+        >
+          {/* Hourly ranges only: the ring runs its own plain fade, independent
+              of the matrix container's blur cross-fade. popLayout pops the
+              leaving ring out of flow at its old spot — otherwise the grid
+              collapses to one column first and the exiting ring reflows to
+              full width for a frame before fading out. */}
+          <AnimatePresence mode="popLayout" initial={false}>
+            {rings && hourlyTimeline ? (
+              <motion.div
+                key="rings"
+                className="min-w-0"
+                initial={reduced ? false : { opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: reduced ? 0 : 0.15, ease: 'easeOut' }}
+              >
+                <UsageTokenRings
+                  segments={rings.segments}
+                  caption={rings.caption}
+                  total={
+                    metric === 'tokens'
+                      ? hourlyTimeline.totals.tokens
+                      : hourlyTimeline.totals.costUSD
+                  }
+                  totalLabel={
+                    metric === 'tokens' ? t('workspace.usage.tokens') : t('workspace.usage.cost')
+                  }
+                  metric={metric}
+                  reduced={reduced}
+                />
+              </motion.div>
+            ) : null}
+          </AnimatePresence>
+          <AnimatePresence mode="popLayout" initial={false}>
+            <motion.div
+              key={hourlyTimeline ? 'hourly' : 'skyline'}
+              className="w-full min-w-0"
+              initial={reduced ? false : { opacity: 0, filter: 'blur(6px)' }}
+              animate={{ opacity: 1, filter: 'blur(0px)' }}
+              exit={reduced ? { opacity: 0 } : { opacity: 0, filter: 'blur(6px)' }}
+              transition={{ duration: reduced ? 0 : 0.2, ease: 'easeOut' }}
+            >
+              {hourlyTimeline ? (
+                <UsageRangePanel
+                  timeline={hourlyTimeline}
+                  metric={metric}
+                  selectedDayMs={selectedDay?.dayStartMs ?? null}
+                  onSelectDay={selectDay}
+                />
+              ) : (
+                <UsageHeatmap
+                  model={model}
+                  metric={metric}
+                  selectedDayMs={selectedDay?.dayStartMs ?? null}
+                  onSelectDay={selectDay}
+                  windowStartMs={windowTimeline?.startMs}
+                />
+              )}
+            </motion.div>
+          </AnimatePresence>
+        </div>
+        {/* Expanding a row height needs a definite value; the 0fr -> 1fr grid
+            track does it without measuring the panel. The bezier approximates a
+            soft spring — fast start, slight overshoot, gentle settle. */}
+        <div
+          className={cn(
+            'grid transition-[grid-template-rows,opacity] duration-[450ms] ease-[cubic-bezier(0.34,1.25,0.64,1)] motion-reduce:transition-none',
             selectedDay ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'
           )}
           onTransitionEnd={() => {
@@ -1376,29 +2441,21 @@ export function UsageCalendarVisualization({
         </div>
       </div>
 
-      {/* Metrics band — the skyline lives here as a watermark. Hovering the band
-          brings it forward (opacity + a small lift) instead of giving the 3D view
-          a tab of its own. */}
-      <div className="group relative min-h-32 overflow-hidden border-t border-border/60 bg-muted/25 px-4 py-4 sm:min-h-36 sm:px-5">
-        <IsometricView
-          model={model}
-          className={cn(
-            'pointer-events-none absolute -right-16 -top-20 h-64 w-[38rem] origin-top-right rounded-none bg-transparent',
-            // Tailwind v4 emits the standalone `scale` property, not `transform`.
-            'opacity-15 transition-[opacity,scale] duration-500 ease-out max-sm:opacity-10',
-            'group-hover:scale-[1.06] group-hover:opacity-35',
-            'motion-reduce:transition-none motion-reduce:group-hover:scale-100'
-          )}
-          framing={0.4}
-        />
-        <img
-          src={lodyLogo}
-          alt="Lody"
-          className="pointer-events-none absolute bottom-3 right-4 h-7 w-7 object-contain opacity-80 sm:right-5"
-        />
-        <div className="relative">
+      {/* Metrics band: the by-model / by-member composition rules sit above the
+          range stats for whichever range is on screen. */}
+      <div className="bg-muted/25 px-4 py-4 sm:px-5">
+        {timeline ? (
+          <UsageCompositionSummary timeline={timeline} reduced={reduced} className="mb-6" />
+        ) : null}
+        {timeline ? (
+          timeline.range === 'total' ? (
+            <UsageSummary model={model} metric={metric} />
+          ) : (
+            <UsageTimelineSummary timeline={timeline} metric={metric} />
+          )
+        ) : (
           <UsageSummary model={model} metric={metric} />
-        </div>
+        )}
       </div>
 
       <div className="space-y-4 p-4 empty:hidden">
