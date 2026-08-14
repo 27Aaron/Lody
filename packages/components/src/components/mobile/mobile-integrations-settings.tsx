@@ -405,7 +405,7 @@ function MobileCloudIntegrationsSettings() {
           </MobileSettingsRow>
         </MobileSettingsRowGroup>
         {personalIdentityEnabled ? (
-          <div className="border-t border-border/40 px-3 py-3">
+          <div className="border-t border-border px-3 py-3">
             <GitHubPersonalIdentitySettingsCard
               enabled={personalIdentityEnabled}
               authorizationState={personalAuthorizationState}
@@ -447,7 +447,7 @@ function MobileCloudIntegrationsSettings() {
         }
       >
         {repos.length > 5 ? (
-          <div className="border-b border-border/40 px-3 py-2">
+          <div className="border-b border-border px-3 py-2">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input

@@ -96,7 +96,12 @@ embedded` lazy-imported from `../tasks/tasks-workspace.tsx` (`embedded`
   (`selectedMobileHomeTab` init); `mobile-workspace-stack.tsx` only keeps the
   `/chat` search/base context mounted under session drawers.
 - Settings: `mobile-settings-layout.tsx` / `mobile-settings-row.tsx` +
-  per-area `mobile-*-settings.tsx` pages.
+  per-area `mobile-*-settings.tsx` pages. In-card row dividers on `bg-card`
+  settings surfaces must use full-strength `border-border` (card outline
+  `border-border/60`) — `border-border/40` is invisible on the near-white
+  card, leaving rows visually glued together. `MobileSettingsSection` renders
+  `title`+`actions` on one header line and `description` full-width below it
+  (don't squeeze the description into the title column next to wide actions).
 - Sheets (bottom): `mobile-new-chat-sheet.tsx`,
   `mobile-workspace-switcher-sheet.tsx`, `mobile-create/delete-workspace-sheet`,
   `mobile-worktree-config-sheet.tsx`, `mobile-acp-history-sheet.tsx`,

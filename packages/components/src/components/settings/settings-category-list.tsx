@@ -95,7 +95,7 @@ export function SettingsCategoryList({ workspaceName }: SettingsCategoryListProp
               <h2 className="px-5 pb-1.5 text-[0.82rem] font-semibold text-muted-foreground">
                 {t(section.headingKey, section.defaultHeading)}
               </h2>
-              <div className="mx-3 overflow-hidden rounded-2xl border border-border/40 bg-card">
+              <div className="mx-3 overflow-hidden rounded-2xl border border-border/60 bg-card">
                 {sectionTabs.map((tab, index) => (
                   <SettingsCategoryRow
                     key={tab.id}
@@ -148,7 +148,7 @@ function SettingsCategoryRow({
       onClick={onSelect}
       className={cn(
         'block w-full text-left transition-colors active:bg-muted/40',
-        hasDivider && 'border-t border-border/40'
+        hasDivider && 'border-t border-border'
       )}
     >
       <div className="flex items-center gap-3 px-4 py-3">
@@ -181,7 +181,7 @@ function SettingsActionRow({
   onSelect: () => void;
 }) {
   return (
-    <div className="mx-3 overflow-hidden rounded-2xl border border-border/40 bg-card">
+    <div className="mx-3 overflow-hidden rounded-2xl border border-border/60 bg-card">
       <button
         type="button"
         onClick={onSelect}

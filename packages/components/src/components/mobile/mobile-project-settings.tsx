@@ -140,7 +140,7 @@ export function MobileProjectSettings({
       {visibleGithubSections.map((section) => (
         <MobileSettingsSection key={section.owner} title={`GitHub · ${section.owner}`}>
           {section.rows.map((row, rowIndex) => (
-            <div key={row.key} className={cn(rowIndex > 0 && 'border-t border-border/40')}>
+            <div key={row.key} className={cn(rowIndex > 0 && 'border-t border-border')}>
               <MobileSettingsRow
                 label={
                   <div className="flex min-w-0 items-center gap-3">
@@ -255,7 +255,7 @@ function MobileProjectRow({
   );
 
   return (
-    <div className={cn(hasDivider && 'border-t border-border/40')}>
+    <div className={cn(hasDivider && 'border-t border-border')}>
       <MobileSettingsRow label={label}>{shareControl}</MobileSettingsRow>
       <div className="mx-4 mb-3 flex flex-col gap-5">
         <WorktreeSetupEditor

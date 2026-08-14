@@ -529,13 +529,13 @@ export function MobileAccountSettings({
           actions={
             hasAdminPermission ? (
               <Button
-                size="icon"
-                variant="ghost"
-                className="h-8 w-8"
-                aria-label={t('workspace.members.invite')}
+                size="sm"
+                variant="outline"
+                className="h-8 px-2.5"
                 onClick={() => setInviteDialogOpen(true)}
               >
-                <UserPlus className="h-4 w-4" />
+                <UserPlus className="mr-1.5 h-3.5 w-3.5" />
+                {t('workspace.members.invite')}
               </Button>
             ) : undefined
           }
@@ -549,7 +549,7 @@ export function MobileAccountSettings({
                 key={member.id}
                 className={cn(
                   'flex items-center gap-3 px-4 py-3 text-sm',
-                  index > 0 && 'border-t border-border/40'
+                  index > 0 && 'border-t border-border'
                 )}
               >
                 <UserAvatar user={member.user} className="h-9 w-9 shrink-0 text-[12px]" />
@@ -615,7 +615,8 @@ export function MobileAccountSettings({
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                      aria-label={t('workspace.removeMember.title')}
+                      className="h-9 w-9 text-muted-foreground hover:text-destructive"
                       onClick={() => {
                         setUserToDelete(member.id);
                         setDeleteUserDialogOpen(true);
@@ -638,14 +639,16 @@ export function MobileAccountSettings({
               key={invitation.id}
               className={cn(
                 'flex items-center gap-3 px-4 py-3 text-sm',
-                index > 0 && 'border-t border-border/40'
+                index > 0 && 'border-t border-border'
               )}
             >
               <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted">
                 <Mail className="h-4 w-4 text-muted-foreground" />
               </div>
               <div className="min-w-0 flex-1">
-                <p className="truncate text-[0.95rem] font-medium leading-tight">
+                {/* Emails have no spaces — `truncate` cut long addresses to an
+                   unreadable stub on narrow phones; wrap them instead. */}
+                <p className="break-all text-[0.95rem] font-medium leading-tight">
                   {invitation.email}
                 </p>
                 <div className="mt-0.5 flex items-center gap-2 text-[0.72rem] text-muted-foreground">
@@ -662,7 +665,7 @@ export function MobileAccountSettings({
                     variant="ghost"
                     size="icon"
                     aria-label={t('workspace.invitations.copyLink')}
-                    className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                    className="h-9 w-9 text-muted-foreground hover:text-foreground"
                     onClick={() => {
                       void onCopyInviteLink(getInviteLink(invitation));
                     }}
@@ -673,7 +676,8 @@ export function MobileAccountSettings({
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                      aria-label={t('common.cancel')}
+                      className="h-9 w-9 text-muted-foreground hover:text-destructive"
                       disabled={cancellingInvitationIds.has(invitation.id)}
                       onClick={() => {
                         void (async () => {
@@ -758,7 +762,7 @@ export function MobileAccountSettings({
                   key={apiKey.id}
                   className={cn(
                     'flex flex-col gap-3 px-4 py-3 text-sm',
-                    index > 0 && 'border-t border-border/40'
+                    index > 0 && 'border-t border-border'
                   )}
                 >
                   <div className="min-w-0 space-y-1">
