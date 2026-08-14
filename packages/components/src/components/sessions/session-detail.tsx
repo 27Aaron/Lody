@@ -139,9 +139,9 @@ import { getCommandKeybindings, useCommand } from '@/lib/commands';
 import { cn, getBasename } from '@/lib';
 import { isMacOSElectronRenderer, useElectronFullscreen } from '@/lib/electron';
 import {
-  normalizeMarkdownAgentFilePath,
-  parseMarkdownAgentFileHref,
-} from '@/lib/markdown-agent-file-link';
+  resolveSessionFileOpenTarget,
+  type SessionFileOpenPathKind,
+} from '@/lib/session-file-open-target';
 import { SessionNotFound } from './session-not-found';
 import { SessionSyncingIndicator } from './session-syncing-indicator';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/ui/sheet';
@@ -293,6 +293,16 @@ type ViewerTab =
       mode?: 'conversation' | 'base';
       label: string;
     };
+
+type SessionDetailOpenFileOptions = {
+  /** Analytics only. */
+  readonly source?: 'file_tree' | 'conversation_file_diff' | 'lsp';
+  /** Defaults to `markdown-href`; see `lib/session-file-open-target.ts`. */
+  readonly pathKind?: SessionFileOpenPathKind;
+  /** Explicit 1-based anchor, for callers that have one without encoding it in the path. */
+  readonly startLine?: number;
+  readonly endLine?: number;
+};
 
 /** Mobile diff sheet state */
 type MobileDiffState = {
@@ -2824,21 +2834,24 @@ const SessionDetail = ({
   }, [replaceSessionUrlBrowser]);
 
   const handleOpenFile = useStableCallback(
-    (filePath: string, source: 'file_tree' | 'conversation_file_diff' = 'file_tree') => {
+    (filePath: string, options: SessionDetailOpenFileOptions = {}) => {
       setFileProviderRequestedByInteraction(true);
       void (async () => {
-        const normalizedFilePath = normalizeMarkdownAgentFilePath(
-          filePath,
-          activeSessionWorkspacePath
-        );
-        const parsedTarget = parseMarkdownAgentFileHref(normalizedFilePath);
-        const baseFilePath = parsedTarget?.filePath ?? normalizedFilePath;
+        // Where the path came from decides whether it may be rewritten at all;
+        // `resolveSessionFileOpenTarget` owns that rule and documents why.
+        const target = resolveSessionFileOpenTarget({
+          rawPath: filePath,
+          pathKind: options.pathKind ?? 'markdown-href',
+          workspacePath: activeSessionWorkspacePath,
+          ...(options.startLine === undefined ? {} : { startLine: options.startLine }),
+          ...(options.endLine === undefined ? {} : { endLine: options.endLine }),
+        });
         const resolution = await resolveSessionFileProviderOpenPath(
           activeSessionFileProvider,
-          baseFilePath
+          target.filePath
         ).catch(
           (): SessionFileProviderOpenPathResolution => ({
-            path: baseFilePath,
+            path: target.filePath,
             redirected: false,
           })
         );
@@ -2850,20 +2863,28 @@ const SessionDetail = ({
           filePath: resolvedFilePath,
           ...(resolution.fileId === undefined ? {} : { fileId: resolution.fileId }),
           label: getBasename(resolvedFilePath),
-          startLine: parsedTarget?.startLine,
-          endLine: parsedTarget?.endLine,
+          startLine: target.startLine,
+          endLine: target.endLine,
           focusRequestSeq: nextFocusRequestSeq(),
         });
         captureSessionDetailEvent('session/viewer_file_opened', {
-          source: parsedTarget ? 'markdown_link' : source,
+          source: target.fromMarkdownLink ? 'markdown_link' : (options.source ?? 'file_tree'),
           file_extension: getFileExtension(resolvedFilePath),
-          has_line_anchor: parsedTarget?.startLine != null,
-          line_suffix_format: parsedTarget?.lineSuffixFormat ?? null,
+          has_line_anchor: target.startLine != null,
+          line_suffix_format: target.lineSuffixFormat ?? null,
           symlink_redirected: resolution.redirected,
         });
       })();
     }
   );
+
+  /**
+   * Every entry point whose path came from the file index. Kept stable so the
+   * file tree's memoized rows do not re-render on each parent commit.
+   */
+  const handleOpenIndexedFile = useStableCallback((filePath: string) => {
+    handleOpenFile(filePath, { pathKind: 'canonical' });
+  });
 
   const handleOpenFileDiffForChat = useStableCallback((turnId: string, filePath: string) => {
     setFileProviderRequestedByInteraction(true);
@@ -4192,7 +4213,7 @@ const SessionDetail = ({
       providerPending={activeSessionFileProviderPending}
       providerMessage={activeSessionFileProviderMessage}
       fallbackPaths={changeFilePaths}
-      onOpenFile={handleOpenFile}
+      onOpenFile={handleOpenIndexedFile}
     />
   );
 
@@ -4216,13 +4237,18 @@ const SessionDetail = ({
           : { fileProviderRole: activeSessionCodeCollabFiles.role })}
         onSaveStateChange={(state) => handleViewerTabSaveStateChange(tab.id, state)}
         onOpenFile={(target) => {
-          // Keep the LSP locator in a VS Code-shaped suffix. The shared
-          // parser splits it back into path/line before provider lookup;
-          // the current viewer still scrolls by line, so column is only
-          // retained for round-tripping.
-          const column = target.character === undefined ? '' : `C${target.character + 1}`;
-          const line = target.line === undefined ? '' : `:L${target.line + 1}${column}`;
-          handleOpenFile(`${target.filePath}${line}`);
+          // The LSP locator travels as structured fields, never encoded into
+          // the path. Round-tripping it through a `:L<line>` suffix meant the
+          // path had to be re-parsed, and a filename that legitimately ends in
+          // `:<digits>` lost its tail. The viewer scrolls by line, so the
+          // column has nowhere to go and is dropped here rather than encoded.
+          handleOpenFile(target.filePath, {
+            pathKind: 'canonical',
+            // Was reported as `markdown_link` only because the locator used to
+            // ride in the path as a `:L<n>` suffix; name the real source now.
+            source: 'lsp',
+            ...(target.line === undefined ? {} : { startLine: target.line + 1 }),
+          });
         }}
         className={className}
       />
@@ -4798,7 +4824,7 @@ const SessionDetail = ({
                     message={activeSessionFileProviderMessage}
                     onOpenFile={(filePath) => {
                       setMobileFilesBrowserOpen(false);
-                      handleOpenFile(filePath);
+                      handleOpenIndexedFile(filePath);
                     }}
                     /* No bottom tab bar over this drawer — only the safe area
                        needs clearing. */
@@ -4957,7 +4983,7 @@ const SessionDetail = ({
     activeSidebarTab === 'files' ? (
       <FileTreeView
         session={activeSession}
-        handleOpenFile={handleOpenFile}
+        handleOpenFile={handleOpenIndexedFile}
         fileProvider={activeSessionFileProvider}
         fileProviderPending={activeSessionFileProviderPending}
         fileProviderMessage={activeSessionFileProviderMessage}

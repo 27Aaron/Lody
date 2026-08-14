@@ -113,6 +113,8 @@ mobile surfaces.
   workspace). So a result with `external: true` must be forced readonly regardless of
   what the index says — otherwise the editor shows a Save button for a file the machine
   will refuse, and the user loses the edit at save time.
+- Path provenance, skip-reason classification, and why file identity must come from the
+  machine's reported path: [src/lib/AGENTS.md](src/lib/AGENTS.md).
 - File-index rows must pass the shared Zod helpers. Preserve structured lazy-directory
   entries so `@file` completion can initialize a directory before refreshing results.
 - Turn-scoped diffs come from the CLI-local evidence store. Do not synthesize them from

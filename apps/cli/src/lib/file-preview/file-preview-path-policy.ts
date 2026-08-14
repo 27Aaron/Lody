@@ -50,6 +50,42 @@ export type FilePreviewPathPolicyOptions = {
   readonly extraRoots?: readonly string[];
   readonly env?: NodeJS.ProcessEnv;
   readonly homeDir?: string;
+  /**
+   * Overrides the two directory reads the tolerant walk makes. Only the WALK
+   * uses it — realpath, stat and containment always go to the real filesystem —
+   * so a test can force the fold branch to run while still exercising the real
+   * authorization check. See `FilePreviewDirectoryReader`.
+   */
+  readonly directoryReader?: FilePreviewDirectoryReader;
+};
+
+/**
+ * The two filesystem reads the tolerant walk needs, injectable so its folding
+ * rule can be tested for real.
+ *
+ * Without this seam the walk is only reachable on a case- and
+ * normalization-SENSITIVE volume: everywhere else `exists` answers true for the
+ * requested spelling and the fold branch never runs. macOS ships
+ * case-insensitive APFS by default, and this repository gates changes on a
+ * local check rather than CI, so the fold rule would ship with no executed
+ * coverage on the machine that approved it.
+ */
+export type FilePreviewDirectoryReader = {
+  /** Follows symlinks, like `fs.existsSync`. False for a broken link. */
+  readonly exists: (candidatePath: string) => boolean;
+  /** Entry names in `directoryPath`, or null when it cannot be listed. */
+  readonly readNames: (directoryPath: string) => readonly string[] | null;
+};
+
+const NODE_DIRECTORY_READER: FilePreviewDirectoryReader = {
+  exists: (candidatePath) => fs.existsSync(candidatePath),
+  readNames: (directoryPath) => {
+    try {
+      return fs.readdirSync(directoryPath);
+    } catch {
+      return null;
+    }
+  },
 };
 
 /**
@@ -113,6 +149,139 @@ function expandHome(input: string, homeDir: string): string {
   return input;
 }
 
+function toLexicalPath(input: string, workspaceRoot: string, homeDir: string): string {
+  const expanded = expandHome(input, homeDir);
+  return path.isAbsolute(expanded) ? path.resolve(expanded) : path.resolve(workspaceRoot, expanded);
+}
+
+/**
+ * The spellings of one request we are willing to look for on disk, in priority
+ * order. The verbatim string always wins: a file really can be named `" a.md"`
+ * or `"draft .md"`, and trimming first would make it permanently unopenable.
+ * The trimmed spelling is only a fallback, for whitespace a caller picked up in
+ * transit rather than from the filename.
+ */
+function buildLexicalCandidates(
+  requested: string,
+  workspaceRoot: string,
+  homeDir: string
+): readonly string[] {
+  const spellings = requested.trim() === requested ? [requested] : [requested, requested.trim()];
+  const candidates: string[] = [];
+  for (const spelling of spellings) {
+    const lexicalPath = toLexicalPath(spelling, workspaceRoot, homeDir);
+    if (!candidates.includes(lexicalPath)) candidates.push(lexicalPath);
+  }
+  return candidates;
+}
+
+/**
+ * Two spellings of one name that macOS, Linux and Git disagree about: letter
+ * case, and Unicode normalization (`é` as one code point vs `e` + U+0301).
+ * Matches `pathSegmentComparisonKey` in `code-collab-v2-service.ts` on purpose —
+ * the file index is built with that key, so a path the index hands us must
+ * resolve by the same rule here.
+ */
+function pathSegmentComparisonKey(segment: string): string {
+  return segment.normalize('NFC').toLocaleLowerCase('en-US');
+}
+
+/**
+ * Find the real on-disk spelling of `relativePath` under `rootPath`, tolerating
+ * case and Unicode-normalization differences per segment.
+ *
+ * This is RESOLUTION, not authorization, and the distinction is the whole
+ * reason it is sound. It never widens what may be read: each step appends one
+ * segment to the directory it is standing in — either the requested name
+ * verbatim, or a single listed entry that folds to it — and `.`/`..` are
+ * refused outright, so the walk cannot climb, jump absolute, or invent a
+ * segment. Whatever it returns still goes through the unchanged
+ * symlink-resolved, case-SENSITIVE containment check below, so a directory that
+ * is a symlink out of the root is still rejected there, exactly as before.
+ * (The walk may LIST a directory outside the root when it is reached through
+ * such a symlink; it can still never return a readable path from one.)
+ *
+ * Why it has to exist, precisely — the two halves are not the same claim:
+ * - NFC/NFD is a RESTORATION. `code-collab/open-text` resolved it
+ *   (`resolveExistingPathWithoutConflicts`), v3 replaced that with a raw
+ *   `path.resolve`, and files that had always opened stopped opening. A file
+ *   index holding the NFC spelling of a name stored on disk as NFD is routine.
+ * - Letter case is NEW tolerance. `open-text` never resolved it: its match test
+ *   is `entry.name === segment` then NFC-equality, so `readme.md` never found
+ *   `README.md` there either. Folding case is a deliberate widening for agents
+ *   that write a path from memory with the wrong case on a case-sensitive
+ *   volume. Note that WRITES stay case-exact — see the asymmetry recorded in
+ *   this directory's AGENTS.md.
+ *
+ * Ambiguity declines instead of guessing: if more than one entry answers to the
+ * folded spelling, the caller keeps its `file_not_found`.
+ *
+ * Exported for its own unit tests — see `FilePreviewDirectoryReader` for why the
+ * fold rule cannot be exercised through the public entry point on a typical
+ * development machine.
+ */
+export function resolveExistingPathIgnoringCaseAndNormalization(
+  rootPath: string,
+  relativePath: string,
+  reader: FilePreviewDirectoryReader = NODE_DIRECTORY_READER
+): string | null {
+  const segments = relativePath.split(path.sep).filter((segment) => segment.length > 0);
+  if (segments.length === 0) return null;
+  // The caller only reaches here with a path already known to be inside the
+  // root, so `path.relative` cannot have produced these. Refusing them anyway
+  // keeps this function safe to read on its own: the exact-name probe below
+  // would happily walk `..` upward if a future caller passed one.
+  if (segments.some((segment) => segment === '.' || segment === '..')) return null;
+
+  let currentPath = rootPath;
+  for (const segment of segments) {
+    // Usually only the last segment is spelled differently, so probe the exact
+    // name first: one `existsSync` instead of listing a directory that may hold
+    // a hundred thousand entries (`node_modules/.pnpm`). This walk is synchronous
+    // like the rest of the policy, so an avoidable `readdirSync` is event-loop
+    // time the daemon does not get back.
+    const exactPath = path.join(currentPath, segment);
+    if (reader.exists(exactPath)) {
+      currentPath = exactPath;
+      continue;
+    }
+    const entryNames = reader.readNames(currentPath);
+    if (entryNames === null) return null;
+    const comparisonKey = pathSegmentComparisonKey(segment);
+    const matches = entryNames.filter((name) => pathSegmentComparisonKey(name) === comparisonKey);
+    // Exactly one real file may answer to a folded spelling, or we decline. The
+    // ambiguity test MUST come before any preferred-match pick: `café.md` in NFC
+    // and in NFD are two different files that both look "exact" once you compare
+    // normalized, so picking one would hand back whichever `readdir` listed
+    // first. The byte-identical name was already taken by the probe above, so
+    // reaching here means no spelling is unambiguously right.
+    // `code-collab-v2-service.ts` rejects the same case as `path_conflict`.
+    if (matches.length !== 1) return null;
+    currentPath = path.join(currentPath, matches[0] as string);
+  }
+  return currentPath;
+}
+
+/**
+ * Retry a missed path against the real on-disk spelling, under the workspace
+ * root only. The extra roots (tmpdir, chats) hold machine-generated names that
+ * no index round-trips, so they have nothing to reconcile.
+ */
+function resolveWorkspacePathTolerantly(
+  lexicalPath: string,
+  workspaceRoots: readonly string[],
+  reader: FilePreviewDirectoryReader
+): string | null {
+  for (const root of workspaceRoots) {
+    if (!isWithinRoot(root, lexicalPath)) continue;
+    const relativePath = path.relative(root, lexicalPath);
+    if (!relativePath) continue;
+    const resolved = resolveExistingPathIgnoringCaseAndNormalization(root, relativePath, reader);
+    if (resolved !== null) return resolved;
+  }
+  return null;
+}
+
 /**
  * Resolve and authorize a requested preview path.
  *
@@ -142,10 +311,7 @@ export function resolveFilePreviewPath(args: {
 
   const homeDir = args.options?.homeDir ?? os.homedir();
   const workspaceRoot = path.resolve(args.workspaceRoot);
-  const expanded = expandHome(trimmed, homeDir);
-  const lexicalPath = path.isAbsolute(expanded)
-    ? path.resolve(expanded)
-    : path.resolve(workspaceRoot, expanded);
+  const lexicalCandidates = buildLexicalCandidates(requested, workspaceRoot, homeDir);
 
   const extraRoots = args.extraRoots ?? getDefaultFilePreviewExtraRoots(args.options);
   const realWorkspaceRoot = resolveRealPathOrNull(workspaceRoot) ?? workspaceRoot;
@@ -174,10 +340,43 @@ export function resolveFilePreviewPath(args: {
     },
   };
 
-  const realTarget = resolveRealPathOrNull(lexicalPath);
+  // Find a spelling that exists. Everything below authorizes whatever this
+  // step landed on, unchanged — resolution never grants a read on its own.
+  let realTarget: string | null = null;
+  for (const candidate of lexicalCandidates) {
+    realTarget = resolveRealPathOrNull(candidate);
+    if (realTarget !== null) break;
+  }
   if (realTarget === null) {
-    // Only reveal "missing" for a path that would have been allowed anyway.
-    return classificationRoots.some((root) => isWithinRoot(root, lexicalPath))
+    // Nothing matched literally. Before calling it missing, look for the real
+    // on-disk spelling of the name (case / Unicode normalization), which is how
+    // `code-collab/open-text` always resolved and what the file index encodes.
+    // Both spellings of the root are needed only when they actually differ (the
+    // lexical candidate is built from the unresolved one, so on macOS
+    // `/var/folders/…` vs `/private/var/folders/…` only one of them contains
+    // it). Passing the same string twice runs the whole synchronous walk twice.
+    const tolerantRoots =
+      realWorkspaceRoot === workspaceRoot ? [workspaceRoot] : [realWorkspaceRoot, workspaceRoot];
+    const reader = args.options?.directoryReader ?? NODE_DIRECTORY_READER;
+    for (const candidate of lexicalCandidates) {
+      const tolerant = resolveWorkspacePathTolerantly(candidate, tolerantRoots, reader);
+      if (tolerant !== null) {
+        realTarget = resolveRealPathOrNull(tolerant);
+        if (realTarget !== null) break;
+      }
+    }
+  }
+  if (realTarget === null) {
+    // Only reveal "missing" when EVERY spelling we were willing to look for is
+    // inside an allowed root. `every`, not `some` — `some` turns the two codes
+    // into an existence oracle for the whole filesystem: `" /etc/passwd"` keeps
+    // the leading space in the verbatim candidate, so that one resolves under
+    // the workspace and vouches for the trimmed candidate that actually escaped.
+    // The caller then reads `file_not_found` vs `path_not_allowed` as "does this
+    // path exist outside the workspace", which the boundary exists to prevent.
+    return lexicalCandidates.every((candidate) =>
+      classificationRoots.some((root) => isWithinRoot(root, candidate))
+    )
       ? { ok: false, rejection: { code: 'file_not_found', message: 'File was not found.' } }
       : notAllowed;
   }

@@ -1240,6 +1240,8 @@
   "sessions.fileError.pathCollision.title": "File path is ambiguous",
   "sessions.fileError.permissionDenied.description": "Lody does not have permission to read this file. Check the file or workspace permissions and try again.",
   "sessions.fileError.permissionDenied.title": "Access denied",
+  "sessions.fileError.sessionMismatch.description": "This session is still connecting to its workspace. Try opening the file again in a moment.",
+  "sessions.fileError.sessionMismatch.title": "File is not ready yet",
   "sessions.fileError.technicalDetails": "Technical details",
   "sessions.fileError.temporary.description": "The host could not read this file right now. Check that the host is online, then try again.",
   "sessions.fileError.temporary.title": "File is temporarily unavailable",

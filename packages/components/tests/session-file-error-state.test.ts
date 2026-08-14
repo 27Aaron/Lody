@@ -53,4 +53,28 @@ describe('getSessionFileErrorPresentation', () => {
       getSessionFileErrorPresentation('Session worktree is unavailable.', undefined, t)
     ).toMatchObject({ kind: 'temporarily-unavailable' });
   });
+
+  it('tells the user to retry an owner-session mismatch instead of giving up on the file', () => {
+    // The client derives the owner from synced session meta and the machine
+    // from the live session, so they disagree while a session is (re)starting.
+    expect(
+      getSessionFileErrorPresentation('Code Collab RPC owner session mismatch.', undefined, t)
+    ).toMatchObject({
+      kind: 'temporarily-unavailable',
+      title: 'File is not ready yet',
+    });
+  });
+
+  it('prefers the retry explanation over the permission reason the machine sends with it', () => {
+    // The machine codes an owner mismatch as `permission_denied`, which the
+    // provider maps to `permission-denied`. Taking the reason at face value
+    // renders "Access denied" — a permanent verdict on a transient race.
+    expect(
+      getSessionFileErrorPresentation(
+        'Code Collab RPC owner session mismatch.',
+        'permission-denied',
+        t
+      )
+    ).toMatchObject({ kind: 'temporarily-unavailable', title: 'File is not ready yet' });
+  });
 });

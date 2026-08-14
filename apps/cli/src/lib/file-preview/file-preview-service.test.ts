@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { gunzipSync } from 'node:zlib';
@@ -20,6 +20,30 @@ async function makeDir(prefix: string): Promise<string> {
   const dir = await mkdtemp(path.join(tmpdir(), prefix));
   created.push(dir);
   return dir;
+}
+
+/**
+ * Does this volume treat `writtenName` and `requestedName` as the same file?
+ * Probed rather than assumed: it is a property of the mount, not the OS —
+ * macOS ships case-insensitive APFS by default but case-sensitive is a
+ * supported format, and Linux volumes go both ways too.
+ */
+async function foldsSpelling(
+  directory: string,
+  writtenName: string,
+  requestedName: string
+): Promise<boolean> {
+  const probeDirectory = path.join(directory, '.spelling-probe');
+  await mkdir(probeDirectory, { recursive: true });
+  try {
+    await writeFile(path.join(probeDirectory, writtenName), 'probe');
+    await readFile(path.join(probeDirectory, requestedName));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    await rm(probeDirectory, { recursive: true, force: true });
+  }
 }
 
 const digestOf = (bytes: Uint8Array | string): string =>
@@ -317,6 +341,147 @@ describe('FilePreviewService', () => {
     });
 
     expect(response).toMatchObject({ status: 'error', code: 'path_not_allowed' });
+  });
+
+  // The requested spelling and the on-disk spelling of one name disagree
+  // routinely: an agent writes `Readme.md`, the file index stores NFC while the
+  // disk holds NFD, a path picks up whitespace in transit. `code-collab/
+  // open-text` resolved through all of that; File Preview v3 replaced it with a
+  // raw `path.resolve`, which turned "the file is right there" into
+  // `file_not_found`. These pin the resolution back — the four below them pin
+  // that it stayed resolution and did not become authorization.
+  it('opens a file whose on-disk name differs from the request only by letter case', async (ctx) => {
+    const workspaceRoot = await makeDir('preview-ws-');
+    await writeFile(path.join(workspaceRoot, 'README.md'), '# hi\n');
+    // A volume that folds case resolves this in `open` itself, so the fallback
+    // this test exists for never runs. Skipping says so out loud instead of
+    // reporting a pass that proved nothing — the bug is real on case-sensitive
+    // volumes (most Linux hosts, case-sensitive APFS), and that is where this
+    // has to be run to mean anything.
+    if (await foldsSpelling(workspaceRoot, 'README.md', 'readme.md')) {
+      ctx.skip();
+    }
+    const service = createService({ workspaceRoot });
+
+    const response = await service.previewFile({ v: 3, sessionId: SESSION_ID, path: 'readme.md' });
+
+    // Reported back with the REAL spelling: the client uses this as the viewer
+    // tab identity and to look the entry up in the file index.
+    expect(response).toMatchObject({ status: 'ok', path: 'README.md', kind: 'text' });
+  });
+
+  it('reports the on-disk spelling of a name back, not the requested one', async () => {
+    // Passes on both volume kinds by a different route, which is the point: a
+    // case-insensitive volume corrects the spelling in `realpathSync.native`, a
+    // case-sensitive one corrects it in the tolerant walk. Either way the
+    // client must receive the real name, because it becomes the viewer tab
+    // identity and the argument a later save is made with.
+    const workspaceRoot = await makeDir('preview-ws-');
+    await writeFile(path.join(workspaceRoot, 'README.md'), '# hi\n');
+    const service = createService({ workspaceRoot });
+
+    const response = await service.previewFile({ v: 3, sessionId: SESSION_ID, path: 'readme.md' });
+
+    expect(response).toMatchObject({ status: 'ok', path: 'README.md' });
+  });
+
+  it('opens a file whose on-disk name differs from the request by Unicode normalization', async (ctx) => {
+    const workspaceRoot = await makeDir('preview-ws-');
+    const composed = 'café.md'.normalize('NFC');
+    const decomposed = 'café.md'.normalize('NFD');
+    await mkdir(path.join(workspaceRoot, 'docs'), { recursive: true });
+    await writeFile(path.join(workspaceRoot, 'docs', decomposed), 'bonjour\n');
+    if (await foldsSpelling(workspaceRoot, decomposed, composed)) {
+      ctx.skip();
+    }
+    const service = createService({ workspaceRoot });
+
+    const response = await service.previewFile({
+      v: 3,
+      sessionId: SESSION_ID,
+      path: `docs/${composed}`,
+    });
+
+    expect(response).toMatchObject({ status: 'ok', kind: 'text' });
+  });
+
+  it('opens a file whose real name starts with a space instead of trimming it away', async () => {
+    const workspaceRoot = await makeDir('preview-ws-');
+    await writeFile(path.join(workspaceRoot, ' notes.md'), 'kept\n');
+    const service = createService({ workspaceRoot });
+
+    const response = await service.previewFile({ v: 3, sessionId: SESSION_ID, path: ' notes.md' });
+
+    expect(response).toMatchObject({ status: 'ok', path: ' notes.md', kind: 'text' });
+  });
+
+  it('still tolerates whitespace a caller picked up around a normal path', async () => {
+    const workspaceRoot = await makeDir('preview-ws-');
+    await mkdir(path.join(workspaceRoot, 'src'), { recursive: true });
+    await writeFile(path.join(workspaceRoot, 'src/app.ts'), 'const a = 1;\n');
+    const service = createService({ workspaceRoot });
+
+    const response = await service.previewFile({
+      v: 3,
+      sessionId: SESSION_ID,
+      path: '  src/app.ts  ',
+    });
+
+    expect(response).toMatchObject({ status: 'ok', path: 'src/app.ts' });
+  });
+
+  it('does not let a differently-cased request follow a symlink out of the workspace', async () => {
+    const workspaceRoot = await makeDir('preview-ws-');
+    const outside = await makeDir('preview-outside-');
+    await writeFile(path.join(outside, 'id_rsa'), 'PRIVATE KEY');
+    await symlink(outside, path.join(workspaceRoot, 'link'));
+    const service = createService({ workspaceRoot });
+
+    const response = await service.previewFile({
+      v: 3,
+      sessionId: SESSION_ID,
+      path: 'LINK/id_rsa',
+    });
+
+    expect(response).toMatchObject({ status: 'error', code: 'path_not_allowed' });
+  });
+
+  it('does not let a differently-cased request escape through `..`', async () => {
+    const workspaceRoot = await makeDir('preview-ws-');
+    const outside = await makeDir('preview-outside-');
+    await writeFile(path.join(outside, 'secret.txt'), 'PRIVATE');
+    const service = createService({ workspaceRoot });
+
+    const response = await service.previewFile({
+      v: 3,
+      sessionId: SESSION_ID,
+      path: `../${path.basename(outside).toUpperCase()}/SECRET.TXT`,
+    });
+
+    expect(response).toMatchObject({ status: 'error', code: 'path_not_allowed' });
+  });
+
+  it('does not turn not-found vs not-allowed into an existence probe past the boundary', async () => {
+    // A leading space keeps the verbatim candidate relative, so it resolves
+    // INSIDE the workspace while the trimmed candidate is the absolute path
+    // that actually escaped. If the classification step accepts any candidate
+    // rather than requiring all of them, the two error codes then split on
+    // whether the out-of-workspace file exists — an oracle over the whole
+    // filesystem, which is exactly what this boundary exists to prevent.
+    const workspaceRoot = await makeDir('preview-ws-');
+    const outside = await makeDir('preview-outside-');
+    await writeFile(path.join(outside, 'exists.txt'), 'SECRET');
+    const service = createService({ workspaceRoot });
+
+    const probe = async (name: string) =>
+      await service.previewFile({
+        v: 3,
+        sessionId: SESSION_ID,
+        path: ` ${path.join(outside, name)}`,
+      });
+
+    expect(await probe('exists.txt')).toMatchObject({ code: 'path_not_allowed' });
+    expect(await probe('never-existed.txt')).toMatchObject({ code: 'path_not_allowed' });
   });
 
   it('rejects a directory', async () => {

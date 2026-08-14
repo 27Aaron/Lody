@@ -135,6 +135,14 @@ export type CodeCollabSessionOpenTextCacheEntry = {
   readonly text: string;
   readonly rawBytes?: number;
   readonly format?: CodeCollabV2TextFormat;
+  /**
+   * Every cache key this entry is stored under, when there is more than one.
+   * Set by `openFile` when the machine resolved a different on-disk spelling
+   * than the request; `saveText` refreshes all of them, so a later
+   * `checkTextChanged` under either spelling sees the post-save digest instead
+   * of reporting our own save as an external change.
+   */
+  readonly cacheKeys?: readonly string[];
 };
 
 type SaveConflictCacheEntry = {
@@ -391,6 +399,7 @@ export class CodeCollabSessionFileProvider implements SessionFileProvider {
       // Binary is never put in the text open cache: that cache backs save-text
       // conflict detection, and there is no text to conflict on.
       this.openCache.delete(path);
+      this.openCache.delete(response.path);
       return {
         status: 'ready',
         entry,
@@ -411,12 +420,28 @@ export class CodeCollabSessionFileProvider implements SessionFileProvider {
             ...(response.format.bom === undefined ? {} : { bom: response.format.bom }),
             ...(response.format.eol === undefined ? {} : { eol: response.format.eol }),
           };
-    this.openCache.set(path, {
+    // Cache under BOTH spellings when the machine resolved a different one.
+    //
+    // `response.path` is required: it becomes `entry.fileId` above, so it is
+    // what `saveText` is later called with, and keying only by the request made
+    // save report "Open the file before saving it." for a file open on screen.
+    // The requested path is required too: the viewer tab keeps the spelling it
+    // was opened with (`session-detail.tsx` refreshes a tab's `fileId` from the
+    // file INDEX, which never learns the resolved name), so `checkTextChanged`
+    // and the next `openFile` still arrive with the original. Dropping that key
+    // silently disables the external-change pre-check and re-downloads the file
+    // on every re-open, because no `knownDigest` can be sent.
+    const cacheKeys = path === response.path ? undefined : [response.path, path];
+    const cacheEntry = {
       digest: response.digest,
       text,
       rawBytes: response.content.rawBytes,
       ...(format === undefined ? {} : { format }),
-    });
+      ...(cacheKeys === undefined ? {} : { cacheKeys }),
+    };
+    for (const key of cacheKeys ?? [response.path]) {
+      this.openCache.set(key, cacheEntry);
+    }
     return {
       status: 'ready',
       entry: {
@@ -538,12 +563,21 @@ export class CodeCollabSessionFileProvider implements SessionFileProvider {
       });
       throw new SaveTextConflictError(response.reason, conflictId);
     }
-    this.openCache.set(path, {
+    // Refresh EVERY key the open stored this entry under, not just the one the
+    // save was addressed to. The viewer tab keeps the requested spelling while
+    // `entry.fileId` carries the machine's, so after a save through the fileId a
+    // `checkTextChanged` with the tab spelling would otherwise find the pre-save
+    // digest and report our own save as an external change.
+    const savedEntry = {
       digest: response.digest,
       text,
       rawBytes: payload.rawBytes,
       format: cached.format,
-    });
+      ...(cached.cacheKeys === undefined ? {} : { cacheKeys: cached.cacheKeys }),
+    };
+    for (const key of cached.cacheKeys ?? [path]) {
+      this.openCache.set(key, savedEntry);
+    }
     this.emitText(path, text);
     return {
       status: 'ready',

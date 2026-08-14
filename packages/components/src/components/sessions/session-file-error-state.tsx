@@ -170,6 +170,26 @@ export function getSessionFileErrorPresentation(
     };
   }
 
+  // Also ahead of the reason mapping, and for the same reason the path check is:
+  // the machine reports an owner-session mismatch as `permission_denied`, so the
+  // reason alone renders it as "Access denied" — a permanent-sounding verdict on
+  // a file nobody was ever denied. It is a startup race. The client derives the
+  // owner from `parentSessionId ?? sessionId` in synced session meta while the
+  // machine derives it from the live session, and they disagree for exactly as
+  // long as that meta takes to land. The only correct advice is "try again".
+  // Matches both producers: `machine-rpc-server.ts` ("Code Collab RPC owner
+  // session mismatch.") and `rpc.ts` ("…payload owner session mismatch.").
+  if (normalized.includes('owner session mismatch')) {
+    return {
+      kind: 'temporarily-unavailable',
+      title: t('sessions.fileError.sessionMismatch.title', 'File is not ready yet'),
+      description: t(
+        'sessions.fileError.sessionMismatch.description',
+        'This session is still connecting to its workspace. Try opening the file again in a moment.'
+      ),
+    };
+  }
+
   if (reason) {
     return providerReasonPresentation(reason, t);
   }

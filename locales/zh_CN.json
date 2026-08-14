@@ -1239,6 +1239,8 @@
   "sessions.fileError.pathCollision.title": "文件路径存在冲突",
   "sessions.fileError.permissionDenied.description": "Lody 没有读取该文件的权限。请检查文件或工作区权限后重试。",
   "sessions.fileError.permissionDenied.title": "没有文件读取权限",
+  "sessions.fileError.sessionMismatch.description": "该会话仍在连接它的工作区。请稍候再打开这个文件。",
+  "sessions.fileError.sessionMismatch.title": "文件尚未就绪",
   "sessions.fileError.technicalDetails": "技术详情",
   "sessions.fileError.temporary.description": "主机目前无法读取该文件。请确认主机在线后重试。",
   "sessions.fileError.temporary.title": "文件暂时不可用",

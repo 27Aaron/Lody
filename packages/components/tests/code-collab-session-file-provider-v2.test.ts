@@ -616,4 +616,47 @@ describe('CodeCollabSessionFileProvider v2', () => {
       ],
     });
   });
+
+  it('keeps both spellings of a resolved open current across a save', async () => {
+    // The machine resolves `Readme.md` to `README.md`. The viewer tab keeps the
+    // requested spelling while `entry.fileId` carries the machine's, so the
+    // save arrives under one key and the next change-check under the other.
+    // Both must see the post-save digest, or the pre-check reports our own
+    // save as an external change.
+    const savedDigest = `sha256:${'3'.repeat(64)}` as CodeCollabV2FileDigest;
+    const refreshText = vi.fn<CodeCollabSessionFileProviderRuntime['refreshText']>(
+      async (_path: string, digest: string) =>
+        digest === savedDigest
+          ? { status: 'up_to_date', path: 'README.md', digest: savedDigest }
+          : (textResult('updated', 'stale\n', DIGEST_2, 'README.md') as Extract<
+              CodeCollabV2RefreshTextResponse,
+              { status: 'updated' }
+            >)
+    );
+    const runtime = createRuntime({
+      previewFile: vi.fn(async () => previewOk('one\n', DIGEST_1, 'README.md')),
+      refreshText,
+      saveText: vi.fn(async () => ({
+        status: 'ok',
+        path: 'README.md',
+        digest: savedDigest,
+        rawBytes: 5,
+      })),
+    });
+    const provider = new CodeCollabSessionFileProvider({ runtime, role: 'write', fileTree: {} });
+
+    const opened = await provider.openFile('Readme.md');
+    expect(opened).toMatchObject({ status: 'ready', entry: { fileId: 'README.md' } });
+
+    await expect(provider.saveText('README.md', 'mine\n')).resolves.toMatchObject({
+      status: 'ready',
+    });
+
+    // The requested spelling still answers the change-check with the NEW digest.
+    await expect(provider.checkTextChanged('Readme.md')).resolves.toMatchObject({
+      status: 'up_to_date',
+      digest: savedDigest,
+    });
+    expect(refreshText).toHaveBeenLastCalledWith('Readme.md', savedDigest);
+  });
 });

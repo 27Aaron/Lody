@@ -33,9 +33,46 @@ save path's text reads.
   subdirectories, never their parent.
 - Authorization is checked against the **symlink-resolved** target and roots, so a
   link inside the workspace pointing at `~/.ssh/id_rsa` is rejected.
-- Containment is case-SENSITIVE with no fallback. A case-folding fallback is unsound
-  on case-sensitive APFS (`/Users/x/Data` vs `/Users/x/data` are different dirs) and
-  buys nothing, since `realpathSync.native` already returns on-disk casing.
+- **Resolution and authorization are separate steps, and only one of them folds
+  case.** RESOLUTION finds the real on-disk spelling of a requested name: if no
+  candidate spelling exists, the policy walks the path down from the workspace
+  root and matches each segment case- and NFC/NFD-insensitively (the same
+  `pathSegmentComparisonKey` rule the file index is built with). Each step
+  appends either the requested name verbatim or ONE listed entry that folds to
+  it, and `.`/`..` are refused, so it cannot climb or invent a segment.
+  AUTHORIZATION is unchanged: containment is case-SENSITIVE with no fallback,
+  and it runs on the symlink-resolved result of whatever resolution produced.
+  Case-folded CONTAINMENT would be unsound on case-sensitive APFS
+  (`/Users/x/Data` vs `/Users/x/data` are different dirs); case-folded
+  RESOLUTION hands the containment check a real path and grants nothing. Do not
+  merge them.
+- The two halves of that tolerance are NOT the same claim, and the difference is
+  load-bearing: NFC/NFD is a RESTORATION (`code-collab/open-text` resolved it via
+  `resolveExistingPathWithoutConflicts`; v3 dropped it and files that had always
+  opened stopped opening). Letter case is NEW — `open-text` matches on
+  `entry.name === segment` then NFC-equality, so `readme.md` never found
+  `README.md` there either. Consequence to keep in mind: **preview reads
+  case-tolerantly, writes stay case-exact.** `save-text`/`refresh-text` still go
+  through the case-intolerant resolver, which is survivable only because the
+  client adopts the machine's reported `path` as the file identity.
+- Ambiguity declines, it does not guess: more than one entry folding to the
+  requested spelling returns no match. The byte-identical name is probed first,
+  so reaching the fold branch means no spelling is unambiguously right.
+- The verbatim request is tried before the trimmed one: `" notes.md"` is a real
+  filename, so trimming first made it permanently unopenable.
+- Missing-path classification requires EVERY candidate spelling to be inside an
+  allowed root (`every`, never `some`). With `some`, a request like
+  `" /etc/passwd"` keeps its leading space in the verbatim candidate, which then
+  resolves under the workspace and vouches for the trimmed candidate that
+  escaped — turning `file_not_found` vs `path_not_allowed` into an existence
+  oracle for the whole filesystem. Regression test:
+  "does not turn not-found vs not-allowed into an existence probe past the
+  boundary".
+- The fold rule is unit-tested through an injected `FilePreviewDirectoryReader`
+  (`file-preview-path-policy.test.ts`), not only against the real filesystem.
+  On a case-insensitive volume — the macOS default, and this repo gates on a
+  LOCAL check — the walk is unreachable through the public entry point, so
+  fs-backed tests alone leave it with zero executed coverage.
 - A missing target has no realpath, so its classification compares against BOTH the
   resolved and unresolved roots — roots are routinely reached through a symlink
   (macOS `os.tmpdir()` is `/var/folders/…` living at `/private/var/folders/…`), and
