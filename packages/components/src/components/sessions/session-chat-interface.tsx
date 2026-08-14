@@ -21,9 +21,11 @@ import {
   Check,
   ChevronDown,
   Copy,
+  CornerLeftUp,
   Ellipsis,
   Folder,
   GitBranch,
+  GitBranchPlus,
   GitFork,
   Github,
   History,
@@ -114,7 +116,11 @@ import { taskIndexRowsAtom } from '@/atoms/tasks';
 import { tasksFeatureEnabledAtom } from '@/atoms/settings';
 import { activeWorkspaceRuntimeAtom } from '@/atoms/runtime';
 import { browserOnlineAtom } from '@/atoms/control-connection';
-import { docMetaCacheReadyAtom } from '@/atoms/doc-meta';
+import {
+  docMetaCacheReadyAtom,
+  openedSessionsAtomFamily,
+  sessionMetaAtomFamily,
+} from '@/atoms/doc-meta';
 import { useMachineOnlineStatus } from '@/hooks/use-machine-online-status';
 import { useDelayedFlag } from '@/hooks/use-delayed-flag';
 import { resolveSessionStatusStripState } from './session-status-strip';
@@ -197,6 +203,11 @@ import { ReviewAgentSetupDialog } from './auto-review-info';
 import { AutoReviewStatus } from './auto-review-status';
 import { useAutoReview } from '@/hooks/use-auto-review';
 import { ConversationColumn } from '@/components/shared/conversation-column';
+import { SessionRelationCard } from '@/components/shared/session-relation-card';
+import {
+  resolveOpenedByNavigationTarget,
+  type SessionNavigationTarget,
+} from '@/lib/session-navigation';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -931,6 +942,21 @@ export type SessionOwnerMenuState = {
   pendingUserId?: string | null;
 };
 
+/**
+ * Navigation across the presentation-only "opened by" relationship (see
+ * `lib/session-opened-by-tree.ts`). Both directions live here so an
+ * MCP-opened independent Session can walk back to the Session that created it,
+ * and an opener can reach every Session it opened, from inside the
+ * conversation — not only from the sidebar tree.
+ */
+export type SessionOpenedByMenuState = {
+  /** The Session that created this one, when it is still resolvable. */
+  openedBy?: { sessionId: SessionId; title: string; target: SessionNavigationTarget } | null;
+  /** Independent Sessions this Session opened, oldest first. */
+  opened?: Array<{ sessionId: SessionId; title: string; target: SessionNavigationTarget }>;
+  onOpenSession: (target: SessionNavigationTarget) => void;
+};
+
 /** Session header "···" menu — context, visibility, sharing, and session actions. */
 export function SessionHeaderMenu({
   session,
@@ -947,6 +973,7 @@ export function SessionHeaderMenu({
   onRename,
   onOpenReviewSettings,
   owner,
+  openedByRelations,
   onArchive,
   onRestore,
   onDelete,
@@ -970,6 +997,8 @@ export function SessionHeaderMenu({
   onOpenReviewSettings?: () => void;
   /** Multi-member workspaces only; omitted elsewhere. */
   owner?: SessionOwnerMenuState;
+  /** Omitted when this Session neither opened nor was opened by another. */
+  openedByRelations?: SessionOpenedByMenuState;
   onArchive?: () => void | Promise<void>;
   onRestore?: () => void | Promise<void>;
   onDelete?: () => void | Promise<void>;
@@ -1004,6 +1033,51 @@ export function SessionHeaderMenu({
     (sharing?.visibility === 'private' &&
       (sharing.privateReason === 'machine-not-registered' || !sharing.canManage));
   const [reviewSetupOpen, setReviewSetupOpen] = useState(false);
+
+  const openedBySession = openedByRelations?.openedBy ?? null;
+  const openedSessions = openedByRelations?.opened ?? [];
+  const openedByRelationRows =
+    openedByRelations && (openedBySession || openedSessions.length > 0) ? (
+      <>
+        {openedBySession ? (
+          <DropdownMenuItem
+            onClick={() => {
+              openedByRelations.onOpenSession(openedBySession.target);
+            }}
+            title={openedBySession.title}
+          >
+            <CornerLeftUp className="h-3.5 w-3.5 shrink-0" />
+            <span className="min-w-0 flex-1 truncate">
+              {t('sessions.openedBy.openOpener', 'Opened by')}: {openedBySession.title}
+            </span>
+          </DropdownMenuItem>
+        ) : null}
+        {openedSessions.length > 0 ? (
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>
+              <GitBranchPlus className="h-3.5 w-3.5 shrink-0" />
+              <span className="min-w-0 flex-1 truncate">
+                {t('sessions.openedBy.openedSessions', 'Opened sessions')} ({openedSessions.length})
+              </span>
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent className="max-h-72 min-w-[200px] max-w-[280px] overflow-y-auto">
+              {openedSessions.map((opened) => (
+                <DropdownMenuItem
+                  key={opened.sessionId}
+                  onClick={() => {
+                    openedByRelations.onOpenSession(opened.target);
+                  }}
+                  title={opened.title}
+                >
+                  <span className="min-w-0 flex-1 truncate">{opened.title}</span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        ) : null}
+        <DropdownMenuSeparator />
+      </>
+    ) : null;
 
   const copyToClipboard = useCallback(
     // successMessage names what was copied in a full sentence (e.g. "Base
@@ -1156,6 +1230,8 @@ export function SessionHeaderMenu({
             </>
           ) : null}
 
+          {openedByRelationRows}
+
           {onOpenSearch && (
             <DropdownMenuItem
               onClick={() => {
@@ -1260,10 +1336,13 @@ export function SessionHeaderMenu({
               {sharing.visibility === 'unknown'
                 ? t('sessions.sharing.loadingAction', 'Checking sharing…')
                 : sharing.privateReason === 'machine-not-registered'
-                ? t('sessions.sharing.registerDeviceToShare', 'Register this device before sharing')
-                : sharing.canManage
-                ? t('sessions.sharing.shareWithTeam', 'Share with team…')
-                : t('sessions.sharing.onlyOwnerCanShare', 'Only the device owner can share')}
+                  ? t(
+                      'sessions.sharing.registerDeviceToShare',
+                      'Register this device before sharing'
+                    )
+                  : sharing.canManage
+                    ? t('sessions.sharing.shareWithTeam', 'Share with team…')
+                    : t('sessions.sharing.onlyOwnerCanShare', 'Only the device owner can share')}
             </DropdownMenuItem>
           ) : null}
 
@@ -1643,7 +1722,7 @@ interface SessionChatInterfaceProps {
   onForkLastAssistant?: (turnId: string) => void;
   forkingAssistantMessageId?: string | null;
   /** Opens another session from an in-conversation link (e.g. a fork's origin). */
-  onNavigateSession?: (sessionId: SessionId) => void;
+  onNavigateSession?: (target: SessionNavigationTarget) => void;
   /** Signals when this mounted conversation surface has loaded durable history. */
   onConversationPrepared?: () => void;
   /** Signals a terminal failure while preparing this conversation surface. */
@@ -1794,11 +1873,11 @@ export const SessionChatInterface = memo(
       analyticsSessionProject?.kind === 'github' ? analyticsSessionProject.repoFullName : null;
     const analyticsSessionProjectGithubRepoFullName =
       analyticsSessionProject?.kind === 'local'
-        ? analyticsSessionProject.githubRepoFullName ?? null
+        ? (analyticsSessionProject.githubRepoFullName ?? null)
         : null;
     const analyticsSessionProjectLocalProjectId =
       analyticsSessionProject?.kind === 'local'
-        ? analyticsSessionProject.localProjectId ?? null
+        ? (analyticsSessionProject.localProjectId ?? null)
         : null;
     const sessionAnalyticsProject = useMemo(
       () =>
@@ -2799,12 +2878,12 @@ export const SessionChatInterface = memo(
     const searchContextValue = useMemo(() => {
       const isSearchActive = isSearchOpen && normalizedSearchQuery.length > 0;
       const matchedBlockIds = isSearchActive ? Array.from(searchBlockMatches.keys()) : [];
-      const activeBlockId = isSearchActive ? activeSearchResult?.blockId ?? null : null;
+      const activeBlockId = isSearchActive ? (activeSearchResult?.blockId ?? null) : null;
       return {
         isOpen: isSearchActive,
         query: isSearchActive ? normalizedSearchQuery : '',
         activeBlockId,
-        activeResultId: isSearchActive ? activeSearchResult?.resultId ?? null : null,
+        activeResultId: isSearchActive ? (activeSearchResult?.resultId ?? null) : null,
         blockMatches: isSearchActive ? searchBlockMatches : new Map(),
         hasMatchedPrefix: (prefix: string) =>
           matchedBlockIds.some((blockId) => blockId === prefix || blockId.startsWith(`${prefix}:`)),
@@ -3209,7 +3288,7 @@ export const SessionChatInterface = memo(
         const projectRepoFullName =
           typeof rawProject.repoFullName === 'string'
             ? rawProject.repoFullName.trim()
-            : session.repoFullName?.trim() ?? '';
+            : (session.repoFullName?.trim() ?? '');
         if (!projectRepoFullName) {
           return undefined;
         }
@@ -3234,7 +3313,7 @@ export const SessionChatInterface = memo(
             typeof rawProject.githubRepoFullName === 'string' &&
             rawProject.githubRepoFullName.trim()
               ? rawProject.githubRepoFullName.trim()
-              : session.repoFullName?.trim() ?? undefined,
+              : (session.repoFullName?.trim() ?? undefined),
           ...(branch ? { branch } : {}),
           ...(typeof rawProject.useWorktree === 'boolean'
             ? { useWorktree: rawProject.useWorktree }
@@ -4092,7 +4171,7 @@ export const SessionChatInterface = memo(
 
     const effectivePrStatus = activePrData
       ? derivePrStatusFromDetails(activePrData.pullRequest)
-      : latestPr?.status ?? null;
+      : (latestPr?.status ?? null);
 
     // The compact `SessionMeta.pullRequests` status (`latestPr.status`) is only
     // written by the CLI PR poller / webhook fan-out, so it can lag behind
@@ -4139,6 +4218,71 @@ export const SessionChatInterface = memo(
       },
       [router, workspaceSlug]
     );
+
+    // Presentation-only "opened by" provenance (MCP `lody_session_create`).
+    // Read from the already-loaded session meta cache, so it costs no extra
+    // document. `parentSessionId` children are excluded by the atom — they are
+    // child tabs / side chats and must keep their own semantics.
+    const openerSessionId = session.openedBySessionId ?? null;
+    const openerSessionMeta = useAtomValue(
+      sessionMetaAtomFamily(openerSessionId ? getSessionRoomId(openerSessionId) : '')
+    );
+    const openedSessions = useAtomValue(openedSessionsAtomFamily(session.id));
+    const openerNavigationTarget = useMemo(
+      () => resolveOpenedByNavigationTarget(session, openerSessionMeta),
+      [openerSessionMeta, session]
+    );
+    const handleOpenRelatedSession = useCallback(
+      (target: SessionNavigationTarget) => {
+        onNavigateSession?.(target);
+      },
+      [onNavigateSession]
+    );
+    const openedByRelations = useMemo<SessionOpenedByMenuState | undefined>(() => {
+      const opened = openedSessions.map((item) => ({
+        sessionId: item.id,
+        title: (item.title ?? '').trim() || t('sessions.untitled', 'Untitled session'),
+        target: { sessionId: item.id },
+      }));
+      // An opener that is archived or not synced to this client still has a
+      // usable id, so navigation stays available; only the label falls back.
+      const openedBy = openerSessionId && openerNavigationTarget
+        ? {
+            sessionId: openerSessionId,
+            title:
+              (openerSessionMeta?.title ?? '').trim() || t('sessions.untitled', 'Untitled session'),
+            target: openerNavigationTarget,
+          }
+        : null;
+      if (!openedBy && opened.length === 0) return undefined;
+      return { openedBy, opened, onOpenSession: handleOpenRelatedSession };
+    }, [
+      handleOpenRelatedSession,
+      openedSessions,
+      openerNavigationTarget,
+      openerSessionId,
+      openerSessionMeta?.title,
+      t,
+    ]);
+    const openedByConversationStart = useMemo(() => {
+      const openedBy = openedByRelations?.openedBy;
+      if (!openedBy) return undefined;
+      return (
+        <ConversationColumn className="py-2 sm:py-3">
+          <SessionRelationCard
+            relation="opened-by"
+            label={t(
+              'sessions.openedBy.createdAutomaticallyBy',
+              'This session was automatically created by'
+            )}
+            sessionTitle={openedBy.title}
+            actionLabel={t('sessions.openedBy.backToOpener', 'Back to session')}
+            actionIcon={CornerLeftUp}
+            onAction={() => openedByRelations.onOpenSession(openedBy.target)}
+          />
+        </ConversationColumn>
+      );
+    }, [openedByRelations, t]);
 
     const infoBarContextActions = useMemo<ContextChipAction[]>(() => {
       // The CI pill renders from live check runs, so the action gating must
@@ -5206,6 +5350,7 @@ export const SessionChatInterface = memo(
         }}
         onOpenReviewSettings={() => openSettings('preferences')}
         owner={ownerMenuState}
+        openedByRelations={openedByRelations}
         onArchive={onArchiveSession}
         onRestore={onRestoreSession}
         onDelete={onDeleteSession}
@@ -5343,6 +5488,7 @@ export const SessionChatInterface = memo(
                           sessionCreatedAt={session?.createdAt}
                           dividerLabel={sessionDividerLabel}
                           className="h-full"
+                          leadingContent={openedByConversationStart}
                           emptyState={chatStreamEmptyState}
                           agentActivityLabel={agentActivityLabel}
                           agentActivityTone={agentActivityTone}

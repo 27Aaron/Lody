@@ -167,6 +167,10 @@ Two things the dev build does deliberately, both load-bearing:
   public wait tool.
   Legacy single create/chat `wait=true` remains a temporary compatibility adapter;
   new callers must not depend on it. Child Sessions are one level deep only.
+  An independent Session created from inside another Session persists exact provenance in
+  `openedBySessionId`. If that opener is a child Tab, it also sparsely persists the Tab owner's
+  root route as `openedByRootSessionId`; clients need both ids to restore the exact originating
+  Tab. Do not rewrite the exact opener to the root or treat either pointer as `parentSessionId`.
 - Local daemon IPC sends the real control request once; do not restore a health preflight.
   Native `LocalDaemonAvailabilityError` must be thrown outside the Effect runtime boundary
   so MCP can preserve `DAEMON_NOT_RUNNING` versus retryable `DAEMON_BUSY`. A connection

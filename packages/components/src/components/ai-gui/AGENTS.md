@@ -97,6 +97,11 @@ context/message-flow.md.
   can't make virtua overlap deterministically: drops empty assistant entries (they'd
   render to `null` = an unmeasurable row) and de-dupes by `id` (the VList keys rows
   by `history.id`; duplicate keys desync virtua). Test: `tests/build-chat-stream-items.test.ts`.
+- `SessionChatStreamView.leadingContent` is a real first Virtua row used for non-history
+  conversation provenance. Its presence must be included in sticky-scroll item counts and added to
+  every imperative/search/group `scrollToIndex` target. Do not absolutely overlay it or persist a
+  synthetic history entry. `session_create` Operation completions render one navigable relation
+  card per successful target and select only that target Session's title from doc meta.
 - `markdown-renderer.tsx` — assistant markdown (story: `MarkdownRenderer.stories.tsx`).
   Keep Streamdown in streaming mode for incomplete Markdown, but do not enable its
   word-level `animated` option: it wraps every word in an opacity-animated span and can

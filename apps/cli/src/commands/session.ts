@@ -258,6 +258,7 @@ type SessionStatusResult = {
     latestUserMsgId?: string;
   };
   openedBySessionId?: SessionId;
+  openedByRootSessionId?: SessionId;
   parentSessionId?: SessionId;
   latestUserMsgId?: string;
   processingUserMsgId?: string;
@@ -298,6 +299,7 @@ type ResolvedCreateContext = {
   project?: ProjectRef;
   parentSessionId?: SessionId;
   openedBySessionId?: SessionId;
+  openedByRootSessionId?: SessionId;
   taskId?: TaskId;
 };
 
@@ -2420,6 +2422,18 @@ export function resolveCreateCurrentSessionId(
     SessionId | undefined;
 }
 
+export function resolveOpenedBySessionRelation(
+  currentSession: Pick<SessionMeta, 'id' | 'parentSessionId'> | undefined
+): { openedBySessionId?: SessionId; openedByRootSessionId?: SessionId } {
+  if (!currentSession) return {};
+  return {
+    openedBySessionId: currentSession.id,
+    ...(currentSession.parentSessionId
+      ? { openedByRootSessionId: currentSession.parentSessionId }
+      : {}),
+  };
+}
+
 export function assertSupportedParentDepth(
   parentSession: Pick<SessionMeta, 'parentSessionId'> | undefined
 ): void {
@@ -2568,7 +2582,7 @@ async function resolveCreateContext(args: {
     agentConfig,
     ...(project ? { project } : {}),
     ...(parentSessionId ? { parentSessionId } : {}),
-    ...(currentSession ? { openedBySessionId: currentSession.id } : {}),
+    ...resolveOpenedBySessionRelation(currentSession),
     ...(taskId ? { taskId } : {}),
   };
 }
@@ -2756,6 +2770,7 @@ export async function createSessionResult(
   project?: ProjectRef;
   parentSessionId?: SessionId;
   openedBySessionId?: SessionId;
+  openedByRootSessionId?: SessionId;
   completionPromise?: Promise<Awaited<ReturnType<typeof waitForTurnCompletion>>>;
 }> {
   const envOverrides = parseEnvAssignments(options.env);
@@ -2782,8 +2797,15 @@ export async function createSessionResult(
     options.sessionOwnerUserId
   );
   const resolved = await resolveCreateContext({ auth, workspace, manager, options });
-  const { targetMachine, agentConfig, project, parentSessionId, openedBySessionId, taskId } =
-    resolved;
+  const {
+    targetMachine,
+    agentConfig,
+    project,
+    parentSessionId,
+    openedBySessionId,
+    openedByRootSessionId,
+    taskId,
+  } = resolved;
   const effectiveDispatchConfig = await resolveEffectiveSessionCreateDispatchConfig({
     manager,
     workspaceId: workspace.id as WorkspaceId,
@@ -2814,6 +2836,7 @@ export async function createSessionResult(
     ...(baseBranch ? { baseBranch } : {}),
     ...(parentSessionId ? { parentSessionId } : {}),
     ...(openedBySessionId ? { openedBySessionId } : {}),
+    ...(openedByRootSessionId ? { openedByRootSessionId } : {}),
     ...(taskId ? { taskId } : {}),
   } satisfies SessionMeta);
 
@@ -2908,6 +2931,7 @@ export async function createSessionResult(
       ...(project ? { project } : {}),
       ...(parentSessionId ? { parentSessionId } : {}),
       ...(openedBySessionId ? { openedBySessionId } : {}),
+      ...(openedByRootSessionId ? { openedByRootSessionId } : {}),
       ...(taskId ? { taskId } : {}),
       completionPromise,
     };
@@ -3314,6 +3338,9 @@ async function buildSessionStatusResult(
         }
       : {}),
     ...(session.openedBySessionId ? { openedBySessionId: session.openedBySessionId } : {}),
+    ...(session.openedByRootSessionId
+      ? { openedByRootSessionId: session.openedByRootSessionId }
+      : {}),
     ...(session.parentSessionId ? { parentSessionId: session.parentSessionId } : {}),
     ...(session.latestUserMsgId ? { latestUserMsgId: session.latestUserMsgId } : {}),
     ...(session.processingUserMsgId ? { processingUserMsgId: session.processingUserMsgId } : {}),
@@ -3359,6 +3386,7 @@ function printHumanSessionShow(result: SessionShowResult): void {
   console.log(`agentConfigId: ${session.agentConfigId ?? '-'}`);
   console.log(`parentSessionId: ${session.parentSessionId ?? '-'}`);
   console.log(`openedBySessionId: ${session.openedBySessionId ?? '-'}`);
+  console.log(`openedByRootSessionId: ${session.openedByRootSessionId ?? '-'}`);
   console.log(`repo: ${normalizeCliValue(session.repoFullName) ?? '-'}`);
   console.log(`baseBranch: ${session.baseBranch ?? '-'}`);
   console.log(`branch: ${session.branchName ?? '-'}`);
@@ -3380,6 +3408,7 @@ function printHumanSessionStatus(result: SessionStatusResult): void {
   console.log(`agentConfigId: ${result.agent.agentConfigId ?? '-'}`);
   console.log(`activeTurn: ${result.activeTurn?.assistantTurnId ?? '-'}`);
   console.log(`openedBySessionId: ${result.openedBySessionId ?? '-'}`);
+  console.log(`openedByRootSessionId: ${result.openedByRootSessionId ?? '-'}`);
   console.log(`parentSessionId: ${result.parentSessionId ?? '-'}`);
 }
 
@@ -3524,6 +3553,9 @@ const sessionCreateCommand = new Command('create')
             userTurnId: result.userTurnId,
             ...(result.parentSessionId ? { parentSessionId: result.parentSessionId } : {}),
             ...(result.openedBySessionId ? { openedBySessionId: result.openedBySessionId } : {}),
+            ...(result.openedByRootSessionId
+              ? { openedByRootSessionId: result.openedByRootSessionId }
+              : {}),
           };
 
           if (!shouldWaitForCompletion) {

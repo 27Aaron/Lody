@@ -1,6 +1,8 @@
 import type { Meta, StoryObj } from '@storybook/react';
+import { createStore, Provider } from 'jotai';
 import { SessionList } from '@/components/session-list';
 import type { SessionListProps } from '@/components/session-list';
+import { sidebarCollapsedOpenedBySessionsAtom } from '@/atoms/focus-layer';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 const meta = {
@@ -17,9 +19,17 @@ type Story = StoryObj<typeof meta>;
 
 type TaskListDemoProps = SessionListProps & {
   containerClassName?: string;
+  /** Seeds the shared sidebar collapse atom so a story can show a folded opener. */
+  collapsedOpenedBySessionIds?: Record<string, boolean>;
 };
 
-function TaskListDemo({ sessions, repos, selectedSessionId, containerClassName }: TaskListDemoProps) {
+function TaskListDemo({
+  sessions,
+  repos,
+  selectedSessionId,
+  containerClassName,
+  collapsedOpenedBySessionIds,
+}: TaskListDemoProps) {
   const [selectedId, setSelectedId] = useState<string | null>(selectedSessionId ?? null);
   const [repoState, setRepoState] = useState(repos);
   const [chatsCollapsed, setChatsCollapsed] = useState(false);
@@ -93,22 +103,34 @@ function TaskListDemo({ sessions, repos, selectedSessionId, containerClassName }
     [containerClassName]
   );
 
+  // A fresh store per mount keeps stories independent: the collapse state is a
+  // shared jotai atom in production, so a leaked default would bleed across.
+  const store = useMemo(() => {
+    const next = createStore();
+    if (collapsedOpenedBySessionIds) {
+      next.set(sidebarCollapsedOpenedBySessionsAtom, collapsedOpenedBySessionIds);
+    }
+    return next;
+  }, [collapsedOpenedBySessionIds]);
+
   return (
     <div className={frameClassName}>
-      <SessionList
-        sessions={taskState}
-        repos={repoState}
-        chatsCollapsed={chatsCollapsed}
-        selectedSessionId={selectedId}
-        onSelect={setSelectedId}
-        onToggleRepoCollapsed={toggleRepoCollapsed}
-        onToggleChatsCollapsed={() => setChatsCollapsed((prev) => !prev)}
-        onArchiveSession={archiveTask}
-        onRenameSession={renameTask}
-        onNew={createTask}
-        onMoveRepo={(move) => setRepoState(move.nextRepos)}
-        getSessionHref={(sessionId) => `/demo/sessions/${sessionId}`}
-      />
+      <Provider store={store}>
+        <SessionList
+          sessions={taskState}
+          repos={repoState}
+          chatsCollapsed={chatsCollapsed}
+          selectedSessionId={selectedId}
+          onSelect={setSelectedId}
+          onToggleRepoCollapsed={toggleRepoCollapsed}
+          onToggleChatsCollapsed={() => setChatsCollapsed((prev) => !prev)}
+          onArchiveSession={archiveTask}
+          onRenameSession={renameTask}
+          onNew={createTask}
+          onMoveRepo={(move) => setRepoState(move.nextRepos)}
+          getSessionHref={(sessionId) => `/demo/sessions/${sessionId}`}
+        />
+      </Provider>
     </div>
   );
 }
@@ -616,4 +638,91 @@ export const AllDiffAndPrStates: Story = {
   render: (args) => (
     <TaskListDemo {...args} containerClassName="scrollbar-pro h-[760px] overflow-y-auto" />
   ),
+};
+
+// ---------------------------------------------------------------------------
+// MCP-opened independent Sessions (`SessionMeta.openedBySessionId`)
+// ---------------------------------------------------------------------------
+
+/**
+ * `lody_session_create` records the Session that opened each new one. The
+ * sidebar indents those rows under their opener, but they stay INDEPENDENT
+ * Sessions — own machine, own project, own lifecycle — not `parentSessionId`
+ * child tabs. Covered here: an opener with several opened Sessions, a working
+ * one, an unread one, the active one, and an orphan whose opener is not in this
+ * list (archived / another scope) and therefore stays top-level.
+ */
+const OPENED_SESSIONS_ARGS: SessionListProps = {
+  selectedSessionId: 'mcp-opened-2',
+  repos: [{ repoFullName: 'loro-dev/lody', collapsed: false }],
+  sessions: [
+    buildStateTask('mcp-opener', 'Refactor the sidebar tree', 'loro-dev/lody', 2, {
+      ...buildPrState('loro-dev/lody', 812, 'open'),
+      addedLines: 214,
+      deletedLines: 63,
+    }),
+    buildStateTask('mcp-opened-1', 'Audit archive + scope behavior', 'loro-dev/lody', 4, {
+      openedBySessionId: 'mcp-opener',
+      isWorking: true,
+      addedLines: 38,
+      deletedLines: 4,
+    }),
+    buildStateTask('mcp-opened-2', 'Write the tree unit tests', 'loro-dev/lody', 6, {
+      openedBySessionId: 'mcp-opener',
+      addedLines: 121,
+      deletedLines: 0,
+    }),
+    buildStateTask('mcp-opened-3', 'Check mobile still reads correctly', 'loro-dev/lody', 9, {
+      openedBySessionId: 'mcp-opener',
+      hasUnreadMessages: true,
+    }),
+    buildStateTask('mcp-opened-4', 'Update the scoped AGENTS.md', 'loro-dev/lody', 14, {
+      openedBySessionId: 'mcp-opener',
+      ...buildPrState('loro-dev/lody', 813, 'draft'),
+    }),
+    // Opened by an agent running inside a CHILD TAB of `mcp-opener`. Child Tabs
+    // have no sidebar row, so the row nests under the Tab's ROOT Session
+    // (`openedByRowSessionId`) while the precise `openedBySessionId` still names
+    // the Tab — that is what "Go to Opener Session" navigates to.
+    buildStateTask('mcp-from-child-tab', 'Opened from a child tab', 'loro-dev/lody', 17, {
+      openedBySessionId: 'mcp-opener-child-tab',
+      openedByRowSessionId: 'mcp-opener',
+      addedLines: 55,
+      deletedLines: 9,
+    }),
+    buildStateTask('mcp-orphan', 'Opened by an archived session', 'loro-dev/lody', 21, {
+      openedBySessionId: 'session-not-in-this-list',
+      openedByRowSessionId: 'session-not-in-this-list',
+      addedLines: 7,
+      deletedLines: 7,
+    }),
+    buildStateTask('mcp-standalone', 'Unrelated conversation', 'loro-dev/lody', 40),
+  ],
+};
+
+export const OpenedSessions: Story = {
+  name: 'Opened Sessions (MCP)',
+  args: OPENED_SESSIONS_ARGS,
+  render: (args) => <TaskListDemo {...args} />,
+};
+
+export const OpenedSessionsLight: Story = {
+  name: 'Opened Sessions (MCP) · Light',
+  args: OPENED_SESSIONS_ARGS,
+  parameters: { globals: { theme: 'light' } },
+  render: (args) => <TaskListDemo {...args} />,
+};
+
+/**
+ * The opener folded: its opened Sessions are hidden, the opener keeps its own
+ * row, and the disclosure chevron stays visible (this is the only state where
+ * rows are hidden, so the affordance must not need a hover to be found).
+ */
+export const OpenedSessionsCollapsed: Story = {
+  name: 'Opened Sessions (MCP) · Collapsed',
+  args: {
+    ...OPENED_SESSIONS_ARGS,
+    selectedSessionId: 'mcp-opener',
+  },
+  render: (args) => <TaskListDemo {...args} collapsedOpenedBySessionIds={{ 'mcp-opener': true }} />,
 };

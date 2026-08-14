@@ -39,6 +39,7 @@ import {
   ensureSessionCreateWorkspaceMetaFresh,
   resolveCreateAgentSelector,
   resolveCreateCurrentSessionId,
+  resolveOpenedBySessionRelation,
   resolveSessionCreateOwnerUserId,
   selectDefaultAgentConfigForCreate,
   resolveSessionCommandRequesterUserId,
@@ -144,6 +145,23 @@ describe('session command helpers', () => {
   it('normalizes blank CLI values to undefined', () => {
     expect(normalizeCliValue('   ')).toBeUndefined();
     expect(normalizeCliValue(' value ')).toBe('value');
+  });
+
+  it('records both the root Session and exact child Tab that opened a Session', () => {
+    expect(
+      resolveOpenedBySessionRelation(
+        createSessionMeta({
+          id: 'child-tab' as SessionId,
+          parentSessionId: 'root-session' as SessionId,
+        })
+      )
+    ).toEqual({
+      openedBySessionId: 'child-tab',
+      openedByRootSessionId: 'root-session',
+    });
+    expect(
+      resolveOpenedBySessionRelation(createSessionMeta({ id: 'root-session' as SessionId }))
+    ).toEqual({ openedBySessionId: 'root-session' });
   });
 
   it('materializes automatic approval defaults for builtin agent turns', () => {

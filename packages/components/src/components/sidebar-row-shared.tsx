@@ -1,9 +1,11 @@
 import { useId, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import {
   Check,
   ChevronDown,
   CircleDot,
+  CornerLeftUp,
   Github,
   Hand,
   Loader2,
@@ -14,6 +16,7 @@ import {
 import type { PrStatus, SessionPullRequestCiState } from '@lody/shared';
 import { cn } from '@/lib/utils';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/ui/tooltip';
+import { ContextMenuItem, ContextMenuSeparator } from '@/ui/context-menu';
 import { PR_STATUS_META } from '@/components/sessions/pull-request-badge';
 import { SidebarConfirmArchiveButton } from '@/components/sidebar-confirm-archive-button';
 import { CachedAvatarImg } from '@/components/cached-avatar-img';
@@ -27,7 +30,7 @@ import { getGitHubOwnerAvatarUrl } from '@/lib/github-avatar';
  * flat Updated list in `sidebar-updated-task-list.tsx`) render the same anatomy,
  * so the pieces live here once instead of being copied three times.
  *
- * Row anatomy: `[① status][② author avatar? + title][③ diff/mergeable?][worktree?][④ PR icon? | archive]`.
+ * Row anatomy: `[① status/tree affordance | more][② author avatar? + title][③ diff/mergeable?][worktree?][④ PR icon? | archive]`.
  * The author avatar (`SessionRowAuthorAvatar`) only appears in team ("All Tasks") scope on a
  * multi-member workspace; otherwise the title owns the leading edge of slot ②. The leading slot
  * stays reserved even when empty (the ⋯ menu button reveals there on hover). A local worktree
@@ -280,10 +283,111 @@ export function SessionRowWorktreeIndicator({ isWorktree }: { isWorktree?: boole
 }
 
 /**
- * ① The leading slot: the status indicator at rest, which on hover swaps for a
- * "⋯ more" button pinned in the SAME fixed spot. Clicking ⋯ opens the row's
+ * Tree state rendered in the shared leading slot. The opener uses the normal
+ * 14px slot; a child widens it to 26px, which indents only the child content by
+ * 12px. The child connector and its ⋯ button share the same 7px centre.
+ */
+export type SessionRowOpenedByTreeSlot =
+  | {
+      kind: 'opener';
+      expanded: boolean;
+      label: string;
+      onToggle: () => void;
+    }
+  | {
+      kind: 'child';
+      isLastChild: boolean;
+    };
+
+const TREE_CHILD_SLOT_CLASS = 'w-[26px]';
+const TREE_CONTROL_LEFT_CLASS = 'left-[7px]';
+const TREE_LINE_CLASS = 'bg-sidebar-foreground/20';
+
+/**
+ * Maps one {@link OpenedBySessionTreeNode} to the leading slot's tree state.
+ * Every session list renders the same three cases (opener with a disclosure,
+ * nested child with a connector, plain flat row), so the mapping — including
+ * the disclosure's i18n label — lives here rather than in each list.
+ *
+ * `onToggle` absent means the caller cannot fold, so an opener degrades to a
+ * plain row rather than showing a dead control.
+ */
+export function buildSessionRowOpenedByTreeSlot(
+  node: { depth: 0 | 1; childCount: number; expanded: boolean; isLastChild: boolean },
+  t: TFunction,
+  onToggle?: () => void
+): SessionRowOpenedByTreeSlot | undefined {
+  if (node.childCount > 0 && onToggle) {
+    return {
+      kind: 'opener',
+      expanded: node.expanded,
+      label: node.expanded
+        ? t('sessions.openedBy.collapse', 'Hide opened sessions')
+        : t('sessions.openedBy.expand', 'Show {{count}} opened sessions', {
+            count: node.childCount,
+          }),
+      onToggle,
+    };
+  }
+  return node.depth === 1 ? { kind: 'child', isLastChild: node.isLastChild } : undefined;
+}
+
+/**
+ * The two opened-by entries every sidebar row's context menu carries, in order:
+ * the opener's expand/collapse (same toggle the leading-slot disclosure uses,
+ * so the two can never disagree) and the reverse "Go to Opener Session" leg.
+ *
+ * The reverse leg is deliberately NOT gated on the row being nested: an opener
+ * that is archived, in another group, or filtered out leaves the row un-nested,
+ * which is exactly when the tree cannot show the link.
+ */
+export function SessionRowOpenedByMenuItems({
+  opener,
+  goToOpener,
+  goToOpenerLabel,
+  separateToggle = true,
+}: {
+  opener?: Extract<SessionRowOpenedByTreeSlot, { kind: 'opener' }> | null;
+  /** Omitted when this row has no opener, or the surface cannot navigate. */
+  goToOpener?: () => void;
+  goToOpenerLabel: string;
+  /** False when nothing follows the toggle in this menu. */
+  separateToggle?: boolean;
+}) {
+  return (
+    <>
+      {opener ? (
+        <>
+          <ContextMenuItem onSelect={opener.onToggle}>
+            <ChevronDown
+              className={cn('transition-transform', opener.expanded ? 'rotate-0' : '-rotate-90')}
+            />
+            {opener.label}
+          </ContextMenuItem>
+          {separateToggle ? <ContextMenuSeparator /> : null}
+        </>
+      ) : null}
+      {goToOpener ? (
+        <>
+          <ContextMenuItem onSelect={goToOpener}>
+            <CornerLeftUp />
+            {goToOpenerLabel}
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+        </>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * ① The leading slot: status, opened-by tree affordance, and the hover-revealed
+ * "⋯ more" button all occupy the SAME fixed spot. Clicking ⋯ opens the row's
  * existing context menu (via a synthetic `contextmenu` event), so there is no
- * duplicate menu to keep in sync. The slot width is constant, so nothing shifts.
+ * duplicate menu to keep in sync. A tree opener always shows its disclosure at
+ * rest. A child always shows its trunk/elbow and layers any permission/working/
+ * unread status at the same node centre. Hover swaps that whole rest state for
+ * ⋯ without moving the title.
  */
 export function SessionRowLeadingSlot({
   isWaitingPermission,
@@ -291,8 +395,11 @@ export function SessionRowLeadingSlot({
   hasUnreadMessages,
   showMenuButton,
   menuLabel,
+  openedByTree,
   /** Fade the status while hovering (e.g. 'group-hover/row:opacity-0' for named groups). */
   fadeClassName = 'group-hover:opacity-0',
+  /** Disable an opener disclosure while its ⋯ replacement is active. */
+  restPointerClassName = 'group-hover:pointer-events-none',
   /** Reveal the ⋯ button while hovering. */
   revealClassName = 'group-hover:opacity-100 group-hover:pointer-events-auto',
 }: {
@@ -301,18 +408,100 @@ export function SessionRowLeadingSlot({
   hasUnreadMessages?: boolean;
   showMenuButton?: boolean;
   menuLabel: string;
+  openedByTree?: SessionRowOpenedByTreeSlot;
   fadeClassName?: string;
+  restPointerClassName?: string;
   revealClassName?: string;
 }) {
+  const childTree = openedByTree?.kind === 'child' ? openedByTree : null;
+  const isTreeChild = childTree !== null;
+  const hasActivity = Boolean(isWaitingPermission || isWorking || hasUnreadMessages);
+  const restClassName = showMenuButton
+    ? cn('transition-opacity duration-100', fadeClassName)
+    : undefined;
+  const controlLeftClassName = isTreeChild ? TREE_CONTROL_LEFT_CLASS : 'left-1/2';
+
   return (
-    <div className="relative flex h-3.5 w-3.5 shrink-0 items-center justify-center">
-      <div className={cn(showMenuButton && cn('transition-opacity duration-100', fadeClassName))}>
-        <SessionRowIndicator
-          isWaitingPermission={isWaitingPermission}
-          isWorking={isWorking}
-          hasUnreadMessages={hasUnreadMessages}
-        />
-      </div>
+    <div
+      data-session-row-leading-slot=""
+      data-session-tree-indent-spacer={isTreeChild ? '' : undefined}
+      className={cn(
+        'relative flex h-3.5 shrink-0 items-center justify-center',
+        isTreeChild ? TREE_CHILD_SLOT_CLASS : 'w-3.5'
+      )}
+    >
+      {openedByTree?.kind === 'opener' ? (
+        <button
+          type="button"
+          data-session-opened-by-toggle=""
+          aria-label={openedByTree.label}
+          aria-expanded={openedByTree.expanded}
+          title={openedByTree.label}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            openedByTree.onToggle();
+          }}
+          className={cn(
+            'relative z-20 flex h-3.5 w-3.5 items-center justify-center rounded-sm',
+            'text-sidebar-foreground-muted transition-[opacity,color] duration-100',
+            'hover:text-sidebar-foreground focus-visible:outline-hidden',
+            showMenuButton && cn(restClassName, restPointerClassName)
+          )}
+        >
+          <ChevronDown
+            className={cn(
+              'h-3.5 w-3.5 transition-transform duration-150 ease-out',
+              openedByTree.expanded ? 'rotate-0' : '-rotate-90'
+            )}
+            aria-hidden="true"
+          />
+        </button>
+      ) : childTree ? (
+        <div data-session-tree-connector-group="" className={cn('absolute inset-0', restClassName)}>
+          <span
+            aria-hidden="true"
+            data-session-tree-connector="trunk"
+            className={cn(
+              'absolute -top-[7px] w-px',
+              TREE_LINE_CLASS,
+              TREE_CONTROL_LEFT_CLASS,
+              childTree.isLastChild ? 'bottom-1/2' : '-bottom-[8px]'
+            )}
+          />
+          <span
+            aria-hidden="true"
+            data-session-tree-connector="elbow"
+            className={cn(
+              'absolute top-1/2 h-px w-[13px]',
+              TREE_LINE_CLASS,
+              TREE_CONTROL_LEFT_CLASS
+            )}
+          />
+          {hasActivity ? (
+            <div
+              className={cn(
+                'absolute top-1/2 z-10 -translate-x-1/2 -translate-y-1/2',
+                TREE_CONTROL_LEFT_CLASS
+              )}
+            >
+              <SessionRowIndicator
+                isWaitingPermission={isWaitingPermission}
+                isWorking={isWorking}
+                hasUnreadMessages={hasUnreadMessages}
+              />
+            </div>
+          ) : null}
+        </div>
+      ) : (
+        <div className={restClassName}>
+          <SessionRowIndicator
+            isWaitingPermission={isWaitingPermission}
+            isWorking={isWorking}
+            hasUnreadMessages={hasUnreadMessages}
+          />
+        </div>
+      )}
       {showMenuButton ? (
         <button
           type="button"
@@ -335,7 +524,8 @@ export function SessionRowLeadingSlot({
             // Overlay a 20px hit target centered on the 14px status slot so the ⋯
             // gets a visible rounded hover chip (it reads as clickable) without
             // the tiny status-slot footprint clipping the background.
-            'absolute left-1/2 top-1/2 z-20 flex h-5 w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-md opacity-0 pointer-events-none',
+            'absolute top-1/2 z-20 flex h-5 w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-md opacity-0 pointer-events-none',
+            controlLeftClassName,
             'text-sidebar-foreground-muted transition-[opacity,color,background-color] duration-100',
             'hover:bg-sidebar-foreground/15 hover:text-sidebar-foreground',
             revealClassName
@@ -344,6 +534,37 @@ export function SessionRowLeadingSlot({
           <MoreHorizontal className="relative -top-px h-3.5 w-3.5" />
         </button>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * Wraps ONE sidebar session row with the "opened by" tree gutter. Rows are
+ * rendered from a flat node list (`buildOpenedBySessionTree`), so this wrapper
+ * only applies tree geometry — it never reorders or hides anything.
+ *
+ * A list with no nesting passes `gutter={false}` and keeps its previous flat
+ * layout byte for byte. The wrapper owns only grouping/data attributes; the
+ * row's shared leading slot owns disclosure, child indent, connectors, and ⋯.
+ */
+export function SessionOpenedByTreeRow({
+  depth,
+  gutter,
+  children,
+}: {
+  depth: 0 | 1;
+  /** False when the list has no nesting at all: renders children untouched. */
+  gutter: boolean;
+  children: ReactNode;
+}) {
+  if (!gutter) return <>{children}</>;
+  return (
+    <div
+      className="group/tree relative min-w-0"
+      data-session-tree-depth={depth}
+      data-session-tree-indent={depth === 1 ? 'child' : undefined}
+    >
+      {children}
     </div>
   );
 }

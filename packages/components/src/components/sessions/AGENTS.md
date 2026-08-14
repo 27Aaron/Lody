@@ -107,6 +107,29 @@ Session conversation page chain:
   (`buildChildSessionsByParent` in `session-list-rows.ts` groups by bare `parentSessionId`) — side
   chat activity and unread state are meant to surface on the parent conversation, so do not add a
   placement filter there.
+  Do NOT confuse that with `SessionMeta.openedBySessionId`, which records the Session that CREATED
+  another (the `lody_session_create` MCP tool, or `lody session create` run inside a session). That
+  one is presentation-only provenance: the opened Session stays INDEPENDENT — own workspace,
+  machine, project, lifecycle, sidebar row — and is only INDENTED under its opener by
+  `lib/session-opened-by-tree.ts`. It must never be turned into a `parentSessionId`, never roll
+  its activity into the opener's row, and never be filtered out of the session list. Both
+  directions of that link are navigable: the sidebar tree plus its "Go to Opener Session" row menu,
+  `SessionHeaderMenu`'s `openedByRelations` ("Opened by …" / "Opened sessions"), and
+  in-conversation relationship cards. A successful `session_create` Operation completion links to
+  each exact `target.sessionId`; the opened Session's first scroll row links back to its exact
+  `openedBySessionId` and shows the opener's live title. The latter is passed through
+  `SessionChatStream.leadingContent`, never persisted as fake history. These are wired from
+  `session-chat-interface.tsx` via `openedSessionsAtomFamily` — that atom excludes
+  `parentSessionId` rows on purpose, so a Session is never presented in both relationships.
+  An agent running inside a CHILD TAB can create one of these, so the opener is often a Tab with
+  no sidebar row. `openedBySessionId` always keeps that PRECISE Tab, while new creates also persist
+  `openedByRootSessionId` when a root route is required. Navigation must carry both dimensions
+  (`SessionNavigationTarget`: root `sessionId` + exact `tabSessionId`) and encode the latter through
+  `session-tab-url.ts`; opening only one id either loses the Tab or routes to a hidden child. For
+  pre-existing data, `resolveOpenedByNavigationTarget` derives the root from the opener's
+  `parentSessionId`. Sidebar indentation uses the same persisted root first, then the legacy
+  `buildSidebarOpenerRowResolver` fallback (`SessionListRow.openedByRowSessionId`). Do not collapse
+  the two ids into one field, and do not give the child Tab a sidebar row to nest under.
   Unlike a fixed panel, a side chat is a tab the moment it exists, so mounting every one of them
   would open a Loro session doc per side chat even for a user who never expands the panel: mount one
   when it is first selected (`mountedSideSessionIds`), plus any fork target still waiting to report

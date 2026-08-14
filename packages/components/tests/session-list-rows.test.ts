@@ -387,3 +387,45 @@ describe('buildSessionListRows repo + PR mapping', () => {
     expect(tasks[0]?.prReadiness).toBeNull();
   });
 });
+
+describe('buildSessionListRows opened-by provenance', () => {
+  test('carries openedBySessionId onto the row so the sidebar can nest it', () => {
+    const opener = makeSession({ id: 'opener' });
+    const opened = makeSession({
+      id: 'opened',
+      openedBySessionId: 'opener' as SessionId,
+    });
+
+    const rows = buildSessionListRows([opener, opened], {
+      scope: 'my',
+      currentUserId: 'user-1',
+      defaultTitle: 'Untitled',
+    });
+
+    expect(rows.find((row) => row.sessionId === 'opener')?.openedBySessionId).toBeNull();
+    expect(rows.find((row) => row.sessionId === 'opened')?.openedBySessionId).toBe('opener');
+  });
+
+  test('a parentSessionId child keeps its own child aggregation and is not confused with an opened session', () => {
+    // The sidebar never receives child sessions (they are filtered upstream by
+    // `sessionListAtom`), but a child that also carries `openedBySessionId`
+    // must still roll up as a child rather than being re-parented by it.
+    const parent = makeSession({ id: 'parent', lastMessageAt: 1_000 });
+    const child = makeSession({
+      id: 'child',
+      parentSessionId: 'parent' as SessionId,
+      openedBySessionId: 'parent' as SessionId,
+      lastMessageAt: 5_000,
+    });
+
+    const rows = buildSessionListRows(
+      [parent],
+      { scope: 'my', currentUserId: 'user-1', defaultTitle: 'Untitled' },
+      [parent, child]
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.sessionId).toBe('parent');
+    expect(rows[0]?.latestMessageAt).toBe(5_000);
+  });
+});

@@ -127,6 +127,8 @@ import { type DurationUnitLabels, formatDurationCompact } from '@/lib/format-dur
 import { resolveSessionHistoryDurationMs } from '@/lib/session-history-duration';
 import { cn } from '@/lib/utils';
 import { ConversationColumn } from '@/components/shared/conversation-column';
+import { SessionRelationCard } from '@/components/shared/session-relation-card';
+import type { SessionNavigationTarget } from '@/lib/session-navigation';
 import { AcpAuthenticationPanel } from '@/components/settings/acp-authentication-panel';
 import { formatConversationTimestamp } from '@/lib/format-conversation-timestamp';
 import { toIntlLocale } from '@/lib/intl-locale';
@@ -342,6 +344,8 @@ export interface SessionChatStreamViewProps {
   items: ChatStreamItem[];
   sessionId: SessionId;
   className?: string;
+  /** Scrolls as the first conversation row (for example, Session provenance). */
+  leadingContent?: ReactNode;
   emptyState?: ReactNode;
   onAtBottomChange?: (atBottom: boolean) => void;
   showScrollToLatest?: boolean;
@@ -1080,6 +1084,7 @@ export const SessionChatStreamView = forwardRef<
       items,
       sessionId,
       className,
+      leadingContent,
       emptyState,
       onAtBottomChange,
       showScrollToLatest = true,
@@ -1190,6 +1195,7 @@ export const SessionChatStreamView = forwardRef<
       lastAssistantMessageId,
       messageFileDiffEntriesByTurn,
     ]);
+    const leadingRowCount = leadingContent == null ? 0 : 1;
 
     useLayoutEffect(() => {
       const rowKey = pendingExpandedGroupRowKeyRef.current;
@@ -1205,7 +1211,10 @@ export const SessionChatStreamView = forwardRef<
       pendingExpandedGroupRowKeyRef.current = null;
       const scrollToken = groupExpansionScrollTokenRef.current;
       const scrollToGroupHeader = () => {
-        vlistRef.current?.scrollToIndex(rowIndex, { align: 'start', smooth: false });
+        vlistRef.current?.scrollToIndex(rowIndex + leadingRowCount, {
+          align: 'start',
+          smooth: false,
+        });
       };
       requestAnimationFrame(scrollToGroupHeader);
       window.setTimeout(() => {
@@ -1218,13 +1227,15 @@ export const SessionChatStreamView = forwardRef<
         });
       }, 180);
       return undefined;
-    }, [virtualRows]);
+    }, [leadingRowCount, virtualRows]);
 
     const { isSticky, scrollToBottom, handleScroll } = useStickyScroll({
       sessionId,
       vlistRef,
       scrollRootRef,
-      itemCount: virtualRows.length + (shouldShowAgentActivity ? 1 : 0),
+      // `leadingContent` is a real first Virtua row, so it counts here — sticky
+      // scroll otherwise targets an index short of the true bottom.
+      itemCount: virtualRows.length + leadingRowCount + (shouldShowAgentActivity ? 1 : 0),
       scrollContainerClass: 'chat-scrollbar',
       onAtBottomChange,
       suppressAutoScrollRef: autoScrollSuppressedRef,
@@ -1267,12 +1278,12 @@ export const SessionChatStreamView = forwardRef<
           virtualIndex = virtualRows.findIndex((row) => row.messageIndex === messageIndex);
         }
         if (virtualIndex === -1) return;
-        vlistRef.current?.scrollToIndex(virtualIndex, {
+        vlistRef.current?.scrollToIndex(virtualIndex + leadingRowCount, {
           align: 'start',
           smooth: smooth ?? true,
         });
       },
-      [activeSearchBlockId, items, virtualRows]
+      [activeSearchBlockId, items, leadingRowCount, virtualRows]
     );
 
     useImperativeHandle(ref, () => ({ scrollToBottom, scrollToIndex }), [
@@ -1320,7 +1331,7 @@ export const SessionChatStreamView = forwardRef<
 
     const hasOnlyEmptyItem = items.length === 1 && items[0]?.type === 'empty';
 
-    if (!items.length || (hasOnlyEmptyItem && emptyState)) {
+    if ((!items.length || (hasOnlyEmptyItem && emptyState)) && leadingContent == null) {
       return (
         <SessionChatSendContext.Provider value={sendMessage ?? null}>
           <SessionImagePreviewContext.Provider value={imagePreviewContextValue}>
@@ -1368,6 +1379,9 @@ export const SessionChatStreamView = forwardRef<
               // rows can transiently overlap. 800 keeps ~2 viewports of headroom.
               bufferSize={800}
             >
+              {leadingContent == null ? null : (
+                <div data-conversation-leading-content="">{leadingContent}</div>
+              )}
               {virtualRows.map((row) => {
                 if (row.type === 'standard') {
                   // Standard rows are only ever system or user messages
@@ -1473,7 +1487,7 @@ export const MessageRowView = memo(function MessageRowView({
 }: {
   message: SessionHistoryParsed;
   sessionId: SessionId;
-  onNavigateSession?: (sessionId: SessionId) => void;
+  onNavigateSession?: (target: SessionNavigationTarget) => void;
   onEdit?: (message: SessionHistoryParsed, text: string) => Promise<boolean>;
   user?: SessionChatUser;
   conversationFontSize?: ConversationFontSize;
@@ -1529,7 +1543,7 @@ const SystemMessageRowView = ({
 }: {
   message: SessionHistoryParsed;
   sessionId: SessionId;
-  onNavigateSession?: (sessionId: SessionId) => void;
+  onNavigateSession?: (target: SessionNavigationTarget) => void;
 }) => {
   const tasksEnabled = useAtomValue(tasksFeatureEnabledAtom);
   const systemItems = message.items.flatMap((item, itemIndex) =>
@@ -1564,17 +1578,54 @@ const SystemMessageRowView = ({
             script={item}
           />
         ) : (
-          <OperationCompletionView key={`${item.deliveryId}-${itemIndex}`} completion={item} />
+          <OperationCompletionView
+            key={`${item.deliveryId}-${itemIndex}`}
+            completion={item}
+            onNavigateSession={onNavigateSession}
+          />
         )
       )}
     </div>
   );
 };
 
+const selectSessionTitle = (session: SessionMeta | null | undefined): string | null =>
+  session?.title?.trim() || null;
+
+const CreatedSessionOperationCard = ({
+  sessionId,
+  fallbackTitle,
+  onNavigateSession,
+}: {
+  sessionId: SessionId;
+  fallbackTitle?: string;
+  onNavigateSession?: (target: SessionNavigationTarget) => void;
+}) => {
+  const { t } = useTranslation();
+  const titleAtom = useMemo(
+    () => selectAtom(sessionMetaAtomFamily(getSessionRoomId(sessionId)), selectSessionTitle),
+    [sessionId]
+  );
+  const liveTitle = useAtomValue(titleAtom);
+  const title = liveTitle || fallbackTitle?.trim() || t('sessions.untitled', 'Untitled session');
+
+  return (
+    <SessionRelationCard
+      relation="opened"
+      label={t('sessions.openedBy.createdSession', 'Session created')}
+      sessionTitle={title}
+      actionLabel={t('sessions.openedBy.viewSession', 'View session')}
+      onAction={onNavigateSession ? () => onNavigateSession({ sessionId }) : undefined}
+    />
+  );
+};
+
 const OperationCompletionView = ({
   completion,
+  onNavigateSession,
 }: {
   completion: Extract<MessageContent, { type: 'operation_completion' }>;
+  onNavigateSession?: (target: SessionNavigationTarget) => void;
 }) => {
   const { t } = useTranslation();
   const resultItems =
@@ -1589,6 +1640,54 @@ const OperationCompletionView = ({
   const failedCompletion = completion.completion.type === 'error';
   const cancelledCompletion = completion.completion.type === 'cancelled';
   const StatusIcon = failedCompletion ? AlertCircle : cancelledCompletion ? Circle : CheckCircle2;
+  const createdSessions =
+    completion.operationKind === 'session_create' ||
+    completion.operationKind === 'session_create_many'
+      ? resultItems.flatMap((item) =>
+          item.status === 'succeeded'
+            ? [
+                {
+                  sessionId: item.target.sessionId,
+                  fallbackTitle: item.label,
+                },
+              ]
+            : []
+        )
+      : [];
+
+  if (createdSessions.length > 0) {
+    return (
+      <div className="flex flex-col gap-2" data-session-create-completion="">
+        {createdSessions.map((created) => (
+          <CreatedSessionOperationCard
+            key={created.sessionId}
+            sessionId={created.sessionId}
+            fallbackTitle={created.fallbackTitle}
+            onNavigateSession={onNavigateSession}
+          />
+        ))}
+        {failedCompletion || cancelledCompletion || failed > 0 || cancelled > 0 ? (
+          <div className="px-1 text-xs text-muted-foreground">
+            {failedCompletion
+              ? t('orchestration.operationFailed', { id: completion.operationId })
+              : cancelledCompletion
+                ? t('orchestration.operationCancelled', { id: completion.operationId })
+                : t('orchestration.operationItemSummary', {
+                    total: resultItems.length,
+                    succeeded,
+                    failed,
+                    cancelled,
+                  })}
+          </div>
+        ) : null}
+        {completion.continuation?.status === 'not_started' ? (
+          <div className="px-1 text-xs text-muted-foreground">
+            {t('orchestration.continuationNotStarted')}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
 
   return (
     <div className="border-border/70 bg-muted/30 flex items-start gap-2 border-y px-3 py-2 text-sm">
@@ -1650,7 +1749,7 @@ const SystemNoticeView = ({
 }: {
   notice: Extract<MessageContent, { type: 'system_notice' }>;
   sessionId: SessionId;
-  onNavigateSession?: (sessionId: SessionId) => void;
+  onNavigateSession?: (target: SessionNavigationTarget) => void;
 }) => {
   const { t } = useTranslation();
 
@@ -1674,7 +1773,7 @@ const SystemNoticeView = ({
             <button
               type="button"
               className="font-medium text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-              onClick={() => onNavigateSession?.(meta.sourceSessionId)}
+              onClick={() => onNavigateSession?.({ sessionId: meta.sourceSessionId })}
             >
               {meta.sourceTitle}
             </button>

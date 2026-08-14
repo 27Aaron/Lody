@@ -771,8 +771,16 @@ export type SessionMeta = {
   agentType: AgentType;
   agentConfigId?: AgentConfigId;
   acpSessionId?: ACPSessionId;
-  /** Session that created/opened this session, when known. */
+  /** Exact Session or child Tab that created/opened this session, when known. */
   openedBySessionId?: SessionId;
+  /**
+   * Root Session that owns `openedBySessionId` when the opener is a child Tab.
+   * Omitted when the exact opener is already a root Session. Keeping this
+   * companion pointer makes the cross-Session route self-contained: clients
+   * can open the root route and restore the precise Tab even if the opener's
+   * metadata has not synced yet.
+   */
+  openedByRootSessionId?: SessionId;
   /** Project binding for this session (GitHub repo or local project). */
   project?: ProjectRef;
   repoFullName?: string;

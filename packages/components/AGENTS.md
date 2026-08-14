@@ -127,6 +127,48 @@ mobile surfaces.
 - Chat landing: `src/components/chat/chat-landing.tsx`.
 - Sidebar: `loro-sidebar.tsx`, `loro-app-sidebar.tsx`, and
   `sessions/session-list-rows.ts`. Sidebar rows are sessions, not Tasks.
+  `SessionMeta.openedBySessionId` (a Session created BY another, e.g. the
+  `lody_session_create` MCP tool) indents that row under its opener via
+  `lib/session-opened-by-tree.ts`. EVERY session list uses it — `session-list.tsx`
+  groups, the local-project sections, and `sidebar-updated-session-list.tsx`
+  (which renders both the Updated bucket and the Pinned section) — plus
+  `sidebar-navigation-model.ts`, so keyboard nav matches what is rendered.
+  It is presentation only and is NOT `parentSessionId`: opened Sessions keep
+  their own workspace/lifecycle and stay first-class rows, while
+  `parentSessionId` children never reach the sidebar at all (`sessionListAtom`),
+  so nothing can nest twice. TWO fields, and they must not be merged:
+  `openedBySessionId` is the PRECISE opener and drives navigation;
+  `openedByRowSessionId` is the sidebar ROW to indent under. They differ when an
+  agent inside a child Tab creates a Session — the Tab has no row, so
+  `buildSidebarOpenerRowResolver` (`sessions/session-list-rows.ts`) walks
+  `parentSessionId` up to the root row. Never "simplify" that by rewriting
+  `openedBySessionId` to the root: "Go to Opener Session" and the conversation's
+  "Opened by" entry must still land on the exact Tab that created the Session.
+  The opener and unrelated top-level rows keep the exact flat-list alignment.
+  The shared leading slot owns every tree affordance: an opener shows its
+  disclosure at rest and swaps it for ⋯ on row hover; an inactive child shows
+  its trunk/elbow and swaps those for ⋯ in the SAME 7px-centred position. Active
+  child status layers on that node centre without removing the connector. Only a child widens that slot
+  from 14px to 26px, producing the 12px title indent without shifting the row
+  background. Keep connector geometry in `sidebar-row-shared.tsx`, and keep the
+  opener's context menu expand/collapse item wired to the same toggle callback.
+  The resolver needs `allActiveSessions` (the only view that still contains
+  child Tabs), so any new list must take it from the sidebar rather than
+  re-deriving it from rows. Nesting is then resolved INSIDE one rendered list,
+  which is what keeps section boundaries intact: a pinned opener and an unpinned
+  opened Session are in different arrays, so both stay top-level. The tree never
+  hides a Session — a missing, cross-section, cross-group, cycling, or
+  deeper-than-one-level opener degrades to a top-level row; the preview cap
+  (`MAX_VISIBLE_SESSIONS` / `SHOW_FULL_BUCKET_THRESHOLD`) counts top-level rows.
+  Every list here is sorted by latest activity, so each surface passes `rootRank`
+  and an opener is ranked by its FRESHEST opened Session — without it, nesting
+  would bury a just-updated row under a stale opener and silently break the
+  ordering contract of Updated mode. Collapse state is the shared
+  `sidebarCollapsedOpenedBySessionsAtom` and defaults to EXPANDED. Both
+  navigation directions must stay reachable: the tree and the row context menu's
+  "Go to Opener Session" in every sidebar list, `SessionHeaderMenu.openedByRelations`,
+  and the in-conversation cards for successful create Operations / the opened
+  Session's precise opener.
 - Desktop update prompt: `sidebar-update-banner.tsx` plus `update-changelog-dialog.tsx`,
   driven by the pure selectors in `lib/electron-update-banner.ts`. The changelog opens
   in-app; release notes come from a remote feed and render as sanitized Markdown with

@@ -1382,6 +1382,9 @@ const sessionSummaryForMcp = (
     ...(opts.live.viewed ? { viewed: true } : {}),
   },
   ...(session.openedBySessionId ? { openedBySessionId: session.openedBySessionId } : {}),
+  ...(session.openedByRootSessionId
+    ? { openedByRootSessionId: session.openedByRootSessionId }
+    : {}),
   ...(session.parentSessionId ? { parentSessionId: session.parentSessionId } : {}),
   executionContext: summarizeProjectRefForMcp(session.project),
   pullRequests: (session.pullRequests ?? [])
@@ -2125,6 +2128,9 @@ const buildSessionCurrentInfo = async (
     machineId: session.machineId,
     ...(session.parentSessionId ? { parentSessionId: session.parentSessionId } : {}),
     ...(session.openedBySessionId ? { openedBySessionId: session.openedBySessionId } : {}),
+    ...(session.openedByRootSessionId
+      ? { openedByRootSessionId: session.openedByRootSessionId }
+      : {}),
     workContext: await buildSessionWorkContext(manager, workspaceId, session),
     git: {
       ...(session.branchName ? { branchName: session.branchName } : {}),
@@ -3764,6 +3770,9 @@ export async function runLodyMcpServer(): Promise<void> {
             userTurnId: result.userTurnId,
             ...(result.parentSessionId ? { parentSessionId: result.parentSessionId } : {}),
             ...(result.openedBySessionId ? { openedBySessionId: result.openedBySessionId } : {}),
+            ...(result.openedByRootSessionId
+              ? { openedByRootSessionId: result.openedByRootSessionId }
+              : {}),
           };
           if (args.wait === true) {
             try {

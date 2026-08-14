@@ -197,6 +197,10 @@ import {
   getSessionTabUrlSyncAction,
   parseSessionTabSearch,
 } from '@/lib/session-tab-url';
+import {
+  getSessionNavigationLocation,
+  type SessionNavigationTarget,
+} from '@/lib/session-navigation';
 import { getSessionDetailInitialTabState } from '@/lib/session-detail-initial-state';
 import {
   resolveSessionFileProviderOpenPath,
@@ -3020,15 +3024,21 @@ const SessionDetail = ({
     [t, takePendingFork]
   );
   const handleNavigateSession = useCallback(
-    (targetSessionId: SessionId) => {
-      if (
-        targetSessionId === sessionId ||
-        visibleChildSessions.some((child) => child.id === targetSessionId)
-      ) {
-        handleSessionTabSelect(targetSessionId);
+    (target: SessionNavigationTarget) => {
+      const location = getSessionNavigationLocation(target);
+      if (location.sessionId === sessionId) {
+        handleSessionTabSelect(target.tabSessionId ?? target.sessionId);
+        return;
       }
+
+      if (!workspaceSlug) return;
+      void router.navigate({
+        to: '/$workspaceName/sessions/$sessionId',
+        params: { workspaceName: workspaceSlug, sessionId: location.sessionId },
+        search: { tab: location.tab },
+      });
     },
-    [handleSessionTabSelect, sessionId, visibleChildSessions]
+    [handleSessionTabSelect, router, sessionId, workspaceSlug]
   );
 
   // When a viewer tab is selected, activate the viewer surface for the current session.
@@ -5094,6 +5104,7 @@ const SessionDetail = ({
         showSessionSharing ? () => handleRequestShareSession(activeSession) : undefined
       }
       onOpenPrTab={handleOpenPrTab}
+      onNavigateSession={handleNavigateSession}
       browserActionSession={activeBrowserSession}
       onOpenBrowser={() => {
         if (activeBrowserSession) {

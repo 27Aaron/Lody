@@ -113,6 +113,7 @@ const SESSION_LIST_VISIBLE_KEYS: readonly (keyof SessionMeta)[] = [
   'parentSessionId',
   'childSessionPlacement',
   'openedBySessionId',
+  'openedByRootSessionId',
   'latestUserMsgId',
   'awaitingUserSince',
   'taskId',
@@ -349,6 +350,22 @@ export const childSessionsAtomFamily = createChildSessionsAtomFamily(
 // Archived child sessions for a given parent — used by the tab archive popover
 export const archivedChildSessionsAtomFamily = createChildSessionsAtomFamily(
   (session, parentId) => isTopTabChild(session, parentId) && !!session.isArchived
+);
+
+/**
+ * Independent Sessions this Session opened (`openedBySessionId`), e.g. through
+ * the `lody_session_create` MCP tool. Unlike `childSessionsAtomFamily` these are
+ * NOT semantic children: they keep their own workspace, lifecycle, and sidebar
+ * row. Rows already nested as a child tab / side chat (`parentSessionId`) are
+ * excluded so a Session is never presented in both relationships at once.
+ */
+export const openedSessionsAtomFamily = createChildSessionsAtomFamily(
+  (session, openerId) =>
+    session.openedBySessionId === openerId &&
+    !session.parentSessionId &&
+    session.id !== openerId &&
+    !session.isArchived,
+  byCreatedAtAscending
 );
 
 // Durable side-session conversations share the parent workspace like ordinary

@@ -195,7 +195,7 @@ export interface LoroSidebarProps {
   updatedIsLoading?: boolean;
   onOrganizeModeChange?: (mode: LoroSidebarOrganizeMode) => void;
   onChatScopeChange?: (scope: LoroSidebarChatScope) => void;
-  onSelectUpdatedItem?: (id: string) => void;
+  onSelectUpdatedItem?: (id: string, tabSessionId?: string) => void;
   onTogglePinnedSection?: () => void;
   onToggleUpdatedBucket?: (key: SidebarUpdatedBucketKey) => void;
   onToggleUpdatedShowFullBucket?: (key: SidebarUpdatedBucketKey) => void;

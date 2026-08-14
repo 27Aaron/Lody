@@ -19,6 +19,7 @@ import {
 import { buildChatStreamItems, type BuildChatStreamItemsCache } from './build-chat-stream-items';
 import { useStableCallback } from '@/hooks/use-stable-callback';
 import { useCloudQuery } from '@lody/platform/react';
+import type { SessionNavigationTarget } from '@/lib/session-navigation';
 
 const emptyHistory = [] as SessionDoc['history'];
 const CHAT_STREAM_ITEMS_CACHE_LIMIT = 20;
@@ -60,6 +61,8 @@ export interface SessionChatStreamProps {
   sessionCreatedAt?: string;
   dividerLabel?: string;
   className?: string;
+  /** Scrolls as the first conversation row (for example, Session provenance). */
+  leadingContent?: ReactNode;
   emptyState?: ReactNode;
   onAtBottomChange?: (atBottom: boolean) => void;
   showScrollToLatest?: boolean;
@@ -74,7 +77,7 @@ export interface SessionChatStreamProps {
   onEditLastUser?: (message: SessionHistoryParsed, text: string) => Promise<boolean>;
   forkingAssistantMessageId?: string | null;
   /** Opens another session from an in-conversation link (e.g. a fork's origin). */
-  onNavigateSession?: (sessionId: SessionId) => void;
+  onNavigateSession?: (target: SessionNavigationTarget) => void;
   onLastCompletedAssistantMessageIdChange?: (messageId: string | null) => void;
   conversationFontSize?: ConversationFontSize;
   suppressStickyAutoScrollRef?: React.RefObject<boolean>;
@@ -91,7 +94,7 @@ const MessageRowConnected = memo(function MessageRowConnected({
   message: SessionHistoryParsed;
   sessionId: SessionId;
   workspaceId?: WorkspaceId | null;
-  onNavigateSession?: (sessionId: SessionId) => void;
+  onNavigateSession?: (target: SessionNavigationTarget) => void;
   onEditLastUser?: (message: SessionHistoryParsed, text: string) => Promise<boolean>;
   conversationFontSize: ConversationFontSize;
 }) {
@@ -121,6 +124,7 @@ const SessionChatStreamImpl = forwardRef<SessionChatStreamHandle, SessionChatStr
       sessionCreatedAt: _sessionCreatedAt,
       dividerLabel: _dividerLabel,
       className,
+      leadingContent,
       emptyState,
       onAtBottomChange,
       showScrollToLatest = true,
@@ -164,8 +168,8 @@ const SessionChatStreamImpl = forwardRef<SessionChatStreamHandle, SessionChatStr
     const stableOnFilePathClick = useStableCallback((filePath: string) => {
       onFilePathClick?.(filePath);
     });
-    const stableOnNavigateSession = useStableCallback((targetSessionId: SessionId) => {
-      onNavigateSession?.(targetSessionId);
+    const stableOnNavigateSession = useStableCallback((target: SessionNavigationTarget) => {
+      onNavigateSession?.(target);
     });
     const stableOnForkLastAssistant = useStableCallback((turnId: string) => {
       onForkLastAssistant?.(turnId);
@@ -216,6 +220,7 @@ const SessionChatStreamImpl = forwardRef<SessionChatStreamHandle, SessionChatStr
         items={items}
         sessionId={sessionId}
         className={className}
+        leadingContent={leadingContent}
         emptyState={emptyState}
         onAtBottomChange={onAtBottomChange}
         showScrollToLatest={showScrollToLatest}

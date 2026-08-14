@@ -6,6 +6,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from 'react';
+import { useAtomValue, useSetAtom } from 'jotai';
 import {
   Archive,
   GitBranch,
@@ -33,6 +34,7 @@ import {
 import { Skeleton } from '@/ui/skeleton';
 import { SwipeActionRow } from '@/components/shared/swipe-action-row';
 import {
+  SessionOpenedByTreeRow,
   SessionPrIcon,
   SessionMergeablePill,
   SessionRowAuthorAvatar,
@@ -41,8 +43,23 @@ import {
   SidebarRowArchiveButton,
   SidebarRowEndSlot,
   SidebarSectionHeader,
+  SessionRowOpenedByMenuItems,
+  buildSessionRowOpenedByTreeSlot,
   type SidebarRowKind,
+  type SessionRowOpenedByTreeSlot,
 } from '@/components/sidebar-row-shared';
+import {
+  sidebarCollapsedOpenedBySessionsAtom,
+  toggleSidebarCollapsedOpenedBySessionAtom,
+} from '@/atoms/focus-layer';
+import {
+  buildOpenedBySessionTree,
+  countOpenedByTreeRoots,
+  hasOpenedByTreeNesting,
+  normalizeSessionRowId,
+  pinnedFirstRootRank,
+  type OpenedBySessionTreeNode,
+} from '@/lib/session-opened-by-tree';
 import { SessionInfoHoverCard } from '@/components/session-info-hover-card';
 import type {
   LocalProjectHistoryProvider,
@@ -64,6 +81,22 @@ export type SidebarUpdatedItem = {
   id: string;
   kind: SidebarUpdatedItemKind;
   title: string;
+  /**
+   * PRECISE opener: the Session that created/opened this one
+   * (`SessionMeta.openedBySessionId`). Presentation-only provenance; see
+   * `@/lib/session-opened-by-tree`. Drives "Go to Opener Session", so it keeps
+   * pointing at the exact opener even when that opener is a child Tab.
+   * Navigation combines it with `openedByRowSessionId`.
+   */
+  openedBySessionId?: string | null;
+  /**
+   * Sidebar row this one nests under — the opener's ROOT Session when the opener
+   * is a child Tab, otherwise the opener itself. It is also the root route for
+   * precise child-Tab navigation; it never replaces `openedBySessionId`.
+   * Nesting is still resolved WITHIN one rendered section, so a pinned opener
+   * and an unpinned opened Session (different sections) both stay top-level.
+   */
+  openedByRowSessionId?: string | null;
   /**
    * Section the item lives in under the Workspace organize mode.
    * Surfaces in the row's hover tooltip (desktop only).
@@ -133,6 +166,7 @@ export type SidebarUpdatedContextMenuLabels = {
   registerDeviceToShare: string;
   loadingSharing: string;
   copyBranch: string;
+  goToOpenerSession: string;
 };
 
 /**
@@ -221,15 +255,64 @@ export function sortUpdatedItems(items: SidebarUpdatedItem[]): SidebarUpdatedIte
  */
 export const SHOW_FULL_BUCKET_THRESHOLD = 20;
 
+/** Group ranking key: pinned first, then latest activity. */
+function updatedItemRootRank(item: SidebarUpdatedItem): number {
+  return pinnedFirstRootRank(getSortKey(item), item.isPinned);
+}
+
+/** Stable identity for a collapsed bucket's (absent) rows. */
+const EMPTY_TREE_NODES: OpenedBySessionTreeNode<SidebarUpdatedItem>[] = [];
+
+/** Tree accessors shared by the renderer and the keyboard navigation model. */
+export const SIDEBAR_UPDATED_OPENED_BY_TREE_ACCESSORS = {
+  getId: (item: SidebarUpdatedItem) => item.id,
+  getOpenedBySessionId: (item: SidebarUpdatedItem) =>
+    item.openedByRowSessionId ?? item.openedBySessionId ?? null,
+} as const;
+
+/** TOP-LEVEL row count — what the "Show all" threshold is measured against. */
+export function countUpdatedItemRoots(orderedItems: SidebarUpdatedItem[]): number {
+  return countOpenedByTreeRoots(orderedItems, SIDEBAR_UPDATED_OPENED_BY_TREE_ACCESSORS);
+}
+
+export function updatedBucketOverflowsPreview(orderedItems: SidebarUpdatedItem[]): boolean {
+  return countUpdatedItemRoots(orderedItems) > SHOW_FULL_BUCKET_THRESHOLD;
+}
+
+/**
+ * Rows this bucket renders, in render order, with their "opened by" geometry.
+ * The preview cap counts top-level rows, so it never splits an opener from the
+ * Sessions it opened.
+ */
+export function getVisibleUpdatedItemTree(
+  orderedItems: SidebarUpdatedItem[],
+  canToggleFullList: boolean,
+  showFull: boolean,
+  collapsedOpenedBySessionIds?: Record<string, boolean>
+): OpenedBySessionTreeNode<SidebarUpdatedItem>[] {
+  const capped = canToggleFullList && !showFull && updatedBucketOverflowsPreview(orderedItems);
+  return buildOpenedBySessionTree(orderedItems, {
+    ...SIDEBAR_UPDATED_OPENED_BY_TREE_ACCESSORS,
+    isCollapsed: (openerId) => collapsedOpenedBySessionIds?.[openerId] === true,
+    // Updated mode IS the recency list: rank each opener by its freshest opened
+    // Session so nesting can never bury a just-updated row under a stale opener.
+    rootRank: updatedItemRootRank,
+    ...(capped ? { maxRoots: SHOW_FULL_BUCKET_THRESHOLD } : {}),
+  });
+}
+
 export function getVisibleUpdatedItems(
   orderedItems: SidebarUpdatedItem[],
   canToggleFullList: boolean,
-  showFull: boolean
+  showFull: boolean,
+  collapsedOpenedBySessionIds?: Record<string, boolean>
 ): SidebarUpdatedItem[] {
-  if (!canToggleFullList || showFull || orderedItems.length <= SHOW_FULL_BUCKET_THRESHOLD) {
-    return orderedItems;
-  }
-  return orderedItems.slice(0, SHOW_FULL_BUCKET_THRESHOLD);
+  return getVisibleUpdatedItemTree(
+    orderedItems,
+    canToggleFullList,
+    showFull,
+    collapsedOpenedBySessionIds
+  ).map((node) => node.item);
 }
 
 export type SidebarUpdatedSessionListProps = {
@@ -247,7 +330,7 @@ export type SidebarUpdatedSessionListProps = {
   isLoading?: boolean;
   className?: string;
   labels?: Partial<SidebarUpdatedSessionListLabels>;
-  onSelectItem?: (id: string) => void;
+  onSelectItem?: (id: string, tabSessionId?: string) => void;
   /**
    * Archive an item. When provided, desktop rows reveal an Archive button on hover
    * (replacing the relative timestamp) with a two-step Archive → Confirm flow, and
@@ -365,6 +448,7 @@ export const SidebarUpdatedSessionList = memo(function SidebarUpdatedSessionList
       ),
       loadingSharing: t('sessions.sharing.loadingAction', 'Checking sharing…'),
       copyBranch: t('sessions.contextMenu.copyBranch', 'Copy Current Branch'),
+      goToOpenerSession: t('sessions.contextMenu.goToOpenerSession', 'Go to Opener Session'),
     }),
     [t]
   );
@@ -373,11 +457,45 @@ export const SidebarUpdatedSessionList = memo(function SidebarUpdatedSessionList
   const beginRename = useCallback((id: string, currentTitle: string) => {
     setRenameTarget({ sessionId: id as SessionId, initialTitle: currentTitle });
   }, []);
+  // Same atom SessionList uses, so an opener folded in one organize mode stays
+  // folded in the other. This component renders BOTH the Updated bucket and the
+  // Pinned section; each instance resolves nesting inside its OWN `items`, which
+  // is what keeps the two sections from reaching across each other.
+  const collapsedOpenedBySessionIds = useAtomValue(sidebarCollapsedOpenedBySessionsAtom);
+  const handleToggleOpenedBySessions = useSetAtom(toggleSidebarCollapsedOpenedBySessionAtom);
+
+  const canToggleBucket = typeof onToggleBucket === 'function';
+  const canToggleFullBucket = typeof onToggleFullBucket === 'function';
 
   const buckets = useMemo<SidebarUpdatedBucket[]>(() => {
     if (!items.length) return [];
     return [{ key: 'all', label: merged.heading, items: sortUpdatedItems(items) }];
   }, [items, merged.heading]);
+
+  // Updated mode is a flat firehose, so a bucket can hold the whole workspace
+  // while showing 20 rows. Resolving the tree per render would re-scan all of
+  // it on every message/status tick; a collapsed bucket renders no rows at all.
+  const bucketTrees = useMemo(
+    () =>
+      buckets.map((bucket) => {
+        if (collapsedBuckets?.[bucket.key]) {
+          return {
+            overflows: updatedBucketOverflowsPreview(bucket.items),
+            nodes: EMPTY_TREE_NODES,
+          };
+        }
+        return {
+          overflows: updatedBucketOverflowsPreview(bucket.items),
+          nodes: getVisibleUpdatedItemTree(
+            bucket.items,
+            canToggleFullBucket,
+            Boolean(showFullBuckets?.[bucket.key]),
+            collapsedOpenedBySessionIds
+          ),
+        };
+      }),
+    [buckets, canToggleFullBucket, collapsedBuckets, collapsedOpenedBySessionIds, showFullBuckets]
+  );
 
   if (isLoading && items.length === 0) {
     return (
@@ -405,9 +523,6 @@ export const SidebarUpdatedSessionList = memo(function SidebarUpdatedSessionList
     );
   }
 
-  const canToggleBucket = typeof onToggleBucket === 'function';
-  const canToggleFullBucket = typeof onToggleFullBucket === 'function';
-
   return (
     <TooltipProvider>
       <div className={cn('flex flex-col', className)}>
@@ -419,8 +534,13 @@ export const SidebarUpdatedSessionList = memo(function SidebarUpdatedSessionList
             onToggleBucket?.(bucket.key);
           };
           const showFull = Boolean(showFullBuckets?.[bucket.key]);
-          const overflows = bucket.items.length > SHOW_FULL_BUCKET_THRESHOLD;
-          const visibleItems = getVisibleUpdatedItems(bucket.items, canToggleFullBucket, showFull);
+          const { overflows, nodes: visibleNodes } = bucketTrees[bucketIndex] ?? {
+            overflows: false,
+            nodes: EMPTY_TREE_NODES,
+          };
+          // Only a bucket that actually contains an opened Session enables the
+          // tree wrapper. Unrelated top-level rows keep their flat geometry.
+          const showTreeGutter = hasOpenedByTreeNesting(visibleNodes);
           const showToggleFullList = canToggleFullBucket && overflows && !collapsed;
           const toggleFullListLabel = showFull
             ? t('sessions.showLess', 'Show less')
@@ -445,29 +565,40 @@ export const SidebarUpdatedSessionList = memo(function SidebarUpdatedSessionList
               />
               {!collapsed ? (
                 <div className="flex flex-col gap-px">
-                  {visibleItems.map((item) => (
-                    <UpdatedItemRow
-                      key={item.id}
-                      item={item}
-                      now={now}
-                      selected={item.id === selectedItemId}
-                      isMobile={isMobile}
-                      showPinnedIcon={showPinnedIcon}
-                      href={getItemHref?.(item.id)}
-                      onSelect={onSelectItem}
-                      onArchive={onArchiveItem}
-                      onRename={onRenameItem}
-                      onTogglePin={onTogglePinItem}
-                      onCopyUrl={onCopyItemUrl}
-                      onShareWithTeam={onShareItemWithTeam}
-                      onOpenPullRequest={onOpenPullRequest}
-                      onBeginRename={beginRename}
-                      contextMenuLabels={contextMenuLabels}
-                      archiveTooltipLabel={archiveLabels.tooltip}
-                      archiveActionLabel={archiveLabels.action}
-                      archiveConfirmLabel={archiveLabels.confirm}
-                    />
-                  ))}
+                  {visibleNodes.map((node) => {
+                    const openedByTree = buildSessionRowOpenedByTreeSlot(node, t, () =>
+                      handleToggleOpenedBySessions(node.item.id)
+                    );
+                    return (
+                      <SessionOpenedByTreeRow
+                        key={node.item.id}
+                        depth={node.depth}
+                        gutter={showTreeGutter}
+                      >
+                        <UpdatedItemRow
+                          item={node.item}
+                          now={now}
+                          selected={node.item.id === selectedItemId}
+                          isMobile={isMobile}
+                          showPinnedIcon={showPinnedIcon}
+                          href={getItemHref?.(node.item.id)}
+                          onSelect={onSelectItem}
+                          onArchive={onArchiveItem}
+                          onRename={onRenameItem}
+                          onTogglePin={onTogglePinItem}
+                          onCopyUrl={onCopyItemUrl}
+                          onShareWithTeam={onShareItemWithTeam}
+                          onOpenPullRequest={onOpenPullRequest}
+                          onBeginRename={beginRename}
+                          openedByTree={openedByTree}
+                          contextMenuLabels={contextMenuLabels}
+                          archiveTooltipLabel={archiveLabels.tooltip}
+                          archiveActionLabel={archiveLabels.action}
+                          archiveConfirmLabel={archiveLabels.confirm}
+                        />
+                      </SessionOpenedByTreeRow>
+                    );
+                  })}
                   {showToggleFullList ? (
                     <button
                       type="button"
@@ -512,7 +643,7 @@ type UpdatedItemRowProps = {
   isMobile: boolean;
   showPinnedIcon: boolean;
   href?: string;
-  onSelect?: (id: string) => void;
+  onSelect?: (id: string, tabSessionId?: string) => void;
   onArchive?: (id: string) => void;
   onRename?: (id: string, nextTitle: string) => void | Promise<void>;
   onTogglePin?: (id: string, nextPinned: boolean) => void;
@@ -520,6 +651,7 @@ type UpdatedItemRowProps = {
   onShareWithTeam?: (id: string) => void;
   onOpenPullRequest?: (request: SessionListPullRequestOpen) => void;
   onBeginRename: (id: string, currentTitle: string) => void;
+  openedByTree?: SessionRowOpenedByTreeSlot;
   contextMenuLabels: SidebarUpdatedContextMenuLabels;
   archiveTooltipLabel: string;
   archiveActionLabel: string;
@@ -541,6 +673,7 @@ const UpdatedItemRow = memo(function UpdatedItemRow({
   onShareWithTeam,
   onOpenPullRequest,
   onBeginRename,
+  openedByTree,
   contextMenuLabels,
   archiveTooltipLabel,
   archiveActionLabel,
@@ -621,6 +754,13 @@ const UpdatedItemRow = memo(function UpdatedItemRow({
   // copyUrl / copyBranch. Mobile users reach archive via swipe and lack the
   // other actions in both organize modes — keeping it consistent rather than
   // inventing a new mobile entry point here.
+  // Reverse leg of the opened-by relationship. Available even when the row is
+  // NOT nested (opener pinned into the other section, archived, or filtered
+  // out), which is exactly when the tree cannot show the link.
+  const openerSessionId = normalizeSessionRowId(item.openedBySessionId);
+  const openerRootSessionId = normalizeSessionRowId(item.openedByRowSessionId) ?? openerSessionId;
+  const canGoToOpener = Boolean(openerSessionId && typeof onSelect === 'function');
+  const openedByOpener = openedByTree?.kind === 'opener' ? openedByTree : null;
   const hasMenuActions =
     !isMobile &&
     (canRename ||
@@ -629,7 +769,9 @@ const UpdatedItemRow = memo(function UpdatedItemRow({
       canCopyUrl ||
       Boolean(shareMenuState) ||
       Boolean(branchName) ||
-      (showPr && Boolean(onOpenPullRequest)));
+      canGoToOpener ||
+      (showPr && Boolean(onOpenPullRequest)) ||
+      Boolean(openedByOpener));
   const titleFontClassName = item.isPinned ? 'font-normal' : 'font-medium';
 
   const handlePrOpen =
@@ -718,7 +860,9 @@ const UpdatedItemRow = memo(function UpdatedItemRow({
           hasUnreadMessages={item.hasUnreadMessages}
           showMenuButton={hasMenuActions}
           menuLabel={contextMenuLabels.moreActions}
+          openedByTree={openedByTree}
           fadeClassName="group-hover/row:opacity-0"
+          restPointerClassName="group-hover/row:pointer-events-none"
           revealClassName="group-hover/row:opacity-100 group-hover/row:pointer-events-auto"
         />
         <SessionRowAuthorAvatar author={item.owner} />
@@ -766,7 +910,9 @@ const UpdatedItemRow = memo(function UpdatedItemRow({
                     <span className="text-code-removed">-{deletedLines}</span>
                   </span>
                 ) : null}
-                <SessionRowWorktreeIndicator isWorktree={item.kind === 'local' && item.isWorktree} />
+                <SessionRowWorktreeIndicator
+                  isWorktree={item.kind === 'local' && item.isWorktree}
+                />
                 {showPr ? <SessionPrIcon prStatus={prStatus} prCiState={item.prCiState} /> : null}
               </span>
             ) : undefined
@@ -819,6 +965,15 @@ const UpdatedItemRow = memo(function UpdatedItemRow({
     <ContextMenu>
       <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
       <ContextMenuContent className="min-w-[180px]">
+        <SessionRowOpenedByMenuItems
+          opener={openedByOpener}
+          goToOpener={
+            canGoToOpener && openerSessionId
+              ? () => onSelect?.(openerRootSessionId ?? openerSessionId, openerSessionId)
+              : undefined
+          }
+          goToOpenerLabel={contextMenuLabels.goToOpenerSession}
+        />
         {handlePrOpen ? (
           <ContextMenuItem
             onSelect={() => {
