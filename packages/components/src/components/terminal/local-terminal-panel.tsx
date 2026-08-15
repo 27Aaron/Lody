@@ -1,13 +1,13 @@
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import { useAtomValue } from 'jotai';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import '@xterm/xterm/css/xterm.css';
 import './terminal-scrollbars.css';
 
 import { terminalFontFamilyAtom, terminalFontSizeAtom } from '@/atoms';
-import { formatKeyBinding, isMac } from '@/lib/commands';
+import { formatKeyBinding } from '@/lib/commands';
 import { observeResizeOnAnimationFrame } from '@/lib/resize-observer';
 import { cn } from '@/lib/utils';
 import {
@@ -18,7 +18,22 @@ import {
   ContextMenuTrigger,
 } from '@/ui/context-menu';
 import { useActiveVSCodeThemeId, useResolvedTheme } from '../../theme-provider';
+import {
+  copyShortcutBinding,
+  isCopyShortcut,
+  isPasteShortcut,
+  pasteShortcutBinding,
+  usesWindowsCopyPasteRightClick,
+} from './terminal-clipboard-shortcuts';
 import type { TerminalChannel } from './terminal-channel';
+import {
+  applyKeyboardSelection,
+  isKeyboardSelectionKey,
+  isKeyboardSelectionShortcut,
+  keyboardSelectionMatchesExisting,
+  selectionUnitForEvent,
+  type CellPos,
+} from './terminal-keyboard-selection';
 import {
   buildTerminalFontLoadSpec,
   buildTerminalTheme,
@@ -37,6 +52,15 @@ export interface LocalTerminalPanelProps {
   onTitleChange?: (title: string) => void;
   onExit?: (exitCode: number) => void;
   className?: string;
+}
+
+function readExistingSelection(term: Terminal): { start: CellPos; end: CellPos } | null {
+  const range = term.getSelectionPosition();
+  if (!range) return null;
+  return {
+    start: { x: range.start.x, y: range.start.y },
+    end: { x: range.end.x, y: range.end.y },
+  };
 }
 
 function waitForTerminalFont(fontFamily: string, fontSize: number): Promise<unknown> {
@@ -63,7 +87,9 @@ export function LocalTerminalPanel({
   const termRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const [hasSelection, setHasSelection] = useState(false);
-  const copyShortcutLabel = formatKeyBinding(isMac() ? 'cmd+c' : 'ctrl+shift+c');
+  const copyShortcutLabel = formatKeyBinding(copyShortcutBinding());
+  const pasteShortcutLabel = formatKeyBinding(pasteShortcutBinding());
+  const windowsRightClick = usesWindowsCopyPasteRightClick();
   const terminalFontFamily = useAtomValue(terminalFontFamilyAtom);
   const terminalFontSize = useAtomValue(terminalFontSizeAtom);
   const terminalFontFamilyRef = useRef(terminalFontFamily);
@@ -109,22 +135,67 @@ export function LocalTerminalPanel({
       fitAddonRef.current = fitAddon;
       t.loadAddon(fitAddon);
       t.open(host);
+      let selectionAnchor: CellPos | null = null;
+      let selectionHead: CellPos | null = null;
+      const syncKeyboardSelectionCache = () => {
+        if (
+          !keyboardSelectionMatchesExisting(
+            selectionAnchor,
+            selectionHead,
+            readExistingSelection(t),
+            t.cols
+          )
+        ) {
+          selectionAnchor = null;
+          selectionHead = null;
+        }
+      };
       t.attachCustomKeyEventHandler((event) => {
-        const isCopyShortcut =
-          event.type === 'keydown' &&
-          event.ctrlKey &&
-          event.shiftKey &&
-          !event.altKey &&
-          !event.metaKey &&
-          (event.code === 'KeyC' || event.key.toLowerCase() === 'c');
-        if (!isCopyShortcut || !t.hasSelection()) return true;
-
-        // Preserve Ctrl+C for SIGINT; only the explicit desktop-terminal copy
-        // chord is intercepted, and only while xterm owns a selection.
-        event.preventDefault();
-        event.stopPropagation();
-        channel.writeClipboardText(t.getSelection());
-        return false;
+        // xterm sends unmatched chords to the PTY. Without this, Ctrl+V on
+        // Windows becomes \x16, and Shift+arrows become CSI sequences instead
+        // of buffer selection (Windows console / VS Code behavior).
+        if (isCopyShortcut(event, t.hasSelection())) {
+          event.preventDefault();
+          event.stopPropagation();
+          channel.writeClipboardText(t.getSelection());
+          return false;
+        }
+        if (isPasteShortcut(event)) {
+          event.preventDefault();
+          event.stopPropagation();
+          const text = channel.readClipboardText();
+          if (text) t.paste(text);
+          return false;
+        }
+        if (isKeyboardSelectionShortcut(event) && isKeyboardSelectionKey(event.key)) {
+          event.preventDefault();
+          event.stopPropagation();
+          syncKeyboardSelectionCache();
+          const next = applyKeyboardSelection({
+            key: event.key,
+            cols: t.cols,
+            lineCount: t.buffer.active.length,
+            cursor: {
+              x: t.buffer.active.cursorX,
+              y: t.buffer.active.baseY + t.buffer.active.cursorY,
+            },
+            anchor: selectionAnchor,
+            head: selectionHead,
+            existing: readExistingSelection(t),
+            unit: selectionUnitForEvent(event),
+            readLine: (y) => t.buffer.active.getLine(y)?.translateToString(false) ?? '',
+          });
+          selectionAnchor = next.anchor;
+          selectionHead = next.head;
+          if (next.length === 0) t.clearSelection();
+          else t.select(next.start.x, next.start.y, next.length);
+          return false;
+        }
+        if (event.type === 'keydown' && event.key !== 'Shift') {
+          selectionAnchor = null;
+          selectionHead = null;
+        }
+        return true;
       });
 
       const safeFit = () => {
@@ -147,6 +218,7 @@ export function LocalTerminalPanel({
         t.onResize(({ cols, rows }) => channel.resize(terminalId, cols, rows)).dispose
       );
       disposers.push(t.onTitleChange((title) => onTitleChangeRef.current?.(title)).dispose);
+      disposers.push(t.onSelectionChange(syncKeyboardSelectionCache).dispose);
 
       offData = channel.onData((event) => {
         if (event.terminalId !== terminalId) return;
@@ -262,18 +334,38 @@ export function LocalTerminalPanel({
     queueMicrotask(() => term.focus());
   };
 
+  const handleWindowsRightClick = (event: MouseEvent<HTMLDivElement>) => {
+    if (!windowsRightClick) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const term = termRef.current;
+    if (!term) return;
+    if (term.hasSelection()) {
+      channel.writeClipboardText(term.getSelection());
+      term.clearSelection();
+      return;
+    }
+    const text = channel.readClipboardText();
+    if (text) term.paste(text);
+  };
+
+  const host = (
+    <div
+      ref={hostRef}
+      className={cn('lody-terminal-panel h-full w-full overflow-hidden', className)}
+      onContextMenu={windowsRightClick ? handleWindowsRightClick : undefined}
+    />
+  );
+
+  if (windowsRightClick) return host;
+
   return (
     <ContextMenu
       onOpenChange={(open) => {
         if (open) setHasSelection(termRef.current?.hasSelection() ?? false);
       }}
     >
-      <ContextMenuTrigger asChild>
-        <div
-          ref={hostRef}
-          className={cn('lody-terminal-panel h-full w-full overflow-hidden', className)}
-        />
-      </ContextMenuTrigger>
+      <ContextMenuTrigger asChild>{host}</ContextMenuTrigger>
       <ContextMenuContent className="min-w-40">
         <ContextMenuItem disabled={!hasSelection} onSelect={copySelection}>
           {translate('common.copy', 'Copy')}
@@ -281,6 +373,7 @@ export function LocalTerminalPanel({
         </ContextMenuItem>
         <ContextMenuItem onSelect={pasteClipboard}>
           {translate('common.paste', 'Paste')}
+          <ContextMenuShortcut>{pasteShortcutLabel}</ContextMenuShortcut>
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>

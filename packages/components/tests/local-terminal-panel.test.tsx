@@ -20,7 +20,10 @@ const mocks = vi.hoisted(() => ({
     options: Record<string, unknown>;
     selection: string;
     pasted: string[];
+    selectedRanges: Array<{ column: number; row: number; length: number }>;
+    selectionRange?: { start: { x: number; y: number }; end: { x: number; y: number } };
     customKeyEventHandler?: (event: KeyboardEvent) => boolean;
+    selectionChangeHandler?: () => void;
   }>,
   fit: vi.fn(),
 }));
@@ -38,6 +41,18 @@ vi.mock('@xterm/xterm', () => ({
     rows = 24;
     selection = '';
     pasted: string[] = [];
+    selectedRanges: Array<{ column: number; row: number; length: number }> = [];
+    selectionRange?: { start: { x: number; y: number }; end: { x: number; y: number } };
+    selectionChangeHandler?: () => void;
+    buffer = {
+      active: {
+        cursorX: 5,
+        cursorY: 2,
+        baseY: 0,
+        length: 24,
+        getLine: () => ({ translateToString: () => 'hello world' }),
+      },
+    };
     customKeyEventHandler?: (event: KeyboardEvent) => boolean;
 
     constructor(options: Record<string, unknown>) {
@@ -53,10 +68,36 @@ vi.mock('@xterm/xterm', () => ({
       this.customKeyEventHandler = handler;
     }
     hasSelection() {
-      return this.selection.length > 0;
+      return this.selection.length > 0 || this.selectedRanges.length > 0;
     }
     getSelection() {
       return this.selection;
+    }
+    getSelectionPosition() {
+      return this.selectionRange;
+    }
+    clearSelection() {
+      this.selection = '';
+      this.selectedRanges = [];
+      this.selectionRange = undefined;
+      this.selectionChangeHandler?.();
+    }
+    select(column: number, row: number, length: number) {
+      this.selectedRanges.push({ column, row, length });
+      const endOffset = row * this.cols + column + length;
+      this.selectionRange = {
+        start: { x: column, y: row },
+        end: { x: endOffset % this.cols, y: Math.floor(endOffset / this.cols) },
+      };
+      this.selectionChangeHandler?.();
+    }
+    onSelectionChange(handler: () => void) {
+      this.selectionChangeHandler = handler;
+      return {
+        dispose: () => {
+          if (this.selectionChangeHandler === handler) this.selectionChangeHandler = undefined;
+        },
+      };
     }
     paste(text: string) {
       this.pasted.push(text);
@@ -211,6 +252,198 @@ describe('LocalTerminalPanel', () => {
     expect(channel.writeClipboardText).toHaveBeenCalledTimes(1);
   });
 
+  it('on Windows copies with Ctrl+C when text is selected and leaves SIGINT alone', async () => {
+    vi.stubGlobal('__LODY_PLATFORM__', { os: 'win32' });
+    __resetPlatformCacheForTests();
+    const channel = createChannel();
+
+    await act(async () => {
+      root?.render(<LocalTerminalPanel channel={channel} terminalId="terminal-1" />);
+      await Promise.resolve();
+    });
+
+    const terminal = mocks.terminalInstances[0];
+    terminal.selection = 'selected output';
+    const copyEvent = new KeyboardEvent('keydown', {
+      key: 'c',
+      code: 'KeyC',
+      ctrlKey: true,
+      cancelable: true,
+    });
+    expect(terminal.customKeyEventHandler?.(copyEvent)).toBe(false);
+    expect(channel.writeClipboardText).toHaveBeenCalledWith('selected output');
+
+    terminal.selection = '';
+    terminal.selectedRanges = [];
+    const interruptEvent = new KeyboardEvent('keydown', {
+      key: 'c',
+      code: 'KeyC',
+      ctrlKey: true,
+      cancelable: true,
+    });
+    expect(terminal.customKeyEventHandler?.(interruptEvent)).toBe(true);
+    expect(channel.writeClipboardText).toHaveBeenCalledTimes(1);
+  });
+
+  it('on Windows copies a selection with right-click and pastes when nothing is selected', async () => {
+    vi.stubGlobal('__LODY_PLATFORM__', { os: 'win32' });
+    __resetPlatformCacheForTests();
+    const channel = createChannel();
+    vi.mocked(channel.readClipboardText).mockReturnValue('clipboard input');
+
+    await act(async () => {
+      root?.render(<LocalTerminalPanel channel={channel} terminalId="terminal-1" />);
+      await Promise.resolve();
+    });
+
+    const terminal = mocks.terminalInstances[0];
+    terminal.selection = 'selected output';
+    await act(async () => {
+      openTerminalContextMenu(container);
+    });
+    expect(channel.writeClipboardText).toHaveBeenCalledWith('selected output');
+    expect(terminal.selection).toBe('');
+    expect(document.querySelector('[role="menuitem"]')).toBeNull();
+
+    await act(async () => {
+      openTerminalContextMenu(container);
+    });
+    expect(terminal.pasted).toEqual(['clipboard input']);
+  });
+
+  it('selects buffer text with Shift+arrows instead of sending CSI to the PTY', async () => {
+    const channel = createChannel();
+
+    await act(async () => {
+      root?.render(<LocalTerminalPanel channel={channel} terminalId="terminal-1" />);
+      await Promise.resolve();
+    });
+
+    const terminal = mocks.terminalInstances[0];
+    const shiftRight = new KeyboardEvent('keydown', {
+      key: 'ArrowRight',
+      shiftKey: true,
+      cancelable: true,
+    });
+    expect(terminal.customKeyEventHandler?.(shiftRight)).toBe(false);
+    expect(shiftRight.defaultPrevented).toBe(true);
+    expect(terminal.selectedRanges).toEqual([{ column: 5, row: 2, length: 1 }]);
+    expect(channel.input).not.toHaveBeenCalled();
+
+    const plainRight = new KeyboardEvent('keydown', {
+      key: 'ArrowRight',
+      cancelable: true,
+    });
+    expect(terminal.customKeyEventHandler?.(plainRight)).toBe(true);
+  });
+
+  it('starts the next Shift+arrow from a mouse selection instead of the old keyboard anchor', async () => {
+    const channel = createChannel();
+
+    await act(async () => {
+      root?.render(<LocalTerminalPanel channel={channel} terminalId="terminal-1" />);
+      await Promise.resolve();
+    });
+
+    const terminal = mocks.terminalInstances[0];
+    expect(
+      terminal.customKeyEventHandler?.(
+        new KeyboardEvent('keydown', { key: 'ArrowRight', shiftKey: true, cancelable: true })
+      )
+    ).toBe(false);
+    expect(terminal.selectedRanges).toEqual([{ column: 5, row: 2, length: 1 }]);
+
+    terminal.selectionRange = { start: { x: 10, y: 5 }, end: { x: 14, y: 5 } };
+    terminal.selectionChangeHandler?.();
+
+    expect(
+      terminal.customKeyEventHandler?.(
+        new KeyboardEvent('keydown', { key: 'ArrowRight', shiftKey: true, cancelable: true })
+      )
+    ).toBe(false);
+    expect(terminal.selectedRanges.at(-1)).toEqual({ column: 10, row: 5, length: 5 });
+  });
+
+  it('pastes with Ctrl+V on Windows without sending the chord to the PTY', async () => {
+    vi.stubGlobal('__LODY_PLATFORM__', { os: 'win32' });
+    __resetPlatformCacheForTests();
+    const channel = createChannel();
+    vi.mocked(channel.readClipboardText).mockReturnValue('clipboard input');
+
+    await act(async () => {
+      root?.render(<LocalTerminalPanel channel={channel} terminalId="terminal-1" />);
+      await Promise.resolve();
+    });
+
+    const terminal = mocks.terminalInstances[0];
+    const pasteEvent = new KeyboardEvent('keydown', {
+      key: 'v',
+      code: 'KeyV',
+      ctrlKey: true,
+      cancelable: true,
+    });
+
+    expect(terminal.customKeyEventHandler?.(pasteEvent)).toBe(false);
+    expect(pasteEvent.defaultPrevented).toBe(true);
+    expect(terminal.pasted).toEqual(['clipboard input']);
+    expect(channel.input).not.toHaveBeenCalled();
+  });
+
+  it('pastes with Ctrl+Shift+V on Windows', async () => {
+    vi.stubGlobal('__LODY_PLATFORM__', { os: 'win32' });
+    __resetPlatformCacheForTests();
+    const channel = createChannel();
+    vi.mocked(channel.readClipboardText).mockReturnValue('shift paste');
+
+    await act(async () => {
+      root?.render(<LocalTerminalPanel channel={channel} terminalId="terminal-1" />);
+      await Promise.resolve();
+    });
+
+    const terminal = mocks.terminalInstances[0];
+    const pasteEvent = new KeyboardEvent('keydown', {
+      key: 'V',
+      code: 'KeyV',
+      ctrlKey: true,
+      shiftKey: true,
+      cancelable: true,
+    });
+
+    expect(terminal.customKeyEventHandler?.(pasteEvent)).toBe(false);
+    expect(terminal.pasted).toEqual(['shift paste']);
+  });
+
+  it('pastes with Cmd+V on macOS and leaves Ctrl+V for the PTY', async () => {
+    vi.stubGlobal('__LODY_PLATFORM__', { os: 'darwin' });
+    __resetPlatformCacheForTests();
+    const channel = createChannel();
+    vi.mocked(channel.readClipboardText).mockReturnValue('mac paste');
+
+    await act(async () => {
+      root?.render(<LocalTerminalPanel channel={channel} terminalId="terminal-1" />);
+      await Promise.resolve();
+    });
+
+    const terminal = mocks.terminalInstances[0];
+    const cmdPaste = new KeyboardEvent('keydown', {
+      key: 'v',
+      code: 'KeyV',
+      metaKey: true,
+      cancelable: true,
+    });
+    expect(terminal.customKeyEventHandler?.(cmdPaste)).toBe(false);
+    expect(terminal.pasted).toEqual(['mac paste']);
+
+    const ctrlPaste = new KeyboardEvent('keydown', {
+      key: 'v',
+      code: 'KeyV',
+      ctrlKey: true,
+      cancelable: true,
+    });
+    expect(terminal.customKeyEventHandler?.(ctrlPaste)).toBe(true);
+    expect(terminal.pasted).toEqual(['mac paste']);
+  });
+
   it('copies and pastes through the terminal context menu', async () => {
     const channel = createChannel();
     vi.mocked(channel.readClipboardText).mockReturnValue('clipboard input');
@@ -256,5 +489,7 @@ describe('LocalTerminalPanel', () => {
     const copyItem = getMenuItem('Copy');
     expect(copyItem.textContent).toContain('⌘C');
     expect(copyItem.textContent).not.toContain('Ctrl+Shift+C');
+    const pasteItem = getMenuItem('Paste');
+    expect(pasteItem.textContent).toContain('⌘V');
   });
 });
