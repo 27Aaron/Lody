@@ -132,8 +132,8 @@ describe('Mention navigation and insertion', () => {
     });
   }
 
-  function pressKey(input: HTMLTextAreaElement, key: string) {
-    const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+  function pressKey(input: HTMLTextAreaElement, key: string, init?: KeyboardEventInit) {
+    const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...init });
     act(() => {
       input.dispatchEvent(event);
     });
@@ -263,13 +263,20 @@ describe('Mention navigation and insertion', () => {
     expect(latest.mentions).toEqual([]);
   });
 
-  it('leaves Tab alone when the highlighted item is not a navigation item', () => {
-    // Tab must stay a plain focus move here: it neither descends nor inserts.
-    // (Whether the menu reopens afterwards is decided by trigger re-detection,
-    // which this contract does not cover.)
-    const input = render([{ value: '3312', insertText: '#3312' }], '@');
+  it('commits the highlighted non-navigation item on Tab', () => {
+    const input = render([{ value: '3312', insertText: '#3312', kind: 'issue' }], '@');
 
     const event = pressKey(input, 'Tab');
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(latest.inputValue).toBe('#3312 ');
+    expect(latest.mentions).toEqual([{ value: '3312', start: 0, end: 5, kind: 'issue' }]);
+  });
+
+  it('leaves Shift+Tab alone so it does not commit the highlighted item', () => {
+    const input = render([{ value: '3312', insertText: '#3312', kind: 'issue' }], '@');
+
+    const event = pressKey(input, 'Tab', { shiftKey: true });
 
     expect(event.defaultPrevented).toBe(false);
     expect(latest.inputValue).toBe('@');

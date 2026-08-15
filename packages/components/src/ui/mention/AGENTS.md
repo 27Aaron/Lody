@@ -20,7 +20,10 @@ Shared mention primitive used by composer autocomplete surfaces.
 - Backspace/ArrowLeft pop a `<namespace>:` drill-down prefix back to the bare
   trigger in one keystroke (`isMentionNavigationPrefix`); path drill-downs are
   excluded so Backspace still walks a path one character at a time.
-  Tab/ArrowRight descend into a highlighted navigation item.
+  Tab/ArrowRight descend into a highlighted navigation item. Tab also
+  commits a highlighted non-navigation item the same way Enter does.
+  Shift+Tab still closes the menu so the composer mode-cycle binding
+  is not stolen.
 - The pop-back itself is `context.onNavigateBack()`, owned by the root next to
   `onMentionAdd`: it has to interleave the controlled value commit with caret
   restoration, so a menu's own Back affordance calls it rather than restaging the
