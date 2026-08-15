@@ -212,16 +212,18 @@ describe('SessionList opened-by rendering', () => {
     const openerRow = container
       ?.querySelector('[data-sidebar-session-id="opener"]')
       ?.closest('[data-session-tree-depth]');
-    expect(openerRow?.querySelector('[data-session-tree-indent-spacer]')).toBeNull();
+    expect(openerRow?.getAttribute('data-session-tree-indent')).toBeNull();
 
     const childRow = container
       ?.querySelector('[data-sidebar-session-id="opened-1"]')
       ?.closest('[data-session-tree-depth]');
-    const childSpacer = childRow?.querySelector('[data-session-tree-indent-spacer]');
-    expect(childSpacer?.hasAttribute('data-session-tree-indent-spacer')).toBe(true);
-    expect(childSpacer?.querySelectorAll('[data-session-tree-connector]')).toHaveLength(2);
-    expect(childSpacer?.hasAttribute('data-session-row-leading-slot')).toBe(true);
-    expect(childSpacer?.querySelector('button[aria-label="More actions"]')).not.toBeNull();
+    const childSlot = childRow?.querySelector('[data-session-row-leading-slot]');
+    expect(childRow?.getAttribute('data-session-tree-indent')).toBe('child');
+    expect(childSlot?.className).toContain('w-[26px]');
+    expect(childSlot?.querySelectorAll('[data-session-tree-connector]')).toHaveLength(2);
+    expect(childSlot?.querySelector('[data-session-tree-connector="trunk"]')).not.toBeNull();
+    expect(childSlot?.querySelector('[data-session-tree-connector="elbow"]')).not.toBeNull();
+    expect(childSlot?.querySelector('button[aria-label="More actions"]')).not.toBeNull();
 
     const openerSlot = openerRow?.querySelector('[data-session-row-leading-slot]');
     expect(openerSlot?.querySelector('[data-session-opened-by-toggle]')).not.toBeNull();
@@ -286,6 +288,27 @@ describe('SessionList opened-by rendering', () => {
     expect(
       container?.querySelector('[data-session-opened-by-toggle]')?.getAttribute('aria-expanded')
     ).toBe('false');
+  });
+
+  it('hides tree connectors on an active child and keeps them on an idle child', () => {
+    renderList(makeOpenerGroupRows());
+
+    const slotOf = (sessionId: string) =>
+      container
+        ?.querySelector(`[data-sidebar-session-id="${sessionId}"]`)
+        ?.querySelector('[data-session-row-leading-slot]');
+
+    const idleSlot = slotOf('opened-1');
+    expect(idleSlot?.querySelector('[data-session-row-indicator]')).toBeNull();
+    expect(idleSlot?.querySelectorAll('[data-session-tree-connector]')).toHaveLength(2);
+
+    const workingSlot = slotOf('opened-2');
+    expect(workingSlot?.querySelector('[data-session-tree-connector]')).toBeNull();
+    expect(workingSlot?.querySelector('[data-session-working-spinner]')).not.toBeNull();
+
+    const unreadSlot = slotOf('opened-3');
+    expect(unreadSlot?.querySelector('[data-session-tree-connector]')).toBeNull();
+    expect(unreadSlot?.querySelector('[data-session-row-indicator] span')).not.toBeNull();
   });
 
   it('renders an active opened session as the selected row', () => {

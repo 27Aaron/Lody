@@ -220,6 +220,8 @@ describe('SidebarUpdatedSessionList opened-by rendering', () => {
       ?.querySelector('[data-sidebar-updated-id="opened-3"]')
       ?.querySelector('[data-session-row-leading-slot]');
     expect(childSlot?.querySelectorAll('[data-session-tree-connector]')).toHaveLength(2);
+    expect(childSlot?.querySelector('[data-session-tree-connector="trunk"]')).not.toBeNull();
+    expect(childSlot?.querySelector('[data-session-tree-connector="elbow"]')).not.toBeNull();
     expect(childSlot?.querySelector('button[aria-label="More actions"]')).not.toBeNull();
   });
 

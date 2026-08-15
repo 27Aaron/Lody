@@ -283,9 +283,9 @@ export function SessionRowWorktreeIndicator({ isWorktree }: { isWorktree?: boole
 }
 
 /**
- * Tree state rendered in the shared leading slot. The opener uses the normal
- * 14px slot; a child widens it to 26px, which indents only the child content by
- * 12px. The child connector and its ⋯ button share the same 7px centre.
+ * Tree state for the shared leading slot. The opener keeps the 14px slot; a
+ * child widens it to 26px (12px title indent). Idle children draw ├/└; an
+ * active child shows only status at the same 7px node as ⋯.
  */
 export type SessionRowOpenedByTreeSlot =
   | {
@@ -299,9 +299,12 @@ export type SessionRowOpenedByTreeSlot =
       isLastChild: boolean;
     };
 
-const TREE_CHILD_SLOT_CLASS = 'w-[26px]';
+const TREE_CHILD_SLOT_CLASS = 'w-[26px] justify-start';
 const TREE_CONTROL_LEFT_CLASS = 'left-[7px]';
 const TREE_LINE_CLASS = 'bg-sidebar-foreground/20';
+/** Cover row padding/border from the 14px slot, plus 1px for list `gap-px`. */
+const TREE_TRUNK_FROM_PREV_CLASS = '-top-2';
+const TREE_TRUNK_INTO_NEXT_CLASS = '-bottom-[9px]';
 
 /**
  * Maps one {@link OpenedBySessionTreeNode} to the leading slot's tree state.
@@ -381,13 +384,9 @@ export function SessionRowOpenedByMenuItems({
 }
 
 /**
- * ① The leading slot: status, opened-by tree affordance, and the hover-revealed
- * "⋯ more" button all occupy the SAME fixed spot. Clicking ⋯ opens the row's
- * existing context menu (via a synthetic `contextmenu` event), so there is no
- * duplicate menu to keep in sync. A tree opener always shows its disclosure at
- * rest. A child always shows its trunk/elbow and layers any permission/working/
- * unread status at the same node centre. Hover swaps that whole rest state for
- * ⋯ without moving the title.
+ * ① Status, opened-by tree affordance, and the hover ⋯ button share one spot.
+ * ⋯ synthesizes `contextmenu` so there is no second menu. Hover fades the rest
+ * state (disclosure, ├/└, or status) without moving the title.
  */
 export function SessionRowLeadingSlot({
   isWaitingPermission,
@@ -416,6 +415,7 @@ export function SessionRowLeadingSlot({
   const childTree = openedByTree?.kind === 'child' ? openedByTree : null;
   const isTreeChild = childTree !== null;
   const hasActivity = Boolean(isWaitingPermission || isWorking || hasUnreadMessages);
+  const showChildConnectors = childTree !== null && !hasActivity;
   const restClassName = showMenuButton
     ? cn('transition-opacity duration-100', fadeClassName)
     : undefined;
@@ -424,10 +424,9 @@ export function SessionRowLeadingSlot({
   return (
     <div
       data-session-row-leading-slot=""
-      data-session-tree-indent-spacer={isTreeChild ? '' : undefined}
       className={cn(
-        'relative flex h-3.5 shrink-0 items-center justify-center',
-        isTreeChild ? TREE_CHILD_SLOT_CLASS : 'w-3.5'
+        'relative flex h-3.5 shrink-0 items-center',
+        isTreeChild ? TREE_CHILD_SLOT_CLASS : 'w-3.5 justify-center'
       )}
     >
       {openedByTree?.kind === 'opener' ? (
@@ -457,16 +456,17 @@ export function SessionRowLeadingSlot({
             aria-hidden="true"
           />
         </button>
-      ) : childTree ? (
-        <div data-session-tree-connector-group="" className={cn('absolute inset-0', restClassName)}>
+      ) : showChildConnectors ? (
+        <div className={cn('absolute inset-0', restClassName)}>
           <span
             aria-hidden="true"
             data-session-tree-connector="trunk"
             className={cn(
-              'absolute -top-[7px] w-px',
+              'absolute w-px',
               TREE_LINE_CLASS,
               TREE_CONTROL_LEFT_CLASS,
-              childTree.isLastChild ? 'bottom-1/2' : '-bottom-[8px]'
+              TREE_TRUNK_FROM_PREV_CLASS,
+              childTree.isLastChild ? 'bottom-1/2' : TREE_TRUNK_INTO_NEXT_CLASS
             )}
           />
           <span
@@ -478,20 +478,6 @@ export function SessionRowLeadingSlot({
               TREE_CONTROL_LEFT_CLASS
             )}
           />
-          {hasActivity ? (
-            <div
-              className={cn(
-                'absolute top-1/2 z-10 -translate-x-1/2 -translate-y-1/2',
-                TREE_CONTROL_LEFT_CLASS
-              )}
-            >
-              <SessionRowIndicator
-                isWaitingPermission={isWaitingPermission}
-                isWorking={isWorking}
-                hasUnreadMessages={hasUnreadMessages}
-              />
-            </div>
-          ) : null}
         </div>
       ) : (
         <div className={restClassName}>
@@ -539,13 +525,8 @@ export function SessionRowLeadingSlot({
 }
 
 /**
- * Wraps ONE sidebar session row with the "opened by" tree gutter. Rows are
- * rendered from a flat node list (`buildOpenedBySessionTree`), so this wrapper
- * only applies tree geometry — it never reorders or hides anything.
- *
- * A list with no nesting passes `gutter={false}` and keeps its previous flat
- * layout byte for byte. The wrapper owns only grouping/data attributes; the
- * row's shared leading slot owns disclosure, child indent, connectors, and ⋯.
+ * Marks one flat-list row with opened-by tree depth. `gutter={false}` leaves
+ * a list with no nesting untouched. Connectors live in the leading slot.
  */
 export function SessionOpenedByTreeRow({
   depth,
@@ -560,7 +541,7 @@ export function SessionOpenedByTreeRow({
   if (!gutter) return <>{children}</>;
   return (
     <div
-      className="group/tree relative min-w-0"
+      className="relative min-w-0"
       data-session-tree-depth={depth}
       data-session-tree-indent={depth === 1 ? 'child' : undefined}
     >

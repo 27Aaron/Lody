@@ -147,10 +147,11 @@ mobile surfaces.
   `openedBySessionId` to the root: "Go to Opener Session" and the conversation's
   "Opened by" entry must still land on the exact Tab that created the Session.
   The opener and unrelated top-level rows keep the exact flat-list alignment.
-  The shared leading slot owns every tree affordance: an opener shows its
-  disclosure at rest and swaps it for ⋯ on row hover; an inactive child shows
-  its trunk/elbow and swaps those for ⋯ in the SAME 7px-centred position. Active
-  child status layers on that node centre without removing the connector. Only a child widens that slot
+  The shared leading slot owns the node-centre affordance: an opener shows its
+  disclosure at rest and swaps it for ⋯ on row hover; an idle child shows ├/└
+  and swaps those for ⋯ in the SAME 7px-centred position. An active child
+  (working / unread / waiting) drops the trunk and elbow and shows only the
+  status at that node — never both. Only a child widens that slot
   from 14px to 26px, producing the 12px title indent without shifting the row
   background. Keep connector geometry in `sidebar-row-shared.tsx`, and keep the
   opener's context menu expand/collapse item wired to the same toggle callback.
