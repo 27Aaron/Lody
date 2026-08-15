@@ -48,6 +48,7 @@ import { SessionCommentAnnotation } from './session-comment-annotation';
 import { SessionCommentAddButton } from './session-comment-add-button';
 import { isCommentableDiffLineType } from './session-comment-line';
 import { EMPTY_COMMENT_REFERENCE_KEYS } from '@/components/chat/comment-reference-state';
+import { DiffFileHeaderActions } from './diff-file-header-actions';
 
 /** Minimum container width (in pixels) to auto-switch to split view */
 const SPLIT_VIEW_MIN_WIDTH = 1024;
@@ -296,6 +297,11 @@ export interface DiffViewerProps {
   commentReferenceKeys?: readonly string[];
   /** Called when an async comment action fails. */
   onCommentError?: (error: unknown) => void;
+  /**
+   * Open this file in a file-preview viewer. When provided, the default
+   * header shows an "Open file" button next to the path.
+   */
+  onOpenFile?: (path: string) => void;
 }
 
 /**
@@ -475,6 +481,7 @@ function DiffViewerImpl({
   commentCallbacks,
   commentReferenceKeys = EMPTY_COMMENT_REFERENCE_KEYS,
   onCommentError,
+  onOpenFile,
 }: DiffViewerProps) {
   const renderStartedAt = isDiffPerfEnabled() ? getDiffPerfNow() : 0;
   const resolvedTheme = useResolvedTheme();
@@ -1152,9 +1159,12 @@ function DiffViewerImpl({
           )}
         >
           <FileIcon filePath={path} className="h-4 w-4 shrink-0" />
-          <span className="min-w-0 flex-1 truncate text-sm text-foreground/90" title={path}>
-            {path}
-          </span>
+          <div className="flex min-w-0 flex-1 items-center gap-1">
+            <span className="min-w-0 truncate text-sm text-foreground/90" title={path}>
+              {path}
+            </span>
+            <DiffFileHeaderActions path={path} onOpenFile={onOpenFile} />
+          </div>
           {commentCount > 0 && (
             <div className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
               <MessageSquare className="h-3 w-3" />
@@ -1206,7 +1216,8 @@ const areDiffViewerPropsEqual = (prev: DiffViewerProps, next: DiffViewerProps): 
   prev.mode === next.mode &&
   prev.commentCallbacks === next.commentCallbacks &&
   prev.commentReferenceKeys === next.commentReferenceKeys &&
-  prev.onCommentError === next.onCommentError;
+  prev.onCommentError === next.onCommentError &&
+  prev.onOpenFile === next.onOpenFile;
 
 export const DiffViewer = memo(DiffViewerImpl, areDiffViewerPropsEqual);
 

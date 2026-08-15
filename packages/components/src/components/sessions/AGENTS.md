@@ -557,7 +557,10 @@ labelClassName`) so the stage diffstat never clips. Wired from
 Code Collab file surfaces (data chain: [packages/components/AGENTS.md](../../../AGENTS.md)):
 
 - Diff page: `session-conversation-diff-panel.tsx`, data from
-  `use-session-conversation-diff-data.ts`.
+  `use-session-conversation-diff-data.ts`. Each file title copies the
+  workspace-relative path and, when wired, opens a file-preview viewer tab
+  through `handleOpenFile` with `pathKind: 'canonical'` (never the markdown
+  href parser).
 - Editor window (Monaco): `session-monaco-text-viewer.tsx` inside
   `session-file-content-view.tsx`.
 - v2 semantics for file tree, All Changes, refresh/save conflicts, and CLI-local

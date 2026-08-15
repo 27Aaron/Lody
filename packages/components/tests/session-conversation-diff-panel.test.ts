@@ -61,6 +61,19 @@ describe('areSessionConversationDiffPanelPropsEqual', () => {
     ).toBe(true);
   });
 
+  it('re-renders when the open-file handler identity changes', () => {
+    const onOpenFile = () => undefined;
+    expect(areSessionConversationDiffPanelPropsEqual(baseProps, { ...baseProps, onOpenFile })).toBe(
+      false
+    );
+    expect(
+      areSessionConversationDiffPanelPropsEqual(
+        { ...baseProps, onOpenFile },
+        { ...baseProps, onOpenFile }
+      )
+    ).toBe(true);
+  });
+
   it('re-renders when fileDiffs hydrate after the summary resolves', () => {
     // Regression: the comparator skipped fileDiffs, freezing a mount-time empty
     // checkpoint list (and its "requires a session-history fileDiff checkpoint"

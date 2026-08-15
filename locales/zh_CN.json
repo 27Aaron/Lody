@@ -1257,6 +1257,7 @@
   "sessions.fileViewer.loading": "正在加载文件…",
   "sessions.fileViewer.missing": "文件不存在。",
   "sessions.fileViewer.moreActions": "文件操作",
+  "sessions.fileViewer.openFile": "打开文件",
   "sessions.fileViewer.path": "文件路径",
   "sessions.fileViewer.pathCopied": "文件路径已复制",
   "sessions.fileViewer.preview.show": "预览",

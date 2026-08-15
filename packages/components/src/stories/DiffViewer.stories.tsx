@@ -1,5 +1,6 @@
 import React from 'react';
 import type { Meta, StoryObj } from '@storybook/react';
+import { fn } from 'storybook/test';
 import type { FileDiffMetadata } from '@pierre/diffs';
 import { DiffViewer } from '@/ui/diff-viewer/diff-viewer';
 
@@ -142,6 +143,20 @@ export const ComplexExample: Story = {
     path: 'apps/web/src/components/ProjectList.tsx',
     oldText,
     newText,
+  },
+  render: (args) => (
+    <div className="scrollbar-pro mx-auto max-w-5xl p-6 overflow-auto">
+      <DiffViewer {...args} />
+    </div>
+  ),
+};
+
+export const WithFileHeaderActions: Story = {
+  args: {
+    path: 'docs/acp-session-fork-worktree.md',
+    oldText,
+    newText,
+    onOpenFile: fn(),
   },
   render: (args) => (
     <div className="scrollbar-pro mx-auto max-w-5xl p-6 overflow-auto">

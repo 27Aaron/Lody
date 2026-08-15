@@ -296,7 +296,7 @@ type ViewerTab =
 
 type SessionDetailOpenFileOptions = {
   /** Analytics only. */
-  readonly source?: 'file_tree' | 'conversation_file_diff' | 'lsp';
+  readonly source?: 'file_tree' | 'conversation_file_diff' | 'lsp' | 'diff_header';
   /** Defaults to `markdown-href`; see `lib/session-file-open-target.ts`. */
   readonly pathKind?: SessionFileOpenPathKind;
   /** Explicit 1-based anchor, for callers that have one without encoding it in the path. */
@@ -2886,6 +2886,10 @@ const SessionDetail = ({
     handleOpenFile(filePath, { pathKind: 'canonical' });
   });
 
+  const handleOpenFileFromDiff = useStableCallback((filePath: string) => {
+    handleOpenFile(filePath, { pathKind: 'canonical', source: 'diff_header' });
+  });
+
   const handleOpenFileDiffForChat = useStableCallback((turnId: string, filePath: string) => {
     setFileProviderRequestedByInteraction(true);
     handleOpenFileDiff(turnId, filePath);
@@ -4282,6 +4286,7 @@ const SessionDetail = ({
             ? activeSessionFileProviderPending
             : false
         }
+        onOpenFile={handleOpenFileFromDiff}
         className={className}
       />
     );
@@ -4734,6 +4739,7 @@ const SessionDetail = ({
                       ? activeSessionFileProviderPending
                       : false
                   }
+                  onOpenFile={handleOpenFileFromDiff}
                   className="h-full"
                 />
               )}

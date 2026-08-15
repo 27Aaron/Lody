@@ -1258,6 +1258,7 @@
   "sessions.fileViewer.loading": "Loading file…",
   "sessions.fileViewer.missing": "File not found.",
   "sessions.fileViewer.moreActions": "File actions",
+  "sessions.fileViewer.openFile": "Open file",
   "sessions.fileViewer.path": "File path",
   "sessions.fileViewer.pathCopied": "File path copied",
   "sessions.fileViewer.preview.show": "Preview",
