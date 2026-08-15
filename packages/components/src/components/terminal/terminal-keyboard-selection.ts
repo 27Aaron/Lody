@@ -144,6 +144,7 @@ function moveExclusiveHead(
     case 'End':
       return clampOffset(Math.floor(offset / cols) * cols + cols, maxExclusive);
   }
+  return offset;
 }
 
 function isWordChar(ch: string): boolean {
