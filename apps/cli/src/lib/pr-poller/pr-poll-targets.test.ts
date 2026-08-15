@@ -173,10 +173,9 @@ describe('enumeratePrPollTargets', () => {
     expect(idle?.discoveryTarget).toBeNull();
 
     // A branch switch changes the fingerprint → discovery resumes.
-    const [resumed] = enumeratePrPollTargets(
-      [alive('s1', { ...meta, branchName: 'feat/next' })],
-      { s1: fingerprint }
-    );
+    const [resumed] = enumeratePrPollTargets([alive('s1', { ...meta, branchName: 'feat/next' })], {
+      s1: fingerprint,
+    });
     expect(resumed?.discoveryTarget).toEqual({ repoFullName: 'owner/repo', branch: 'feat/next' });
 
     // No recorded fingerprint (fresh daemon) → one discovery is still allowed.
@@ -195,7 +194,7 @@ describe('enumeratePrPollTargets', () => {
     expect(entry?.runtimeBranch).toBeNull();
   });
 
-  it('skips PR discovery and status polling for a direct local project', () => {
+  it('discovers and polls PRs for a GitHub-capable direct local project', () => {
     const [entry] = enumeratePrPollTargets([
       alive(
         's1',
@@ -205,15 +204,23 @@ describe('enumeratePrPollTargets', () => {
             githubRepoFullName: 'owner/local-repo',
           } as SessionMeta['project'],
           branchName: 'fix/y',
-          pullRequests: [
-            { url: 'https://github.com/owner/local-repo/pull/7', status: 'open' },
-          ],
+          pullRequests: [{ url: 'https://github.com/owner/local-repo/pull/7', status: 'open' }],
         })
       ),
     ]);
 
-    expect(entry?.statusTargets).toEqual([]);
-    expect(entry?.discoveryTarget).toBeNull();
+    expect(entry?.statusTargets).toEqual([
+      {
+        url: 'https://github.com/owner/local-repo/pull/7',
+        repoFullName: 'owner/local-repo',
+        prNumber: 7,
+        status: 'open',
+      },
+    ]);
+    expect(entry?.discoveryTarget).toEqual({
+      repoFullName: 'owner/local-repo',
+      branch: 'fix/y',
+    });
   });
 
   it('resolves the GitHub repo for local-project worktrees', () => {

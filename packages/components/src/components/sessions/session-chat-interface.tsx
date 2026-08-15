@@ -2051,7 +2051,6 @@ export const SessionChatInterface = memo(
       () => getSessionGitHubState(session, workspaceSession),
       [session, workspaceSession]
     );
-    const isWorktreeSession = (workspaceSession ?? session).isWorktree === true;
     const latestPrNumber = getPullRequestNumber(latestPr);
     const latestPrRepoFullName = getPullRequestRepoFullName(latestPr) ?? repoFullName;
     const preferredMergeMethod = usePreferredPrMergeMethod();
@@ -4246,14 +4245,16 @@ export const SessionChatInterface = memo(
       }));
       // An opener that is archived or not synced to this client still has a
       // usable id, so navigation stays available; only the label falls back.
-      const openedBy = openerSessionId && openerNavigationTarget
-        ? {
-            sessionId: openerSessionId,
-            title:
-              (openerSessionMeta?.title ?? '').trim() || t('sessions.untitled', 'Untitled session'),
-            target: openerNavigationTarget,
-          }
-        : null;
+      const openedBy =
+        openerSessionId && openerNavigationTarget
+          ? {
+              sessionId: openerSessionId,
+              title:
+                (openerSessionMeta?.title ?? '').trim() ||
+                t('sessions.untitled', 'Untitled session'),
+              target: openerNavigationTarget,
+            }
+          : null;
       if (!openedBy && opened.length === 0) return undefined;
       return { openedBy, opened, onOpenSession: handleOpenRelatedSession };
     }, [
@@ -4295,7 +4296,6 @@ export const SessionChatInterface = memo(
         hasExistingPr,
         workspaceDirty,
         hasChanges,
-        isWorktree: isWorktreeSession,
         isAgentBusy,
         prCiState: liveCiFailed ? 'f' : latestPrState?.s,
         prMergeState: latestPrState?.m,
@@ -4375,7 +4375,6 @@ export const SessionChatInterface = memo(
       isAgentBusy,
       isPrActionPending,
       isResolvingConflicts,
-      isWorktreeSession,
       latestPrState,
       activePrState,
       isActivePrMarkingReady,

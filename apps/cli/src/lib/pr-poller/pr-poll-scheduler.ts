@@ -1,9 +1,4 @@
-import {
-  collectViewedSessionIdsFromPresence,
-  getServerNow,
-  isDirectLocalProject,
-  type SessionId,
-} from '@lody/shared';
+import { collectViewedSessionIdsFromPresence, getServerNow, type SessionId } from '@lody/shared';
 import type { Logger } from '@/utils/logger';
 import { formatErrorMessage } from '@/utils/format-error';
 import { buildPrPollBatchQuery, type PrPollBatchQuery } from './graphql-batch-builder';
@@ -23,11 +18,7 @@ import {
   scopeQuotaAvailableAtMs,
   spendScopeQuota,
 } from './pr-poll-quota';
-import {
-  emptyPrPollerState,
-  type PrPollerState,
-  type PrPollerStateStore,
-} from './pr-poller-state';
+import { emptyPrPollerState, type PrPollerState, type PrPollerStateStore } from './pr-poller-state';
 import { selectHighOwners } from './pr-poll-priority';
 import {
   computeNextWakeAtMs,
@@ -1011,12 +1002,6 @@ export class PrPollScheduler {
       if (!freshMeta || freshMeta.isArchived || freshMeta.machineId !== runtime.handle.machineId) {
         return failed;
       }
-      if (isDirectLocalProject(freshMeta.project, freshMeta.isWorktree)) {
-        // The original local directory has no Session-owned branch. Drop a
-        // result that was already in flight when the Session changed context.
-        return failed;
-      }
-
       // Context revalidation: results were fetched for `(repoFullName,
       // queriedBranch)`. A repo/branch switch while the request was in flight
       // invalidates the DISCOVERY results (they belong to the old context);

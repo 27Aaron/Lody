@@ -407,7 +407,8 @@ labelClassName`) so the stage diffstat never clips. Wired from
   opens the existing fixed All Changes side-panel tab; file-row and comment-reference
   actions may still create a diff viewer because they carry a precise file/comment focus.
   The context stage is also the single owner of agent-driven GitHub/worktree actions:
-  a changed worktree without a PR shows `Create PR` + `Commit & Push`. For an open
+  a changed GitHub-capable workspace without a PR shows `Create PR` + `Commit & Push`,
+  including a direct Local Project with a resolved GitHub repository. For an open
   associated PR, compact poller state selects exactly one higher-priority path:
   conflicts show `Resolve Conflicts` (an immediate agent prompt), failed/error CI
   shows `Fix CI Errors` (refresh details, include a bounded failed-check snapshot,
