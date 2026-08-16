@@ -117,7 +117,10 @@ Product-level mention sources built on `src/ui/mention`.
 - `useSessionMentionItems` is the single owner of the mentionable-session list.
   The composer and `useMentionPromptExpansion` are both mounted on a session
   screen, so deriving items separately re-slugged every visible session twice a
-  tick.
+  tick. It reads the child-inclusive `allActiveSessions` projection, not the
+  `sessionListAtom` sidebar rows that hide child tabs: mentioning is an
+  addressing surface, and review/task child sessions are exactly what gets
+  referenced. Archived and the composer's own session stay excluded.
 - `useMentionPromptExpansion` is the single before-send text transform. With two
   send paths, per-type expansion hooks must compose here, not be wired into both.
 - A candidate describes its side panel through the neutral

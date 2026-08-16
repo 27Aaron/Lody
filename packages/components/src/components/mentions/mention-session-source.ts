@@ -215,12 +215,17 @@ export function rememberSessionMentionSlugs(items: readonly SessionMentionItem[]
  * One owner on purpose: the composer's menu and `useMentionPromptExpansion` both
  * need the same items, and deriving them separately meant re-slugging every
  * visible session twice on each session-list tick.
+ *
+ * Reads the child-inclusive projection on purpose: mentioning is an addressing
+ * surface (the agent is pointed at that session's history), and child sessions —
+ * review runs, task sessions — are exactly what gets referenced. `sessions` is
+ * the sidebar-row projection, which deliberately hides child tabs.
  */
 export function useSessionMentionItems(currentSessionId?: string | null): SessionMentionItem[] {
-  const { sessions } = useVisibleSessionMetas();
+  const { allActiveSessions } = useVisibleSessionMetas();
   const items = React.useMemo(
-    () => buildSessionMentionItems(sessions, currentSessionId),
-    [currentSessionId, sessions]
+    () => buildSessionMentionItems(allActiveSessions, currentSessionId),
+    [currentSessionId, allActiveSessions]
   );
   // Keep the slug -> id map durable so a draft reloaded tomorrow, or one whose
   // session has since been renamed, still resolves.
