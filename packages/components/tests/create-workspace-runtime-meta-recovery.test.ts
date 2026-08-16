@@ -298,6 +298,7 @@ vi.mock('@lody/shared', async (importOriginal) => {
       getToken: vi.fn(async () => 'streams-token'),
       invalidate: mocks.tokenProviderInvalidate,
       getGatewayBaseUrl: vi.fn(() => actual.DEFAULT_LORO_STREAMS_BASE_URL),
+      getShardHostSuffix: vi.fn(() => undefined),
       createAuthCallback: vi.fn(() => async () => 'streams-token'),
     })),
   };

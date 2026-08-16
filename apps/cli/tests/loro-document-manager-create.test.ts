@@ -33,6 +33,7 @@ vi.mock('@lody/shared', async (importOriginal) => {
     createLoroStreamsTokenProvider: vi.fn(() => ({
       getToken: mocks.streamsGetToken,
       getGatewayBaseUrl: () => mocks.streamsGatewayBaseUrl,
+      getShardHostSuffix: () => undefined,
       invalidate: () => {},
       createAuthCallback: () => async () => 'streams-jwt',
     })),
@@ -98,6 +99,7 @@ const testStreamsTokens = {
   createTokenProvider: () => ({
     getToken: mocks.streamsGetToken,
     getGatewayBaseUrl: () => mocks.streamsGatewayBaseUrl,
+    getShardHostSuffix: () => undefined,
     invalidate: () => {},
     createAuthCallback: () => async () => 'streams-jwt',
   }),

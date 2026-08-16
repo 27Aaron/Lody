@@ -1782,7 +1782,7 @@ async function createMachineRpcClient(args: {
     // Keep the prepared URL available during an auth-triggered token refresh;
     // prefer a newly returned gateway after the refresh completes.
     getBaseUrl: () => streamsTokenProvider.getGatewayBaseUrl() ?? baseUrl,
-    shardUrls: getLoroStreamsShardUrls(baseUrl),
+    shardUrls: getLoroStreamsShardUrls(baseUrl, streamsTokenProvider.getShardHostSuffix()),
     fetchImpl: cliHttpFetch,
     timeout: {
       connectTimeoutMs: readPositiveIntEnv('LODY_LORO_RPC_CONNECT_TIMEOUT_MS', 30_000),

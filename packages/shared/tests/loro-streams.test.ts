@@ -18,6 +18,7 @@ import {
   getLoroStreamsBaseUrl,
   getLoroStreamsPresenceBaseUrl,
   getLoroStreamsShardUrls,
+  normalizeLoroStreamsShardHostSuffix,
   getPreviewCommentRoomId,
   getSessionRoomId,
   type SessionId,
@@ -154,5 +155,56 @@ describe('loro streams helpers', () => {
     expect(shardUrls?.largePostMinBytes).toBe(LORO_STREAMS_LARGE_POST_SHARD_MIN_BYTES);
     expect(getLoroStreamsShardUrls(LEGACY_LORO_STREAMS_BASE_URL)).toBeUndefined();
     expect(getLoroStreamsShardUrls('http://127.0.0.1:8787')).toBeUndefined();
+  });
+
+  it('shards presence for any gateway when a runtime topology suffix is injected', () => {
+    expect(
+      getLoroStreamsPresenceBaseUrl('https://api.streams.example.com', '07', 'streams.example.com')
+    ).toBe('https://presence-07.streams.example.com');
+    expect(
+      getLoroStreamsPresenceBaseUrl(
+        'https://api.streams.example.com',
+        undefined,
+        'streams.example.com'
+      )
+    ).toBe('https://presence.streams.example.com');
+    // Unknown shard ids still fall back to the canonical presence host.
+    expect(
+      getLoroStreamsPresenceBaseUrl('https://api.streams.example.com', 'zz', 'streams.example.com')
+    ).toBe('https://presence.streams.example.com');
+    // The injected topology also applies to the sentinel origin.
+    expect(
+      getLoroStreamsPresenceBaseUrl(DEFAULT_LORO_STREAMS_BASE_URL, '01', 'streams.example.com')
+    ).toBe('https://presence-01.streams.example.com');
+  });
+
+  it('rejects malformed topology suffixes instead of steering traffic to stray origins', () => {
+    for (const invalid of [
+      'https://streams.example.com',
+      'streams.example.com/path',
+      'streams.example.com:8443',
+      'single-label',
+      ' ',
+      '',
+    ]) {
+      expect(getLoroStreamsPresenceBaseUrl('https://api.streams.example.com', '01', invalid)).toBe(
+        'https://api.streams.example.com'
+      );
+      expect(getLoroStreamsShardUrls('https://api.streams.example.com', invalid)).toBeUndefined();
+    }
+    expect(normalizeLoroStreamsShardHostSuffix(' Streams.Example.COM ')).toBe(
+      'streams.example.com'
+    );
+  });
+
+  it('builds shard URLs for any gateway when a runtime topology suffix is injected', () => {
+    const shardUrls = getLoroStreamsShardUrls(
+      'https://api.streams.example.com',
+      'streams.example.com'
+    );
+    expect(shardUrls?.bootstrap?.[0]).toBe('https://control-a.streams.example.com');
+    expect(shardUrls?.largePost?.[3]).toBe('https://write-d.streams.example.com');
+    expect(shardUrls?.other?.[1]).toBe('https://api-b.streams.example.com');
+    expect(shardUrls?.largePostMinBytes).toBe(LORO_STREAMS_LARGE_POST_SHARD_MIN_BYTES);
   });
 });

@@ -141,11 +141,33 @@ export const getLoroStreamsBaseUrl = (baseUrl?: string | null): string => {
   return trimmed.replace(/\/+$/g, '');
 };
 
+// A bare DNS name: dot-separated labels, no scheme/port/path. Anything else is
+// rejected so a hostile or malformed token response can never steer sharded
+// traffic to a stray origin.
+const LORO_STREAMS_SHARD_HOST_SUFFIX_PATTERN =
+  /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i;
+
+/**
+ * Validate a runtime-injected shard host suffix (the hosted deployment's
+ * topology, e.g. delivered in the token-mint response). Returns the normalized
+ * suffix, or `undefined` when absent/invalid — callers then fall back to
+ * unsharded traffic on the gateway origin.
+ */
+export const normalizeLoroStreamsShardHostSuffix = (
+  value?: string | null
+): string | undefined => {
+  const trimmed = value?.trim().toLowerCase();
+  if (!trimmed) return undefined;
+  return LORO_STREAMS_SHARD_HOST_SUFFIX_PATTERN.test(trimmed) ? trimmed : undefined;
+};
+
 // Hosted adapters may route ephemeral traffic to a separate host. Browsers cap simultaneous connections per
 // host (Firefox defaults to ~6), so opening Lody in several tabs can exhaust that
 // budget and stall presence connections. Spreading presence across sibling
 // subdomains gives each tab its own per-host budget. These inert suffixes preserve
-// the protocol helper contract without publishing a hosted deployment topology.
+// the protocol helper contract without publishing a hosted deployment topology;
+// hosted deployments deliver their real suffix at runtime in the token-mint
+// response (`shardHostSuffix`), which the URL helpers below accept explicitly.
 export const LORO_STREAMS_PRESENCE_SHARD_IDS = [
   '01',
   '02',
@@ -200,11 +222,26 @@ export const pickLoroStreamsPresenceShardId = (): LoroStreamsPresenceShardId => 
 
 export const getLoroStreamsPresenceBaseUrl = (
   baseUrl?: string | null,
-  shardId?: LoroStreamsPresenceShardId | string | null
+  shardId?: LoroStreamsPresenceShardId | string | null,
+  shardHostSuffix?: string | null
 ): string => {
   const normalized = getLoroStreamsBaseUrl(baseUrl);
   try {
     const url = new URL(normalized);
+    // A runtime-injected topology (hosted deployments deliver it with the
+    // Streams token) wins over the inert compile-time sentinel: presence gets
+    // its own host (and per-tab shard) regardless of the gateway origin.
+    const injectedSuffix = normalizeLoroStreamsShardHostSuffix(shardHostSuffix);
+    if (injectedSuffix) {
+      url.protocol = 'https:';
+      url.host = isLoroStreamsPresenceShardId(shardId)
+        ? `presence-${shardId}.${injectedSuffix}`
+        : `presence.${injectedSuffix}`;
+      // The host setter keeps a pre-existing port; hosted topology is always
+      // on the default https port.
+      url.port = '';
+      return url.toString().replace(/\/+$/g, '');
+    }
     if (url.origin !== new URL(DEFAULT_LORO_STREAMS_BASE_URL).origin) {
       return normalized;
     }
@@ -221,11 +258,15 @@ export const getLoroStreamsPresenceBaseUrl = (
   }
 };
 
-const getLoroStreamsShardOrigin = (trafficClass: string, shardId: string): string =>
-  `https://${trafficClass}-${shardId}.${DEFAULT_LORO_STREAMS_PROXY_HOST_SUFFIX}`;
+const getLoroStreamsShardOrigin = (
+  trafficClass: string,
+  shardId: string,
+  hostSuffix: string
+): string => `https://${trafficClass}-${shardId}.${hostSuffix}`;
 
 export const getLoroStreamsShardUrls = (
-  baseUrl?: string | null
+  baseUrl?: string | null,
+  shardHostSuffix?: string | null
 ): StreamsCrdtShardUrlsOptions | undefined => {
   let origin: string;
   try {
@@ -233,14 +274,25 @@ export const getLoroStreamsShardUrls = (
   } catch {
     return undefined;
   }
-  if (origin !== new URL(DEFAULT_LORO_STREAMS_BASE_URL).origin) {
+  const suffix =
+    normalizeLoroStreamsShardHostSuffix(shardHostSuffix) ??
+    (origin === new URL(DEFAULT_LORO_STREAMS_BASE_URL).origin
+      ? DEFAULT_LORO_STREAMS_PROXY_HOST_SUFFIX
+      : undefined);
+  if (!suffix) {
     return undefined;
   }
   return {
-    bootstrap: LORO_STREAMS_CONTROL_SHARD_IDS.map((id) => getLoroStreamsShardOrigin('control', id)),
-    catchup: LORO_STREAMS_CONTROL_SHARD_IDS.map((id) => getLoroStreamsShardOrigin('control', id)),
-    largePost: LORO_STREAMS_WRITE_SHARD_IDS.map((id) => getLoroStreamsShardOrigin('write', id)),
-    other: LORO_STREAMS_OTHER_SHARD_IDS.map((id) => getLoroStreamsShardOrigin('api', id)),
+    bootstrap: LORO_STREAMS_CONTROL_SHARD_IDS.map((id) =>
+      getLoroStreamsShardOrigin('control', id, suffix)
+    ),
+    catchup: LORO_STREAMS_CONTROL_SHARD_IDS.map((id) =>
+      getLoroStreamsShardOrigin('control', id, suffix)
+    ),
+    largePost: LORO_STREAMS_WRITE_SHARD_IDS.map((id) =>
+      getLoroStreamsShardOrigin('write', id, suffix)
+    ),
+    other: LORO_STREAMS_OTHER_SHARD_IDS.map((id) => getLoroStreamsShardOrigin('api', id, suffix)),
     largePostMinBytes: LORO_STREAMS_LARGE_POST_SHARD_MIN_BYTES,
   };
 };

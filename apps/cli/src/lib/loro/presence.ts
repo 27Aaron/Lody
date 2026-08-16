@@ -40,6 +40,8 @@ export type CliPresenceRuntimeOptions = {
 export type CliPresenceStreamsOptions = {
   streamsBaseUrl: string;
   auth: StreamsAuthCallback;
+  /** Hosted shard topology from the token response; presence publishes to its dedicated host when set. */
+  shardHostSuffix?: string;
 };
 
 // Presence is a liveness channel: a failed join or a dead room must never be
@@ -142,7 +144,11 @@ export class CliPresenceRuntime {
     const durableStreamUrl = createLoroStreamUrl({
       bucketId: LORO_STREAMS_BUCKET_ID,
       streamId: getLoroMetaStreamId(this.options.workspaceId),
-      baseUrl: getLoroStreamsPresenceBaseUrl(streamsOptions.streamsBaseUrl),
+      baseUrl: getLoroStreamsPresenceBaseUrl(
+        streamsOptions.streamsBaseUrl,
+        undefined,
+        streamsOptions.shardHostSuffix
+      ),
     });
     this.transport = new EphemeralStreamCrdt({
       streamUrl: toLodyPresenceStreamUrl(durableStreamUrl),

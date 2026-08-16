@@ -50,7 +50,7 @@ export async function createCliStreamsTransport(args: {
       remoteCursorStore: args.remoteCursorStore,
       snapshotCodec: streamsSnapshotCodec,
       baseUrl: gatewayBaseUrl,
-      shardUrls: getLoroStreamsShardUrls(gatewayBaseUrl),
+      shardUrls: getLoroStreamsShardUrls(gatewayBaseUrl, tokenProvider.getShardHostSuffix()),
       snapshotUpload: {
         canUpload: async () => true,
         debounceMs: 5_000,

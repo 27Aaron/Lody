@@ -53,6 +53,7 @@ export type WorkspacePresenceTransportOptions = EphemeralRoomBaseOptions & {
 export type WorkspacePresenceTransportStartOptions = {
   baseUrl: string;
   auth: PresenceAuthCallback;
+  shardHostSuffix?: string;
 };
 
 export class WorkspacePresenceTransport extends EphemeralRoomTransport<

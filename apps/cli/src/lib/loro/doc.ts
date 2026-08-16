@@ -583,10 +583,12 @@ export class LoroDocumentManager {
       this.presenceRuntime?.attachStreams({
         streamsBaseUrl: streamsTransport.gatewayBaseUrl,
         auth: streamsTransport.tokenProvider.createAuthCallback(),
+        shardHostSuffix: streamsTransport.tokenProvider.getShardHostSuffix(),
       });
       this.machineMonitorRuntime?.attachStreams({
         streamsBaseUrl: streamsTransport.gatewayBaseUrl,
         auth: streamsTransport.tokenProvider.createAuthCallback(),
+        shardHostSuffix: streamsTransport.tokenProvider.getShardHostSuffix(),
       });
       this.remoteStreamsAttached = true;
       this.remoteStreamsGeneration += 1;

@@ -37,6 +37,8 @@ export type CliMachineMonitorRuntimeOptions = {
 export type CliMachineMonitorStreamsOptions = {
   streamsBaseUrl: string;
   auth: StreamsAuthCallback;
+  /** Hosted shard topology from the token response; the monitor room lives on the presence host when set. */
+  shardHostSuffix?: string;
 };
 
 export function resolveMachineMonitorObservers(args: {
@@ -103,7 +105,11 @@ export class CliMachineMonitorRuntime {
     const durableStreamUrl = createLoroStreamUrl({
       bucketId: LORO_STREAMS_BUCKET_ID,
       streamId: getLoroMetaStreamId(this.options.workspaceId),
-      baseUrl: getLoroStreamsPresenceBaseUrl(streamsOptions.streamsBaseUrl),
+      baseUrl: getLoroStreamsPresenceBaseUrl(
+        streamsOptions.streamsBaseUrl,
+        undefined,
+        streamsOptions.shardHostSuffix
+      ),
     });
     this.transport = new EphemeralStreamCrdt({
       streamUrl: toLodyMachineMonitorStreamUrl(durableStreamUrl),

@@ -650,6 +650,10 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
     provider?.getGatewayBaseUrl() ??
     getLoroStreamsBaseUrl(import.meta.env.VITE_LORO_STREAMS_BASE_URL);
 
+  const getStreamsShardHostSuffixForProvider = (
+    provider: LoroStreamsTokenProvider | null
+  ): string | undefined => provider?.getShardHostSuffix();
+
   const invalidateMetaRemoteCursor = async (reason: string, error: unknown): Promise<void> => {
     // Remote cursors only exist for the Streams plane; the local-only
     // platform has neither the cursor rows nor a provider to derive URLs from.
@@ -1539,7 +1543,10 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
         // the dispatcher's `LoroStreamsLiveModePolicy`, not by this static
         // default. The client's idle watchdog (see `liveIdleTimeoutMs`) still
         // makes an SSE stall self-heal instead of hanging.
-        shardUrls: getLoroStreamsShardUrls(streamsBaseUrl),
+        shardUrls: getLoroStreamsShardUrls(
+          streamsBaseUrl,
+          getStreamsShardHostSuffixForProvider(provider)
+        ),
       });
       // Pre-warm the shared RPC response dispatcher (create/join of the
       // response stream) so the first machine RPC of the session doesn't pay
@@ -2615,19 +2622,27 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
       return;
     }
     const durableBaseUrl = getStreamsBaseUrlForProvider(streamsTokenProvider);
-    const presenceBaseUrl = getLoroStreamsPresenceBaseUrl(durableBaseUrl);
+    const shardHostSuffix = getStreamsShardHostSuffixForProvider(streamsTokenProvider);
+    const presenceBaseUrl = getLoroStreamsPresenceBaseUrl(
+      durableBaseUrl,
+      undefined,
+      shardHostSuffix
+    );
     console.info('createWorkspaceRuntime: starting workspace presence transport', {
       workspaceId,
       baseUrl: presenceBaseUrl,
       durableBaseUrl,
+      shardHostSuffix,
     });
     presenceTransport.start({
       baseUrl: durableBaseUrl,
       auth: streamsTokenProvider.createAuthCallback(),
+      shardHostSuffix,
     });
     machineMonitorTransport.start({
       baseUrl: durableBaseUrl,
       auth: streamsTokenProvider.createAuthCallback(),
+      shardHostSuffix,
     });
   };
 
@@ -2709,7 +2724,10 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
       remoteCursorStore,
       snapshotCodec: streamsSnapshotCodec,
       baseUrl: streamsBaseUrl,
-      shardUrls: getLoroStreamsShardUrls(streamsBaseUrl),
+      shardUrls: getLoroStreamsShardUrls(
+        streamsBaseUrl,
+        getStreamsShardHostSuffixForProvider(activeStreamsTokenProvider)
+      ),
       snapshotUpload: {
         canUpload: async () => true,
       },
@@ -3517,7 +3535,10 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
         }),
         auth: provider.createAuthCallback(),
         adapter: createLoroDocAdapter(new LoroDoc()),
-        shardUrls: getLoroStreamsShardUrls(streamsBaseUrl),
+        shardUrls: getLoroStreamsShardUrls(
+          streamsBaseUrl,
+          getStreamsShardHostSuffixForProvider(provider)
+        ),
         snapshotCodec: streamsSnapshotCodec,
       });
       try {
