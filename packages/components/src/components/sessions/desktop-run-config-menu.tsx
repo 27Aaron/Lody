@@ -13,6 +13,10 @@ import { getAllAgentConfigAtom } from '@/atoms';
 import { getModeIcon as getPermissionModeIcon } from '@/components/chat/chat-landing-selectors';
 import { AgentIcon } from '@/components/icons/agent-icon';
 import {
+  RecentRunConfigMenuGroup,
+  type RecentRunConfigItem,
+} from '@/components/sessions/recent-run-config-menu-group';
+import {
   resolveConfigOptionValue,
   resolveOnOffConfigOptionEnabled,
   resolvePlanModeSelectorEnabled,
@@ -329,6 +333,13 @@ export type DesktopRunConfigMenuProps = {
   configOptionSelectors?: AcpConfigOptionSelector[];
   configOptionValues?: Record<string, AcpConfigOptionValue>;
   onConfigOptionChange?: (configId: string, value: AcpConfigOptionValue) => void;
+  /**
+   * Whole run configurations the user recently started a chat with, already
+   * filtered (current selection removed, unusable entries dropped) and capped
+   * by the caller. Empty renders no section at all.
+   */
+  recentRunConfigs?: ReadonlyArray<RecentRunConfigItem>;
+  onRecentRunConfigSelect?: (id: string) => void;
 };
 
 export function DesktopRunConfigMenu({
@@ -346,6 +357,8 @@ export function DesktopRunConfigMenu({
   configOptionSelectors = [],
   configOptionValues,
   onConfigOptionChange,
+  recentRunConfigs,
+  onRecentRunConfigSelect,
 }: DesktopRunConfigMenuProps) {
   const { t } = useTranslation();
   const executorConfigs = useAtomValue(getAllAgentConfigAtom);
@@ -530,6 +543,12 @@ export function DesktopRunConfigMenu({
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="min-w-56">
+        {onRecentRunConfigSelect ? (
+          <RecentRunConfigMenuGroup
+            items={recentRunConfigs ?? []}
+            onSelect={onRecentRunConfigSelect}
+          />
+        ) : null}
         {agentOptions.length > 0 || selectedAgentConfig ? (
           isAgentLocked ? (
             <DropdownMenuItem disabled>

@@ -428,6 +428,7 @@
   "chat.runConfig.modelLabel": "Model",
   "chat.runConfig.permissionLabel": "Permission",
   "chat.runConfig.reasoningLabel": "Reasoning",
+  "chat.runConfig.recentLabel": "Recently used",
   "chat.runConfig.title": "Run configuration",
   "chat.promptPlaceholder": "",
   "chat.projectPicker.clear": "Don't work in a project",
