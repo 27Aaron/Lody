@@ -66,6 +66,7 @@ const meta = {
     },
     onOpenSearch: fn(),
     onFork: fn(),
+    forkWorktreeAvailability: 'available',
     onRename: fn(),
     onArchive: fn(),
     t: (_key, fallback, options) =>

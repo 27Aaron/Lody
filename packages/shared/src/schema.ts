@@ -933,10 +933,38 @@ export type MessageQueueItemInput = Omit<
   project: ProjectRef | undefined;
 };
 
+const sessionForkOperationDocSchema = schema.LoroMap(
+  {
+    id: schema.String(),
+    sourceSessionId: schema.String<SessionId>(),
+    sourceTurnId: schema.String(),
+    requestedByUserId: schema.String(),
+    targetContext: schema.String<'shared' | 'new-worktree'>(),
+    capturedHeadSha: schema.String({ required: false }),
+    sourceWasDirty: schema.Boolean({ required: false }),
+    state: schema.String<'preparing' | 'failed'>(),
+    phase: schema.String<'preparing-worktree' | 'running-setup' | 'starting-agent' | 'committing'>({
+      required: false,
+    }),
+    error: schema.LoroMap(
+      {
+        code: schema.String(),
+        message: schema.String(),
+      },
+      { required: false }
+    ),
+    createdAt: schema.String(),
+    updatedAt: schema.String(),
+  },
+  { required: false }
+);
+
 export const sessionDocSchema = schema({
   session: sessionSchema,
   history: schema.LoroList(sessionHistorySchema, (item) => item.id),
   mq: schema.LoroMovableList(messageQueueItemSchema, (item) => item.$cid, { required: false }),
+  /** Temporary durable state for an asynchronous Session fork. Removed on success. */
+  forkOperation: sessionForkOperationDocSchema,
   preview: sessionPreviewDocSchema,
   externalHistoryCursor: sessionExternalHistoryCursorDocSchema,
 });

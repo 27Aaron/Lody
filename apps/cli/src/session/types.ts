@@ -39,6 +39,10 @@ export interface SessionConfig {
   branch?: string;
   /** Existing session branch to reattach when restoring a cleaned-up archived worktree. */
   restoreBranchName?: string;
+  /** Internally captured, verified commit used as the exact worktree start point. */
+  worktreeStartPoint?: string;
+  /** Let a higher-level saga publish worktree metadata with its final commit. */
+  deferWorktreeMetaPersistence?: boolean;
 
   // Worktree fields
   /** Repository identifier for worktree management */

@@ -149,6 +149,11 @@ Session conversation page chain:
   mounted active chat surface's ref; the split desktop toolbar must not mount or subscribe to a
   second session doc merely to discover that turn. Keep its capability, archive, pending/loading,
   and RPC path identical to the assistant-footer fork action.
+  When the authoritative capability cache advertises worktree forking for a Git-backed project,
+  those entry points first offer shared-workspace Tab or new-worktree Session. A worktree fork keeps
+  the source route active after the accepted response, persists its target id locally so refresh can
+  reattach, and navigates only after the target publishes committed root-Session meta. Dirty-source
+  confirmation means committed `HEAD` only; never imply that uncommitted or untracked files move.
   Browser side-panel state and the mobile deep link are named `browser` / `?browser=1`; the removed
   `preview` values are not migrated. Once opened, keep `SessionBrowserPanel` mounted while other fixed side-panel
   tabs are active so managed DOM state and Electron native-view history survive tab switches.

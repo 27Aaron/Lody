@@ -199,6 +199,12 @@ import {
   CREATE_PR_PROMPT,
 } from './create-pr-prompt';
 import { AutoReviewMenuItem } from './auto-review-menu-item';
+import { WorktreeIcon } from '@/components/icons/worktree-icon';
+import {
+  getSessionForkDestinationOptions,
+  type SessionForkDestination,
+  type SessionForkWorktreeAvailability,
+} from './session-fork-destination-menu';
 import { ReviewAgentSetupDialog } from './auto-review-info';
 import { AutoReviewStatus } from './auto-review-status';
 import { useAutoReview } from '@/hooks/use-auto-review';
@@ -970,6 +976,8 @@ export function SessionHeaderMenu({
   onOpenSearch,
   onFork,
   isForking = false,
+  forkWorktreeAvailability = 'hidden',
+  onForkMenuOpen,
   onRename,
   onOpenReviewSettings,
   owner,
@@ -991,8 +999,10 @@ export function SessionHeaderMenu({
   sharing?: SessionSharingState;
   onShareWithTeam?: () => void | Promise<void>;
   onOpenSearch?: () => void | Promise<void>;
-  onFork?: () => void | Promise<void>;
+  onFork?: (destination?: SessionForkDestination) => void | Promise<void>;
   isForking?: boolean;
+  forkWorktreeAvailability?: SessionForkWorktreeAvailability;
+  onForkMenuOpen?: () => void;
   onRename?: () => void | Promise<void>;
   onOpenReviewSettings?: () => void;
   /** Multi-member workspaces only; omitted elsewhere. */
@@ -1094,7 +1104,11 @@ export function SessionHeaderMenu({
 
   return (
     <>
-      <DropdownMenu>
+      <DropdownMenu
+        onOpenChange={(open) => {
+          if (open) onForkMenuOpen?.();
+        }}
+      >
         <DropdownMenuTrigger asChild>
           <Button
             variant="ghost"
@@ -1243,12 +1257,49 @@ export function SessionHeaderMenu({
             </DropdownMenuItem>
           )}
 
-          {onFork && !isArchived && (
+          {onFork && !isArchived && forkWorktreeAvailability !== 'hidden' ? (
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger disabled={isForking}>
+                {isForking ? (
+                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                ) : (
+                  <GitFork className="h-3.5 w-3.5 shrink-0" />
+                )}
+                <span className="min-w-0 flex-1 truncate">
+                  {t('sessions.forkSession', 'Fork session')}
+                </span>
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="min-w-[16rem]">
+                {getSessionForkDestinationOptions(t, forkWorktreeAvailability).map((option) => (
+                  <DropdownMenuItem
+                    key={option.id}
+                    disabled={option.disabled || isForking}
+                    className="items-start py-1.5"
+                    onSelect={() => {
+                      void onFork(option.id);
+                    }}
+                  >
+                    {option.id === 'new-worktree' ? (
+                      <WorktreeIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    ) : (
+                      <Folder className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    )}
+                    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                      <span className="leading-tight">{option.label}</span>
+                      <span className="text-xs font-normal leading-snug text-muted-foreground">
+                        {option.hint}
+                      </span>
+                    </span>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          ) : onFork && !isArchived ? (
             <DropdownMenuItem
               disabled={isForking}
               onClick={() => {
                 if (!isForking) {
-                  void onFork();
+                  void onFork('shared');
                 }
               }}
             >
@@ -1259,7 +1310,7 @@ export function SessionHeaderMenu({
               )}
               {t('sessions.forkSession', 'Fork session')}
             </DropdownMenuItem>
-          )}
+          ) : null}
 
           {onRename && !isArchived && (
             <DropdownMenuItem
@@ -1696,7 +1747,7 @@ interface SessionChatInterfaceProps {
   /** External callback for copying conversation history (used when header and message area are split) */
   onCopyConversationHistory?: () => void | Promise<void>;
   /** External latest-assistant fork callback for split header/message layouts. */
-  onForkSession?: () => void | Promise<void>;
+  onForkSession?: (destination?: SessionForkDestination) => void | Promise<void>;
   /** Effective team/private visibility for the session shown in the header menu. */
   sharing?: SessionSharingState;
   /** Request the parent-owned confirmation flow for a private session. */
@@ -1719,7 +1770,9 @@ interface SessionChatInterfaceProps {
   /** Called when the context strip's diffstat is clicked. */
   onOpenAllChanges?: () => void;
   /** Native ACP fork action for the latest completed assistant turn. */
-  onForkLastAssistant?: (turnId: string) => void;
+  onForkLastAssistant?: (turnId: string, destination?: SessionForkDestination) => void;
+  forkWorktreeAvailability?: SessionForkWorktreeAvailability;
+  onForkWorktreeMenuOpen?: () => void;
   forkingAssistantMessageId?: string | null;
   /** Opens another session from an in-conversation link (e.g. a fork's origin). */
   onNavigateSession?: (target: SessionNavigationTarget) => void;
@@ -1843,6 +1896,8 @@ export const SessionChatInterface = memo(
       changesDiffStat,
       onOpenAllChanges,
       onForkLastAssistant,
+      forkWorktreeAvailability = 'hidden',
+      onForkWorktreeMenuOpen,
       forkingAssistantMessageId,
       onNavigateSession,
       onConversationPrepared,
@@ -2462,15 +2517,18 @@ export const SessionChatInterface = memo(
       },
       [session.id]
     );
-    const handleForkFromMenu = useCallback(() => {
-      if (onForkSessionExternal) {
-        void onForkSessionExternal();
-        return;
-      }
-      if (lastCompletedAssistantMessageId && onForkLastAssistant) {
-        onForkLastAssistant(lastCompletedAssistantMessageId);
-      }
-    }, [lastCompletedAssistantMessageId, onForkLastAssistant, onForkSessionExternal]);
+    const handleForkFromMenu = useCallback(
+      (destination?: SessionForkDestination) => {
+        if (onForkSessionExternal) {
+          void onForkSessionExternal(destination);
+          return;
+        }
+        if (lastCompletedAssistantMessageId && onForkLastAssistant) {
+          onForkLastAssistant(lastCompletedAssistantMessageId, destination);
+        }
+      },
+      [lastCompletedAssistantMessageId, onForkLastAssistant, onForkSessionExternal]
+    );
     const canForkFromMenu = Boolean(
       onForkSessionExternal || (lastCompletedAssistantMessageId && onForkLastAssistant)
     );
@@ -5341,6 +5399,8 @@ export const SessionChatInterface = memo(
         onOpenSearch={hideMessageArea ? onOpenSearchExternal : openSearch}
         onFork={canForkFromMenu ? handleForkFromMenu : undefined}
         isForking={forkingAssistantMessageId !== null && forkingAssistantMessageId !== undefined}
+        forkWorktreeAvailability={forkWorktreeAvailability}
+        onForkMenuOpen={onForkWorktreeMenuOpen}
         onRename={() => {
           setRenameDialogTarget({
             sessionId: session.id,
@@ -5497,6 +5557,8 @@ export const SessionChatInterface = memo(
                           assistantActions={assistantQuickActions}
                           assistantActionsMessageId={latestCompletedProposedPlan?.entryId}
                           onForkLastAssistant={onForkLastAssistant}
+                          forkWorktreeAvailability={forkWorktreeAvailability}
+                          onForkWorktreeMenuOpen={onForkWorktreeMenuOpen}
                           onEditLastUser={
                             editableLastUserMessageId ? handleEditLastUser : undefined
                           }

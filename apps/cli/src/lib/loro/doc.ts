@@ -50,6 +50,8 @@ import {
   type AcpConfigOptionSummary,
   type AcpCommandSummary,
   type AcpCapabilityCacheEntry,
+  type SessionForkOperation,
+  SessionForkOperationSchema,
   createLocalLoroDataPlaneScheduler,
   LocalLoroDataPlaneServer,
   type LodyPresenceStateMap,
@@ -1469,6 +1471,7 @@ type SessionDocInitialState = {
     id?: SessionId;
   };
   history?: SessionHistoryInput[];
+  forkOperation?: SessionForkOperation;
 };
 
 /**
@@ -1518,6 +1521,7 @@ export class SessionDocument implements LoroDocument<SessionDocMeta, SessionMeta
     const base: SessionDocInitialState = {
       session: { id: this.sessionId },
       history: [],
+      forkOperation: undefined,
     };
     const initialHistory = initialState?.history ?? base.history ?? [];
     const normalizedHistory = initialHistory.map((entry) => ({
@@ -1851,6 +1855,7 @@ export class SessionDocument implements LoroDocument<SessionDocMeta, SessionMeta
       session: state.session,
       history,
       mq: state.mq as SessionDocMeta['mq'],
+      forkOperation: state.forkOperation as SessionDocMeta['forkOperation'],
       preview: state.preview as SessionDocMeta['preview'],
       externalHistoryCursor: state.externalHistoryCursor as SessionDocMeta['externalHistoryCursor'],
     };
@@ -1901,6 +1906,31 @@ export class SessionDocument implements LoroDocument<SessionDocMeta, SessionMeta
 
   async getMetaState(): Promise<SessionMeta | undefined> {
     return await getAliveDocMeta<SessionMeta>(this.repo, this.roomId);
+  }
+
+  getForkOperation(): SessionForkOperation | undefined {
+    if (!this.mirror) {
+      throw new Error('SessionDocument not initialized');
+    }
+    const parsed = SessionForkOperationSchema.safeParse(this.mirror.getState().forkOperation);
+    return parsed.success ? parsed.data : undefined;
+  }
+
+  setForkOperation(operation: SessionForkOperation | undefined): void {
+    if (!this.mirror) {
+      throw new Error('SessionDocument not initialized');
+    }
+    this.mirror.setState((prev) => {
+      if (operation) {
+        // Mirror exposes readonly state to callers, but setState supplies its mutable draft.
+        // @ts-expect-error mutable Mirror draft
+        prev.forkOperation = operation;
+      } else {
+        // @ts-expect-error mutable Mirror draft
+        delete prev.forkOperation;
+      }
+      return prev;
+    });
   }
 
   async markHistoryAsSeen(turnId: string): Promise<void> {
@@ -2732,6 +2762,7 @@ const serializeAcpCapabilityWithoutFetchTime = (entry: AcpCapabilityCacheEntry):
     configOptions: entry.configOptions,
     availableCommands: entry.availableCommands,
     sessionFork: entry.sessionFork,
+    sessionForkWorktree: entry.sessionForkWorktree,
   });
 
 export class MachineDocument implements LoroDocument<{}, MachineMeta> {
@@ -2839,6 +2870,7 @@ export class MachineDocument implements LoroDocument<{}, MachineMeta> {
       configOptions: configOptions?.length ? configOptions : undefined,
       availableCommands: availableCommands?.length ? availableCommands : undefined,
       sessionFork,
+      sessionForkWorktree: sessionFork,
       modelReasoningEfforts:
         modelReasoningEfforts && Object.keys(modelReasoningEfforts).length > 0
           ? modelReasoningEfforts

@@ -20,6 +20,10 @@ import { buildChatStreamItems, type BuildChatStreamItemsCache } from './build-ch
 import { useStableCallback } from '@/hooks/use-stable-callback';
 import { useCloudQuery } from '@lody/platform/react';
 import type { SessionNavigationTarget } from '@/lib/session-navigation';
+import type {
+  SessionForkDestination,
+  SessionForkWorktreeAvailability,
+} from '@/components/sessions/session-fork-destination-menu';
 
 const emptyHistory = [] as SessionDoc['history'];
 const CHAT_STREAM_ITEMS_CACHE_LIMIT = 20;
@@ -73,7 +77,9 @@ export interface SessionChatStreamProps {
   messageFileDiffEntriesByTurn?: MessageFileDiffEntriesByTurn;
   assistantActions?: AssistantMessageAction[];
   assistantActionsMessageId?: string | null;
-  onForkLastAssistant?: (turnId: string) => void;
+  onForkLastAssistant?: (turnId: string, destination?: SessionForkDestination) => void;
+  forkWorktreeAvailability?: SessionForkWorktreeAvailability;
+  onForkWorktreeMenuOpen?: () => void;
   onEditLastUser?: (message: SessionHistoryParsed, text: string) => Promise<boolean>;
   forkingAssistantMessageId?: string | null;
   /** Opens another session from an in-conversation link (e.g. a fork's origin). */
@@ -136,6 +142,8 @@ const SessionChatStreamImpl = forwardRef<SessionChatStreamHandle, SessionChatStr
       assistantActions,
       assistantActionsMessageId,
       onForkLastAssistant,
+      forkWorktreeAvailability,
+      onForkWorktreeMenuOpen,
       forkingAssistantMessageId,
       onNavigateSession,
       onEditLastUser,
@@ -171,9 +179,11 @@ const SessionChatStreamImpl = forwardRef<SessionChatStreamHandle, SessionChatStr
     const stableOnNavigateSession = useStableCallback((target: SessionNavigationTarget) => {
       onNavigateSession?.(target);
     });
-    const stableOnForkLastAssistant = useStableCallback((turnId: string) => {
-      onForkLastAssistant?.(turnId);
-    });
+    const stableOnForkLastAssistant = useStableCallback(
+      (turnId: string, destination?: SessionForkDestination) => {
+        onForkLastAssistant?.(turnId, destination);
+      }
+    );
     const hasFileDiffClick = onFileDiffClick !== undefined;
     const hasFilePathClick = onFilePathClick !== undefined;
     const hasNavigateSession = onNavigateSession !== undefined;
@@ -233,6 +243,8 @@ const SessionChatStreamImpl = forwardRef<SessionChatStreamHandle, SessionChatStr
         assistantActions={assistantActions}
         assistantActionsMessageId={assistantActionsMessageId}
         onForkLastAssistant={hasForkLastAssistant ? stableOnForkLastAssistant : undefined}
+        forkWorktreeAvailability={forkWorktreeAvailability}
+        onForkWorktreeMenuOpen={onForkWorktreeMenuOpen}
         forkingAssistantMessageId={forkingAssistantMessageId}
         agentActivityLabel={agentActivityLabel}
         agentActivityTone={agentActivityTone}

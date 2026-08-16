@@ -233,6 +233,38 @@ describe('WorktreeManager', () => {
       expect(runGit(sourceDir, ['worktree', 'list'])).toContain(info.hostPath);
     });
 
+    it('should create from the captured commit even after the source HEAD advances', async () => {
+      const sourceDir = createLocalRepo(testDir);
+      const capturedHead = runGit(sourceDir, ['rev-parse', 'HEAD']);
+      fs.writeFileSync(path.join(sourceDir, 'later.txt'), 'later\n', 'utf8');
+      const laterHead = gitCommit(sourceDir, 'later source commit');
+      manager.updateSource({ kind: 'local-shared', originalRootPath: sourceDir });
+
+      const info = await manager.createWorktree(
+        'forkhead-session-worktree' as SessionId,
+        undefined,
+        undefined,
+        capturedHead
+      );
+
+      expect(info.headSha).toBe(capturedHead);
+      expect(info.headSha).not.toBe(laterHead);
+    });
+
+    it('should reject an existing target worktree at a different captured commit', async () => {
+      const sourceDir = createLocalRepo(testDir);
+      const capturedHead = runGit(sourceDir, ['rev-parse', 'HEAD']);
+      fs.writeFileSync(path.join(sourceDir, 'later.txt'), 'later\n', 'utf8');
+      const laterHead = gitCommit(sourceDir, 'later source commit');
+      manager.updateSource({ kind: 'local-shared', originalRootPath: sourceDir });
+      const sessionId = 'forkmismatch-session' as SessionId;
+      await manager.createWorktree(sessionId, undefined, undefined, laterHead);
+
+      await expect(
+        manager.createWorktree(sessionId, undefined, undefined, capturedHead)
+      ).rejects.toThrow(/does not match captured fork HEAD/);
+    });
+
     it('should base a shared-local worktree on an exact remote ref', async () => {
       const { sourceDir } = createRemoteRepo(testDir, 'main');
       runGit(sourceDir, ['checkout', '-b', 'feature/remote-only']);

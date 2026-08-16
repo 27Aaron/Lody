@@ -97,6 +97,30 @@ describe('SessionHeaderMenu fork action', () => {
     const forkItem = menuItems.find((item) => item.textContent?.includes('Fork session'));
     await act(async () => forkItem?.click());
     expect(onFork).toHaveBeenCalledTimes(1);
+    expect(onFork).toHaveBeenCalledWith('shared');
+  });
+
+  it('turns the fork action into a submenu when a worktree destination is available', async () => {
+    const onFork = vi.fn();
+    await act(async () => {
+      root?.render(
+        <SessionHeaderMenu
+          session={session}
+          onCopyUrl={vi.fn()}
+          onFork={onFork}
+          forkWorktreeAvailability="available"
+          t={translate}
+        />
+      );
+    });
+    await openMenu();
+
+    const forkItem = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find(
+      (item) => item.textContent?.includes('Fork session')
+    );
+    expect(forkItem?.getAttribute('aria-haspopup')).toBe('menu');
+    await act(async () => forkItem?.click());
+    expect(onFork).not.toHaveBeenCalled();
   });
 
   it('keeps the fork action visible but disabled while the request is pending', async () => {

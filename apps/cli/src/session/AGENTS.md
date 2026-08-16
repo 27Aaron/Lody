@@ -178,6 +178,14 @@ delegation proofs or a shared-machine gate without a new product and security de
   `SessionForkSpec.targetPlacement === 'side-panel'` is a sparse
   presentation hint persisted as target `childSessionPlacement`; it does not alter parent/root
   workspace ownership, history cloning, ACP lifetime, or the fork commit boundary.
+  `targetContext.kind === 'new-worktree'` is a distinct asynchronous saga: accept only when the
+  provider advertises native fork support, capture the source's committed `HEAD` after any dirty
+  source acknowledgement, then persist a target-doc `forkOperation` before returning. Create the
+  worktree from that exact commit, run setup, and invoke ACP fork from the new cwd in the background.
+  The target is an independent root Session (no `parentSessionId`) and must not publish Session meta
+  until the final local commit; failures terminate ACP, remove the worktree/branch, and retain a
+  durable failed operation receipt. Retries reuse the caller-supplied target Session id and must not
+  duplicate side effects. Startup recovery fail-closes interrupted preparing operations.
 - `session-edit-and-resend-service.ts` owns same-Lody-session replacement of the last normal User
   turn for builtin Codex/Claude. Prepare provider `forkAtTurn` (or `session/new` for the first
   User) before cancelling the exact active turn, then wait for old ownership release before one

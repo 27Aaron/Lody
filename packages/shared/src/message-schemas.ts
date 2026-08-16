@@ -628,10 +628,15 @@ export const SessionForkErrorCodeSchema = z.enum([
   'SOURCE_SESSION_ARCHIVED',
   'SOURCE_SESSION_BUSY',
   'SOURCE_TURN_NOT_FORKABLE',
+  'SOURCE_PROJECT_NOT_WORKTREE_CAPABLE',
+  'SOURCE_WORKTREE_DIRTY',
+  'SOURCE_HEAD_UNAVAILABLE',
   'FORK_UNAVAILABLE',
   'TARGET_SESSION_CONFLICT',
   'MACHINE_ACCESS_DENIED',
   'ACP_FORK_FAILED',
+  'WORKTREE_CREATE_FAILED',
+  'WORKTREE_SETUP_FAILED',
   'HISTORY_CLONE_FAILED',
   'TARGET_WRITE_FAILED',
   'INTERNAL_ERROR',
@@ -696,9 +701,24 @@ export const SessionForkSpecSchema = z
     sourceTurnId: z.string().trim().min(1),
     targetSessionId: SessionIdSchema,
     requestedByUserId: z.string().trim().min(1),
+    targetContext: z
+      .discriminatedUnion('kind', [
+        z.object({ kind: z.literal('shared') }).strict(),
+        z
+          .object({
+            kind: z.literal('new-worktree'),
+            acknowledgeDirtySource: z.literal(true).optional(),
+          })
+          .strict(),
+      ])
+      .optional(),
     targetPlacement: z.literal('side-panel').optional(),
   })
-  .strict();
+  .strict()
+  .refine((spec) => !(spec.targetContext?.kind === 'new-worktree' && spec.targetPlacement), {
+    message: 'A new-worktree fork cannot use child-session placement.',
+    path: ['targetPlacement'],
+  });
 
 export const SessionForkResponseSchema = z
   .object({
@@ -706,6 +726,9 @@ export const SessionForkResponseSchema = z
     sourceSessionId: SessionIdSchema,
     targetSessionId: SessionIdSchema,
     success: z.boolean(),
+    disposition: z.enum(['accepted', 'confirmation-required', 'completed', 'failed']).optional(),
+    operationId: z.string().trim().min(1).optional(),
+    reason: z.literal('SOURCE_WORKTREE_DIRTY').optional(),
     partial: z.boolean(),
     warnings: z.array(
       z
@@ -725,10 +748,39 @@ export const SessionForkResponseSchema = z
   })
   .strict();
 
+export const SessionForkOperationSchema = z
+  .object({
+    id: z.string().trim().min(1),
+    sourceSessionId: SessionIdSchema,
+    sourceTurnId: z.string().trim().min(1),
+    requestedByUserId: z.string().trim().min(1),
+    targetContext: z.enum(['shared', 'new-worktree']),
+    capturedHeadSha: z
+      .string()
+      .regex(/^[0-9a-f]{40,64}$/u)
+      .optional(),
+    sourceWasDirty: z.boolean().optional(),
+    state: z.enum(['preparing', 'failed']),
+    phase: z
+      .enum(['preparing-worktree', 'running-setup', 'starting-agent', 'committing'])
+      .optional(),
+    error: z
+      .object({
+        code: SessionForkErrorCodeSchema,
+        message: z.string().trim().min(1),
+      })
+      .strict()
+      .optional(),
+    createdAt: z.string().trim().min(1),
+    updatedAt: z.string().trim().min(1),
+  })
+  .strict();
+
 export type SessionForkSpec = z.infer<typeof SessionForkSpecSchema>;
 export type SessionForkResponse = z.infer<typeof SessionForkResponseSchema>;
 export type SessionForkErrorCode = z.infer<typeof SessionForkErrorCodeSchema>;
 export type SessionForkWarningCode = z.infer<typeof SessionForkWarningCodeSchema>;
+export type SessionForkOperation = z.infer<typeof SessionForkOperationSchema>;
 export type SessionEditAndResendSpec = z.infer<typeof SessionEditAndResendSpecSchema>;
 export type SessionEditAndResendResponse = z.infer<typeof SessionEditAndResendResponseSchema>;
 export type SessionEditAndResendErrorCode = z.infer<typeof SessionEditAndResendErrorCodeSchema>;

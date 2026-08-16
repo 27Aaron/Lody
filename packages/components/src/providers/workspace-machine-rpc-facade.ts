@@ -707,7 +707,8 @@ export function createWorkspaceMachineRpcFacade(deps: WorkspaceMachineRpcFacadeD
           workspaceId,
           method: 'session/fork',
           params: args,
-          timeoutMs: options?.timeoutMs ?? 120_000,
+          timeoutMs:
+            options?.timeoutMs ?? (args.targetContext?.kind === 'new-worktree' ? 15_000 : 120_000),
         });
         if (response && !response.ok) {
           return sessionForkFailure(args, 'INTERNAL_ERROR', response.error);
@@ -716,7 +717,11 @@ export function createWorkspaceMachineRpcFacade(deps: WorkspaceMachineRpcFacadeD
       }
       return await (
         await getMachineRpcClient(machineId)
-      ).requestSessionFork({ ...args, timeoutMs: options?.timeoutMs ?? 120_000 });
+      ).requestSessionFork({
+        ...args,
+        timeoutMs:
+          options?.timeoutMs ?? (args.targetContext?.kind === 'new-worktree' ? 15_000 : 120_000),
+      });
     } catch (error) {
       return sessionForkFailure(
         args,

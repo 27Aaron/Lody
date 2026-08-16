@@ -45,6 +45,7 @@ function createForkHarness(
     sourceBusy?: boolean;
     supportsActiveTurnFork?: boolean;
     sourceHistory?: SessionHistoryInput[];
+    worktree?: { dirty: boolean; headSha: string };
   } = {}
 ) {
   const sourceMeta = {
@@ -60,14 +61,27 @@ function createForkHarness(
     agentType: 'codex',
     agentConfigId,
     acpSessionId: 'acp-source',
+    ...(options.worktree
+      ? {
+          project: {
+            kind: 'local' as const,
+            localProjectId: 'local-project-1' as never,
+          },
+        }
+      : {}),
   } as unknown as SessionMeta;
   const sourceDoc = {
     getMetaState: vi.fn(async () => sourceMeta),
     getHistory: vi.fn(async () => options.sourceHistory ?? sourceHistory),
   };
+  let forkOperation: unknown;
   const targetDoc = {
     updateHistory: vi.fn(async () => undefined),
     waitUntilSynced: vi.fn(async () => false),
+    getForkOperation: vi.fn(() => forkOperation),
+    setForkOperation: vi.fn((operation) => {
+      forkOperation = operation;
+    }),
   };
   const persistPendingChanges = vi.fn(async (reason: string) => {
     if (reason === failPersistReason) {
@@ -101,9 +115,12 @@ function createForkHarness(
               supportsActiveTurnFork: () => options.supportsActiveTurnFork === true,
             },
           }
-        : { acpSessionId: 'acp-target' }
+        : { acpSessionId: 'acp-target', getWorkdir: () => process.cwd() }
     ),
     terminateSession: vi.fn(async () => undefined),
+    resolveSessionWorkdir: vi.fn(async () => '/source/workdir'),
+    resolveLocalProjectRootPath: vi.fn(async () => '/source/project-root'),
+    cleanupForkWorktree: vi.fn(async () => undefined),
   };
   const logger = { error: vi.fn() };
   const service = new SessionForkService({
@@ -116,6 +133,12 @@ function createForkHarness(
     workspaceId: 'workspace-1',
     machineId,
     isSourceBusy: () => options.sourceBusy === true,
+    inspectGitWorkdir: options.worktree
+      ? vi.fn(async () => ({
+          dirty: options.worktree!.dirty,
+          headSha: options.worktree!.headSha,
+        }))
+      : undefined,
   });
 
   return {
@@ -422,5 +445,69 @@ describe('SessionForkService durability boundary', () => {
     expect(harness.sessionManager.terminateSession).toHaveBeenCalledWith(targetSessionId, true);
     expect(harness.repo.deleteDoc).toHaveBeenCalledTimes(1);
     expect(harness.persistPendingChanges).toHaveBeenLastCalledWith('session-fork-rollback');
+  });
+
+  it('requires confirmation for a dirty source without reserving the target', async () => {
+    const harness = createForkHarness(undefined, {
+      worktree: { dirty: true, headSha: 'a'.repeat(40) },
+    });
+
+    const result = await harness.service.fork({
+      ...forkSpec,
+      targetContext: { kind: 'new-worktree' },
+    });
+
+    expect(result).toMatchObject({
+      success: false,
+      disposition: 'confirmation-required',
+      reason: 'SOURCE_WORKTREE_DIRTY',
+    });
+    expect(harness.targetDoc.setForkOperation).not.toHaveBeenCalled();
+    expect(harness.sessionManager.createSession).not.toHaveBeenCalled();
+  });
+
+  it('accepts durably before creating an independent worktree from captured HEAD', async () => {
+    const capturedHead = 'b'.repeat(40);
+    const harness = createForkHarness(undefined, {
+      worktree: { dirty: true, headSha: capturedHead },
+    });
+
+    const result = await harness.service.fork({
+      ...forkSpec,
+      targetContext: { kind: 'new-worktree', acknowledgeDirtySource: true },
+    });
+
+    expect(result).toMatchObject({
+      success: true,
+      disposition: 'accepted',
+      operationId: `session-fork:${targetSessionId}`,
+    });
+    expect(harness.persistPendingChanges).toHaveBeenCalledWith('session-fork-prepare');
+    expect(harness.targetDoc.setForkOperation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        capturedHeadSha: capturedHead,
+        sourceWasDirty: true,
+        state: 'preparing',
+      })
+    );
+    expect(harness.sessionManager.createSession).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(harness.sessionManager.createSession).toHaveBeenCalledTimes(1));
+    expect(harness.sessionManager.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        worktreeStartPoint: capturedHead,
+        deferWorktreeMetaPersistence: true,
+        workdir: '/source/project-root',
+        project: expect.objectContaining({ kind: 'local', useWorktree: true }),
+      }),
+      expect.objectContaining({ forkSessionId: 'acp-source' })
+    );
+    expect(harness.sessionManager.createSession.mock.calls[0]?.[0]).not.toHaveProperty(
+      'parentSessionId'
+    );
+    await vi.waitFor(() =>
+      expect(harness.persistPendingChanges).toHaveBeenCalledWith('session-fork-commit')
+    );
+    expect(harness.targetDoc.updateHistory).toHaveBeenCalledTimes(1);
+    expect(harness.targetDoc.setForkOperation).toHaveBeenLastCalledWith(undefined);
   });
 });

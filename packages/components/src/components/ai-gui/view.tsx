@@ -109,6 +109,11 @@ import { OpenAIIcon } from '@/components/icons/openai-icon';
 import { AgentIcon } from '@/components/icons/agent-icon';
 import { AssistantEditedFiles, type AssistantEditedFileEntry } from './assistant-edited-files';
 import {
+  SessionForkDestinationPopover,
+  type SessionForkDestination,
+  type SessionForkWorktreeAvailability,
+} from '@/components/sessions/session-fork-destination-menu';
+import {
   buildAssistantMessageRenderItems,
   type AssistantMessageRenderItem,
 } from './assistant-message-render-items';
@@ -358,7 +363,9 @@ export interface SessionChatStreamViewProps {
   messageFileDiffEntriesByTurn?: MessageFileDiffEntriesByTurn;
   assistantActions?: AssistantMessageAction[];
   assistantActionsMessageId?: string | null;
-  onForkLastAssistant?: (turnId: string) => void;
+  onForkLastAssistant?: (turnId: string, destination?: SessionForkDestination) => void;
+  forkWorktreeAvailability?: SessionForkWorktreeAvailability;
+  onForkWorktreeMenuOpen?: () => void;
   forkingAssistantMessageId?: string | null;
   agentActivityLabel?: string | null;
   agentActivityTone?: AgentActivityTone;
@@ -1098,6 +1105,8 @@ export const SessionChatStreamView = forwardRef<
       assistantActions,
       assistantActionsMessageId = null,
       onForkLastAssistant,
+      forkWorktreeAvailability = 'hidden',
+      onForkWorktreeMenuOpen,
       forkingAssistantMessageId,
       agentActivityLabel = null,
       agentActivityTone = 'primary',
@@ -1419,6 +1428,8 @@ export const SessionChatStreamView = forwardRef<
                       assistantActions
                     )}
                     onFork={canForkAssistantMessage ? onForkLastAssistant : undefined}
+                    forkWorktreeAvailability={forkWorktreeAvailability}
+                    onForkWorktreeMenuOpen={onForkWorktreeMenuOpen}
                     isForking={forkingAssistantMessageId === row.item.message.id}
                     onFileDiffClick={onFileDiffClick}
                     onFilePathClick={onFilePathClick}
@@ -2876,6 +2887,67 @@ const AssistantThoughtVirtualRow = memo(function AssistantThoughtVirtualRow({
  */
 export const MOBILE_TURN_ACTION_LEADING_INSET_PX = 48;
 
+const AssistantForkButton = ({
+  turnId,
+  isForking,
+  worktreeAvailability,
+  onFork,
+  onWorktreeMenuOpen,
+}: {
+  turnId: string;
+  isForking?: boolean;
+  worktreeAvailability: SessionForkWorktreeAvailability;
+  onFork: (turnId: string, destination?: SessionForkDestination) => void;
+  onWorktreeMenuOpen?: () => void;
+}) => {
+  const { t } = useTranslation();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const offerWorktree = worktreeAvailability !== 'hidden';
+  const button = (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      className="h-7 w-7 text-muted-foreground hover:bg-hover hover:text-foreground"
+      onClick={offerWorktree ? undefined : () => onFork(turnId, 'shared')}
+      disabled={isForking}
+      aria-label={t('sessions.forkSession', 'Fork session')}
+    >
+      {isForking ? (
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+      ) : (
+        <GitFork className="h-3.5 w-3.5" />
+      )}
+    </Button>
+  );
+
+  if (!offerWorktree) {
+    return (
+      <TooltipProvider>
+        <Tooltip delayDuration={500}>
+          <TooltipTrigger asChild>{button}</TooltipTrigger>
+          <TooltipContent>{t('sessions.forkSession', 'Fork session')}</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    );
+  }
+
+  return (
+    <SessionForkDestinationPopover
+      open={menuOpen}
+      onOpenChange={(open) => {
+        setMenuOpen(open);
+        if (open) onWorktreeMenuOpen?.();
+      }}
+      worktreeAvailability={worktreeAvailability}
+      disabled={isForking}
+      onSelect={(destination) => onFork(turnId, destination)}
+    >
+      {button}
+    </SessionForkDestinationPopover>
+  );
+};
+
 const AssistantTurnFooter = ({
   message,
   sessionId,
@@ -2885,6 +2957,8 @@ const AssistantTurnFooter = ({
   showDuration,
   isTurnHovered,
   onFork,
+  forkWorktreeAvailability = 'hidden',
+  onForkWorktreeMenuOpen,
   isForking,
 }: {
   message: SessionHistoryParsed;
@@ -2894,7 +2968,9 @@ const AssistantTurnFooter = ({
   onFileDiffClick?: (turnId: string, filePath: string) => void;
   showDuration: boolean;
   isTurnHovered: boolean;
-  onFork?: (turnId: string) => void;
+  onFork?: (turnId: string, destination?: SessionForkDestination) => void;
+  forkWorktreeAvailability?: SessionForkWorktreeAvailability;
+  onForkWorktreeMenuOpen?: () => void;
   isForking?: boolean;
 }) => {
   const { t, i18n } = useTranslation();
@@ -3048,28 +3124,13 @@ const AssistantTurnFooter = ({
                 />
               ) : null}
               {onFork ? (
-                <TooltipProvider>
-                  <Tooltip delayDuration={500}>
-                    <TooltipTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7 text-muted-foreground hover:bg-hover hover:text-foreground"
-                        onClick={() => onFork?.(message.id)}
-                        disabled={isForking}
-                        aria-label={t('sessions.forkSession', 'Fork session')}
-                      >
-                        {isForking ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <GitFork className="h-3.5 w-3.5" />
-                        )}
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>{t('sessions.forkSession', 'Fork session')}</TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
+                <AssistantForkButton
+                  turnId={message.id}
+                  isForking={isForking}
+                  worktreeAvailability={forkWorktreeAvailability}
+                  onFork={onFork}
+                  onWorktreeMenuOpen={onForkWorktreeMenuOpen}
+                />
               ) : null}
             </div>
           ) : null}
@@ -3137,7 +3198,9 @@ interface AssistantChatItemProps {
   row: AssistantChatVirtualRow;
   fileDiffOverride?: readonly AssistantEditedFileEntry[];
   assistantActions?: AssistantMessageAction[];
-  onFork?: (turnId: string) => void;
+  onFork?: (turnId: string, destination?: SessionForkDestination) => void;
+  forkWorktreeAvailability?: SessionForkWorktreeAvailability;
+  onForkWorktreeMenuOpen?: () => void;
   isForking?: boolean;
   onFileDiffClick?: (turnId: string, filePath: string) => void;
   onFilePathClick?: (filePath: string) => void;
@@ -3219,6 +3282,8 @@ const areAssistantChatItemPropsEqual = (
   prev.onGroupExpandedChange === next.onGroupExpandedChange &&
   prev.onWorkedGroupExpandedChange === next.onWorkedGroupExpandedChange &&
   prev.onFork === next.onFork &&
+  prev.forkWorktreeAvailability === next.forkWorktreeAvailability &&
+  prev.onForkWorktreeMenuOpen === next.onForkWorktreeMenuOpen &&
   prev.isForking === next.isForking &&
   prev.isTurnHovered === next.isTurnHovered &&
   prev.onTurnHoverChange === next.onTurnHoverChange &&
@@ -3229,6 +3294,8 @@ const AssistantChatItem = memo(function AssistantChatItem({
   fileDiffOverride,
   assistantActions,
   onFork,
+  forkWorktreeAvailability,
+  onForkWorktreeMenuOpen,
   isForking,
   onFileDiffClick,
   onFilePathClick,
@@ -3338,6 +3405,8 @@ const AssistantChatItem = memo(function AssistantChatItem({
             showDuration={content.showDuration}
             isTurnHovered={isTurnHovered}
             onFork={onFork}
+            forkWorktreeAvailability={forkWorktreeAvailability}
+            onForkWorktreeMenuOpen={onForkWorktreeMenuOpen}
             isForking={isForking}
           />
         );

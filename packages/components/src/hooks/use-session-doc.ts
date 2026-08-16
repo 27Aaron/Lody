@@ -103,6 +103,7 @@ export function useSessionDoc(
       session: { id: sessionId },
       history: [],
       mq: [],
+      forkOperation: undefined,
       preview: undefined,
       externalHistoryCursor: undefined,
     }),

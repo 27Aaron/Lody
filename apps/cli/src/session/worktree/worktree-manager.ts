@@ -1287,7 +1287,8 @@ export class WorktreeManager {
   async createWorktree(
     sessionId: SessionId,
     baseBranch?: string,
-    restoreBranchName?: string
+    restoreBranchName?: string,
+    exactStartPoint?: string
   ): Promise<WorktreeInfo> {
     return withRepoLock(this.repoId, async () => {
       assertSafeSessionId(sessionId);
@@ -1301,6 +1302,11 @@ export class WorktreeManager {
       if (fs.existsSync(worktreePath)) {
         this.ensureWorktreeGitdirIsRelative(sessionId);
         const info = await this.getWorktreeInfo(sessionId);
+        if (exactStartPoint && info.headSha !== exactStartPoint) {
+          throw new Error(
+            `[${this.repoId}] Existing worktree HEAD ${info.headSha ?? 'unknown'} does not match captured fork HEAD ${exactStartPoint}`
+          );
+        }
         this.logger.debug(
           `[${this.repoId}] Worktree already exists (sessionId=${sessionId} branch=${info.branch} head=${info.headSha ?? 'unknown'}): ${info.hostPath}`
         );
@@ -1310,6 +1316,17 @@ export class WorktreeManager {
       const existingBranchName = await this.resolveExistingBranchName(sessionId, restoreBranchName);
 
       if (existingBranchName) {
+        if (exactStartPoint) {
+          const existingHead = await this.runGit(
+            ['rev-parse', '--verify', `${existingBranchName}^{commit}`],
+            gitAdminCwd
+          );
+          if (existingHead !== exactStartPoint) {
+            throw new Error(
+              `[${this.repoId}] Existing fork branch HEAD ${existingHead} does not match captured fork HEAD ${exactStartPoint}`
+            );
+          }
+        }
         // Worktree missing but branch exists - create worktree from existing branch
         this.logger.debug(
           `[${this.repoId}] Creating worktree from existing branch: ${existingBranchName}`
@@ -1320,54 +1337,73 @@ export class WorktreeManager {
         );
       } else {
         const branchName = await this.resolveAvailableSessionBranchName(sessionId);
-        const resolvedBase = await this.resolveBaseRef(baseBranch);
-        const reusableBaseBranch = await this.resolveReusableBaseBranch(baseBranch);
-        if (reusableBaseBranch) {
-          this.logger.debug(
-            `[${this.repoId}] Creating worktree from selected branch: ${reusableBaseBranch.branchName}`
+        if (exactStartPoint) {
+          const verifiedStartPoint = await this.runGit(
+            ['rev-parse', '--verify', `${exactStartPoint}^{commit}`],
+            gitAdminCwd
           );
-          try {
-            if (reusableBaseBranch.startPoint) {
-              await this.runWorktreeAddWithPruneRetry(
-                [
-                  'worktree',
-                  'add',
-                  '-b',
-                  reusableBaseBranch.branchName,
-                  worktreePath,
-                  reusableBaseBranch.startPoint,
-                ],
-                gitAdminCwd
-              );
-            } else {
-              await this.runWorktreeAddWithPruneRetry(
-                ['worktree', 'add', worktreePath, reusableBaseBranch.branchName],
-                gitAdminCwd
-              );
-            }
-          } catch (error) {
-            if (!this.isBranchAlreadyCheckedOutError(error)) {
-              throw error;
-            }
-            this.logger.debug(
-              `[${this.repoId}] Selected branch already checked out; creating session branch instead (branch=${branchName} base=${resolvedBase})`
+          if (verifiedStartPoint !== exactStartPoint) {
+            throw new Error(
+              `[${this.repoId}] Captured fork HEAD did not resolve exactly: ${exactStartPoint}`
             );
+          }
+          this.logger.debug(
+            `[${this.repoId}] Creating fork worktree from captured HEAD (sessionId=${sessionId} branch=${branchName} head=${exactStartPoint})`
+          );
+          await this.runWorktreeAddWithPruneRetry(
+            ['worktree', 'add', '-b', branchName, worktreePath, exactStartPoint],
+            gitAdminCwd
+          );
+        } else {
+          const resolvedBase = await this.resolveBaseRef(baseBranch);
+          const reusableBaseBranch = await this.resolveReusableBaseBranch(baseBranch);
+          if (reusableBaseBranch) {
+            this.logger.debug(
+              `[${this.repoId}] Creating worktree from selected branch: ${reusableBaseBranch.branchName}`
+            );
+            try {
+              if (reusableBaseBranch.startPoint) {
+                await this.runWorktreeAddWithPruneRetry(
+                  [
+                    'worktree',
+                    'add',
+                    '-b',
+                    reusableBaseBranch.branchName,
+                    worktreePath,
+                    reusableBaseBranch.startPoint,
+                  ],
+                  gitAdminCwd
+                );
+              } else {
+                await this.runWorktreeAddWithPruneRetry(
+                  ['worktree', 'add', worktreePath, reusableBaseBranch.branchName],
+                  gitAdminCwd
+                );
+              }
+            } catch (error) {
+              if (!this.isBranchAlreadyCheckedOutError(error)) {
+                throw error;
+              }
+              this.logger.debug(
+                `[${this.repoId}] Selected branch already checked out; creating session branch instead (branch=${branchName} base=${resolvedBase})`
+              );
+              await this.runWorktreeAddWithPruneRetry(
+                ['worktree', 'add', '-b', branchName, worktreePath, resolvedBase],
+                gitAdminCwd
+              );
+            }
+          } else {
+            // Create new branch and worktree
+            this.logger.debug(
+              `[${this.repoId}] Creating new worktree (sessionId=${sessionId} branch=${branchName} base=${resolvedBase}): ${worktreePath}`
+            );
+
+            // Create worktree with new branch
             await this.runWorktreeAddWithPruneRetry(
               ['worktree', 'add', '-b', branchName, worktreePath, resolvedBase],
               gitAdminCwd
             );
           }
-        } else {
-          // Create new branch and worktree
-          this.logger.debug(
-            `[${this.repoId}] Creating new worktree (sessionId=${sessionId} branch=${branchName} base=${resolvedBase}): ${worktreePath}`
-          );
-
-          // Create worktree with new branch
-          await this.runWorktreeAddWithPruneRetry(
-            ['worktree', 'add', '-b', branchName, worktreePath, resolvedBase],
-            gitAdminCwd
-          );
         }
       }
 

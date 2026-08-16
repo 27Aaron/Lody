@@ -1044,6 +1044,7 @@ export class LoroStreamsMachineRpcServer {
             sourceTurnId: request.params.sourceTurnId,
             targetSessionId: request.params.targetSessionId,
             requestedByUserId: request.params.requestedByUserId,
+            targetContext: request.params.targetContext,
             targetPlacement: request.params.targetPlacement,
           });
           await this.appendResultResponse(request.replyTo, request.id, request.method, response);

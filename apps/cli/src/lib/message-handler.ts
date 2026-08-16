@@ -3625,6 +3625,11 @@ export class MessageHandler {
         return live.state !== 'unknown';
       },
     });
+    void this.sessionForkService.recoverPendingForks().catch((error: unknown) => {
+      this.logger.debug(
+        `[session-fork] Failed to recover pending forks: ${formatErrorMessage(error)}`
+      );
+    });
     this.sessionEditAndResendService = new SessionEditAndResendService({
       workspaceDocument: this.workspaceDocument,
       sessionManager: this.sessionManager,

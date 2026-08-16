@@ -2576,6 +2576,7 @@ export class LoroStreamsMachineRpcClient {
         sourceTurnId: options.sourceTurnId,
         targetSessionId: options.targetSessionId,
         requestedByUserId: options.requestedByUserId,
+        targetContext: options.targetContext,
         targetPlacement: options.targetPlacement,
       },
     })) as SessionForkResponse | null;

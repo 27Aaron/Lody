@@ -92,6 +92,7 @@ import type {
   WorktreeManagerSource,
 } from './worktree/worktree-manager';
 import { readLocalProjectWorktreeSetup } from './worktree/worktree-setup-config-store';
+import { resolveTerminalWorkdirFromMetadata } from '@/lib/terminal-workdir-resolver';
 import { createWorktreeScriptHistoryRecorder } from './worktree/worktree-script-history';
 import { runWorktreeSetup } from './worktree/worktree-setup-runner';
 import { deriveRepoIdFromLocalProjectPath } from '@lody/shared/node/worktree-paths';
@@ -1887,11 +1888,14 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
           return await worktreeManager.createWorktree(
             config.sessionId!,
             config.branch,
-            config.restoreBranchName
+            config.restoreBranchName,
+            config.worktreeStartPoint
           );
         })());
-      await sessionDoc.setBranchName(worktreeInfo.branch);
-      await sessionDoc.setIsWorktree(true);
+      if (!config.deferWorktreeMetaPersistence) {
+        await sessionDoc.setBranchName(worktreeInfo.branch);
+        await sessionDoc.setIsWorktree(true);
+      }
       workdir = worktreeInfo.hostPath;
       this.logger.debug(`[${config.sessionId}] Using worktree as workdir: ${workdir}`);
       this.logger.debug(
@@ -2015,6 +2019,63 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
 
   getSession(sessionId: SessionId): ISession | null {
     return this.sessions.get(sessionId) ?? null;
+  }
+
+  async resolveSessionWorkdir(sessionId: SessionId): Promise<string> {
+    const resident = this.sessions.get(sessionId);
+    if (resident) return resident.getWorkdir();
+
+    return await resolveTerminalWorkdirFromMetadata({
+      sessionId,
+      machineId: this.machineId,
+      lookupSessionMeta: async (candidateId) => {
+        const meta = await this.workspaceDocument.repo.getDocMeta(getSessionRoomId(candidateId));
+        if (!meta) return { type: 'missing' as const };
+        if (isLoroRepoDocDeleted(meta)) return { type: 'deleted' as const };
+        return { type: 'found' as const, meta: meta.meta as SessionMeta };
+      },
+      resolveLocalProjectRootPath: async (localProjectId) =>
+        await resolveWorkspaceLocalProjectRootPathWithRetry(
+          this.workspaceDocument.repo,
+          this.workspaceId,
+          this.machineId,
+          localProjectId,
+          {
+            requestSync: () =>
+              this.workspaceDocument.syncMachineFlockDoc(this.machineId, {
+                reason: 'session-fork-workdir-resolve',
+                timeoutMs: readTimeoutEnv('LODY_LOCAL_PROJECT_RESOLVE_SYNC_TIMEOUT_MS', 1_500),
+              }),
+          }
+        ),
+    });
+  }
+
+  async resolveLocalProjectRootPath(localProjectId: LocalProjectId): Promise<string | null> {
+    return await resolveWorkspaceLocalProjectRootPathWithRetry(
+      this.workspaceDocument.repo,
+      this.workspaceId,
+      this.machineId,
+      localProjectId,
+      {
+        requestSync: () =>
+          this.workspaceDocument.syncMachineFlockDoc(this.machineId, {
+            reason: 'session-fork-local-project-resolve',
+            timeoutMs: readTimeoutEnv('LODY_LOCAL_PROJECT_RESOLVE_SYNC_TIMEOUT_MS', 1_500),
+          }),
+      }
+    );
+  }
+
+  async cleanupForkWorktree(config: SessionConfig): Promise<void> {
+    if (config.project?.kind === 'github' && !config.repoId) {
+      await this.prepareGitHubRepoSessionConfig(config);
+    }
+    const target = this.resolveSessionWorktreeTarget(config);
+    if (!target || !config.sessionId) return;
+    await target.manager.removeWorktree(config.sessionId, true, undefined, {
+      baseBranchName: config.branch,
+    });
   }
 
   async listMonitorSessions(): Promise<SessionMonitorRuntimeInfo[]> {
