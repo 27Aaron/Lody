@@ -178,7 +178,19 @@ export class Session extends EventEmitter<SessionEvents> implements ISession {
   }
 
   setWorkdir(workdir: string): void {
-    const stat = fs.statSync(workdir);
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(workdir);
+    } catch (error) {
+      const code =
+        error && typeof error === 'object' && 'code' in error
+          ? (error as { code?: unknown }).code
+          : null;
+      if (code === 'ENOENT') {
+        throw new Error(`Session workdir does not exist: ${workdir}`, { cause: error });
+      }
+      throw error;
+    }
     if (!stat.isDirectory()) {
       throw new Error(`Session workdir is not a directory: ${workdir}`);
     }

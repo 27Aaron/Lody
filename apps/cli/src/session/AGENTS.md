@@ -153,7 +153,17 @@ delegation proofs or a shared-machine gate without a new product and security de
   claims the marker only when repo/source/base-branch target identity matches, runs
   setup, then permits the first prompt. An unpublished incompatible preparation must
   never delay cold fallback; a published incompatible resource must finish cleanup
-  before cold worktree materialization so two owners cannot race the same path. Full
+  before cold worktree materialization so two owners cannot race the same path.
+  INVARIANT: speculative-worktree marker mutations are read-check-act on one file and
+  are serialized per session (`withSessionMarkerLock` in
+  `worktree/speculative-worktree.ts`) — a superseded preparation's dispose racing its
+  replacement's materialization must never delete the replacement's directory. A
+  prepared worktree may be adopted only when the durable claim did not return
+  `mismatch` AND its directory still exists on disk; otherwise discard the prepared
+  runtime (its ACP process cwd points at a dead inode) and let the cold path rebuild
+  via `createWorktree`. A `mismatch` claim deletes the mismatched directory, so
+  adoption after it hands the session a path that is not on disk (the production
+  `ENOENT ... stat .../worktrees/<sessionId>` at `turn_pre_prompt_failed`). Full
   lifecycle, sandbox/worktree ownership, crash recovery, TTL, and transport map:
   The detailed contract remains in the private architecture context.
   Launch compatibility must use canonical `buildSessionLaunchConfig` semantics: empty

@@ -652,6 +652,76 @@ describe('SessionManager worktree setup', () => {
     await preparedWorktree.dispose();
     expect(existsSync(preparedWorktree.info.hostPath)).toBe(true);
   });
+
+  it('rebuilds a prepared worktree whose directory disappeared before adoption', async () => {
+    const sourceDir = createLocalRepo(tempHome);
+    const originalRootPath = normalizeLocalProjectRootPath(sourceDir);
+    const sessionId = 'setup-prepared-vanished' as SessionId;
+    const localProjectId = 'local-project-prepared-vanished' as LocalProjectId;
+    const repoId = deriveRepoIdFromLocalProjectPath(originalRootPath);
+    const logger = createLogger();
+    const manager = new SessionManager(
+      logger,
+      'token',
+      'machine-1' as MachineId,
+      'workspace-1' as WorkspaceId,
+      createWorkspaceDocument(new Map()),
+      {
+        sessionSandboxFactory: async () => createNoopSessionSandbox(),
+        cloudPort: createTestCloudPort(),
+      }
+    );
+    const worktreeManager = getWorktreeManager({
+      repoId,
+      source: {
+        kind: 'local-shared',
+        originalRootPath,
+      },
+      logger,
+    });
+    const preparedWorktree = await materializeSpeculativeWorktree({
+      preparationId: 'prepare-setup-vanished',
+      sessionId,
+      workspaceId: 'workspace-1' as WorkspaceId,
+      machineId: 'machine-1' as MachineId,
+      manager: worktreeManager,
+      managerConfig: {
+        repoId,
+        source: {
+          kind: 'local-shared',
+          originalRootPath,
+        },
+      },
+      baseBranch: 'main',
+      logger,
+    });
+    await preparedWorktree.claim();
+
+    // The production failure: an unserialized late dispose (or a cross-process
+    // sweep) removed the materialized directory after preparation but before
+    // adoption. The prepared info then names a path that is not on disk; the
+    // session must rebuild it instead of starting against a dead workdir.
+    rmSync(preparedWorktree.info.hostPath, { recursive: true, force: true });
+
+    const session = await createSessionInner(
+      manager,
+      createSessionConfig({
+        sessionId,
+        branch: 'main',
+        workdir: sourceDir,
+        project: {
+          kind: 'local',
+          localProjectId,
+          branch: 'main',
+          useWorktree: true,
+        },
+      }),
+      preparedWorktree.info
+    );
+
+    expect(session.getWorkdir()).toBe(preparedWorktree.info.hostPath);
+    expect(existsSync(session.getWorkdir())).toBe(true);
+  });
 });
 
 describe('SessionManager.requestSessionTerminate', () => {

@@ -680,7 +680,7 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
       await claim.cleanup;
       return await this.createSessionInnerWithAgent(config, agentStart);
     }
-    return await this.finishPreparedSession(config, claim.resource);
+    return await this.finishPreparedSession(config, claim.resource, agentStart);
   }
 
   /**
@@ -1111,7 +1111,8 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
 
   private async finishPreparedSession(
     incomingConfig: SessionConfig,
-    prepared: PreparedSessionRuntime
+    prepared: PreparedSessionRuntime,
+    agentStart?: AgentStartConfig
   ): Promise<ISession> {
     const sessionId = incomingConfig.sessionId!;
     await prepared.adopt();
@@ -1122,6 +1123,38 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
       env: { ...preparedEnv, ...incomingConfig.env },
     });
     await this.workspaceDocument.getOrCreateSessionDoc(sessionId);
+
+    // The durable config is authoritative for the worktree target. The prepared
+    // worktree was materialized from the preparation-time guess, and its
+    // directory can also have been removed underneath us (a superseded
+    // preparation's late dispose, a cross-process sweep). Adopting the prepared
+    // ACP process anyway would hand it a cwd whose inode no longer exists —
+    // recreating the path does not revive the process's working directory — so
+    // an unusable worktree discards the whole preparation and takes the cold
+    // path, which rebuilds the worktree before spawning a fresh process.
+    if (preparedWorktree) {
+      const worktreeTarget = this.resolveSessionWorktreeTarget(config);
+      const claimOutcome = worktreeTarget
+        ? await claimSpeculativeWorktreeForDurableSession({
+            sessionId: config.sessionId!,
+            workspaceId: config.workspaceId,
+            machineId: this.machineId,
+            target: worktreeTarget.target,
+            logger: this.logger,
+          })
+        : null;
+      const worktreeUsable =
+        worktreeTarget !== null &&
+        claimOutcome !== 'mismatch' &&
+        existsSync(preparedWorktree.info.hostPath);
+      if (!worktreeUsable) {
+        this.logger.warn(
+          `[${sessionId}] Discarding prepared session: prepared worktree is unusable for the durable target (claim=${claimOutcome ?? 'no-worktree-target'} path=${preparedWorktree.info.hostPath})`
+        );
+        await prepared.dispose();
+        return await this.createSessionInnerWithAgent(config, agentStart);
+      }
+    }
 
     try {
       const session = await withSlowOperationWarning(
@@ -1871,16 +1904,31 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
       this.logger.debug(
         `[${config.sessionId}] Preparing worktree (repoId=${worktreeTarget.managerConfig.repoId} sessionId=${config.sessionId}) in host`
       );
-      const speculativeSetupPending = await claimSpeculativeWorktreeForDurableSession({
+      const speculativeClaim = await claimSpeculativeWorktreeForDurableSession({
         sessionId: config.sessionId!,
         workspaceId: config.workspaceId,
         machineId: this.machineId,
         target: worktreeTarget.target,
         logger: this.logger,
       });
+      const speculativeSetupPending = speculativeClaim === 'claimed';
       const worktreeAlreadyExisted = worktreeManager.hasWorktree(config.sessionId!);
+      // A `mismatch` claim just DELETED the prepared directory (it was built for
+      // a different target), and a lost cross-process race can remove it without
+      // any claim outcome. Either way the prepared info now names a path that is
+      // not on disk — fall through to createWorktree, which rebuilds it, instead
+      // of handing the session a dead workdir.
+      const preparedWorktreeUsable =
+        preparedWorktree && speculativeClaim !== 'mismatch' && existsSync(preparedWorktree.hostPath)
+          ? preparedWorktree
+          : undefined;
+      if (preparedWorktree && !preparedWorktreeUsable) {
+        this.logger.warn(
+          `[${config.sessionId}] Prepared worktree is unusable (claim=${speculativeClaim} path=${preparedWorktree.hostPath}); recreating it via the cold path`
+        );
+      }
       const worktreeInfo =
-        preparedWorktree ??
+        preparedWorktreeUsable ??
         (await (async () => {
           await worktreeManager.ensureRepo({
             brokerAuth: await this.resolveHostGitBrokerAuth(worktreeTarget.target.source),
