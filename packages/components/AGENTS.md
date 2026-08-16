@@ -148,8 +148,10 @@ mobile surfaces.
   "Opened by" entry must still land on the exact Tab that created the Session.
   The opener and unrelated top-level rows keep the exact flat-list alignment.
   The shared leading slot owns the node-centre affordance: an opener shows its
-  disclosure at rest and swaps it for ⋯ on row hover; an idle child shows ├/└
-  and swaps those for ⋯ in the SAME 7px-centred position. An active child
+  disclosure at rest and swaps it for ⋯ on row hover, and a WORKING opener
+  swaps the disclosure for the status spinner — loading outranks folding, so
+  collapse stays reachable only via the row context menu while active. An idle
+  child shows ├/└ and swaps those for ⋯ in the SAME 7px-centred position. An active child
   (working / unread / waiting) drops the trunk and elbow and shows only the
   status at that node — never both. Only a child widens that slot
   from 14px to 26px, producing the 12px title indent without shifting the row

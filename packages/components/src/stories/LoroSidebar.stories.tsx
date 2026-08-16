@@ -728,7 +728,9 @@ export const UpdatedMode: Story = {
  *
  * `stale-opener` is the ordering case: it is the oldest row here, but the
  * Session it opened is the newest, so the whole group still sorts to the top —
- * Updated mode stays a recency list.
+ * Updated mode stays a recency list. It is also WORKING, so its leading slot
+ * shows the status spinner instead of the disclosure chevron (loading
+ * outranks folding; collapse stays in the row's context menu).
  */
 export const UpdatedModeOpenedSessions: Story = {
   name: 'Updated Mode · Opened Sessions (MCP)',
@@ -765,7 +767,9 @@ export const UpdatedModeOpenedSessions: Story = {
           'missing-opener',
           190
         ),
-        buildOpenedDemoRow('stale-opener', 'Long-running orchestration', undefined, 6 * 24 * 60),
+        buildOpenedDemoRow('stale-opener', 'Long-running orchestration', undefined, 6 * 24 * 60, {
+          isWorking: true,
+        }),
         buildOpenedDemoRow('stale-opened', 'Just finished a subtask', 'stale-opener', 2),
       ],
     },

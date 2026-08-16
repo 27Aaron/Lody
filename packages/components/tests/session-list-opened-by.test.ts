@@ -290,6 +290,42 @@ describe('SessionList opened-by rendering', () => {
     ).toBe('false');
   });
 
+  it('shows the working spinner instead of the disclosure on a working opener', () => {
+    renderList([
+      makeRow({ sessionId: 'opener', isWorking: true }),
+      makeRow({ sessionId: 'opened-1', openedBySessionId: 'opener' }),
+    ]);
+
+    const openerSlot = container
+      ?.querySelector('[data-sidebar-session-id="opener"]')
+      ?.querySelector('[data-session-row-leading-slot]');
+    expect(openerSlot?.querySelector('[data-session-working-spinner]')).not.toBeNull();
+    expect(openerSlot?.querySelector('[data-session-opened-by-toggle]')).toBeNull();
+  });
+
+  it('keeps collapse reachable from the context menu while the opener is working', () => {
+    renderList([
+      makeRow({ sessionId: 'opener', isWorking: true }),
+      makeRow({ sessionId: 'opened-1', openedBySessionId: 'opener' }),
+    ]);
+    const opener = container?.querySelector('[data-sidebar-session-id="opener"]');
+
+    flushSync(() => {
+      opener?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+    });
+
+    const collapseItem = Array.from(document.querySelectorAll('[role="menuitem"]')).find((item) =>
+      item.textContent?.includes('Hide opened sessions')
+    );
+    expect(collapseItem).toBeDefined();
+
+    flushSync(() => {
+      collapseItem?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    });
+
+    expect(container?.querySelector('[data-sidebar-session-id="opened-1"]')).toBeNull();
+  });
+
   it('hides tree connectors on an active child and keeps them on an idle child', () => {
     renderList(makeOpenerGroupRows());
 

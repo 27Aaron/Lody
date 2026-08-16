@@ -285,7 +285,9 @@ export function SessionRowWorktreeIndicator({ isWorktree }: { isWorktree?: boole
 /**
  * Tree state for the shared leading slot. The opener keeps the 14px slot; a
  * child widens it to 26px (12px title indent). Idle children draw ├/└; an
- * active child shows only status at the same 7px node as ⋯.
+ * active child shows only status at the same 7px node as ⋯. A working opener
+ * likewise shows the status spinner instead of its disclosure — loading
+ * outranks folding.
  */
 export type SessionRowOpenedByTreeSlot =
   | {
@@ -387,6 +389,10 @@ export function SessionRowOpenedByMenuItems({
  * ① Status, opened-by tree affordance, and the hover ⋯ button share one spot.
  * ⋯ synthesizes `contextmenu` so there is no second menu. Hover fades the rest
  * state (disclosure, ├/└, or status) without moving the title.
+ *
+ * A working opener swaps its disclosure for the status spinner — loading
+ * outranks folding, so the collapse toggle moves to the row's context menu
+ * while the session is active.
  */
 export function SessionRowLeadingSlot({
   isWaitingPermission,
@@ -416,6 +422,9 @@ export function SessionRowLeadingSlot({
   const isTreeChild = childTree !== null;
   const hasActivity = Boolean(isWaitingPermission || isWorking || hasUnreadMessages);
   const showChildConnectors = childTree !== null && !hasActivity;
+  // Loading outranks folding: a working opener shows the spinner, not the
+  // disclosure (collapse stays reachable via the row context menu).
+  const showOpenerDisclosure = openedByTree?.kind === 'opener' && !isWorking;
   const restClassName = showMenuButton
     ? cn('transition-opacity duration-100', fadeClassName)
     : undefined;
@@ -429,7 +438,7 @@ export function SessionRowLeadingSlot({
         isTreeChild ? TREE_CHILD_SLOT_CLASS : 'w-3.5 justify-center'
       )}
     >
-      {openedByTree?.kind === 'opener' ? (
+      {showOpenerDisclosure && openedByTree?.kind === 'opener' ? (
         <button
           type="button"
           data-session-opened-by-toggle=""
