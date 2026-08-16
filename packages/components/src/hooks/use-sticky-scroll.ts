@@ -1,30 +1,24 @@
 import {
   type MutableRefObject,
+  type RefCallback,
   type RefObject,
   useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
+  useState,
 } from 'react';
 import { useStickToBottom } from 'use-stick-to-bottom';
-import type { VListHandle } from 'virtua';
+import type { VirtualizerHandle } from 'virtua';
 import type { SessionId } from '@lody/shared';
-import {
-  getScrollBottomPaddingOffset,
-  resolveVListScrollElement,
-  scrollViewportToRealBottom,
-} from './sticky-scroll-dom';
+import { getScrollBottomPaddingOffset, scrollViewportToRealBottom } from './sticky-scroll-dom';
 import { getScrollPosition, saveScrollPosition } from './use-scroll-position-cache';
 
 export interface UseStickyScrollOptions {
   sessionId: SessionId;
-  vlistRef: RefObject<VListHandle | null>;
-  /** Root element for scoped DOM fallback when Virtua internals are unavailable. */
-  scrollRootRef: RefObject<HTMLElement | null>;
+  vlistRef: RefObject<VirtualizerHandle | null>;
   /** Total number of items in the list. Used as the scroll-to target index. */
   itemCount: number;
-  /** CSS class on the VList scroll container, used as fallback for DOM access. */
-  scrollContainerClass: string;
   onAtBottomChange?: (atBottom: boolean) => void;
   /**
    * When true, releases follow-output before a programmatic jump or expansion
@@ -34,119 +28,39 @@ export interface UseStickyScrollOptions {
 }
 
 export interface UseStickyScrollResult {
+  /** Attach directly to the scroll viewport that owns the Virtua virtualizer. */
+  scrollRef: RefCallback<HTMLDivElement>;
   /** Whether the view is currently locked to the bottom. */
   isSticky: boolean;
   /** Force-scroll to bottom and re-enable sticky mode. */
   scrollToBottom: () => void;
-  /** Pass to VList's onScroll prop. */
+  /** Pass to Virtua's onScroll prop. */
   handleScroll: (offset: number) => void;
-}
-
-function keyboardEventIsShrinking(event: Event): boolean {
-  const height = (event as CustomEvent<{ height: number }>).detail?.height ?? 0;
-  return height > 0;
-}
-
-function terminalDockEventIsShrinking(event: Event): boolean {
-  return (event as CustomEvent<{ open: boolean }>).detail?.open === true;
-}
-
-/**
- * A viewport can shrink over several animation frames while its content height
- * stays unchanged (native keyboard and terminal dock transitions). The
- * third-party hook intentionally observes the content element, so keep this
- * app-specific bridge for animated viewport resizes.
- */
-function usePumpStickyScrollDuringResize(options: {
-  eventName: string;
-  isShrinking: (event: Event) => boolean;
-  durationMs: number;
-  stickyBottomRef: MutableRefObject<boolean>;
-  itemCountRef: MutableRefObject<number>;
-  scrollToRealBottom: () => void;
-  suppressAutoScrollRef?: RefObject<boolean>;
-}): void {
-  const {
-    eventName,
-    isShrinking,
-    durationMs,
-    stickyBottomRef,
-    itemCountRef,
-    scrollToRealBottom,
-    suppressAutoScrollRef,
-  } = options;
-
-  useEffect(() => {
-    let rafId: number | null = null;
-    let stopTimerId: ReturnType<typeof setTimeout> | null = null;
-
-    const animateScrollToBottom = () => {
-      scrollToRealBottom();
-      rafId = requestAnimationFrame(animateScrollToBottom);
-    };
-
-    const stopAnimation = () => {
-      if (rafId !== null) {
-        cancelAnimationFrame(rafId);
-        rafId = null;
-      }
-      scrollToRealBottom();
-    };
-
-    const handler = (event: Event) => {
-      if (!stickyBottomRef.current || itemCountRef.current <= 0) return;
-      if (suppressAutoScrollRef?.current) return;
-
-      if (rafId !== null) cancelAnimationFrame(rafId);
-      if (stopTimerId !== null) clearTimeout(stopTimerId);
-
-      if (isShrinking(event)) {
-        rafId = requestAnimationFrame(animateScrollToBottom);
-        stopTimerId = setTimeout(stopAnimation, durationMs);
-      } else {
-        scrollToRealBottom();
-      }
-    };
-
-    window.addEventListener(eventName, handler);
-    return () => {
-      window.removeEventListener(eventName, handler);
-      if (rafId !== null) cancelAnimationFrame(rafId);
-      if (stopTimerId !== null) clearTimeout(stopTimerId);
-    };
-  }, [
-    durationMs,
-    eventName,
-    isShrinking,
-    itemCountRef,
-    scrollToRealBottom,
-    stickyBottomRef,
-    suppressAutoScrollRef,
-  ]);
 }
 
 /**
  * `use-stick-to-bottom` observes content growth. Observe the viewport too so a
  * flex sibling or window inset shrinking the available height cannot leave a
- * followed conversation floating above the real bottom.
+ * followed conversation floating above the real bottom. ResizeObserver is the
+ * completion signal for every committed viewport size; no transition-duration
+ * clock or custom resize-event pump is needed.
  */
 function useStickyViewportResizeObserver(options: {
   itemCountRef: MutableRefObject<number>;
   stickyBottomRef: MutableRefObject<boolean>;
-  resolveScrollElement: () => HTMLElement | null;
+  scrollElement: HTMLElement | null;
   scrollToRealBottom: () => void;
   suppressAutoScrollRef?: RefObject<boolean>;
 }): void {
   const {
     itemCountRef,
     stickyBottomRef,
-    resolveScrollElement,
+    scrollElement,
     scrollToRealBottom,
     suppressAutoScrollRef,
   } = options;
 
   useEffect(() => {
-    const scrollElement = resolveScrollElement();
     if (!scrollElement || typeof ResizeObserver === 'undefined') return undefined;
 
     let previousWidth = scrollElement.getBoundingClientRect().width;
@@ -176,21 +90,13 @@ function useStickyViewportResizeObserver(options: {
       observer.disconnect();
       if (rafId !== null) cancelAnimationFrame(rafId);
     };
-  }, [
-    itemCountRef,
-    resolveScrollElement,
-    scrollToRealBottom,
-    stickyBottomRef,
-    suppressAutoScrollRef,
-  ]);
+  }, [itemCountRef, scrollElement, scrollToRealBottom, stickyBottomRef, suppressAutoScrollRef]);
 }
 
 export function useStickyScroll({
   sessionId,
   vlistRef,
-  scrollRootRef,
   itemCount,
-  scrollContainerClass,
   onAtBottomChange,
   suppressAutoScrollRef,
 }: UseStickyScrollOptions): UseStickyScrollResult {
@@ -201,72 +107,69 @@ export function useStickyScroll({
   });
   const {
     contentRef,
-    escapedFromLock,
-    isAtBottom,
-    scrollRef,
+    scrollRef: stickToBottomScrollRef,
     scrollToBottom: scrollToBottomWithLock,
     state,
     stopScroll,
   } = stickToBottom;
 
-  const isSticky = isAtBottom && !escapedFromLock;
+  // `isAtBottom` returned by the library also includes its near-bottom
+  // tolerance. The mutable state field is the actual follow lock: upward user
+  // intent clears it, while an explicit scrollToBottom call restores it. Using
+  // `escapedFromLock` here would leave the UI permanently escaped after that
+  // explicit re-lock because it records history rather than the current lock.
+  const isSticky = state.isAtBottom;
   const stickyBottomRef = useRef(isSticky);
   stickyBottomRef.current = isSticky;
 
   const itemCountRef = useRef(itemCount);
   itemCountRef.current = itemCount;
 
-  const scrollElementRef = useRef<HTMLElement | null>(null);
+  const scrollElementRef = useRef<HTMLDivElement | null>(null);
+  const [scrollElement, setScrollElement] = useState<HTMLDivElement | null>(null);
   const initialScrollRestoredRef = useRef(false);
 
-  const resolveScrollElement = useCallback((): HTMLElement | null => {
-    const currentVlist = vlistRef.current;
-    if (!currentVlist) return scrollElementRef.current;
+  const handleWheelUp = useCallback(
+    (event: WheelEvent) => {
+      if (event.deltaY < 0) stopScroll();
+    },
+    [stopScroll]
+  );
 
-    const scrollElement = resolveVListScrollElement(
-      currentVlist,
-      scrollContainerClass,
-      scrollRootRef.current
-    );
-    if (scrollElement) scrollElementRef.current = scrollElement;
-    return scrollElement ?? scrollElementRef.current;
-  }, [scrollContainerClass, scrollRootRef, vlistRef]);
+  const setScrollRef = useCallback<RefCallback<HTMLDivElement>>(
+    (nextScrollElement) => {
+      const previousScrollElement = scrollElementRef.current;
+      if (previousScrollElement === nextScrollElement) return;
+
+      if (previousScrollElement) {
+        previousScrollElement.removeEventListener('wheel', handleWheelUp);
+      }
+      contentRef(null);
+      stickToBottomScrollRef(null);
+
+      scrollElementRef.current = nextScrollElement;
+      setScrollElement(nextScrollElement);
+      if (!nextScrollElement) return;
+
+      const contentElement = nextScrollElement.firstElementChild;
+      if (!(contentElement instanceof HTMLElement)) return;
+
+      stickToBottomScrollRef(nextScrollElement);
+      contentRef(contentElement);
+      nextScrollElement.addEventListener('wheel', handleWheelUp, { passive: true });
+    },
+    [contentRef, handleWheelUp, stickToBottomScrollRef]
+  );
 
   const scrollToRealBottom = useCallback(() => {
-    const scrollElement = resolveScrollElement();
+    const scrollElement = scrollElementRef.current;
     scrollViewportToRealBottom({
       itemCount: itemCountRef.current,
       vlist: vlistRef.current,
       scrollElement,
       bottomOffset: getScrollBottomPaddingOffset(scrollElement),
     });
-  }, [itemCountRef, resolveScrollElement, vlistRef]);
-
-  // Attach the library to Virtua's actual viewport and total-height content
-  // element. VList does not expose these refs publicly, so DOM resolution stays
-  // isolated in sticky-scroll-dom.ts until the virtualizer is replaced.
-  useLayoutEffect(() => {
-    const scrollElement = resolveScrollElement();
-    const contentElement = scrollElement?.firstElementChild;
-    if (!scrollElement || !(contentElement instanceof HTMLElement)) return undefined;
-
-    // The library walks the CSS `overflow` shorthand to find the wheel's scroll
-    // owner. Virtua intentionally uses different x/y overflow values, whose
-    // shorthand serializes as two tokens in browsers. Release explicitly on an
-    // upward wheel so that shape can never hide the user's intent.
-    const handleWheelUp = (event: WheelEvent) => {
-      if (event.deltaY < 0) stopScroll();
-    };
-
-    scrollRef(scrollElement);
-    contentRef(contentElement);
-    scrollElement.addEventListener('wheel', handleWheelUp, { passive: true });
-    return () => {
-      scrollElement.removeEventListener('wheel', handleWheelUp);
-      contentRef(null);
-      scrollRef(null);
-    };
-  }, [contentRef, resolveScrollElement, scrollRef, stopScroll]);
+  }, [itemCountRef, vlistRef]);
 
   useEffect(() => {
     if (initialScrollRestoredRef.current || itemCount === 0) return;
@@ -304,14 +207,14 @@ export function useStickyScroll({
 
   const handleScroll = useCallback(
     (offset: number) => {
-      const scrollOffset = resolveScrollElement()?.scrollTop ?? offset;
-      const followingBottom = state.isAtBottom && !state.escapedFromLock;
+      const scrollOffset = scrollElementRef.current?.scrollTop ?? offset;
+      const followingBottom = state.isAtBottom;
       saveScrollPosition(
         sessionId,
         followingBottom ? { type: 'end' } : { type: 'offset', scrollOffset }
       );
     },
-    [resolveScrollElement, sessionId, state]
+    [sessionId, state]
   );
 
   const previousStickyRef = useRef(isSticky);
@@ -327,37 +230,17 @@ export function useStickyScroll({
   // saying "end" even though follow mode has been released.
   useEffect(() => {
     if (!initialScrollRestoredRef.current) return;
-    const scrollOffset = resolveScrollElement()?.scrollTop ?? 0;
+    const scrollOffset = scrollElementRef.current?.scrollTop ?? 0;
     saveScrollPosition(sessionId, isSticky ? { type: 'end' } : { type: 'offset', scrollOffset });
-  }, [isSticky, resolveScrollElement, sessionId]);
+  }, [isSticky, sessionId]);
 
   useStickyViewportResizeObserver({
     itemCountRef,
     stickyBottomRef,
-    resolveScrollElement,
+    scrollElement,
     scrollToRealBottom,
     suppressAutoScrollRef,
   });
 
-  usePumpStickyScrollDuringResize({
-    eventName: 'lody:keyboard-resize',
-    isShrinking: keyboardEventIsShrinking,
-    durationMs: 260,
-    stickyBottomRef,
-    itemCountRef,
-    scrollToRealBottom,
-    suppressAutoScrollRef,
-  });
-
-  usePumpStickyScrollDuringResize({
-    eventName: 'lody:terminal-dock-resize',
-    isShrinking: terminalDockEventIsShrinking,
-    durationMs: 240,
-    stickyBottomRef,
-    itemCountRef,
-    scrollToRealBottom,
-    suppressAutoScrollRef,
-  });
-
-  return { isSticky, scrollToBottom, handleScroll };
+  return { scrollRef: setScrollRef, isSticky, scrollToBottom, handleScroll };
 }

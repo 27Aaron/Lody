@@ -32,7 +32,7 @@ import {
 import { useAtomValue } from 'jotai';
 import { getRpcDeliveredTurnKey, rpcDeliveredTurnsAtom } from '@/atoms/session-dispatch-delivery';
 import { selectAtom } from 'jotai/utils';
-import { VList, type VListHandle } from 'virtua';
+import { Virtualizer, type VirtualizerHandle } from 'virtua';
 import {
   type AgentConfigCliType,
   type ChatFailedCode,
@@ -1081,7 +1081,7 @@ export const buildChatVirtualRows = ({
 /**
  * Chat virtual scroll using Virtua library.
  *
- * IMPORTANT: Do NOT dynamically toggle VList's `shift` prop — it causes
+ * IMPORTANT: Do NOT dynamically toggle Virtua's `shift` prop — it causes
  * element overlap bugs (Virtua bug #284). We use shift={false} since chat
  * messages are appended to the end.
  *
@@ -1121,7 +1121,7 @@ export const SessionChatStreamView = forwardRef<
     },
     ref
   ) => {
-    const vlistRef = useRef<VListHandle>(null);
+    const vlistRef = useRef<VirtualizerHandle>(null);
     const scrollRootRef = useRef<HTMLDivElement>(null);
     const { t } = useTranslation();
     const search = useSessionSearch();
@@ -1130,8 +1130,8 @@ export const SessionChatStreamView = forwardRef<
     const [assistantExpansionVersion, setAssistantExpansionVersion] = useState(0);
     const [hoveredAssistantMessageId, setHoveredAssistantMessageId] = useState<string | null>(null);
     const pendingExpandedGroupRowKeyRef = useRef<string | null>(null);
-    const groupExpansionScrollTokenRef = useRef(0);
     const groupExpansionAutoScrollSuppressedRef = useRef(false);
+    const releaseGroupExpansionSuppressionRef = useRef(false);
     const autoScrollSuppressedRef = useMemo(
       () => ({
         get current() {
@@ -1155,7 +1155,6 @@ export const SessionChatStreamView = forwardRef<
         });
         if (expanded) {
           pendingExpandedGroupRowKeyRef.current = `assistant:${messageId}:${groupKey}:header`;
-          groupExpansionScrollTokenRef.current += 1;
           groupExpansionAutoScrollSuppressedRef.current = true;
         }
         setAssistantExpansionVersion((version) => version + 1);
@@ -1174,7 +1173,6 @@ export const SessionChatStreamView = forwardRef<
         });
         if (expanded) {
           pendingExpandedGroupRowKeyRef.current = `assistant:${messageId}:${segmentKey}:worked-header`;
-          groupExpansionScrollTokenRef.current += 1;
           groupExpansionAutoScrollSuppressedRef.current = true;
         }
         setAssistantExpansionVersion((version) => version + 1);
@@ -1224,36 +1222,38 @@ export const SessionChatStreamView = forwardRef<
       }
 
       pendingExpandedGroupRowKeyRef.current = null;
-      const scrollToken = groupExpansionScrollTokenRef.current;
-      const scrollToGroupHeader = () => {
-        vlistRef.current?.scrollToIndex(rowIndex + leadingRowCount, {
-          align: 'start',
-          smooth: false,
-        });
-      };
-      requestAnimationFrame(scrollToGroupHeader);
-      window.setTimeout(() => {
-        if (groupExpansionScrollTokenRef.current !== scrollToken) return;
-        scrollToGroupHeader();
-        requestAnimationFrame(() => {
-          if (groupExpansionScrollTokenRef.current === scrollToken) {
-            groupExpansionAutoScrollSuppressedRef.current = false;
-          }
-        });
-      }, 180);
+      // Descendant layout effects run before this parent effect, so Virtua has
+      // committed and measured the expanded row set when this call runs.
+      vlistRef.current?.scrollToIndex(rowIndex + leadingRowCount, {
+        align: 'start',
+        smooth: false,
+      });
+      releaseGroupExpansionSuppressionRef.current = true;
       return undefined;
     }, [leadingRowCount, virtualRows]);
 
-    const { isSticky, scrollToBottom, handleScroll } = useStickyScroll({
+    const {
+      scrollRef: scrollContainerRef,
+      isSticky,
+      scrollToBottom,
+      handleScroll,
+    } = useStickyScroll({
       sessionId,
       vlistRef,
-      scrollRootRef,
       // `leadingContent` is a real first Virtua row, so it counts here — sticky
       // scroll otherwise targets an index short of the true bottom.
       itemCount: virtualRows.length + leadingRowCount + (shouldShowAgentActivity ? 1 : 0),
-      scrollContainerClass: 'chat-scrollbar',
       onAtBottomChange,
       suppressAutoScrollRef: autoScrollSuppressedRef,
+    });
+
+    // useStickyScroll's layout effect runs before this one in hook order and
+    // consumes the suppression for the expansion commit. Release it at the end
+    // of that same commit instead of guessing when Virtua settles with a timer.
+    useLayoutEffect(() => {
+      if (!releaseGroupExpansionSuppressionRef.current) return;
+      releaseGroupExpansionSuppressionRef.current = false;
+      groupExpansionAutoScrollSuppressedRef.current = false;
     });
 
     // Desktop-only top fade: shown only when content has scrolled under the top
@@ -1372,10 +1372,10 @@ export const SessionChatStreamView = forwardRef<
             ref={scrollRootRef}
             className={cn('relative bg-background', className)}
           >
-            <VList
-              ref={vlistRef}
-              // Virtua sets only overflow-y:auto. CSS otherwise computes the
-              // untouched x axis to auto too, letting any wide row pan the
+            <div
+              ref={scrollContainerRef}
+              // Keep x overflow explicit: overflow-y:auto otherwise computes
+              // the untouched x axis to auto too, letting any wide row pan the
               // entire conversation instead of its own nested scroller.
               className="chat-scrollbar h-full overflow-x-hidden py-5 sm:py-6"
               // Mobile session page floats a frosted header over the list;
@@ -1383,74 +1383,85 @@ export const SessionChatStreamView = forwardRef<
               // branch) pads the scroll content so the first message clears the
               // header at rest while later content scrolls under it and blurs.
               // Unset elsewhere → falls back to py-6's 1.5rem, a no-op.
-              style={{ paddingTop: 'calc(var(--conversation-top-inset, 0px) + 1.5rem)' }}
-              shift={false}
-              onScroll={handleStreamScroll}
-              // Pre-render extra items outside the viewport to reduce blank areas
-              // during fast scrolling (especially on mobile). This is 4x Virtua's
-              // default (200px) — generous, but deliberately not the previous 2000px:
-              // an oversized buffer keeps a huge set of still-resizing rows mounted,
-              // which widens the window where Virtua's offsets are mid-recompute and
-              // rows can transiently overlap. 800 keeps ~2 viewports of headroom.
-              bufferSize={800}
+              style={{
+                display: 'block',
+                overflowY: 'auto',
+                contain: 'strict',
+                width: '100%',
+                height: '100%',
+                paddingTop: 'calc(var(--conversation-top-inset, 0px) + 1.5rem)',
+              }}
             >
-              {leadingContent == null ? null : (
-                <div data-conversation-leading-content="">{leadingContent}</div>
-              )}
-              {virtualRows.map((row) => {
-                if (row.type === 'standard') {
-                  // Standard rows are only ever system or user messages
-                  // (assistant turns are flattened into `assistant` rows below),
-                  // so they carry no per-turn file diffs or last-assistant
-                  // quick actions.
+              <Virtualizer
+                ref={vlistRef}
+                shift={false}
+                onScroll={handleStreamScroll}
+                // Pre-render extra items outside the viewport to reduce blank areas
+                // during fast scrolling (especially on mobile). This is 4x Virtua's
+                // default (200px) — generous, but deliberately not the previous 2000px:
+                // an oversized buffer keeps a huge set of still-resizing rows mounted,
+                // which widens the window where Virtua's offsets are mid-recompute and
+                // rows can transiently overlap. 800 keeps ~2 viewports of headroom.
+                bufferSize={800}
+              >
+                {leadingContent == null ? null : (
+                  <div data-conversation-leading-content="">{leadingContent}</div>
+                )}
+                {virtualRows.map((row) => {
+                  if (row.type === 'standard') {
+                    // Standard rows are only ever system or user messages
+                    // (assistant turns are flattened into `assistant` rows below),
+                    // so they carry no per-turn file diffs or last-assistant
+                    // quick actions.
+                    return (
+                      <ChatItem
+                        key={row.key}
+                        item={row.item}
+                        renderMessageRow={renderMessageRow}
+                        noMessagesLabel={noMessagesLabel}
+                        emptyState={emptyState}
+                      />
+                    );
+                  }
+
+                  const canForkAssistantMessage =
+                    row.item.message.finished === true &&
+                    (row.item.message.id === lastCompletedAssistantMessageId ||
+                      Boolean(row.item.message.acpTurnId));
+                  const fileDiffOverride =
+                    messageFileDiffEntriesByTurn === undefined
+                      ? undefined
+                      : (messageFileDiffEntriesByTurn[row.item.message.id] ??
+                        EMPTY_EDITED_FILE_ENTRIES);
                   return (
-                    <ChatItem
+                    <AssistantChatItem
                       key={row.key}
-                      item={row.item}
-                      renderMessageRow={renderMessageRow}
-                      noMessagesLabel={noMessagesLabel}
-                      emptyState={emptyState}
+                      row={row}
+                      fileDiffOverride={fileDiffOverride}
+                      assistantActions={resolveAssistantMessageActions(
+                        row.item.message.id,
+                        assistantActionsMessageId,
+                        assistantActions
+                      )}
+                      onFork={canForkAssistantMessage ? onForkLastAssistant : undefined}
+                      forkWorktreeAvailability={forkWorktreeAvailability}
+                      onForkWorktreeMenuOpen={onForkWorktreeMenuOpen}
+                      isForking={forkingAssistantMessageId === row.item.message.id}
+                      onFileDiffClick={onFileDiffClick}
+                      onFilePathClick={onFilePathClick}
+                      onGroupExpandedChange={handleAssistantGroupExpandedChange}
+                      onWorkedGroupExpandedChange={handleAssistantWorkedGroupExpandedChange}
+                      isTurnHovered={hoveredAssistantMessageId === row.item.message.id}
+                      onTurnHoverChange={handleAssistantTurnHoverChange}
+                      conversationFontSize={conversationFontSize}
                     />
                   );
-                }
-
-                const canForkAssistantMessage =
-                  row.item.message.finished === true &&
-                  (row.item.message.id === lastCompletedAssistantMessageId ||
-                    Boolean(row.item.message.acpTurnId));
-                const fileDiffOverride =
-                  messageFileDiffEntriesByTurn === undefined
-                    ? undefined
-                    : (messageFileDiffEntriesByTurn[row.item.message.id] ??
-                      EMPTY_EDITED_FILE_ENTRIES);
-                return (
-                  <AssistantChatItem
-                    key={row.key}
-                    row={row}
-                    fileDiffOverride={fileDiffOverride}
-                    assistantActions={resolveAssistantMessageActions(
-                      row.item.message.id,
-                      assistantActionsMessageId,
-                      assistantActions
-                    )}
-                    onFork={canForkAssistantMessage ? onForkLastAssistant : undefined}
-                    forkWorktreeAvailability={forkWorktreeAvailability}
-                    onForkWorktreeMenuOpen={onForkWorktreeMenuOpen}
-                    isForking={forkingAssistantMessageId === row.item.message.id}
-                    onFileDiffClick={onFileDiffClick}
-                    onFilePathClick={onFilePathClick}
-                    onGroupExpandedChange={handleAssistantGroupExpandedChange}
-                    onWorkedGroupExpandedChange={handleAssistantWorkedGroupExpandedChange}
-                    isTurnHovered={hoveredAssistantMessageId === row.item.message.id}
-                    onTurnHoverChange={handleAssistantTurnHoverChange}
-                    conversationFontSize={conversationFontSize}
-                  />
-                );
-              })}
-              {shouldShowAgentActivity && agentActivityLabel && (
-                <AgentActivityRow label={agentActivityLabel} tone={agentActivityTone} />
-              )}
-            </VList>
+                })}
+                {shouldShowAgentActivity && agentActivityLabel && (
+                  <AgentActivityRow label={agentActivityLabel} tone={agentActivityTone} />
+                )}
+              </Virtualizer>
+            </div>
             {/* Top fade into the bg-background canvas above (desktop only),
                 hinting that the conversation continues past the top edge. */}
             {!isMobile && isScrolledFromTop ? (

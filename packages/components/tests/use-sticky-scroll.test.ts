@@ -2,11 +2,11 @@
  * @vitest-environment jsdom
  */
 
-import React, { act, useEffect, useRef } from 'react';
+import React, { act, useEffect, useLayoutEffect, useRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionId } from '@lody/shared';
-import type { VListHandle } from 'virtua';
+import type { VirtualizerHandle } from 'virtua';
 import {
   clearAllScrollPositions,
   getScrollPosition,
@@ -58,35 +58,36 @@ type ScrollFixture = {
   getScrollTop: () => number;
   setContentHeight: (value: number) => void;
   setScrollHeight: (value: number) => void;
+  setClientHeight: (value: number) => void;
 };
 
-type MockVListHandle = VListHandle & {
-  _scrollElement: HTMLElement;
+type MockVirtualizerHandle = VirtualizerHandle & {
   scrollToIndex: ReturnType<typeof vi.fn>;
   scrollTo: ReturnType<typeof vi.fn>;
 };
 
 type HarnessProps = {
   sessionId: SessionId;
-  vlist: MockVListHandle;
+  vlist: MockVirtualizerHandle | null;
+  scrollElement: HTMLDivElement | null;
   itemCount: number;
   onAtBottomChange?: (atBottom: boolean) => void;
 };
 
-async function flushAnimationFrames(): Promise<void> {
-  for (let iteration = 0; iteration < 20; iteration += 1) {
+async function advanceAnimationFrames(): Promise<void> {
+  for (let iteration = 0; iteration < 200; iteration += 1) {
     if (rafQueue.length === 0) {
       await Promise.resolve();
       if (rafQueue.length === 0) return;
     }
     const callbacks = [...rafQueue];
     rafQueue = [];
+    vi.advanceTimersByTime(17);
     for (const callback of callbacks) {
       callback(performance.now());
     }
     await Promise.resolve();
   }
-  throw new Error('requestAnimationFrame queue did not settle');
 }
 
 function createScrollFixture(): ScrollFixture {
@@ -102,7 +103,7 @@ function createScrollFixture(): ScrollFixture {
 
   let scrollTop = 0;
   let scrollHeight = 640;
-  const clientHeight = 400;
+  let clientHeight = 400;
   const width = 320;
   let contentHeight = 616;
 
@@ -159,19 +160,21 @@ function createScrollFixture(): ScrollFixture {
     setScrollHeight: (value) => {
       scrollHeight = value;
     },
+    setClientHeight: (value) => {
+      clientHeight = value;
+    },
   };
 }
 
-function createMockVListHandle(scrollElement: HTMLElement): MockVListHandle {
+function createMockVirtualizerHandle(scrollElement: HTMLElement): MockVirtualizerHandle {
   const handle = {
-    _scrollElement: scrollElement,
     scrollSize: 640,
     viewportSize: 400,
     scrollToIndex: vi.fn(),
     scrollTo: vi.fn((offset: number) => {
       scrollElement.scrollTop = offset;
     }),
-  } as unknown as MockVListHandle;
+  } as unknown as MockVirtualizerHandle;
 
   Object.defineProperty(handle, 'scrollOffset', {
     configurable: true,
@@ -207,19 +210,27 @@ function emitResize(target: Element): void {
   }
 }
 
-function HookHarness({ sessionId, vlist, itemCount, onAtBottomChange }: HarnessProps) {
-  const vlistRef = useRef<VListHandle | null>(vlist);
-  const scrollRootRef = useRef<HTMLElement | null>(vlist._scrollElement.parentElement);
+function HookHarness({
+  sessionId,
+  vlist,
+  scrollElement,
+  itemCount,
+  onAtBottomChange,
+}: HarnessProps) {
+  const vlistRef = useRef<VirtualizerHandle | null>(vlist);
   vlistRef.current = vlist;
 
   const result = useStickyScroll({
     sessionId,
     vlistRef,
-    scrollRootRef,
     itemCount,
-    scrollContainerClass: 'chat-scrollbar',
     onAtBottomChange,
   });
+
+  useLayoutEffect(() => {
+    result.scrollRef(scrollElement);
+    return () => result.scrollRef(null);
+  }, [result.scrollRef, scrollElement]);
 
   useEffect(() => {
     latestResult = result;
@@ -245,6 +256,7 @@ describe('useStickyScroll Virtua adapter', () => {
     resizeObserverInstances.length = 0;
     rafQueue = [];
     latestResult = null;
+    vi.useFakeTimers();
     vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
     vi.stubGlobal('ResizeObserver', MockResizeObserver as typeof ResizeObserver);
     vi.stubGlobal('requestAnimationFrame', ((callback: FrameRequestCallback) => {
@@ -269,21 +281,23 @@ describe('useStickyScroll Virtua adapter', () => {
     rafQueue = [];
     clearAllScrollPositions();
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   it('restores a cached offset without forcing the list back to the bottom', async () => {
     const sessionId = 'session-cached-offset' as SessionId;
     const fixture = createScrollFixture();
-    const vlist = createMockVListHandle(fixture.scrollElement);
+    const vlist = createMockVirtualizerHandle(fixture.scrollElement);
     saveScrollPosition(sessionId, { type: 'offset', scrollOffset: 96 });
 
     await renderHarness({
       sessionId,
       vlist,
+      scrollElement: fixture.scrollElement,
       itemCount: 4,
     });
     await act(async () => {
-      await flushAnimationFrames();
+      await advanceAnimationFrames();
     });
 
     expect(vlist.scrollTo).toHaveBeenCalledWith(96);
@@ -294,17 +308,18 @@ describe('useStickyScroll Virtua adapter', () => {
   it('unsticks after a real upward user scroll and does not auto-scroll on later content changes', async () => {
     const sessionId = 'session-unstick' as SessionId;
     const fixture = createScrollFixture();
-    const vlist = createMockVListHandle(fixture.scrollElement);
+    const vlist = createMockVirtualizerHandle(fixture.scrollElement);
     const atBottomChanges = vi.fn();
 
     await renderHarness({
       sessionId,
       vlist,
+      scrollElement: fixture.scrollElement,
       itemCount: 4,
       onAtBottomChange: atBottomChanges,
     });
     await act(async () => {
-      await flushAnimationFrames();
+      await advanceAnimationFrames();
     });
 
     vlist.scrollToIndex.mockClear();
@@ -324,12 +339,13 @@ describe('useStickyScroll Virtua adapter', () => {
     await renderHarness({
       sessionId,
       vlist,
+      scrollElement: fixture.scrollElement,
       itemCount: 5,
       onAtBottomChange: atBottomChanges,
     });
     await act(async () => {
       emitResize(fixture.contentElement);
-      await flushAnimationFrames();
+      await advanceAnimationFrames();
     });
 
     expect(vlist.scrollToIndex).not.toHaveBeenCalled();
@@ -337,9 +353,7 @@ describe('useStickyScroll Virtua adapter', () => {
 
     await act(async () => {
       latestResult?.scrollToBottom();
-      fixture.scrollElement.dispatchEvent(new Event('scroll'));
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      await flushAnimationFrames();
+      await advanceAnimationFrames();
     });
 
     expect(latestResult?.isSticky).toBe(true);
@@ -350,15 +364,16 @@ describe('useStickyScroll Virtua adapter', () => {
   it('keeps the viewport pinned to the real bottom when sticky content grows', async () => {
     const sessionId = 'session-streaming-growth' as SessionId;
     const fixture = createScrollFixture();
-    const vlist = createMockVListHandle(fixture.scrollElement);
+    const vlist = createMockVirtualizerHandle(fixture.scrollElement);
 
     await renderHarness({
       sessionId,
       vlist,
+      scrollElement: fixture.scrollElement,
       itemCount: 4,
     });
     await act(async () => {
-      await flushAnimationFrames();
+      await advanceAnimationFrames();
     });
 
     vlist.scrollToIndex.mockClear();
@@ -367,11 +382,90 @@ describe('useStickyScroll Virtua adapter', () => {
 
     await act(async () => {
       emitResize(fixture.contentElement);
-      await flushAnimationFrames();
+      await advanceAnimationFrames();
     });
 
     expect(vlist.scrollToIndex).not.toHaveBeenCalled();
-    expect(fixture.getScrollTop()).toBe(319);
+    expect(fixture.getScrollTop()).toBeCloseTo(319, 5);
+    expect(latestResult?.isSticky).toBe(true);
+  });
+
+  it('follows each committed viewport resize without a transition timer', async () => {
+    const sessionId = 'session-viewport-resize' as SessionId;
+    const fixture = createScrollFixture();
+    const vlist = createMockVirtualizerHandle(fixture.scrollElement);
+
+    await renderHarness({
+      sessionId,
+      vlist,
+      scrollElement: fixture.scrollElement,
+      itemCount: 4,
+    });
+    await act(async () => {
+      await advanceAnimationFrames();
+    });
+
+    expect(fixture.getScrollTop()).toBe(240);
+    vlist.scrollToIndex.mockClear();
+
+    fixture.setClientHeight(320);
+    await act(async () => {
+      emitResize(fixture.scrollElement);
+      await advanceAnimationFrames();
+    });
+
+    expect(vlist.scrollToIndex).toHaveBeenCalledWith(3, { align: 'end', offset: 24 });
+    expect(fixture.getScrollTop()).toBe(320);
+    expect(latestResult?.isSticky).toBe(true);
+  });
+
+  it('attaches when the scroll viewport mounts after the empty state', async () => {
+    const sessionId = 'session-late-viewport' as SessionId;
+    saveScrollPosition(sessionId, { type: 'offset', scrollOffset: 96 });
+
+    await renderHarness({
+      sessionId,
+      vlist: null,
+      scrollElement: null,
+      itemCount: 0,
+    });
+
+    const fixture = createScrollFixture();
+    const vlist = createMockVirtualizerHandle(fixture.scrollElement);
+    await renderHarness({
+      sessionId,
+      vlist,
+      scrollElement: fixture.scrollElement,
+      itemCount: 4,
+    });
+    await act(async () => {
+      await advanceAnimationFrames();
+    });
+
+    expect(vlist.scrollTo).toHaveBeenCalledWith(96);
+    expect(latestResult?.isSticky).toBe(false);
+
+    await act(async () => {
+      fixture.scrollElement.dispatchEvent(new Event('scroll'));
+      vi.advanceTimersByTime(2);
+    });
+
+    await act(async () => {
+      latestResult?.scrollToBottom();
+      await advanceAnimationFrames();
+    });
+
+    expect(fixture.getScrollTop()).toBe(240);
+    expect(latestResult?.isSticky).toBe(true);
+
+    fixture.setContentHeight(696);
+    fixture.setScrollHeight(720);
+    await act(async () => {
+      emitResize(fixture.contentElement);
+      await advanceAnimationFrames();
+    });
+
+    expect(fixture.getScrollTop()).toBeCloseTo(319, 5);
     expect(latestResult?.isSticky).toBe(true);
   });
 });

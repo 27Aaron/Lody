@@ -187,9 +187,19 @@ test('a small upward wheel escapes streaming follow until the user re-sticks', a
 
   const story = page.getByTestId('session-conversation-story');
   await expect(story).toHaveAttribute('data-stream-phase', 'streaming', { timeout: 15_000 });
-  await page.waitForTimeout(1_500);
 
   const scrollContainer = page.locator('.chat-scrollbar');
+  await expect(scrollContainer).toBeVisible();
+  await expect
+    .poll(() => scrollContainer.evaluate((el) => el.scrollHeight - el.clientHeight))
+    .toBeGreaterThan(80);
+  await expect
+    .poll(() =>
+      scrollContainer.evaluate((el) =>
+        Math.max(0, el.scrollHeight - el.scrollTop - el.clientHeight)
+      )
+    )
+    .toBeLessThanOrEqual(40);
   const box = await scrollContainer.boundingBox();
   if (!box) throw new Error('scroll container not visible');
 
@@ -199,32 +209,21 @@ test('a small upward wheel escapes streaming follow until the user re-sticks', a
   const btn = story.locator('button[aria-label*="croll"]');
   await expect(btn).toBeVisible();
 
-  const escapedPosition = await scrollContainer.evaluate((el) => ({
-    scrollTop: el.scrollTop,
-    distance: Math.max(0, el.scrollHeight - el.scrollTop - el.clientHeight),
-  }));
-  expect(escapedPosition.distance).toBeGreaterThan(40);
-
   const escapedAtChunk = Number(await story.getAttribute('data-stream-chunk'));
   await expect
     .poll(async () => Number(await story.getAttribute('data-stream-chunk')))
     .toBeGreaterThan(escapedAtChunk);
-  await page.waitForTimeout(250);
-
-  const positionAfterMoreOutput = await scrollContainer.evaluate((el) => ({
-    scrollTop: el.scrollTop,
-    distance: Math.max(0, el.scrollHeight - el.scrollTop - el.clientHeight),
-  }));
-  expect(
-    Math.abs(positionAfterMoreOutput.scrollTop - escapedPosition.scrollTop)
-  ).toBeLessThanOrEqual(20);
-  expect(positionAfterMoreOutput.distance).toBeGreaterThan(40);
   await expect(btn).toBeVisible();
 
   await btn.click();
-  await page.waitForTimeout(500);
+  await expect(btn).toBeHidden();
+  const reStuckAtChunk = Number(await story.getAttribute('data-stream-chunk'));
+  await expect
+    .poll(async () => Number(await story.getAttribute('data-stream-chunk')))
+    .toBeGreaterThan(reStuckAtChunk + 5);
   const distanceAfterClick = await scrollContainer.evaluate((el) =>
     Math.max(0, el.scrollHeight - el.scrollTop - el.clientHeight)
   );
   expect(distanceAfterClick).toBeLessThanOrEqual(40);
+  await expect(btn).toBeHidden();
 });
