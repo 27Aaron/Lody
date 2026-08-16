@@ -10,7 +10,12 @@ export default defineConfig({
   },
   plugins: [loroCrdtWasmUrlWorkaround(), tsconfigPaths(), wasm(), topLevelAwait()],
   test: {
-    include: ['tests/**/*.test.ts', 'tests/**/*.test.tsx'],
+    // `src/**` is included so a test written next to its module runs instead of
+    // silently never running. Two such files had accumulated under `src/lib`,
+    // one of them a diverged copy of a live suite — 16 passing tests that no
+    // run had ever executed. Tests still belong in `tests/`; this only makes a
+    // misplaced one fail loudly rather than look like coverage it is not.
+    include: ['tests/**/*.test.ts', 'tests/**/*.test.tsx', 'src/**/*.test.ts', 'src/**/*.test.tsx'],
     environment: 'node',
     // Keep diagnostics from failing tests while avoiding the substantial I/O
     // produced by expected logs from hundreds of passing files.

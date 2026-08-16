@@ -12,6 +12,10 @@ import type {
 } from './ai';
 import type { SessionHistoryInput } from './schema';
 import {
+  reanchorMessageTextSpansForTrim,
+  sanitizeMessageTextSpans,
+} from './message-text-spans';
+import {
   AgentConfigCliTypeSchema,
   SessionInputBlocksSchema,
   normalizeSessionTurnInputConfig,
@@ -104,7 +108,12 @@ const normalizeTextInputBlock = (
   block: Extract<SessionInputBlock, { type: 'text' }>
 ): Extract<SessionInputBlock, { type: 'text' }> | null => {
   const trimmed = block.text.trim();
-  return trimmed ? { type: 'text', text: trimmed } : null;
+  if (!trimmed) return null;
+  // The trim is what makes this more than a field copy: dropping leading
+  // whitespace shifts every offset left, so spans have to be re-anchored
+  // against the trimmed string rather than carried across as-is.
+  const spans = reanchorMessageTextSpansForTrim(block.text, trimmed, block.spans);
+  return spans ? { type: 'text', text: trimmed, spans } : { type: 'text', text: trimmed };
 };
 
 const toImagePayload = (
@@ -363,6 +372,7 @@ export const inputBlocksToHistoryItems = (
       items.push({
         type: 'text',
         text: normalizedTextBlock.text,
+        ...(normalizedTextBlock.spans ? { spans: normalizedTextBlock.spans } : {}),
       } satisfies SessionInputHistoryItem);
     }
   }
@@ -381,7 +391,19 @@ export const historyItemsToInputBlocks = (
 
   for (const item of items) {
     if (isTextHistoryItem(item)) {
-      const normalizedTextBlock = normalizeTextInputBlock({ type: 'text', text: item.text });
+      // `item` came out of the session document, where spans ride an untyped
+      // catchall — whatever wrote them, including an older or newer client,
+      // never had its shape checked. Sanitize before anything downstream
+      // indexes into the text with these offsets.
+      const spans = sanitizeMessageTextSpans(
+        item.text,
+        (item as { spans?: unknown }).spans
+      );
+      const normalizedTextBlock = normalizeTextInputBlock({
+        type: 'text',
+        text: item.text,
+        ...(spans ? { spans } : {}),
+      });
       if (normalizedTextBlock) {
         blocks.push(normalizedTextBlock);
       }

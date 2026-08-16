@@ -1,4 +1,8 @@
 import * as React from 'react';
+import {
+  forEachAtTokenSpan,
+  type HydratedMentions,
+} from '@/components/mentions/mention-hydration';
 import { useAtomValue } from 'jotai';
 import { usePostHog } from '@posthog/react';
 import { z } from 'zod';
@@ -339,33 +343,31 @@ export function getSuggestions(
 }
 
 export function hydrateFileMentionsFromText(text: string, knownPaths: Set<string>) {
-  const mentions: Array<{ value: string; start: number; end: number }> = [];
+  const mentions: HydratedMentions['mentions'] = [];
   const values = new Set<string>();
 
-  for (let i = 0; i < text.length; i++) {
-    if (text[i] !== '@') continue;
-    const start = i;
-    let j = i + 1;
-    while (j < text.length) {
-      const ch = text[j];
-      if (!ch) break;
-      if (ch === ' ' || ch === '\n' || ch === '\t') break;
-      j++;
-    }
-    const candidate = text.slice(i + 1, j);
-    if (!candidate) continue;
+  forEachAtTokenSpan(text, ({ token, start, end }) => {
+    if (!token) return false;
     // Match the candidate directly, or with a trailing slash for directories
     // whose display text has the slash stripped.
-    const matchedToken = knownPaths.has(candidate)
-      ? candidate
-      : knownPaths.has(`${candidate}/`)
-        ? `${candidate}/`
+    const matchedToken = knownPaths.has(token)
+      ? token
+      : knownPaths.has(`${token}/`)
+        ? `${token}/`
         : null;
-    if (!matchedToken) continue;
-    mentions.push({ value: matchedToken, start, end: start + 1 + candidate.length });
+    if (!matchedToken) return false;
+    mentions.push({
+      value: matchedToken,
+      start,
+      end,
+      // The known-path set marks a directory with a trailing slash; the
+      // committed text has it stripped, which is why the lookup above tries
+      // both. The chip needs the distinction back to pick folder vs file glyph.
+      kind: matchedToken.endsWith('/') ? 'dir' : 'file',
+    });
     values.add(matchedToken);
-    i = j - 1;
-  }
+    return true;
+  });
 
   return { mentions, values: Array.from(values) };
 }

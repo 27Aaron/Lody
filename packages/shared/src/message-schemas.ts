@@ -9,6 +9,7 @@ import {
   type SessionTurnInputConfig,
 } from './ai';
 import type { SessionId } from './ids';
+import { MESSAGE_TEXT_SPAN_KINDS } from './message-text-spans';
 import { RpcSecretPublicKeySchema } from './rpc-secret';
 import { LodyOperationIdSchema } from './session-orchestration';
 import { isSensitiveAcpConfigOptionId } from './session-preparation';
@@ -155,10 +156,26 @@ export const SessionFileBlockSchema = SessionFileBlockObjectSchema.superRefine((
   refineSessionFileBlock(block, ctx)
 );
 
+const MessageTextSpanSchema = z
+  .object({
+    start: z.number().int().nonnegative(),
+    end: z.number().int().nonnegative(),
+    kind: z.enum(MESSAGE_TEXT_SPAN_KINDS),
+    label: z.string().min(1),
+    target: z.string().optional(),
+  })
+  .strict();
+
 const SessionTextInputBlockSchema = z
   .object({
     type: z.literal('text'),
     text: z.string(),
+    // Optional so every text block written before spans existed still parses.
+    // Offsets are NOT checked against `text` here — only the shape is. The
+    // range check belongs to `sanitizeMessageTextSpans`, which also runs on the
+    // read path, where spans arrive through the session document's untyped
+    // catchall and never see this schema at all.
+    spans: z.array(MessageTextSpanSchema).optional(),
   })
   .strict();
 

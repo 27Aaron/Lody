@@ -1,4 +1,6 @@
 import type { ClipboardEvent, KeyboardEvent, ReactNode, Ref } from 'react';
+import type { Mention as MentionRange } from '@/ui/mention/index';
+import type { PersistedMentionRange } from '@/components/mentions/mention-persistence';
 
 import type { AcpCommandSummary, AgentConfigCliType } from '@lody/shared';
 import { cn } from '@/lib/utils';
@@ -57,6 +59,8 @@ export interface ChatLandingViewProps {
   pastedTextDrafts?: PastedTextDraft[];
   /** Callback when pasted text draft ranges change */
   onPastedTextDraftsChange?: (drafts: PastedTextDraft[]) => void;
+  onMentionRangesChange?: (ranges: MentionRange[]) => void;
+  persistedMentions?: readonly PersistedMentionRange[];
   /** Pending image drafts shown above the textarea */
   imageItems?: ChatComposerImageItem[];
   /** Whether add-image button should be disabled */
@@ -174,6 +178,8 @@ export function ChatLandingView({
   promptRef,
   pastedTextDrafts = [],
   onPastedTextDraftsChange,
+  onMentionRangesChange,
+  persistedMentions,
   imageItems = [],
   imageAddDisabled = false,
   imageAddAriaLabel,
@@ -411,6 +417,8 @@ export function ChatLandingView({
         promptEnterKeyHint={promptEnterKeyHint}
         pastedTextDrafts={submissionPending ? [] : pastedTextDrafts}
         onPastedTextDraftsChange={submissionPending ? undefined : onPastedTextDraftsChange}
+        onMentionRangesChange={onMentionRangesChange}
+        persistedMentions={persistedMentions}
         imageItems={submissionPending ? [] : imageItems}
         imageAddDisabled={submissionPending || imageAddDisabled}
         imageAddAriaLabel={imageAddAriaLabel}

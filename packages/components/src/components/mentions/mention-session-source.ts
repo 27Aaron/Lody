@@ -1,10 +1,15 @@
 import * as React from 'react';
+import {
+  forEachAtTokenSpan,
+  type HydratedMentions,
+} from '@/components/mentions/mention-hydration';
+import type { TextRewrite } from '@lody/shared';
 import type { SessionId, SessionMeta } from '@lody/shared';
 import { getEffectiveLatestMessageAt } from '@/components/sessions/session-list-rows';
 import { useVisibleSessionMetas } from '@/hooks/use-visible-session-metas';
 
 /**
- * `@session:` mention — the one type whose displayed text is not what the agent
+ * Session mention — the one type whose displayed text is not what the agent
  * receives.
  *
  * The composer is a textarea with a character-aligned highlight overlay, so it
@@ -13,12 +18,11 @@ import { useVisibleSessionMetas } from '@/hooks/use-visible-session-metas';
  * text carries a human-readable token, the real payload rides on the mention
  * range, and the token is rewritten on the way out.
  *
- * Unlike the other namespaces, `@session:` stays in the committed text. It is
- * the anchor `expandSessionMentionsInText` matches on.
+ * There is no `session:` marker in the committed text. It only ever existed as
+ * an anchor for a text-matching rewrite, and the user had to read it; the
+ * committed range carries the real session id, so `buildSessionMentionRewrites`
+ * rewrites THE RANGE and the composer writes a plain `@<slug>`.
  */
-
-export const SESSION_MENTION_NAMESPACE = 'session';
-export const SESSION_MENTION_PREFIX = `@${SESSION_MENTION_NAMESPACE}:`;
 
 /** Slugs stay short enough to read inline without dominating the composer. */
 const MAX_SLUG_LENGTH = 40;
@@ -239,65 +243,70 @@ export function resolveSessionMentionIds(
 // Text: hydration and before-send expansion
 // ---------------------------------------------------------------------------
 
-/** Walk every `@session:<slug>` span; slugs run to the next whitespace. */
-function forEachSessionMentionSpan(
-  text: string,
-  visit: (span: { slug: string; start: number; end: number }) => boolean
-): void {
-  let index = text.indexOf(SESSION_MENTION_PREFIX);
-  while (index !== -1) {
-    let end = index + SESSION_MENTION_PREFIX.length;
-    while (end < text.length) {
-      const char = text[end];
-      if (!char || char === ' ' || char === '\n' || char === '\t') break;
-      end += 1;
-    }
-    const slug = text.slice(index + SESSION_MENTION_PREFIX.length, end);
-    const consumed = visit({ slug, start: index, end });
-    index = text.indexOf(SESSION_MENTION_PREFIX, consumed ? end : index + 1);
-  }
-}
-
 export function buildSessionMentionPrompt(sessionId: string): string {
   return `use lody mcp to query session[id: ${sessionId}] history`;
 }
 
 /**
- * Rewrite `@session:<slug>` into the MCP instruction carrying the real id.
+ * The session -> MCP-instruction rewrites these ranges imply.
  *
- * Idempotent by construction: expansion consumes the `@session:` anchor, so a
- * re-sent prompt has nothing left to match. An unresolvable slug (a rename we
- * never cached) is left exactly as-is — a stale token the agent can ignore is
- * far better than a confidently wrong session id.
+ * Driven by the committed ranges, not by scanning the text. The composer used
+ * to write `@session:<slug>` and this used to match on that prefix, which is
+ * why the prefix had to survive into the sent text at all. It carried no
+ * meaning for the user — it was an anchor for this function. Ranges carry the
+ * session id directly, so the anchor is gone and the composer writes a plain
+ * `@<slug>`.
+ *
+ * The span keeps the slug as its label, so the transcript shows the session the
+ * user picked rather than the id-bearing instruction the agent needs.
  */
-export function expandSessionMentionsInText(
+export function buildSessionMentionRewrites(
   text: string,
-  slugToId: ReadonlyMap<string, string>
-): string {
-  if (!text.includes(SESSION_MENTION_PREFIX) || slugToId.size === 0) return text;
-
-  let result = '';
-  let copiedTo = 0;
-  forEachSessionMentionSpan(text, ({ slug, start, end }) => {
-    const sessionId = slug ? slugToId.get(slug) : undefined;
-    if (!sessionId) return false;
-    result += text.slice(copiedTo, start) + buildSessionMentionPrompt(sessionId);
-    copiedTo = end;
-    return true;
-  });
-  return result + text.slice(copiedTo);
+  mentions: readonly { start: number; end: number; kind?: string; value: string }[]
+): TextRewrite[] {
+  const rewrites: TextRewrite[] = [];
+  for (const mention of mentions) {
+    if (mention.kind !== 'session' || !mention.value) continue;
+    const label = text.slice(mention.start, mention.end).replace(/^@/, '');
+    if (!label) continue;
+    rewrites.push({
+      start: mention.start,
+      end: mention.end,
+      replacement: buildSessionMentionPrompt(mention.value),
+      span: { kind: 'session', label, target: mention.value },
+    });
+  }
+  return rewrites;
 }
 
+/**
+ * Recover session ranges from a reloaded draft's text.
+ *
+ * Ranges are not persisted with a draft, so after a reload the only evidence
+ * that `@crdt-metadata-cleanup` was a session is that the slug is one we know.
+ * That is weaker than the old `@session:` prefix, which said so outright, and
+ * it is the price of not showing that prefix to the user.
+ *
+ * `knownFileTokens` is what keeps the weaker signal safe: a token that is also
+ * a real path is left for the file hydrator. Paths are the overwhelmingly
+ * common case, and mistaking one for a session would silently turn a file
+ * reference into a history query, whereas the reverse merely leaves a session
+ * token unexpanded — visible to the user as a missing chip.
+ */
 export function hydrateSessionMentionsFromText(
   text: string,
-  slugToId: ReadonlyMap<string, string>
-): { mentions: Array<{ value: string; start: number; end: number }>; values: string[] } {
-  const mentions: Array<{ value: string; start: number; end: number }> = [];
+  slugToId: ReadonlyMap<string, string>,
+  knownFileTokens?: ReadonlySet<string>
+): HydratedMentions {
+  const mentions: HydratedMentions['mentions'] = [];
   const values = new Set<string>();
-  forEachSessionMentionSpan(text, ({ slug, start, end }) => {
-    const sessionId = slug ? slugToId.get(slug) : undefined;
+  if (slugToId.size === 0) return { mentions, values: [] };
+
+  forEachAtTokenSpan(text, ({ token, start, end }) => {
+    if (!token || knownFileTokens?.has(token)) return false;
+    const sessionId = slugToId.get(token);
     if (!sessionId) return false;
-    mentions.push({ value: sessionId, start, end });
+    mentions.push({ value: sessionId, start, end, kind: 'session' });
     values.add(sessionId);
     return true;
   });

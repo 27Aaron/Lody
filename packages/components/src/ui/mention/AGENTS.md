@@ -40,6 +40,14 @@ Shared mention primitive used by composer autocomplete surfaces.
   position through `.current`, so a snapshot taken before the node mounts leaves
   a null-node entry behind — the sort collapses around it and highlight movement
   matches the wrong row.
+- `onMentionsChange`/`onValueChange` updaters see the last value WRITTEN, not
+  the last value rendered (`useFlushConsistentState` in `mention-root.tsx`).
+  `useControllableState` resolves an updater against the controlled prop, and
+  that prop only moves on the owner's next render — so two updates in one commit
+  each saw the pre-flush value and the last one replaced the others. Every
+  hydrator runs its effect in the same flush, so a draft carrying two kinds of
+  mention came back from a remount holding only whichever hydrator rendered
+  last. Do not "simplify" this back to a plain functional `setState`.
 - The primitive does not filter. Menus rank and slice their own candidates, so
   `useFilterStore` runs with `manualFiltering`; letting the built-in scorer also
   match the search term against each item's `value` hides rows whose payload

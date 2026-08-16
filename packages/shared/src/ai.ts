@@ -8,6 +8,7 @@ import {
 import type { ToolCallContent as AcpToolCallContent, SessionMode } from '@agentclientprotocol/sdk';
 import type { PermissionOutcome } from './message';
 import type { AgentConfigId, SessionId } from './ids';
+import type { MessageTextSpan } from './message-text-spans';
 import type { MinimalVisualAnnotationAnchor } from './visual-annotation-types';
 import type { WorktreeScriptPhase } from './project';
 import {
@@ -1309,6 +1310,8 @@ export type SessionInputBlock =
   | {
       type: 'text';
       text: string;
+      /** Mention regions of `text`. See `message-text-spans.ts`. */
+      spans?: MessageTextSpan[];
     }
   | ({
       type: 'image';
@@ -1367,6 +1370,8 @@ export type MessageContent =
   | {
       type: 'text';
       text: string;
+      /** Mention regions of `text`. See `message-text-spans.ts`. */
+      spans?: MessageTextSpan[];
     }
   | ({
       type: 'image';

@@ -23,6 +23,10 @@ import {
 } from './visual-annotation-reference-chip';
 import { cn } from '@/lib/utils';
 import { CombinedMentionTextarea } from '@/components/mentions/combined-mention-textarea';
+import {
+  getComposerMentionChip,
+  wrapPastedTextChipLabel,
+} from '@/components/mentions/mention-chips';
 import type { MentionProjectSource } from '@/components/mentions/mention-project-file-source';
 import type { SkillMentionAgent } from '@/components/mentions/mention-skill-source';
 import {
@@ -34,6 +38,7 @@ import {
   type PastedTextDraft,
 } from '@/lib/pasted-text-draft';
 import type { Mention as MentionRange } from '@/ui/mention/index';
+import type { PersistedMentionRange } from '@/components/mentions/mention-persistence';
 import { toIntlLocale } from '@/lib/intl-locale';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { Button, type ButtonProps } from '@/ui/button';
@@ -111,6 +116,15 @@ export interface ChatComposerProps {
   promptRef?: Ref<HTMLTextAreaElement>;
   pastedTextDrafts?: PastedTextDraft[];
   onPastedTextDraftsChange?: (drafts: PastedTextDraft[]) => void;
+  /**
+   * Every committed mention range. The send path needs these to record which
+   * regions of the sent text were mentions; see `useMentionPromptExpansion`.
+   */
+  onMentionRangesChange?: (ranges: MentionRange[]) => void;
+  /** Ranges stored with the draft, restored when the composer remounts. */
+  persistedMentions?: readonly PersistedMentionRange[];
+  /** Identity of the draft `promptValue` belongs to; see `draftKey` there. */
+  draftKey?: string;
   imageItems?: ChatComposerImageItem[];
   imageAddAriaLabel?: string;
   imageAddDisabled?: boolean;
@@ -219,6 +233,9 @@ export function ChatComposer({
   promptRef,
   pastedTextDrafts = [],
   onPastedTextDraftsChange,
+  onMentionRangesChange,
+  persistedMentions,
+  draftKey,
   imageItems = [],
   imageAddDisabled = false,
   onImageAddClick,
@@ -301,9 +318,11 @@ export function ChatComposer({
     pastedTextDrafts.find((item) => item.id === previewPastedTextDraftId) ?? null;
   const formatPastedTextInlineLabel = useCallback(
     (text: string) =>
-      t('composer.pastedTextInlineLabel', '[Pasted {{charCount}} chars]', {
-        charCount: numberFormatter.format(getPastedTextCharacterCount(text)),
-      }),
+      wrapPastedTextChipLabel(
+        t('composer.pastedTextInlineLabel', '[Pasted {{charCount}} chars]', {
+          charCount: numberFormatter.format(getPastedTextCharacterCount(text)),
+        })
+      ),
     [numberFormatter, t]
   );
   const pastedTextMentions = useMemo<MentionRange[]>(
@@ -504,6 +523,19 @@ export function ChatComposer({
 
   const boxTextareaClassName = getChatComposerTextareaClassName({ tone, variant, isMobile });
 
+  /**
+   * The colour a mention decoration paints to hide the textarea's own glyphs
+   * before redrawing them in the mention colour. It has to equal whatever this
+   * composer paints behind the textarea, or the "invisible" cover shows up as a
+   * rectangle — which is exactly what `--input` did here, since this surface is
+   * deliberately `bg-background` rather than the muddy `bg-input`.
+   *
+   * KEEP IN SYNC with the `bg-*` classes below. CSS cannot read an ancestor's
+   * background, so this is a copy, and a copy can drift.
+   */
+  const mentionSurfaceClassName =
+    '[--mention-chip-surface:hsl(var(--background))] dark:[--mention-chip-surface:color-mix(in_srgb,hsl(var(--input))_90%,hsl(var(--background)))]';
+
   // Linear-like light surface: white canvas + hairline border + soft lift.
   // Avoid heavy bg-input fills that read as muddy gray on cool-white themes.
   const mentionContainerClassName = !isLanding
@@ -511,7 +543,8 @@ export function ChatComposer({
         'w-full',
         'focus-within:ring-1 focus-within:ring-offset-0',
         'focus-within:outline-hidden',
-        'rounded-2xl border border-foreground/[0.10] bg-background focus-within:ring-ring/30 dark:border-input-border/70 dark:bg-input/90'
+        'rounded-2xl border border-foreground/[0.10] bg-background focus-within:ring-ring/30 dark:border-input-border/70 dark:bg-input/90',
+        mentionSurfaceClassName
       )
     : undefined;
 
@@ -535,13 +568,15 @@ export function ChatComposer({
   const landingContainerClassName = cn(
     'flex flex-col gap-4 rounded-xl border px-4 pt-4 pb-3 transition-shadow focus-within:ring-1',
     'border-foreground/[0.10] bg-background shadow-[0_1px_2px_hsl(0_0%_0%/0.04),0_8px_24px_-12px_hsl(0_0%_0%/0.08)] focus-within:ring-ring/30',
-    'dark:border-input-border/60 dark:bg-input/90 dark:shadow-[0_22px_70px_-48px_rgba(15,23,42,0.25)] dark:focus-within:ring-ring/40'
+    'dark:border-input-border/60 dark:bg-input/90 dark:shadow-[0_22px_70px_-48px_rgba(15,23,42,0.25)] dark:focus-within:ring-ring/40',
+    mentionSurfaceClassName
   );
 
   const sessionContainerClassName = cn(
     'flex flex-col gap-1 rounded-xl border px-2 py-1.5 transition-colors duration-150',
     'border border-foreground/[0.10] bg-background focus-within:border-ring/40',
-    'dark:border-input-border/70 dark:bg-input/90'
+    'dark:border-input-border/70 dark:bg-input/90',
+    mentionSurfaceClassName
   );
 
   const boxContainerClassName = isLanding ? landingContainerClassName : sessionContainerClassName;
@@ -819,6 +854,10 @@ export function ChatComposer({
                 externalMentions={pastedTextMentions}
                 onExternalMentionsChange={handlePastedTextMentionsChange}
                 onMentionClick={handleMentionClick}
+                getMentionChip={getComposerMentionChip}
+                onMentionRangesChange={onMentionRangesChange}
+                persistedMentions={persistedMentions}
+                draftKey={draftKey}
                 onKeyDown={onPromptKeyDown}
                 onPaste={onPromptPaste}
                 onCopy={handlePromptCopy}
@@ -916,6 +955,10 @@ export function ChatComposer({
               externalMentions={pastedTextMentions}
               onExternalMentionsChange={handlePastedTextMentionsChange}
               onMentionClick={handleMentionClick}
+              getMentionChip={getComposerMentionChip}
+              onMentionRangesChange={onMentionRangesChange}
+              persistedMentions={persistedMentions}
+              draftKey={draftKey}
               onKeyDown={onPromptKeyDown}
               onPaste={onPromptPaste}
               onCopy={handlePromptCopy}

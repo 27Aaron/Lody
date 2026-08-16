@@ -10,5 +10,11 @@ export type { MentionLabelProps } from './mention-label';
 export { Label, MentionLabel } from './mention-label';
 export type { MentionPortalProps } from './mention-portal';
 export { MentionPortal, Portal } from './mention-portal';
-export type { Mention, MentionKind, MentionRootProps } from './mention-root';
+export type {
+  Mention,
+  MentionChip,
+  MentionChipResolver,
+  MentionKind,
+  MentionRootProps,
+} from './mention-root';
 export { MentionRoot, Root } from './mention-root';

@@ -1,3 +1,5 @@
+import type { TextRewrite } from '@lody/shared';
+
 export interface PastedTextDraft {
   id: string;
   text: string;
@@ -209,32 +211,31 @@ export const updatePastedTextDraftContent = ({
   return { nextValue, nextDrafts };
 };
 
-export const restorePastedTextDraftsToValue = (
-  value: string,
-  drafts: readonly PastedTextDraft[]
-): string => {
-  const sortedDrafts = [...drafts].sort((a, b) => a.start - b.start);
-  let cursor = 0;
-  let restoredValue = '';
-
-  for (const draft of sortedDrafts) {
-    if (
-      draft.start < cursor ||
-      draft.start < 0 ||
-      draft.end < draft.start ||
-      draft.end > value.length
-    ) {
-      continue;
-    }
-
-    restoredValue += value.slice(cursor, draft.start);
-    restoredValue += normalizePastedTextDraft(draft.text);
-    cursor = draft.end;
-  }
-
-  restoredValue += value.slice(cursor);
-  return restoredValue;
-};
+/**
+ * The placeholder -> full-blob rewrites these drafts imply.
+ *
+ * Takes no text: a draft already carries its own absolute range, and
+ * `applyTextRewrites` is what validates those ranges against the string.
+ *
+ * The span is what makes the blob survivable in a transcript: the agent still
+ * receives all four thousand characters, and the bubble collapses them back to
+ * the same `Pasted N chars` label the composer showed.
+ */
+export const buildPastedTextRewrites = (drafts: readonly PastedTextDraft[]): TextRewrite[] =>
+  [...drafts]
+    .sort((a, b) => a.start - b.start)
+    .map((draft) => ({
+      start: draft.start,
+      end: draft.end,
+      replacement: normalizePastedTextDraft(draft.text),
+      span: {
+        kind: 'pasted_text' as const,
+        // Trimmed: the composer pads the label with figure spaces so its inline
+        // chip has an icon gutter, and a message chip has real padding instead.
+        label: draft.displayText.trim(),
+        target: draft.id,
+      },
+    }));
 
 export const getPastedTextClipboardTextForSelection = ({
   value,

@@ -156,7 +156,13 @@ import {
 } from './session-file-preview-dialog';
 import { downloadSessionFile, fetchSessionFilePreview } from '@/lib/session-file-download';
 import { getMachineMetaByIdAtomFamily } from '@/atoms/machines';
-import type { MachineId, SessionFilePayload, TaskProposalMeta } from '@lody/shared';
+import type {
+  MachineId,
+  MessageTextSpan,
+  SessionFilePayload,
+  TaskProposalMeta,
+} from '@lody/shared';
+import { MessageTextWithChips } from '@/components/mentions/message-text-chips';
 import { isNativeIOSAppShell } from '@/lib/native-platform';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/ui/tooltip';
 import { Popover, PopoverContent, PopoverTrigger } from '@/ui/popover';
@@ -4352,6 +4358,7 @@ const renderUserContent = (
       return (
         <UserPlainTextBlock
           text={content.text}
+          spans={content.spans}
           fontSize={options.conversationFontSize}
           searchBlockId={getTextSearchBlockId(options.messageId, options.itemIndex)}
         />
@@ -4510,14 +4517,16 @@ export const MarkdownBlock = memo(function MarkdownBlock({
 
 const UserPlainTextBlock = ({
   text,
+  spans,
   fontSize,
   searchBlockId,
 }: {
   text: string;
+  spans?: MessageTextSpan[];
   fontSize: ConversationFontSize;
   searchBlockId?: string;
 }) => {
-  const renderSlice = useMemo(() => getUserTextRenderSlice(text), [text]);
+  const renderSlice = useMemo(() => getUserTextRenderSlice(text, spans), [spans, text]);
   const isLong = renderSlice.isTruncated;
   const [isExpanded, setIsExpanded] = useState(false);
   const [prevText, setPrevText] = useState(text);
@@ -4529,6 +4538,9 @@ const UserPlainTextBlock = ({
   const isSearchActive = Boolean(searchMatch?.activeResultId);
   const isFullTextVisible = !isLong || isExpanded || isSearchActive;
   const renderedText = isFullTextVisible ? text : renderSlice.text;
+  // The slice remaps its spans onto the text it produced; the full text keeps
+  // the originals.
+  const renderedSpans = isFullTextVisible ? spans : renderSlice.spans;
 
   return (
     <div className="flex max-w-full justify-end sm:pl-2">
@@ -4551,10 +4563,17 @@ const UserPlainTextBlock = ({
           }
           data-search-block-id={searchBlockId}
         >
-          {searchBlockId ? (
-            <SearchHighlightedText blockId={searchBlockId} text={renderedText} />
+          {/* Search wins over chips: both want to split the same string, and a
+              match that lands inside a chip has nowhere to paint. Chips come
+              back the moment the search closes. */}
+          {isSearchActive || !renderedSpans?.length ? (
+            searchBlockId ? (
+              <SearchHighlightedText blockId={searchBlockId} text={renderedText} />
+            ) : (
+              renderedText
+            )
           ) : (
-            renderedText
+            <MessageTextWithChips text={renderedText} spans={renderedSpans} />
           )}
         </div>
         {isLong ? (

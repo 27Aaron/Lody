@@ -144,11 +144,11 @@ import {
   getPastedTextDraftsAfterInsertion,
   insertPastedTextDraft,
   normalizePastedTextDraft,
-  restorePastedTextDraftsToValue,
   sanitizePastedTextDrafts,
   shouldCapturePastedTextDraft,
   type PastedTextDraft,
 } from '@/lib/pasted-text-draft';
+import { wrapPastedTextChipLabel } from '@/components/mentions/mention-chips';
 
 import { ErrorBoundary } from '@/components/error-boundary';
 import { ChatLandingView, type ChatLandingHintType } from './chat-landing-view';
@@ -158,6 +158,11 @@ import {
   useKnownIssuePrItems,
 } from '@/components/mentions/issue-pr-hash-mention';
 import { useMentionPromptExpansion } from '@/components/mentions/mention-expansion';
+import type { Mention as MentionRange } from '@/ui/mention/index';
+import {
+  arePersistedMentionRangesEqual,
+  toPersistedMentionRanges,
+} from '@/components/mentions/mention-persistence';
 import { useChatLandingImageDraft } from '@/hooks/use-chat-landing-image-draft';
 import { useChatLandingFileDraft } from '@/hooks/use-chat-landing-file-draft';
 import { useChatLandingDraftSession } from '@/hooks/use-chat-landing-draft-session';
@@ -893,6 +898,33 @@ function WorkspaceChatLanding({
     () => sanitizePastedTextDrafts(sessionState.pastedTextDrafts),
     [sessionState.pastedTextDrafts]
   );
+  /**
+   * Committed mention ranges, kept for the before-send rewrite. `@path` and
+   * `#123` survive into the sent text unchanged, so the range is the only
+   * record that the region was ever a mention.
+   *
+   * The persisted copy is the only copy. It is narrower than the live range —
+   * no `pasted_text`, no kindless range — and neither rewrite builder wants
+   * either of those: pasted text is rebuilt from `pastedTextDrafts`, and a
+   * range with no kind has nothing to dispatch on. Holding a second live list
+   * beside it would be two states updated from one callback that must not
+   * drift, which is the bug `session-chat-input-area.tsx` documents.
+   */
+  const persistedMentionRanges = sessionState.mentionRanges;
+  const handleMentionRangesChange = useCallback(
+    (ranges: MentionRange[]) => {
+      // Stored with the prompt so a returning draft does not have to have its
+      // mentions recognised again from the text — which only works once each
+      // source has loaded, and not at all for one that never does.
+      const persisted = toPersistedMentionRanges(ranges);
+      setSessionState((prev) =>
+        arePersistedMentionRangesEqual(prev.mentionRanges ?? [], persisted)
+          ? prev
+          : { ...prev, mentionRanges: persisted }
+      );
+    },
+    [setSessionState]
+  );
   const [composerStatus, setComposerStatus] = useState<{
     message: ReactNode;
     tone: 'error' | 'warning' | 'info';
@@ -1275,9 +1307,11 @@ function WorkspaceChatLanding({
       const result = insertPastedTextDraft({
         currentValue,
         pastedText: normalizedText,
-        displayText: t('composer.pastedTextInlineLabel', '[Pasted {{charCount}} chars]', {
-          charCount: numberFormatter.format(getPastedTextCharacterCount(normalizedText)),
-        }),
+        displayText: wrapPastedTextChipLabel(
+          t('composer.pastedTextInlineLabel', '[Pasted {{charCount}} chars]', {
+            charCount: numberFormatter.format(getPastedTextCharacterCount(normalizedText)),
+          })
+        ),
         selectionStart,
         selectionEnd,
       });
@@ -2567,10 +2601,17 @@ function WorkspaceChatLanding({
       return;
     }
 
-    const restoredPrompt = restorePastedTextDraftsToValue(prompt, pastedTextDrafts);
-    const expandedPrompt = expandSkillMentionsForPrompt(restoredPrompt);
+    // One pass: pasted placeholders, `$skill`, `@session:`, and the mentions
+    // that need no rewrite all resolve against the same original text, and the
+    // spans record where each landed. `normalizeSessionInputBlocks` re-anchors
+    // them across its trim.
+    const expandedPrompt = expandSkillMentionsForPrompt({
+      text: prompt,
+      mentions: persistedMentionRanges ?? [],
+      pastedTextDrafts,
+    });
     const inputBlocks = normalizeSessionInputBlocks(
-      buildInputBlocks(expandedPrompt, buildFileInputBlocks()),
+      buildInputBlocks(expandedPrompt.text, buildFileInputBlocks(), expandedPrompt.spans),
       ''
     );
     const promptText = extractPromptPreviewFromInputBlocks(inputBlocks);
@@ -5406,6 +5447,8 @@ function WorkspaceChatLanding({
             promptEnterKeyHint={promptEnterKeyHint}
             pastedTextDrafts={submitting ? [] : pastedTextDrafts}
             onPastedTextDraftsChange={submitting ? undefined : setPastedTextDrafts}
+            onMentionRangesChange={handleMentionRangesChange}
+            persistedMentions={persistedMentionRanges}
             imageItems={submitting ? [] : imageItems}
             imageAddDisabled={submitting || !canAddMoreImages}
             imageAddAriaLabel={t('sessions.addImage', 'Add image')}
@@ -5867,6 +5910,8 @@ function WorkspaceChatLanding({
         promptRef={promptTextareaRef}
         pastedTextDrafts={pastedTextDrafts}
         onPastedTextDraftsChange={setPastedTextDrafts}
+        onMentionRangesChange={handleMentionRangesChange}
+        persistedMentions={persistedMentionRanges}
         imageItems={imageItems}
         imageAddDisabled={submitting || !canAddMoreImages}
         imageAddAriaLabel={t('sessions.addImage', 'Add image')}

@@ -1,4 +1,8 @@
-import type { MessageContent } from '@lody/shared';
+import {
+  sanitizeMessageTextSpans,
+  type MessageContent,
+  type MessageTextSpan,
+} from '@lody/shared';
 
 export const USER_TEXT_RENDER_LINE_LIMIT = 10;
 export const USER_TEXT_RENDER_CHAR_LIMIT = 900;
@@ -71,27 +75,96 @@ export const getTextContentFromMessageItems = (items: MessageContent[]): string 
 export const hasTextContentFromMessageItems = (items: MessageContent[]): boolean =>
   items.some((content) => content.type === 'text' && content.text.trim().length > 0);
 
-export const getUserTextRenderSlice = (text: string): { text: string; isTruncated: boolean } => {
-  const charLimitEnd =
-    text.length > USER_TEXT_RENDER_CHAR_LIMIT ? USER_TEXT_RENDER_CHAR_LIMIT : text.length;
-  let lineBreakCount = 0;
+/**
+ * The slice of a user message shown before "Show more", measured in what the
+ * reader actually sees rather than in raw characters.
+ *
+ * A mention span costs its LABEL, not its text. That distinction is the whole
+ * point for pasted text: a paste only becomes a draft above
+ * `LARGE_PASTED_TEXT_MIN_CHAR_COUNT` (1024) characters, which is already past
+ * this 900-character budget, so charging it by its raw length guaranteed that
+ * every collapsed message containing a paste cut somewhere inside the blob.
+ * The span then failed its `end <= text.length` check, was dropped, and the
+ * bubble rendered 900 characters of raw pasted log — the exact thing the chip
+ * exists to hide, shown only in the collapsed state.
+ *
+ * So a span is never cut. It is taken whole into the output text (the chip
+ * covers that region, and expanding reveals it) while costing only its label
+ * against the budget. Newlines inside a span do not count toward the line limit
+ * for the same reason: a collapsed blob occupies one chip, not forty lines.
+ */
+export const getUserTextRenderSlice = (
+  text: string,
+  spans?: readonly { start: number; end: number; label: string }[]
+): { text: string; spans?: MessageTextSpan[]; isTruncated: boolean } => {
+  // No spans is not a special case: the loop below simply does not run, and the
+  // tail slice past it is exactly the whole-text slice such a message needs.
+  const resolved = sanitizeMessageTextSpans(text, spans) ?? [];
 
-  for (let index = 0; index < charLimitEnd; index += 1) {
-    if (text.charCodeAt(index) !== 10) {
-      continue;
+  let out = '';
+  let copiedTo = 0;
+  let charsUsed = 0;
+  let linesUsed = 0;
+  const keptSpans: MessageTextSpan[] = [];
+
+  for (const span of resolved) {
+    const run = sliceUserTextRun(
+      text.slice(copiedTo, span.start),
+      USER_TEXT_RENDER_CHAR_LIMIT - charsUsed,
+      linesUsed
+    );
+    out += run.text;
+    charsUsed += run.text.length;
+    linesUsed += run.lineBreaks;
+    if (run.isTruncated) {
+      return { text: out, spans: keptSpans.length > 0 ? keptSpans : undefined, isTruncated: true };
     }
 
-    lineBreakCount += 1;
-    if (lineBreakCount >= USER_TEXT_RENDER_LINE_LIMIT) {
-      return { text: text.slice(0, index), isTruncated: true };
+    // The label is what this region costs the reader; the region itself comes
+    // along whole so the chip has something to cover.
+    if (charsUsed + span.label.length > USER_TEXT_RENDER_CHAR_LIMIT) {
+      return { text: out, spans: keptSpans.length > 0 ? keptSpans : undefined, isTruncated: true };
+    }
+    keptSpans.push({ ...span, start: out.length, end: out.length + (span.end - span.start) });
+    out += text.slice(span.start, span.end);
+    charsUsed += span.label.length;
+    copiedTo = span.end;
+  }
+
+  const tail = sliceUserTextRun(
+    text.slice(copiedTo),
+    USER_TEXT_RENDER_CHAR_LIMIT - charsUsed,
+    linesUsed
+  );
+  out += tail.text;
+  return {
+    text: out,
+    spans: keptSpans.length > 0 ? keptSpans : undefined,
+    isTruncated: tail.isTruncated,
+  };
+};
+
+/** Cuts one span-free run at whichever of the two budgets runs out first. */
+const sliceUserTextRun = (
+  text: string,
+  charBudget: number,
+  linesUsed: number
+): { text: string; isTruncated: boolean; lineBreaks: number } => {
+  const charLimitEnd = Math.max(0, Math.min(text.length, charBudget));
+  let lineBreaks = 0;
+
+  for (let index = 0; index < charLimitEnd; index += 1) {
+    if (text.charCodeAt(index) !== 10) continue;
+    lineBreaks += 1;
+    if (linesUsed + lineBreaks >= USER_TEXT_RENDER_LINE_LIMIT) {
+      return { text: text.slice(0, index), isTruncated: true, lineBreaks };
     }
   }
 
   if (charLimitEnd < text.length) {
-    return { text: text.slice(0, charLimitEnd), isTruncated: true };
+    return { text: text.slice(0, charLimitEnd), isTruncated: true, lineBreaks };
   }
-
-  return { text, isTruncated: false };
+  return { text, isTruncated: false, lineBreaks };
 };
 
 export const getVisibleAssistantTextContent = (

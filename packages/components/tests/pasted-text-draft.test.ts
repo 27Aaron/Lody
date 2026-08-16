@@ -1,13 +1,24 @@
 import { describe, expect, it } from 'vitest';
+import { applyTextRewrites } from '@lody/shared';
 
 import {
+  arePastedTextDraftsEqual,
+  buildPastedTextRewrites,
+  getPastedTextCharacterCount,
   getPastedTextDraftsAfterInsertion,
+  getPastedTextLineCount,
   getPastedTextClipboardTextForSelection,
-  restorePastedTextDraftsToValue,
+  insertPastedTextDraft,
+  isLargePastedText,
+  normalizePastedTextDraft,
   sanitizePastedTextDrafts,
   shouldCapturePastedTextDraft,
   updatePastedTextDraftContent,
 } from '../src/lib/pasted-text-draft';
+
+/** What the send path does with these rewrites, so the test asserts that. */
+const restoreToValue = (value: string, drafts: Parameters<typeof buildPastedTextRewrites>[0]) =>
+  applyTextRewrites(value, buildPastedTextRewrites(drafts)).text;
 
 describe('shouldCapturePastedTextDraft', () => {
   it('captures text only when it exceeds 1024 characters', () => {
@@ -164,10 +175,24 @@ describe('updatePastedTextDraftContent', () => {
   });
 });
 
-describe('restorePastedTextDraftsToValue', () => {
+describe('buildPastedTextRewrites', () => {
+  it('restores full pasted text into the visible inline prompt', () => {
+    expect(
+      restoreToValue('Error [Pasted 10 characters], please help', [
+        {
+          id: 'paste-1',
+          text: 'alpha\nbeta',
+          displayText: '[Pasted 10 characters]',
+          start: 'Error '.length,
+          end: 'Error '.length + '[Pasted 10 characters]'.length,
+        },
+      ])
+    ).toBe('Error alpha\nbeta, please help');
+  });
+
   it('preserves edited leading and trailing line breaks when restoring', () => {
     expect(
-      restorePastedTextDraftsToValue('Before [Pasted 5 characters] after', [
+      restoreToValue('Before [Pasted 5 characters] after', [
         {
           id: 'paste-1',
           text: '\nalpha\n',
@@ -253,6 +278,29 @@ describe('getPastedTextClipboardTextForSelection', () => {
 });
 
 describe('sanitizePastedTextDrafts', () => {
+  it('drops invalid entries and normalizes surviving drafts without trimming text', () => {
+    expect(
+      sanitizePastedTextDrafts([
+        {
+          id: 'paste-1',
+          text: '  alpha\r\nbeta  \n',
+          displayText: '[Pasted 10 characters]',
+          start: 5,
+          end: 27,
+        },
+        { id: 'bad-entry', text: 'missing range' },
+      ])
+    ).toEqual([
+      {
+        id: 'paste-1',
+        text: '  alpha\nbeta  \n',
+        displayText: '[Pasted 10 characters]',
+        start: 5,
+        end: 27,
+      },
+    ]);
+  });
+
   it('preserves whitespace-only draft text while the inline token still exists', () => {
     expect(
       sanitizePastedTextDrafts([
@@ -273,5 +321,71 @@ describe('sanitizePastedTextDrafts', () => {
         end: '[Pasted 0 characters]'.length,
       },
     ]);
+  });
+});
+
+describe('normalizePastedTextDraft', () => {
+  it('normalizes CRLF line endings', () => {
+    expect(normalizePastedTextDraft('a\r\nb\r\n')).toBe('a\nb\n');
+  });
+});
+
+describe('isLargePastedText', () => {
+  it('treats text over 1024 characters as large', () => {
+    expect(isLargePastedText('a'.repeat(1025))).toBe(true);
+  });
+
+  it('does not treat text at or below 1024 characters as large', () => {
+    expect(isLargePastedText('a'.repeat(1024))).toBe(false);
+    expect(
+      isLargePastedText(Array.from({ length: 20 }, (_, index) => `line ${index}`).join('\n'))
+    ).toBe(false);
+  });
+});
+
+describe('pasted text summaries', () => {
+  it('reports characters and lines from normalized content', () => {
+    const text = '  first line\r\nsecond line\r\n\r\nthird line  ';
+    expect(getPastedTextCharacterCount(text)).toBe('first line\nsecond line\n\nthird line'.length);
+    expect(getPastedTextLineCount(text)).toBe(4);
+  });
+});
+
+describe('insertPastedTextDraft', () => {
+  it('replaces the active selection with an inline pasted-text label', () => {
+    expect(
+      insertPastedTextDraft({
+        currentValue: 'Report: replace me please',
+        pastedText: '  alpha\nbeta  ',
+        displayText: '[Pasted 10 characters]',
+        id: 'paste-1',
+        selectionStart: 'Report: '.length,
+        selectionEnd: 'Report: replace me please'.length,
+      })
+    ).toEqual({
+      nextValue: 'Report: [Pasted 10 characters]',
+      draft: {
+        id: 'paste-1',
+        text: 'alpha\nbeta',
+        displayText: '[Pasted 10 characters]',
+        start: 'Report: '.length,
+        end: 'Report: '.length + '[Pasted 10 characters]'.length,
+      },
+    });
+  });
+});
+
+describe('arePastedTextDraftsEqual', () => {
+  it('compares complete draft identity and ranges', () => {
+    const draft = {
+      id: 'paste-1',
+      text: 'alpha',
+      displayText: '[Pasted 5 characters]',
+      start: 6,
+      end: 27,
+    };
+
+    expect(arePastedTextDraftsEqual([draft], [draft])).toBe(true);
+    expect(arePastedTextDraftsEqual([draft], [{ ...draft, end: draft.end + 1 }])).toBe(false);
   });
 });

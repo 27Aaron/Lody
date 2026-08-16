@@ -3,7 +3,7 @@ import {
   formatSessionTabSearch,
   getSessionTabUrlSyncAction,
   parseSessionTabSearch,
-} from './session-tab-url';
+} from '../src/lib/session-tab-url';
 
 describe('parseSessionTabSearch', () => {
   it('returns missing when tab is absent', () => {

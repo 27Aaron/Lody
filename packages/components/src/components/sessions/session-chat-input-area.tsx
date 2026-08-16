@@ -24,7 +24,17 @@ import {
 } from '@/components/chat/chat-composer';
 import { MobileSessionRunConfig } from '@/components/mobile/mobile-session-run-config';
 import type { MentionProjectSource } from '@/components/mentions/mention-project-file-source';
-import { useMentionPromptExpansion } from '@/components/mentions/mention-expansion';
+import {
+  useMentionPromptExpansion,
+  type ExpandedMentionPrompt,
+  type MentionPromptExpansionArgs,
+} from '@/components/mentions/mention-expansion';
+import { reanchorMessageTextSpansForTrim } from '@lody/shared';
+import type { Mention as MentionRange } from '@/ui/mention/index';
+import {
+  toPersistedMentionRanges,
+  type PersistedMentionRange,
+} from '@/components/mentions/mention-persistence';
 import { useTranslation } from 'react-i18next';
 import { usePostHog } from '@posthog/react';
 import {
@@ -96,10 +106,10 @@ import {
   getPastedTextDraftsAfterInsertion,
   insertPastedTextDraft,
   normalizePastedTextDraft,
-  restorePastedTextDraftsToValue,
   shouldCapturePastedTextDraft,
   type PastedTextDraft,
 } from '@/lib/pasted-text-draft';
+import { wrapPastedTextChipLabel } from '@/components/mentions/mention-chips';
 import { toIntlLocale } from '@/lib/intl-locale';
 import {
   canUseElectronLocalFileSend,
@@ -203,6 +213,31 @@ const getSessionPastedTextDrafts = (sessionId: SessionId): PastedTextDraft[] => 
   ...(sessionPastedTextDraftsCache.get(sessionId) ?? []),
 ];
 
+/**
+ * Mention ranges for the session's draft, kept beside its text.
+ *
+ * Same lifetime as the other draft caches — in memory, so it covers leaving the
+ * session and coming back, which is where the ranges were being lost. It does
+ * not survive a restart, but neither does the draft text here, so there is
+ * nothing to restore them onto.
+ */
+const sessionMentionRangesCache = new Map<SessionId, PersistedMentionRange[]>();
+
+const getSessionMentionRanges = (sessionId: SessionId): PersistedMentionRange[] => [
+  ...(sessionMentionRangesCache.get(sessionId) ?? []),
+];
+
+const setSessionMentionRanges = (
+  sessionId: SessionId,
+  ranges: readonly PersistedMentionRange[]
+): void => {
+  if (ranges.length === 0) {
+    sessionMentionRangesCache.delete(sessionId);
+  } else {
+    sessionMentionRangesCache.set(sessionId, [...ranges]);
+  }
+};
+
 const setSessionImageDrafts = (
   sessionId: SessionId,
   images: readonly PendingImage[]
@@ -242,6 +277,9 @@ export const clearSessionChatInputDrafts = (sessionId: SessionId): void => {
   sessionImageDraftsCache.delete(sessionId);
   sessionFileDraftsCache.delete(sessionId);
   sessionPastedTextDraftsCache.delete(sessionId);
+  // The ranges belong to the text that was just cleared. Left behind, they land
+  // on whatever the user types next at the old offsets.
+  sessionMentionRangesCache.delete(sessionId);
   revokeImagePreviewUrls(images);
   abortPendingFileUploads(files);
 };
@@ -641,7 +679,35 @@ export const SessionChatInputArea = memo(
     // its actual state stays intact until the durable writer accepts it. A
     // rejected send simply reveals the preserved draft again.
     const [submissionPending, setSubmissionPending] = useState(false);
-    const expandSkillMentionsForPromptRef = useRef<(text: string) => string>((text) => text);
+    const expandPromptMentionsRef = useRef<
+      (args: MentionPromptExpansionArgs) => ExpandedMentionPrompt
+    >(({ text }) => ({ text }));
+    // Committed mention ranges, kept for the before-send rewrite. `@path` and
+    // `#123` survive into the sent text unchanged, so the range is the only
+    // record that the region was ever a mention.
+    /**
+     * A ref, not state, and the only copy the send path reads.
+     *
+     * It was state as well, which gave `sendMessage` a second source to close
+     * over and get wrong two ways: the closure did not list it as a dependency,
+     * so restoring a draft — where the ranges change but the text does not —
+     * refreshed nothing and sent the pre-restore ranges; and switching sessions
+     * reset the persisted seed without resetting it, so one session's ranges
+     * could ride along into another's message. A ref has neither failure: it is
+     * current by construction and costs `sendMessage` no re-creation, matching
+     * `expandPromptMentionsRef` beside it.
+     */
+    const mentionRangesRef = useRef<MentionRange[]>([]);
+    const [persistedMentionRanges, setPersistedMentionRanges] = useState<PersistedMentionRange[]>(
+      () => getSessionMentionRanges(session.id)
+    );
+    const handleMentionRangesChange = useCallback(
+      (ranges: MentionRange[]) => {
+        mentionRangesRef.current = ranges;
+        setSessionMentionRanges(session.id, toPersistedMentionRanges(ranges));
+      },
+      [session.id]
+    );
 
     // Load new session's draft when session changes (during-render state adjustment)
     const [prevSessionId, setPrevSessionId] = useState(session.id);
@@ -653,6 +719,10 @@ export const SessionChatInputArea = memo(
       setPendingImages(getSessionImageDrafts(session.id));
       setPendingFiles(getSessionFileDrafts(session.id));
       setPastedTextDrafts(getSessionPastedTextDrafts(session.id));
+      setPersistedMentionRanges(getSessionMentionRanges(session.id));
+      // Cleared with the rest of the draft: the incoming session's own ranges
+      // arrive from its hydrators, and until they do there must be none.
+      mentionRangesRef.current = [];
       commentReferencesRef.current = [];
       setCommentReferences([]);
       visualAnnotationReferencesRef.current = [];
@@ -1398,9 +1468,11 @@ export const SessionChatInputArea = memo(
         const result = insertPastedTextDraft({
           currentValue,
           pastedText: normalizedText,
-          displayText: t('composer.pastedTextInlineLabel', '[Pasted {{charCount}} chars]', {
-            charCount: numberFormatter.format(getPastedTextCharacterCount(normalizedText)),
-          }),
+          displayText: wrapPastedTextChipLabel(
+            t('composer.pastedTextInlineLabel', '[Pasted {{charCount}} chars]', {
+              charCount: numberFormatter.format(getPastedTextCharacterCount(normalizedText)),
+            })
+          ),
           selectionStart,
           selectionEnd,
         });
@@ -1592,11 +1664,29 @@ export const SessionChatInputArea = memo(
           return;
         }
         const currentValue = textareaRef.current?.value ?? userInput;
-        const restoredPrompt = restorePastedTextDraftsToValue(currentValue, pastedTextDrafts);
-        const expandedPrompt = expandSkillMentionsForPromptRef.current(restoredPrompt);
-        const trimmedPrompt = expandedPrompt.trim();
+        // One pass: pasted placeholders, `$skill`, `@session:`, and the mentions
+        // that need no rewrite all resolve against the same original text, and
+        // the spans record where each landed.
+        const expandedPrompt = expandPromptMentionsRef.current({
+          text: currentValue,
+          mentions: mentionRangesRef.current,
+          pastedTextDrafts,
+        });
+        const trimmedPrompt = expandedPrompt.text.trim();
+        // The trim moves every character left; re-anchor before the offsets ship.
+        const trimmedSpans = reanchorMessageTextSpansForTrim(
+          expandedPrompt.text,
+          trimmedPrompt,
+          expandedPrompt.spans
+        );
         const textBlocks: SessionInputBlock[] = trimmedPrompt
-          ? [{ type: 'text', text: trimmedPrompt }]
+          ? [
+              {
+                type: 'text',
+                text: trimmedPrompt,
+                ...(trimmedSpans ? { spans: trimmedSpans } : {}),
+              },
+            ]
           : [];
         const uploadedImages = pendingImages
           .filter((image): image is PendingImage & { uploaded: SessionImagePayload } => {
@@ -1893,13 +1983,12 @@ export const SessionChatInputArea = memo(
           : undefined,
       [isArchived, session.agentType, session.cliType, session.machineId]
     );
-    const expandSkillMentionsForPrompt = useMentionPromptExpansion({
+    const expandPromptMentions = useMentionPromptExpansion({
       source: isArchived ? undefined : mentionSource,
       skillAgent,
       promptValue: userInput,
-      currentSessionId: session.id,
     });
-    expandSkillMentionsForPromptRef.current = expandSkillMentionsForPrompt;
+    expandPromptMentionsRef.current = expandPromptMentions;
 
     const tone = isDark ? 'dark' : 'light';
     // For non-archived sessions, ChatComposer auto-resolves the placeholder from
@@ -2140,6 +2229,12 @@ export const SessionChatInputArea = memo(
         }
         pastedTextDrafts={submissionPending ? [] : pastedTextDrafts}
         onPastedTextDraftsChange={submissionPending ? undefined : handlePastedTextDraftsChange}
+        onMentionRangesChange={handleMentionRangesChange}
+        persistedMentions={persistedMentionRanges}
+        // This composer switches sessions in place, so the draft's identity has
+        // to travel with its text — otherwise the previous session's ranges stay
+        // committed over the incoming draft.
+        draftKey={session.id}
         imageItems={submissionPending ? [] : imageItems}
         imageAddDisabled={
           submissionPending ||

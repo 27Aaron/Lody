@@ -7,6 +7,7 @@ import {
   type ChangeEvent,
   type ClipboardEvent,
 } from 'react';
+import type { MessageTextSpan } from '@lody/shared';
 import {
   SESSION_IMAGE_MAX_COUNT,
   type SessionId,
@@ -381,7 +382,11 @@ export function useChatLandingImageDraft(args: {
   );
 
   const buildInputBlocks = useCallback(
-    (prompt: string, extraBlocks: SessionInputBlock[] = []): SessionInputBlock[] => {
+    (
+      prompt: string,
+      extraBlocks: SessionInputBlock[] = [],
+      spans?: MessageTextSpan[]
+    ): SessionInputBlock[] => {
       const uploadedImages = pendingImages
         .filter((image): image is PendingImage & { uploaded: SessionImagePayload } => {
           return image.status === 'uploaded' && !!image.uploaded;
@@ -390,11 +395,11 @@ export function useChatLandingImageDraft(args: {
       // Images first, then any caller-supplied blocks (e.g. file attachments),
       // then the prompt text — matching the in-session block ordering.
       const leadingBlocks = [...uploadedImages, ...extraBlocks];
-      const trimmedPrompt = prompt.trim();
-      if (!trimmedPrompt) {
-        return leadingBlocks;
-      }
-      return [...leadingBlocks, { type: 'text', text: trimmedPrompt }];
+      // Emitted untrimmed, spans still anchored to `prompt`. Every caller runs
+      // the result through `normalizeSessionInputBlocks`, which owns both the
+      // trim and the span re-anchor it forces — and drops the block entirely
+      // when nothing survives the trim.
+      return [...leadingBlocks, { type: 'text', text: prompt, ...(spans ? { spans } : {}) }];
     },
     [pendingImages]
   );

@@ -29,7 +29,31 @@ Product-level mention sources built on `src/ui/mention`.
   absolute `SKILL.md` path. Display order is project → global → system
   (`compareProjectSkillScope`).
 - Hydrators should only add ranges for known tokens/items and should preserve
-  existing external `pasted_text` mention ranges.
+  existing external `pasted_text` mention ranges. Every hydrator must record a
+  `kind` — `HydratedMentions` requires it — because both the chip resolver and
+  the before-send rewrite dispatch on it, so a kindless range renders without
+  its icon and, for sessions, silently stops expanding.
+- A composer stores its mention ranges with its draft and restores them through
+  `PersistedMentionHydrator`. Rebuilding from text is the fallback, not the
+  mechanism: it needs the source loaded, so a mention spent every return looking
+  like plain text and never came back at all if the source never loaded. Store
+  the narrow `PersistedMentionRange`, never the live range — that carries
+  callbacks, which `JSON.stringify` writes as `{}`. What makes it a fallback is
+  `mergeHydratedMentions`: a hydrated range that OVERLAPS one already present is
+  dropped, not just an exact duplicate. Since a session and a path are now the
+  same shape, two sources can each claim `@fix-ci` at different ends, and only
+  rejecting overlaps keeps the restored range authoritative.
+- A composer that swaps drafts in place (the session one does — it switches
+  session without remounting) must pass `draftKey`. Otherwise a swap is
+  indistinguishable from a very large edit: the outgoing draft's ranges stay
+  committed and land on the incoming text at their old offsets, and hydration —
+  which arms once per mount — has already fired, so the incoming draft's own
+  mentions never appear. The reset runs during render, so the stale ranges are
+  never painted, not even for a frame.
+- Hydration latches the first NON-EMPTY text, not the first render's. A
+  persisted draft is not there on mount: `atomWithStorage` initialises with its
+  default and reads storage in `onMount`, so latching at mount latches `''` and
+  the "only hydrate the text I measured" guard never passes again.
 - A `MentionCandidate`'s `insertText` must keep its type's existing prompt form
   (`@path`, `#123`, `$token`, `/cmd`). Reaching a type through `@` must not
   change what the agent receives.
@@ -69,14 +93,21 @@ Product-level mention sources built on `src/ui/mention`.
 - Composer placeholder hints advertise `$` only when the same project-source or
   machine-source conditions enable Skill mentions. Plain-agent chats with a
   machine can therefore advertise `$` without falsely advertising `@`.
-- `@session:` is the only type whose displayed text differs from what the agent
-  receives: the composer holds `@session:<title-slug>`, the mention range holds
-  the real `sessionId`, and `useMentionPromptExpansion` rewrites the token into
-  an id-bearing MCP instruction on send. Its `@session:` prefix therefore stays
-  in the committed text — it is the expansion anchor, unlike every other
-  namespace prefix, which is consumed on commit.
-- An unresolvable session slug is sent verbatim. A stale token the agent can
-  ignore beats a confidently wrong session id, so expansion never guesses.
+- A session mention commits as a plain `@<title-slug>`: no `session:` marker,
+  because it was only ever an anchor for the before-send rewrite and the user
+  had to read it. The mention range carries the real `sessionId`, and
+  `useMentionPromptExpansion` rewrites **the range** — not a text match — into
+  an id-bearing MCP instruction on send. It is still the only type whose
+  displayed text differs from what the agent receives.
+- A session token with no committed range is sent verbatim. A stale token the
+  agent can ignore beats a confidently wrong session id, so the rewrite never
+  resolves a slug itself.
+- Dropping the marker makes a session and a path the same shape, so hydrating a
+  reloaded draft has to break the tie: `hydrateSessionMentionsFromText` skips
+  any token the file source already knows. Paths are the common case, and
+  mistaking one for a session silently turns a file reference into a history
+  query, where the reverse only leaves a token unexpanded — which the user can
+  see.
 - Session slugs resolve through the live list first, then a `localStorage`
   slug -> id map. The store is synchronous on purpose: expansion runs on the
   send path, and an async store would make that whole path async. Its key is
@@ -117,11 +148,22 @@ Product-level mention sources built on `src/ui/mention`.
   funnel, both through `hooks/use-fire-once` rather than private refs.
   `category_enter` is reported from the resolved view, not a row callback: a
   navigation item never fires `onMentionSelect`, and the keyboard route counts.
-- `mention-session-source.ts` owns `@session:` slugs, candidates, the slug -> id
+- `mention-session-source.ts` owns session slugs, candidates, the slug -> id
   cache, hydration, and the before-send expansion.
 - `mention-expansion.ts` composes every before-send transform into one hook.
-- `mention-hydration.ts` owns the hydrate-the-initial-text-once effect and the
-  range merge every source shares; a source supplies only its `hydrate`.
+  Which kinds it rewrites is the short list (`REWRITTEN_SPAN_KINDS`); the
+  verbatim ones are derived from `MESSAGE_TEXT_SPAN_KINDS` minus it, so a new
+  span kind is a type error here rather than a mention that silently stops
+  getting a transcript chip.
+- `mention-hydration.ts` owns the hydrate-the-initial-text-once effect, the
+  range merge every source shares, and `forEachAtTokenSpan` — the single
+  definition of where an `@` token ends. Both the file and session hydrators
+  scan with it; they have to agree, because the session one decides what it may
+  claim by asking the file source which tokens it already knows.
+- `mention-chips.tsx` owns the kind -> glyph and kind -> colour tables for BOTH
+  chip surfaces. The composer's resolver decides only slot geometry and the
+  transcript's chip only its layout, so `@src/a.ts` cannot look like two
+  different objects before and after it is sent.
 - `mention-fuse.ts` owns the shared, module-cached `fuse.js` import. Keep it
   module-cached and keyed by menu activation, and reuse provider file entries
   when paths/lazy dirs are unchanged — the menu must not rebuild either from

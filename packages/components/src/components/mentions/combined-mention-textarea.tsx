@@ -22,11 +22,14 @@ import {
   hydrateSessionMentionsFromText,
   resolveSessionMentionIds,
   useSessionMentionItems,
-  SESSION_MENTION_PREFIX,
   type SessionMentionItem,
 } from '@/components/mentions/mention-session-source';
 import { useMentionFuseCtor } from '@/components/mentions/mention-fuse';
 import { useMentionHydration } from '@/components/mentions/mention-hydration';
+import {
+  sanitizeMentionRanges,
+  type PersistedMentionRange,
+} from '@/components/mentions/mention-persistence';
 import { MentionTwoLevelMenu } from '@/components/mentions/mention-two-level-menu';
 import {
   buildMentionFileIndex,
@@ -49,7 +52,10 @@ import {
 } from '@/components/mentions/mention-skill-source';
 import { type AcpCommandSummary } from '@lody/shared';
 import { Mention, MentionInput, MentionLabel, useMentionContext } from '@/ui/mention';
-import type { Mention as MentionRange } from '@/ui/mention/index';
+import type {
+  Mention as MentionRange,
+  MentionChipResolver,
+} from '@/ui/mention/index';
 import { Textarea, type TextareaProps } from '@/ui/textarea';
 
 // ============================================================================
@@ -308,23 +314,78 @@ function FileMentionHydrator({
   return null;
 }
 
+/**
+ * Restores the ranges stored with the draft.
+ *
+ * Runs through the same hydrate-the-initial-text-once contract as the token
+ * scanners, which is the point: it inherits their guards — only against the
+ * text the offsets were measured for, never while the menu is mid-commit — and
+ * it composes with them, so a draft written before ranges were persisted still
+ * falls back to recognising its own tokens.
+ *
+ * Unlike them it needs nothing loaded, so it is the one that works on a cold
+ * start.
+ */
+function PersistedMentionHydrator({
+  ranges,
+  text,
+  enabled,
+}: {
+  ranges: readonly PersistedMentionRange[];
+  text: string;
+  enabled: boolean;
+}) {
+  const hydrate = React.useCallback(
+    (value: string) => {
+      const restored = sanitizeMentionRanges(value, ranges);
+      if (restored.length === 0) return null;
+      return {
+        mentions: restored,
+        values: Array.from(new Set(restored.map((range) => range.value))),
+      };
+    },
+    [ranges]
+  );
+  useMentionHydration('PersistedMentionHydrator', { text, enabled, hydrate });
+
+  return null;
+}
+
 function SessionMentionHydrator({
+  getKnownFileTokens,
   text,
   items,
   enabled,
 }: {
+  /** Paths the file source knows; they win a token both sources claim. */
+  getKnownFileTokens: () => ReadonlySet<string>;
   text: string;
   items: readonly SessionMentionItem[];
   enabled: boolean;
 }) {
+  /**
+   * Memoized because the hydration effect is not one-shot in practice: it stays
+   * armed until it actually produces a range, and a draft whose `@` tokens are
+   * all file paths never does. `items` changes on every session-list tick —
+   * several a second while an agent streams — so building this inside `hydrate`
+   * re-read and re-parsed `localStorage` on each of them, for a composer nobody
+   * is typing in.
+   */
+  const slugToId = React.useMemo(() => resolveSessionMentionIds(items), [items]);
   const hydrate = React.useCallback(
     (value: string) =>
-      // Reading the slug cache parses localStorage, so only pay for it once the
-      // draft actually carries the anchor.
-      value.includes(SESSION_MENTION_PREFIX)
-        ? hydrateSessionMentionsFromText(value, resolveSessionMentionIds(items))
+      // There is no `@session:` anchor to gate on any more — a session mention
+      // is now a plain `@<slug>`, told apart from a path only by the slug being
+      // one we know — so scan only once the draft carries an `@` at all.
+      value.includes('@')
+        ? hydrateSessionMentionsFromText(
+            value,
+            slugToId,
+            // A token that is also a real path belongs to the file hydrator.
+            getKnownFileTokens()
+          )
         : null,
-    [items]
+    [getKnownFileTokens, slugToId]
   );
   useMentionHydration('SessionMentionHydrator', { text, enabled, hydrate });
 
@@ -359,6 +420,34 @@ export interface CombinedMentionTextareaProps extends Omit<
   externalMentions?: MentionRange[];
   onExternalMentionsChange?: (mentions: MentionRange[]) => void;
   onMentionClick?: (mention: MentionRange) => void;
+  /** Renders matching ranges as icon chips instead of plain highlights. */
+  getMentionChip?: MentionChipResolver;
+  /**
+   * Ranges stored with the draft, restored on mount. Without these a returning
+   * draft has to have its mentions recognised again from the text, which only
+   * works once each source has loaded.
+   */
+  persistedMentions?: readonly PersistedMentionRange[];
+  /**
+   * Identity of the draft `value` belongs to — the session id, for a composer
+   * that switches sessions in place.
+   *
+   * Without it a swap is indistinguishable from a very large edit: the ranges
+   * of the draft that left stay committed and land on the incoming text at
+   * their old offsets, and hydration — which arms once per mount — has already
+   * fired, so the incoming draft's own mentions never appear. Changing this
+   * drops the committed ranges and re-arms every hydrator.
+   */
+  draftKey?: string;
+  /**
+   * Every committed range, not just the external ones.
+   *
+   * `onExternalMentionsChange` only reports `pasted_text` because that is the
+   * only kind the composer does not own. The before-send rewrite needs all of
+   * them: a `@path` or `#123` survives into the sent text unchanged, so the
+   * only record that the region was ever a mention is the range itself.
+   */
+  onMentionRangesChange?: (ranges: MentionRange[]) => void;
 }
 
 export const CombinedMentionTextarea = React.forwardRef<
@@ -382,6 +471,10 @@ export const CombinedMentionTextarea = React.forwardRef<
       externalMentions = [],
       onExternalMentionsChange,
       onMentionClick,
+      getMentionChip,
+      onMentionRangesChange,
+      persistedMentions,
+      draftKey,
       className,
       ...props
     },
@@ -490,6 +583,7 @@ export const CombinedMentionTextarea = React.forwardRef<
     );
     const handleMentionsChange = React.useCallback(
       (nextMentions: MentionRange[]) => {
+        onMentionRangesChange?.(nextMentions);
         const nextInternalMentions = nextMentions.filter(
           (mention) => mention.kind !== 'pasted_text'
         );
@@ -500,7 +594,7 @@ export const CombinedMentionTextarea = React.forwardRef<
         setInternalMentions(nextInternalMentions);
         onExternalMentionsChange?.(nextExternalMentions);
       },
-      [onExternalMentionsChange]
+      [onExternalMentionsChange, onMentionRangesChange]
     );
     const mergedMentions = React.useMemo(() => {
       const seen = new Set<string>();
@@ -517,6 +611,22 @@ export const CombinedMentionTextarea = React.forwardRef<
     const [instanceKey, setInstanceKey] = React.useState(0);
     const prevValueRef = React.useRef(value);
     const shouldRefocusRef = React.useRef(false);
+
+    // A draft swap, applied during render so the outgoing draft's ranges are
+    // never painted over the incoming text — not even for one frame. Remounting
+    // the tree is what re-arms the hydrators, which otherwise fire once per
+    // mount and would leave the incoming draft's mentions undecorated forever.
+    const [renderedDraftKey, setRenderedDraftKey] = React.useState(draftKey);
+    if (renderedDraftKey !== draftKey) {
+      setRenderedDraftKey(draftKey);
+      setInternalMentions([]);
+      setInstanceKey((k) => k + 1);
+      // The swap is not an edit, so it must not read as one: an incoming empty
+      // draft would otherwise trip the cleared-input reset below and report the
+      // *new* draft's ranges as emptied.
+      prevValueRef.current = value;
+    }
+
     React.useEffect(() => {
       const prevValue = prevValueRef.current;
       prevValueRef.current = value;
@@ -530,9 +640,17 @@ export const CombinedMentionTextarea = React.forwardRef<
         setInternalMentions([]);
         handleMentionValuesChange([]);
         onExternalMentionsChange?.([]);
+        onMentionRangesChange?.([]);
         setInstanceKey((k) => k + 1);
       }
-    }, [handleMentionValuesChange, onExternalMentionsChange, ref, resetOnEmpty, value]);
+    }, [
+      handleMentionValuesChange,
+      onExternalMentionsChange,
+      onMentionRangesChange,
+      ref,
+      resetOnEmpty,
+      value,
+    ]);
 
     // Re-focus the textarea after the Mention tree remounts due to instanceKey change
     React.useEffect(() => {
@@ -594,6 +712,7 @@ export const CombinedMentionTextarea = React.forwardRef<
         mentions={mergedMentions}
         onMentionsChange={handleMentionsChange}
         onMentionClick={onMentionClick}
+        getMentionChip={getMentionChip}
         value={mentionValues}
         onValueChange={handleMentionValuesChange}
         onFilter={(options) => options}
@@ -605,7 +724,15 @@ export const CombinedMentionTextarea = React.forwardRef<
           getKnownPaths={getKnownFileTokens}
           enabled={enableFileMentions}
         />
-        <SessionMentionHydrator text={value} items={sessionItems} enabled={enableSessionMentions} />
+        {persistedMentions && persistedMentions.length > 0 ? (
+          <PersistedMentionHydrator text={value} ranges={persistedMentions} enabled />
+        ) : null}
+        <SessionMentionHydrator
+          getKnownFileTokens={getKnownFileTokens}
+          text={value}
+          items={sessionItems}
+          enabled={enableSessionMentions}
+        />
         {enableSkillMentions ? (
           <SkillMentionHydrator
             text={value}

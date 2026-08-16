@@ -9,7 +9,10 @@ import type { IssuePRMention } from '@lody/shared';
 import { currentWorkspaceIdAtom } from '@/atoms';
 import { capturePostHogEvent } from '@/lib/posthog-analytics';
 import { normalizeGithubFetchErrorCode } from '@/components/mentions/mention-analytics';
-import { useMentionHydration } from '@/components/mentions/mention-hydration';
+import {
+  useMentionHydration,
+  type HydratedMentions,
+} from '@/components/mentions/mention-hydration';
 import { withGitHubTokenRetry } from '@/lib/github-token';
 import { cn } from '@/lib/utils';
 import { useMentionContext } from '@/ui/mention';
@@ -307,7 +310,7 @@ export function getIssuePrSuggestions(
 }
 
 function hydrateIssuePrMentionsFromText(text: string, knownItems: Map<number, IssuePrKnownItem>) {
-  const mentions: Array<{ value: string; start: number; end: number }> = [];
+  const mentions: HydratedMentions['mentions'] = [];
   const values = new Set<string>();
 
   for (let i = 0; i < text.length; i++) {
@@ -327,7 +330,9 @@ function hydrateIssuePrMentionsFromText(text: string, knownItems: Map<number, Is
     if (!knownItems.has(num)) continue;
     const value = `#${num}`;
     // Use the actual span end (supports inputs like "#0123" for issue #123).
-    mentions.push({ value, start, end: j });
+    // The known item says whether this number is an issue or a PR; the text
+    // does not, and the chip picks a different glyph for each.
+    mentions.push({ value, start, end: j, kind: knownItems.get(num)?.type ?? 'issue' });
     values.add(value);
     i = j - 1;
   }

@@ -798,6 +798,16 @@ const MentionInput = React.forwardRef<InputElement, MentionInputProps>((props, f
         onCompositionEnd={composeEventHandlers(inputProps.onCompositionEnd, onCompositionEnd)}
         onSelect={composeEventHandlers(inputProps.onSelect, onSelect)}
       />
+      {/*
+        The chip mirror is a second full copy of the draft, re-split into
+        segments on every keystroke and measuring the textarea's computed style
+        of its own. With no committed range it paints nothing — its text is
+        `transparent` and only a chip is ever opaque — so it is worth exactly
+        nothing until there is one, which is most of a composer's life.
+      */}
+      {context.getMentionChip && context.mentions.length > 0 ? (
+        <MentionHighlighter layer="chip" className={highlighterClassName} />
+      ) : null}
     </div>
   );
 });

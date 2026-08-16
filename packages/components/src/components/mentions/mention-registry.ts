@@ -18,7 +18,6 @@ import {
   type SkillMentionItem,
 } from '@/components/mentions/mention-skill-source';
 import {
-  SESSION_MENTION_PREFIX,
   selectSessionMentionCandidates,
   type SessionMentionItem,
 } from '@/components/mentions/mention-session-source';
@@ -404,7 +403,9 @@ export function toSessionCandidate(
     // The range payload is the real id; the text only ever carries the slug.
     value: item.sessionId,
     label: item.slug,
-    insertText: `${SESSION_MENTION_PREFIX}${item.slug}`,
+    // No `session:` marker: the slug alone is what the user sees, and the
+    // committed range is what carries the id to the before-send rewrite.
+    insertText: `${MENTION_TRIGGER}${item.slug}`,
     kind: 'session',
     icon: 'session',
     title: item.title || labels.untitled,
