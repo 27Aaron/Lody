@@ -10,7 +10,7 @@ catalog:
   '@better-auth/core': 1.5.5
   '@better-auth/electron': 1.5.5
   '@convex-dev/better-auth': 0.11.2
-  '@loro-dev/flock-wasm': ^0.4.2
+  '@loro-dev/flock-wasm': ^0.4.3
   '@loro-dev/loro-cli': 0.5.3
   '@loro-dev/sqlite-riverrun': 0.2.0
   '@loro-dev/streams-client': 0.7.0

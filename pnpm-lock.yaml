@@ -19,8 +19,8 @@ catalogs:
       specifier: 0.11.2
       version: 0.11.2
     '@loro-dev/flock-wasm':
-      specifier: ^0.4.2
-      version: 0.4.2
+      specifier: ^0.4.3
+      version: 0.4.3
     '@loro-dev/loro-cli':
       specifier: 0.5.3
       version: 0.5.3
@@ -244,10 +244,10 @@ importers:
         version: link:../../packages/turn-diff-store
       '@loro-dev/flock-wasm':
         specifier: 'catalog:'
-        version: 0.4.2
+        version: 0.4.3
       '@loro-dev/streams-crdt':
         specifier: 'catalog:'
-        version: 0.15.1(patch_hash=4b23c7e37b6281eda3cedbf779cd6bb6c0eec5e6f3c0a79ede4d2812755eaeb8)(@loro-dev/flock-wasm@0.4.2)(loro-crdt@1.14.1)
+        version: 0.15.1(patch_hash=4b23c7e37b6281eda3cedbf779cd6bb6c0eec5e6f3c0a79ede4d2812755eaeb8)(@loro-dev/flock-wasm@0.4.3)(loro-crdt@1.14.1)
       '@modelcontextprotocol/sdk':
         specifier: 1.29.0
         version: 1.29.0(zod@4.3.6)
@@ -355,7 +355,7 @@ importers:
         version: 2.2.1(loro-crdt@1.14.1)
       loro-repo:
         specifier: 'catalog:'
-        version: 0.20.0(@loro-dev/flock-wasm@0.4.2)(@loro-dev/flock@4.4.4)(@loro-dev/streams-crdt@0.15.1(patch_hash=4b23c7e37b6281eda3cedbf779cd6bb6c0eec5e6f3c0a79ede4d2812755eaeb8)(@loro-dev/flock-wasm@0.4.2)(loro-crdt@1.14.1))(@types/better-sqlite3@7.6.13)(better-sqlite3@13.0.3)(loro-crdt@1.14.1)
+        version: 0.20.0(@loro-dev/flock-wasm@0.4.3)(@loro-dev/flock@4.4.4)(@loro-dev/streams-crdt@0.15.1(patch_hash=4b23c7e37b6281eda3cedbf779cd6bb6c0eec5e6f3c0a79ede4d2812755eaeb8)(@loro-dev/flock-wasm@0.4.3)(loro-crdt@1.14.1))(@types/better-sqlite3@7.6.13)(better-sqlite3@13.0.3)(loro-crdt@1.14.1)
       ora:
         specifier: ^8.2.0
         version: 8.2.0
@@ -421,10 +421,10 @@ importers:
     dependencies:
       '@better-auth/electron':
         specifier: 'catalog:'
-        version: 1.5.5(patch_hash=c0bab8bf6f42816473109d61f757f961d4f3bcc1b1cd07c4fe7c2f012fd291ac)(@better-auth/core@1.5.5(@better-auth/utils@0.3.1)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260317.1)(better-call@1.3.2(zod@4.3.6))(jose@6.2.2)(kysely@0.28.11)(nanostores@1.2.0))(@better-auth/utils@0.3.1)(@better-fetch/fetch@1.1.21)(better-auth@1.5.5(973a228cf2a818eeb1681951f947792f))(better-call@1.3.2(zod@4.3.6))(conf@15.1.0)(electron@39.5.1)
+        version: 1.5.5(patch_hash=c0bab8bf6f42816473109d61f757f961d4f3bcc1b1cd07c4fe7c2f012fd291ac)(@better-auth/core@1.5.5(@better-auth/utils@0.3.1)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260317.1)(better-call@1.3.2(zod@4.3.6))(jose@6.2.2)(kysely@0.28.11)(nanostores@1.2.0))(@better-auth/utils@0.3.1)(@better-fetch/fetch@1.1.21)(better-auth@1.5.5(d6e6d5b42c782cf2b92f8a8b0b83e57b))(better-call@1.3.2(zod@4.3.6))(conf@15.1.0)(electron@39.5.1)
       '@convex-dev/better-auth':
         specifier: 'catalog:'
-        version: 0.11.2(@standard-schema/spec@1.1.0)(better-auth@1.5.5(973a228cf2a818eeb1681951f947792f))(convex@1.33.1(react@18.3.1))(hono@4.12.14)(react@18.3.1)(typescript@5.9.3)
+        version: 0.11.2(@standard-schema/spec@1.1.0)(better-auth@1.5.5(d6e6d5b42c782cf2b92f8a8b0b83e57b))(convex@1.33.1(react@18.3.1))(hono@4.12.14)(react@18.3.1)(typescript@5.9.3)
       '@electron-toolkit/preload':
         specifier: ^3.0.2
         version: 3.0.2(electron@39.5.1)
@@ -445,7 +445,7 @@ importers:
         version: 1.159.5(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       better-auth:
         specifier: 'catalog:'
-        version: 1.5.5(973a228cf2a818eeb1681951f947792f)
+        version: 1.5.5(d6e6d5b42c782cf2b92f8a8b0b83e57b)
       conf:
         specifier: ^15.1.0
         version: 15.1.0
@@ -661,7 +661,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^3.2.4
-        version: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.12)(jiti@2.6.1)(jsdom@26.1.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.23.7)(yaml@2.8.2)
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.12)(jiti@2.7.0)(jsdom@26.1.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.23.7)(yaml@2.8.2)
 
   packages/acp-extension-grok: {}
 
@@ -876,10 +876,10 @@ importers:
         version: link:../shared
       '@loro-dev/flock-wasm':
         specifier: 'catalog:'
-        version: 0.4.2
+        version: 0.4.3
       '@loro-dev/streams-crdt':
         specifier: 'catalog:'
-        version: 0.15.1(patch_hash=4b23c7e37b6281eda3cedbf779cd6bb6c0eec5e6f3c0a79ede4d2812755eaeb8)(@loro-dev/flock-wasm@0.4.2)(loro-crdt@1.14.1)
+        version: 0.15.1(patch_hash=4b23c7e37b6281eda3cedbf779cd6bb6c0eec5e6f3c0a79ede4d2812755eaeb8)(@loro-dev/flock-wasm@0.4.3)(loro-crdt@1.14.1)
       '@meowdown/core':
         specifier: 0.59.0
         version: 0.59.0(@lezer/common@1.5.2)(@shikijs/types@4.3.1)(@types/hast@3.0.4)(highlight.js@11.11.1)(loro-crdt@1.14.1)(lowlight@3.3.0)(prosemirror-model@1.25.11)(prosemirror-state@1.4.4)(prosemirror-transform@1.12.0)(prosemirror-view@1.42.2)(refractor@5.0.0)
@@ -1062,7 +1062,7 @@ importers:
         version: 2.2.1(loro-crdt@1.14.1)(loro-mirror@2.2.1(loro-crdt@1.14.1))(react@18.3.1)
       loro-repo:
         specifier: 'catalog:'
-        version: 0.20.0(@loro-dev/flock-wasm@0.4.2)(@loro-dev/flock@4.4.4)(@loro-dev/streams-crdt@0.15.1(patch_hash=4b23c7e37b6281eda3cedbf779cd6bb6c0eec5e6f3c0a79ede4d2812755eaeb8)(@loro-dev/flock-wasm@0.4.2)(loro-crdt@1.14.1))(@types/better-sqlite3@7.6.13)(better-sqlite3@12.10.0)(loro-crdt@1.14.1)
+        version: 0.20.0(@loro-dev/flock-wasm@0.4.3)(@loro-dev/flock@4.4.4)(@loro-dev/streams-crdt@0.15.1(patch_hash=4b23c7e37b6281eda3cedbf779cd6bb6c0eec5e6f3c0a79ede4d2812755eaeb8)(@loro-dev/flock-wasm@0.4.3)(loro-crdt@1.14.1))(@types/better-sqlite3@7.6.13)(better-sqlite3@12.10.0)(loro-crdt@1.14.1)
       loro-websocket:
         specifier: 'catalog:'
         version: 0.6.2(@loro-dev/flock@4.4.4)(loro-crdt@1.14.1)
@@ -1150,12 +1150,12 @@ importers:
       tw-animate-css:
         specifier: ^1.3.5
         version: 1.4.0
-      uuid:
-        specifier: ^11.0.5
-        version: 11.1.0
       use-stick-to-bottom:
         specifier: ^1.1.6
         version: 1.1.6(react@18.3.1)
+      uuid:
+        specifier: ^11.0.5
+        version: 11.1.0
       validator:
         specifier: ^13.15.35
         version: 13.15.35
@@ -1342,7 +1342,7 @@ importers:
         version: 0.0.27
       '@loro-dev/streams-crdt':
         specifier: 'catalog:'
-        version: 0.15.1(patch_hash=4b23c7e37b6281eda3cedbf779cd6bb6c0eec5e6f3c0a79ede4d2812755eaeb8)(@loro-dev/flock-wasm@0.4.2)(loro-crdt@1.14.1)
+        version: 0.15.1(patch_hash=4b23c7e37b6281eda3cedbf779cd6bb6c0eec5e6f3c0a79ede4d2812755eaeb8)(@loro-dev/flock-wasm@0.4.3)(loro-crdt@1.14.1)
       acp-extension-core:
         specifier: workspace:*
         version: link:../acp-extension-core
@@ -1382,7 +1382,7 @@ importers:
         version: 24.10.12
       loro-repo:
         specifier: 'catalog:'
-        version: 0.20.0(@loro-dev/flock-wasm@0.4.2)(@loro-dev/flock@4.4.4)(@loro-dev/streams-crdt@0.15.1(patch_hash=4b23c7e37b6281eda3cedbf779cd6bb6c0eec5e6f3c0a79ede4d2812755eaeb8)(@loro-dev/flock-wasm@0.4.2)(loro-crdt@1.14.1))(@types/better-sqlite3@7.6.13)(better-sqlite3@12.10.0)(loro-crdt@1.14.1)
+        version: 0.20.0(@loro-dev/flock-wasm@0.4.3)(@loro-dev/flock@4.4.4)(@loro-dev/streams-crdt@0.15.1(patch_hash=4b23c7e37b6281eda3cedbf779cd6bb6c0eec5e6f3c0a79ede4d2812755eaeb8)(@loro-dev/flock-wasm@0.4.3)(loro-crdt@1.14.1))(@types/better-sqlite3@7.6.13)(better-sqlite3@12.10.0)(loro-crdt@1.14.1)
       typescript:
         specifier: 'catalog:'
         version: 5.9.3
@@ -3179,8 +3179,8 @@ packages:
   '@lit-labs/ssr-dom-shim@1.6.0':
     resolution: {integrity: sha512-VHb0ALPMTlgKjM6yIxxoQNnpKyUKLD04VzeQdsiXkMqkvYlAHxq9glGLmgbb889/1GsohSOAjvQYoiBppXFqrQ==}
 
-  '@loro-dev/flock-wasm@0.4.2':
-    resolution: {integrity: sha512-qFm8kApLILN1PrzrIatbTlHE4jUgcDo1IAl4e0+ZBc1zsIIbeCB/ukQvKIT3VLyk6ARR9n4Em4bR6EoZ+hAbng==}
+  '@loro-dev/flock-wasm@0.4.3':
+    resolution: {integrity: sha512-Vy81NnCPLazxLzIaTQvL4C3cgYmn9I13NQALVEJHNmTQGaz4z/+4kgC/fdcESMVMCfK0kT1PrJJ0WPxZwRwD9Q==}
     engines: {node: '>=18'}
 
   '@loro-dev/flock@4.4.4':
@@ -11789,13 +11789,13 @@ packages:
       '@types/react':
         optional: true
 
-  use-sync-external-store@1.6.0:
-    resolution: {integrity: sha512-Pp6GSwGP/NrPIrxVFAIkOQeyw8lFenOHijQWkUTrDvrF4ALqylP2C/KCkeS9dpUM3KvYRQhna5vt7IL95+ZQ9w==}
+  use-stick-to-bottom@1.1.6:
+    resolution: {integrity: sha512-z3Up8jYQGTkUCsGBnwg6/wj70KgXoW5Kz1AAc1j8MtQuYMBo6ZsdhrIXoegxa7gaMMilgQYyTohTrt3p94jHog==}
     peerDependencies:
       react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
 
-  use-stick-to-bottom@1.1.6:
-    resolution: {integrity: sha512-z3Up8jYQGTkUCsGBnwg6/wj70KgXoW5Kz1AAc1j8MtQuYMBo6ZsdhrIXoegxa7gaMMilgQYyTohTrt3p94jHog==}
+  use-sync-external-store@1.6.0:
+    resolution: {integrity: sha512-Pp6GSwGP/NrPIrxVFAIkOQeyw8lFenOHijQWkUTrDvrF4ALqylP2C/KCkeS9dpUM3KvYRQhna5vt7IL95+ZQ9w==}
     peerDependencies:
       react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
 
@@ -12761,24 +12761,24 @@ snapshots:
     optionalDependencies:
       drizzle-orm: 0.45.1(@cloudflare/workers-types@4.20260317.1)(@electric-sql/pglite@0.3.15)(@opentelemetry/api@1.9.0)(@prisma/client@7.4.0(prisma@7.4.0(@types/react@19.2.17)(better-sqlite3@13.0.3)(magicast@0.3.5)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)(typescript@5.9.3))(typescript@5.9.3))(@types/better-sqlite3@7.6.13)(@types/pg@8.15.6)(better-sqlite3@13.0.3)(kysely@0.28.11)(mysql2@3.15.3)(postgres@3.4.7)(prisma@7.4.0(@types/react@19.2.17)(better-sqlite3@13.0.3)(magicast@0.3.5)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)(typescript@5.9.3))
 
-  '@better-auth/electron@1.5.5(patch_hash=c0bab8bf6f42816473109d61f757f961d4f3bcc1b1cd07c4fe7c2f012fd291ac)(@better-auth/core@1.5.5(@better-auth/utils@0.3.1)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260317.1)(better-call@1.3.2(zod@4.3.6))(jose@6.2.2)(kysely@0.28.11)(nanostores@1.2.0))(@better-auth/utils@0.3.1)(@better-fetch/fetch@1.1.21)(better-auth@1.5.5(973a228cf2a818eeb1681951f947792f))(better-call@1.3.2(zod@4.3.6))(conf@15.1.0)(electron@39.5.1)':
-    dependencies:
-      '@better-auth/core': 1.5.5(@better-auth/utils@0.3.1)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260317.1)(better-call@1.3.2(zod@4.3.6))(jose@6.2.2)(kysely@0.28.11)(nanostores@1.2.0)
-      '@better-auth/utils': 0.3.1
-      '@better-fetch/fetch': 1.1.21
-      better-auth: 1.5.5(973a228cf2a818eeb1681951f947792f)
-      better-call: 1.3.2(zod@4.3.6)
-      zod: 4.3.6
-    optionalDependencies:
-      conf: 15.1.0
-      electron: 39.5.1
-
   '@better-auth/electron@1.5.5(patch_hash=c0bab8bf6f42816473109d61f757f961d4f3bcc1b1cd07c4fe7c2f012fd291ac)(@better-auth/core@1.5.5(@better-auth/utils@0.3.1)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260317.1)(better-call@1.3.2(zod@4.3.6))(jose@6.2.2)(kysely@0.28.11)(nanostores@1.2.0))(@better-auth/utils@0.3.1)(@better-fetch/fetch@1.1.21)(better-auth@1.5.5(affc8643d2a62eb147455ed14c80743d))(better-call@1.3.2(zod@4.3.6))(conf@15.1.0)(electron@39.5.1)':
     dependencies:
       '@better-auth/core': 1.5.5(@better-auth/utils@0.3.1)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260317.1)(better-call@1.3.2(zod@4.3.6))(jose@6.2.2)(kysely@0.28.11)(nanostores@1.2.0)
       '@better-auth/utils': 0.3.1
       '@better-fetch/fetch': 1.1.21
       better-auth: 1.5.5(affc8643d2a62eb147455ed14c80743d)
+      better-call: 1.3.2(zod@4.3.6)
+      zod: 4.3.6
+    optionalDependencies:
+      conf: 15.1.0
+      electron: 39.5.1
+
+  '@better-auth/electron@1.5.5(patch_hash=c0bab8bf6f42816473109d61f757f961d4f3bcc1b1cd07c4fe7c2f012fd291ac)(@better-auth/core@1.5.5(@better-auth/utils@0.3.1)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260317.1)(better-call@1.3.2(zod@4.3.6))(jose@6.2.2)(kysely@0.28.11)(nanostores@1.2.0))(@better-auth/utils@0.3.1)(@better-fetch/fetch@1.1.21)(better-auth@1.5.5(d6e6d5b42c782cf2b92f8a8b0b83e57b))(better-call@1.3.2(zod@4.3.6))(conf@15.1.0)(electron@39.5.1)':
+    dependencies:
+      '@better-auth/core': 1.5.5(@better-auth/utils@0.3.1)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260317.1)(better-call@1.3.2(zod@4.3.6))(jose@6.2.2)(kysely@0.28.11)(nanostores@1.2.0)
+      '@better-auth/utils': 0.3.1
+      '@better-fetch/fetch': 1.1.21
+      better-auth: 1.5.5(d6e6d5b42c782cf2b92f8a8b0b83e57b)
       better-call: 1.3.2(zod@4.3.6)
       zod: 4.3.6
     optionalDependencies:
@@ -13135,10 +13135,10 @@ snapshots:
 
   '@colors/colors@1.6.0': {}
 
-  '@convex-dev/better-auth@0.11.2(@standard-schema/spec@1.1.0)(better-auth@1.5.5(973a228cf2a818eeb1681951f947792f))(convex@1.33.1(react@18.3.1))(hono@4.12.14)(react@18.3.1)(typescript@5.9.3)':
+  '@convex-dev/better-auth@0.11.2(@standard-schema/spec@1.1.0)(better-auth@1.5.5(affc8643d2a62eb147455ed14c80743d))(convex@1.33.1(react@18.3.1))(hono@4.12.14)(react@18.3.1)(typescript@5.9.3)':
     dependencies:
       '@better-fetch/fetch': 1.1.21
-      better-auth: 1.5.5(973a228cf2a818eeb1681951f947792f)
+      better-auth: 1.5.5(affc8643d2a62eb147455ed14c80743d)
       common-tags: 1.8.2
       convex: 1.33.1(react@18.3.1)
       convex-helpers: 0.1.111(@standard-schema/spec@1.1.0)(convex@1.33.1(react@18.3.1))(hono@4.12.14)(react@18.3.1)(typescript@5.9.3)(zod@4.3.6)
@@ -13153,10 +13153,10 @@ snapshots:
       - hono
       - typescript
 
-  '@convex-dev/better-auth@0.11.2(@standard-schema/spec@1.1.0)(better-auth@1.5.5(affc8643d2a62eb147455ed14c80743d))(convex@1.33.1(react@18.3.1))(hono@4.12.14)(react@18.3.1)(typescript@5.9.3)':
+  '@convex-dev/better-auth@0.11.2(@standard-schema/spec@1.1.0)(better-auth@1.5.5(d6e6d5b42c782cf2b92f8a8b0b83e57b))(convex@1.33.1(react@18.3.1))(hono@4.12.14)(react@18.3.1)(typescript@5.9.3)':
     dependencies:
       '@better-fetch/fetch': 1.1.21
-      better-auth: 1.5.5(affc8643d2a62eb147455ed14c80743d)
+      better-auth: 1.5.5(d6e6d5b42c782cf2b92f8a8b0b83e57b)
       common-tags: 1.8.2
       convex: 1.33.1(react@18.3.1)
       convex-helpers: 0.1.111(@standard-schema/spec@1.1.0)(convex@1.33.1(react@18.3.1))(hono@4.12.14)(react@18.3.1)(typescript@5.9.3)(zod@4.3.6)
@@ -14210,7 +14210,7 @@ snapshots:
 
   '@lit-labs/ssr-dom-shim@1.6.0': {}
 
-  '@loro-dev/flock-wasm@0.4.2': {}
+  '@loro-dev/flock-wasm@0.4.3': {}
 
   '@loro-dev/flock@4.4.4':
     optional: true
@@ -14226,11 +14226,11 @@ snapshots:
 
   '@loro-dev/streams-client@0.7.0': {}
 
-  '@loro-dev/streams-crdt@0.15.1(patch_hash=4b23c7e37b6281eda3cedbf779cd6bb6c0eec5e6f3c0a79ede4d2812755eaeb8)(@loro-dev/flock-wasm@0.4.2)(loro-crdt@1.14.1)':
+  '@loro-dev/streams-crdt@0.15.1(patch_hash=4b23c7e37b6281eda3cedbf779cd6bb6c0eec5e6f3c0a79ede4d2812755eaeb8)(@loro-dev/flock-wasm@0.4.3)(loro-crdt@1.14.1)':
     dependencies:
       '@loro-dev/streams-client': 0.7.0
     optionalDependencies:
-      '@loro-dev/flock-wasm': 0.4.2
+      '@loro-dev/flock-wasm': 0.4.3
       loro-crdt: 1.14.1
 
   '@lydell/node-pty-darwin-arm64@1.2.0-beta.14':
@@ -16560,14 +16560,14 @@ snapshots:
       - webpack
     optional: true
 
-  '@tanstack/react-start-rsc@0.1.32(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(rollup@4.57.1)(vite@7.3.1(@types/node@24.10.12)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.23.7)(yaml@2.8.2))':
+  '@tanstack/react-start-rsc@0.1.32(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(vite@7.3.1(@types/node@24.10.12)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.23.7)(yaml@2.8.2))':
     dependencies:
       '@tanstack/react-router': 1.170.18(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@tanstack/router-core': 1.171.15
       '@tanstack/router-utils': 1.162.2
       '@tanstack/start-client-core': 1.170.14
       '@tanstack/start-fn-stubs': 1.162.0
-      '@tanstack/start-plugin-core': 1.171.24(@tanstack/react-router@1.170.18(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(rollup@4.57.1)(vite@7.3.1(@types/node@24.10.12)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.23.7)(yaml@2.8.2))
+      '@tanstack/start-plugin-core': 1.171.24(@tanstack/react-router@1.170.18(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(vite@7.3.1(@types/node@24.10.12)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.23.7)(yaml@2.8.2))
       '@tanstack/start-server-core': 1.169.17
       '@tanstack/start-storage-context': 1.167.17
       pathe: 2.0.3
@@ -16728,15 +16728,15 @@ snapshots:
       - webpack
     optional: true
 
-  '@tanstack/react-start@1.168.33(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(rollup@4.57.1)(vite@7.3.1(@types/node@24.10.12)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.23.7)(yaml@2.8.2))':
+  '@tanstack/react-start@1.168.33(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(vite@7.3.1(@types/node@24.10.12)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.23.7)(yaml@2.8.2))':
     dependencies:
       '@tanstack/react-router': 1.170.18(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@tanstack/react-start-client': 1.168.16(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
-      '@tanstack/react-start-rsc': 0.1.32(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(rollup@4.57.1)(vite@7.3.1(@types/node@24.10.12)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.23.7)(yaml@2.8.2))
+      '@tanstack/react-start-rsc': 0.1.32(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(vite@7.3.1(@types/node@24.10.12)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.23.7)(yaml@2.8.2))
       '@tanstack/react-start-server': 1.167.22(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@tanstack/router-utils': 1.162.2
       '@tanstack/start-client-core': 1.170.14
-      '@tanstack/start-plugin-core': 1.171.24(@tanstack/react-router@1.170.18(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(rollup@4.57.1)(vite@7.3.1(@types/node@24.10.12)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.23.7)(yaml@2.8.2))
+      '@tanstack/start-plugin-core': 1.171.24(@tanstack/react-router@1.170.18(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(vite@7.3.1(@types/node@24.10.12)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.23.7)(yaml@2.8.2))
       '@tanstack/start-server-core': 1.169.17
       pathe: 2.0.3
       react: 18.3.1
@@ -16913,7 +16913,7 @@ snapshots:
       - unloader
     optional: true
 
-  '@tanstack/router-plugin@1.168.23(@tanstack/react-router@1.170.18(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(rollup@4.57.1)(vite@7.3.1(@types/node@24.10.12)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.23.7)(yaml@2.8.2))':
+  '@tanstack/router-plugin@1.168.23(@tanstack/react-router@1.170.18(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(vite@7.3.1(@types/node@24.10.12)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.23.7)(yaml@2.8.2))':
     dependencies:
       '@babel/core': 7.29.0
       '@babel/template': 7.28.6
@@ -16922,7 +16922,7 @@ snapshots:
       '@tanstack/router-generator': 1.167.21
       '@tanstack/router-utils': 1.162.2
       chokidar: 5.0.0
-      unplugin: 3.3.0(rollup@4.57.1)(vite@7.3.1(@types/node@24.10.12)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.23.7)(yaml@2.8.2))
+      unplugin: 3.3.0(vite@7.3.1(@types/node@24.10.12)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.23.7)(yaml@2.8.2))
       zod: 4.3.6
     optionalDependencies:
       '@tanstack/react-router': 1.170.18(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -17087,14 +17087,14 @@ snapshots:
       - webpack
     optional: true
 
-  '@tanstack/start-plugin-core@1.171.24(@tanstack/react-router@1.170.18(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(rollup@4.57.1)(vite@7.3.1(@types/node@24.10.12)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.23.7)(yaml@2.8.2))':
+  '@tanstack/start-plugin-core@1.171.24(@tanstack/react-router@1.170.18(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(vite@7.3.1(@types/node@24.10.12)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.23.7)(yaml@2.8.2))':
     dependencies:
       '@babel/code-frame': 7.27.1
       '@babel/core': 7.29.0
       '@babel/types': 7.29.0
       '@tanstack/router-core': 1.171.15
       '@tanstack/router-generator': 1.167.21
-      '@tanstack/router-plugin': 1.168.23(@tanstack/react-router@1.170.18(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(rollup@4.57.1)(vite@7.3.1(@types/node@24.10.12)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.23.7)(yaml@2.8.2))
+      '@tanstack/router-plugin': 1.168.23(@tanstack/react-router@1.170.18(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(vite@7.3.1(@types/node@24.10.12)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.23.7)(yaml@2.8.2))
       '@tanstack/router-utils': 1.162.2
       '@tanstack/start-server-core': 1.169.17
       exsolve: 1.0.8
@@ -18657,40 +18657,6 @@ snapshots:
     transitivePeerDependencies:
       - '@cloudflare/workers-types'
 
-  better-auth@1.5.5(973a228cf2a818eeb1681951f947792f):
-    dependencies:
-      '@better-auth/core': 1.5.5(@better-auth/utils@0.3.1)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260317.1)(better-call@1.3.2(zod@4.3.6))(jose@6.2.2)(kysely@0.28.11)(nanostores@1.2.0)
-      '@better-auth/drizzle-adapter': 1.5.5(@better-auth/core@1.5.5(@better-auth/utils@0.3.1)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260317.1)(better-call@1.3.2(zod@4.3.6))(jose@6.2.2)(kysely@0.28.11)(nanostores@1.2.0))(@better-auth/utils@0.3.1)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260317.1)(@electric-sql/pglite@0.3.15)(@opentelemetry/api@1.9.0)(@prisma/client@7.4.0(prisma@7.4.0(@types/react@18.3.28)(better-sqlite3@12.10.0)(magicast@0.3.5)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3))(typescript@5.9.3))(@types/better-sqlite3@7.6.13)(@types/pg@8.15.6)(better-sqlite3@12.10.0)(kysely@0.28.11)(mysql2@3.15.3)(postgres@3.4.7)(prisma@7.4.0(@types/react@18.3.28)(better-sqlite3@12.10.0)(magicast@0.3.5)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3)))
-      '@better-auth/kysely-adapter': 1.5.5(@better-auth/core@1.5.5(@better-auth/utils@0.3.1)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260317.1)(better-call@1.3.2(zod@4.3.6))(jose@6.2.2)(kysely@0.28.11)(nanostores@1.2.0))(@better-auth/utils@0.3.1)(kysely@0.28.11)
-      '@better-auth/memory-adapter': 1.5.5(@better-auth/core@1.5.5(@better-auth/utils@0.3.1)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260317.1)(better-call@1.3.2(zod@4.3.6))(jose@6.2.2)(kysely@0.28.11)(nanostores@1.2.0))(@better-auth/utils@0.3.1)
-      '@better-auth/mongo-adapter': 1.5.5(@better-auth/core@1.5.5(@better-auth/utils@0.3.1)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260317.1)(better-call@1.3.2(zod@4.3.6))(jose@6.2.2)(kysely@0.28.11)(nanostores@1.2.0))(@better-auth/utils@0.3.1)(mongodb@7.1.0(socks@2.8.7))
-      '@better-auth/prisma-adapter': 1.5.5(@better-auth/core@1.5.5(@better-auth/utils@0.3.1)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260317.1)(better-call@1.3.2(zod@4.3.6))(jose@6.2.2)(kysely@0.28.11)(nanostores@1.2.0))(@better-auth/utils@0.3.1)(@prisma/client@7.4.0(prisma@7.4.0(@types/react@18.3.28)(better-sqlite3@12.10.0)(magicast@0.3.5)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3))(typescript@5.9.3))(prisma@7.4.0(@types/react@18.3.28)(better-sqlite3@12.10.0)(magicast@0.3.5)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3))
-      '@better-auth/telemetry': 1.5.5(@better-auth/core@1.5.5(@better-auth/utils@0.3.1)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260317.1)(better-call@1.3.2(zod@4.3.6))(jose@6.2.2)(kysely@0.28.11)(nanostores@1.2.0))
-      '@better-auth/utils': 0.3.1
-      '@better-fetch/fetch': 1.1.21
-      '@noble/ciphers': 2.1.1
-      '@noble/hashes': 2.0.1
-      better-call: 1.3.2(zod@4.3.6)
-      defu: 6.1.6
-      jose: 6.2.2
-      kysely: 0.28.11
-      nanostores: 1.2.0
-      zod: 4.3.6
-    optionalDependencies:
-      '@prisma/client': 7.4.0(prisma@7.4.0(@types/react@18.3.28)(better-sqlite3@12.10.0)(magicast@0.3.5)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3))(typescript@5.9.3)
-      '@tanstack/react-start': 1.168.33(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(rollup@4.57.1)(vite@7.3.1(@types/node@24.10.12)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.23.7)(yaml@2.8.2))
-      better-sqlite3: 12.10.0
-      drizzle-orm: 0.45.1(@cloudflare/workers-types@4.20260317.1)(@electric-sql/pglite@0.3.15)(@opentelemetry/api@1.9.0)(@prisma/client@7.4.0(prisma@7.4.0(@types/react@18.3.28)(better-sqlite3@12.10.0)(magicast@0.3.5)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3))(typescript@5.9.3))(@types/better-sqlite3@7.6.13)(@types/pg@8.15.6)(better-sqlite3@12.10.0)(kysely@0.28.11)(mysql2@3.15.3)(postgres@3.4.7)(prisma@7.4.0(@types/react@18.3.28)(better-sqlite3@12.10.0)(magicast@0.3.5)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3))
-      mongodb: 7.1.0(socks@2.8.7)
-      mysql2: 3.15.3
-      prisma: 7.4.0(@types/react@18.3.28)(better-sqlite3@12.10.0)(magicast@0.3.5)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3)
-      react: 18.3.1
-      react-dom: 18.3.1(react@18.3.1)
-      vitest: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.10.12)(jsdom@26.1.0)(vite@7.3.1(@types/node@24.10.12)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.23.7)(yaml@2.8.2))
-      vue: 3.5.28(typescript@5.9.3)
-    transitivePeerDependencies:
-      - '@cloudflare/workers-types'
-
   better-auth@1.5.5(affc8643d2a62eb147455ed14c80743d):
     dependencies:
       '@better-auth/core': 1.5.5(@better-auth/utils@0.3.1)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260317.1)(better-call@1.3.2(zod@4.3.6))(jose@6.2.2)(kysely@0.28.11)(nanostores@1.2.0)
@@ -18721,6 +18687,40 @@ snapshots:
       react: 18.3.1
       react-dom: 18.3.1(react@18.3.1)
       vitest: 3.2.4(@types/debug@4.1.12)(@types/node@26.1.2)(jiti@2.7.0)(jsdom@26.1.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.23.7)(yaml@2.8.2)
+      vue: 3.5.28(typescript@5.9.3)
+    transitivePeerDependencies:
+      - '@cloudflare/workers-types'
+
+  better-auth@1.5.5(d6e6d5b42c782cf2b92f8a8b0b83e57b):
+    dependencies:
+      '@better-auth/core': 1.5.5(@better-auth/utils@0.3.1)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260317.1)(better-call@1.3.2(zod@4.3.6))(jose@6.2.2)(kysely@0.28.11)(nanostores@1.2.0)
+      '@better-auth/drizzle-adapter': 1.5.5(@better-auth/core@1.5.5(@better-auth/utils@0.3.1)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260317.1)(better-call@1.3.2(zod@4.3.6))(jose@6.2.2)(kysely@0.28.11)(nanostores@1.2.0))(@better-auth/utils@0.3.1)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260317.1)(@electric-sql/pglite@0.3.15)(@opentelemetry/api@1.9.0)(@prisma/client@7.4.0(prisma@7.4.0(@types/react@18.3.28)(better-sqlite3@12.10.0)(magicast@0.3.5)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3))(typescript@5.9.3))(@types/better-sqlite3@7.6.13)(@types/pg@8.15.6)(better-sqlite3@12.10.0)(kysely@0.28.11)(mysql2@3.15.3)(postgres@3.4.7)(prisma@7.4.0(@types/react@18.3.28)(better-sqlite3@12.10.0)(magicast@0.3.5)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3)))
+      '@better-auth/kysely-adapter': 1.5.5(@better-auth/core@1.5.5(@better-auth/utils@0.3.1)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260317.1)(better-call@1.3.2(zod@4.3.6))(jose@6.2.2)(kysely@0.28.11)(nanostores@1.2.0))(@better-auth/utils@0.3.1)(kysely@0.28.11)
+      '@better-auth/memory-adapter': 1.5.5(@better-auth/core@1.5.5(@better-auth/utils@0.3.1)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260317.1)(better-call@1.3.2(zod@4.3.6))(jose@6.2.2)(kysely@0.28.11)(nanostores@1.2.0))(@better-auth/utils@0.3.1)
+      '@better-auth/mongo-adapter': 1.5.5(@better-auth/core@1.5.5(@better-auth/utils@0.3.1)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260317.1)(better-call@1.3.2(zod@4.3.6))(jose@6.2.2)(kysely@0.28.11)(nanostores@1.2.0))(@better-auth/utils@0.3.1)(mongodb@7.1.0(socks@2.8.7))
+      '@better-auth/prisma-adapter': 1.5.5(@better-auth/core@1.5.5(@better-auth/utils@0.3.1)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260317.1)(better-call@1.3.2(zod@4.3.6))(jose@6.2.2)(kysely@0.28.11)(nanostores@1.2.0))(@better-auth/utils@0.3.1)(@prisma/client@7.4.0(prisma@7.4.0(@types/react@18.3.28)(better-sqlite3@12.10.0)(magicast@0.3.5)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3))(typescript@5.9.3))(prisma@7.4.0(@types/react@18.3.28)(better-sqlite3@12.10.0)(magicast@0.3.5)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3))
+      '@better-auth/telemetry': 1.5.5(@better-auth/core@1.5.5(@better-auth/utils@0.3.1)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260317.1)(better-call@1.3.2(zod@4.3.6))(jose@6.2.2)(kysely@0.28.11)(nanostores@1.2.0))
+      '@better-auth/utils': 0.3.1
+      '@better-fetch/fetch': 1.1.21
+      '@noble/ciphers': 2.1.1
+      '@noble/hashes': 2.0.1
+      better-call: 1.3.2(zod@4.3.6)
+      defu: 6.1.6
+      jose: 6.2.2
+      kysely: 0.28.11
+      nanostores: 1.2.0
+      zod: 4.3.6
+    optionalDependencies:
+      '@prisma/client': 7.4.0(prisma@7.4.0(@types/react@18.3.28)(better-sqlite3@12.10.0)(magicast@0.3.5)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3))(typescript@5.9.3)
+      '@tanstack/react-start': 1.168.33(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(vite@7.3.1(@types/node@24.10.12)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.23.7)(yaml@2.8.2))
+      better-sqlite3: 12.10.0
+      drizzle-orm: 0.45.1(@cloudflare/workers-types@4.20260317.1)(@electric-sql/pglite@0.3.15)(@opentelemetry/api@1.9.0)(@prisma/client@7.4.0(prisma@7.4.0(@types/react@18.3.28)(better-sqlite3@12.10.0)(magicast@0.3.5)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3))(typescript@5.9.3))(@types/better-sqlite3@7.6.13)(@types/pg@8.15.6)(better-sqlite3@12.10.0)(kysely@0.28.11)(mysql2@3.15.3)(postgres@3.4.7)(prisma@7.4.0(@types/react@18.3.28)(better-sqlite3@12.10.0)(magicast@0.3.5)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3))
+      mongodb: 7.1.0(socks@2.8.7)
+      mysql2: 3.15.3
+      prisma: 7.4.0(@types/react@18.3.28)(better-sqlite3@12.10.0)(magicast@0.3.5)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3)
+      react: 18.3.1
+      react-dom: 18.3.1(react@18.3.1)
+      vitest: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.10.12)(jsdom@26.1.0)(vite@7.3.1(@types/node@24.10.12)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.23.7)(yaml@2.8.2))
       vue: 3.5.28(typescript@5.9.3)
     transitivePeerDependencies:
       - '@cloudflare/workers-types'
@@ -21772,10 +21772,10 @@ snapshots:
 
   loro-protocol@0.3.0: {}
 
-  loro-repo@0.20.0(@loro-dev/flock-wasm@0.4.2)(@loro-dev/flock@4.4.4)(@loro-dev/streams-crdt@0.15.1(patch_hash=4b23c7e37b6281eda3cedbf779cd6bb6c0eec5e6f3c0a79ede4d2812755eaeb8)(@loro-dev/flock-wasm@0.4.2)(loro-crdt@1.14.1))(@types/better-sqlite3@7.6.13)(better-sqlite3@12.10.0)(loro-crdt@1.14.1):
+  loro-repo@0.20.0(@loro-dev/flock-wasm@0.4.3)(@loro-dev/flock@4.4.4)(@loro-dev/streams-crdt@0.15.1(patch_hash=4b23c7e37b6281eda3cedbf779cd6bb6c0eec5e6f3c0a79ede4d2812755eaeb8)(@loro-dev/flock-wasm@0.4.3)(loro-crdt@1.14.1))(@types/better-sqlite3@7.6.13)(better-sqlite3@12.10.0)(loro-crdt@1.14.1):
     dependencies:
-      '@loro-dev/flock-wasm': 0.4.2
-      '@loro-dev/streams-crdt': 0.15.1(patch_hash=4b23c7e37b6281eda3cedbf779cd6bb6c0eec5e6f3c0a79ede4d2812755eaeb8)(@loro-dev/flock-wasm@0.4.2)(loro-crdt@1.14.1)
+      '@loro-dev/flock-wasm': 0.4.3
+      '@loro-dev/streams-crdt': 0.15.1(patch_hash=4b23c7e37b6281eda3cedbf779cd6bb6c0eec5e6f3c0a79ede4d2812755eaeb8)(@loro-dev/flock-wasm@0.4.3)(loro-crdt@1.14.1)
       loro-adaptors: 0.6.1(@loro-dev/flock@4.4.4)(loro-crdt@1.14.1)
       loro-crdt: 1.14.1
       loro-protocol: 0.3.0
@@ -21789,10 +21789,10 @@ snapshots:
       - utf-8-validate
       - yjs
 
-  loro-repo@0.20.0(@loro-dev/flock-wasm@0.4.2)(@loro-dev/flock@4.4.4)(@loro-dev/streams-crdt@0.15.1(patch_hash=4b23c7e37b6281eda3cedbf779cd6bb6c0eec5e6f3c0a79ede4d2812755eaeb8)(@loro-dev/flock-wasm@0.4.2)(loro-crdt@1.14.1))(@types/better-sqlite3@7.6.13)(better-sqlite3@13.0.3)(loro-crdt@1.14.1):
+  loro-repo@0.20.0(@loro-dev/flock-wasm@0.4.3)(@loro-dev/flock@4.4.4)(@loro-dev/streams-crdt@0.15.1(patch_hash=4b23c7e37b6281eda3cedbf779cd6bb6c0eec5e6f3c0a79ede4d2812755eaeb8)(@loro-dev/flock-wasm@0.4.3)(loro-crdt@1.14.1))(@types/better-sqlite3@7.6.13)(better-sqlite3@13.0.3)(loro-crdt@1.14.1):
     dependencies:
-      '@loro-dev/flock-wasm': 0.4.2
-      '@loro-dev/streams-crdt': 0.15.1(patch_hash=4b23c7e37b6281eda3cedbf779cd6bb6c0eec5e6f3c0a79ede4d2812755eaeb8)(@loro-dev/flock-wasm@0.4.2)(loro-crdt@1.14.1)
+      '@loro-dev/flock-wasm': 0.4.3
+      '@loro-dev/streams-crdt': 0.15.1(patch_hash=4b23c7e37b6281eda3cedbf779cd6bb6c0eec5e6f3c0a79ede4d2812755eaeb8)(@loro-dev/flock-wasm@0.4.3)(loro-crdt@1.14.1)
       loro-adaptors: 0.6.1(@loro-dev/flock@4.4.4)(loro-crdt@1.14.1)
       loro-crdt: 1.14.1
       loro-protocol: 0.3.0
@@ -24994,13 +24994,12 @@ snapshots:
       vite: 6.4.1(@types/node@26.1.2)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.23.7)(yaml@2.8.2)
     optional: true
 
-  unplugin@3.3.0(rollup@4.57.1)(vite@7.3.1(@types/node@24.10.12)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.23.7)(yaml@2.8.2)):
+  unplugin@3.3.0(vite@7.3.1(@types/node@24.10.12)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.23.7)(yaml@2.8.2)):
     dependencies:
       '@jridgewell/remapping': 2.3.5
       picomatch: 4.0.5
       webpack-virtual-modules: 0.6.2
     optionalDependencies:
-      rollup: 4.57.1
       vite: 7.3.1(@types/node@24.10.12)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.23.7)(yaml@2.8.2)
     optional: true
 
@@ -25071,6 +25070,10 @@ snapshots:
     optionalDependencies:
       '@types/react': 19.2.17
 
+  use-stick-to-bottom@1.1.6(react@18.3.1):
+    dependencies:
+      react: 18.3.1
+
   use-sync-external-store@1.6.0(react@18.3.1):
     dependencies:
       react: 18.3.1
@@ -25078,10 +25081,6 @@ snapshots:
   use-sync-external-store@1.6.0(react@19.2.0):
     dependencies:
       react: 19.2.0
-
-  use-stick-to-bottom@1.1.6(react@18.3.1):
-    dependencies:
-      react: 18.3.1
 
   utf8-byte-length@1.0.5: {}
 
