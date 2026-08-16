@@ -2981,6 +2981,8 @@
   "settings.agent.setup.installingRuntime": "正在安装 Agent 运行时…",
   "settings.agent.setup.preparingRuntime": "正在下载 Agent 运行时…",
   "settings.agent.setup.queued": "正在等待目标机器…",
+  "settings.agent.setup.machineOffline": "正在等待目标机器上线…",
+  "settings.agent.setup.unsupportedTarget": "请更新目标机器上的 Lody 以完成此提供商设置。",
   "settings.agent.setup.retryFailed": "无法重试 Provider 配置",
   "settings.agent.setup.runtimeInstallFailed": "无法下载 Agent 运行时。",
   "settings.agent.setup.runtimeReady": "Agent 运行时已就绪，正在检查 Provider 访问权限…",

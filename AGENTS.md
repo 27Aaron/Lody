@@ -36,6 +36,10 @@ private service secrets, and the Web and mobile app sources.
   not accept or discover staging/production deployment presets.
 - Local CLI, renderer, and Electron-main telemetry is hard-disabled even when
   unrelated PostHog variables exist in the caller's shell.
+- Client workflows that require daemon support negotiate integer protocol versions through
+  `MachineMeta.protocolCapabilities`; never infer support from the CLI release version. Missing
+  capabilities mean legacy/unsupported. Advertised set and version checks share one binding in
+  `packages/shared/src/machine-protocol-capabilities.ts` so a key never travels without its version.
 - Managed runtime downloads default to the public R2-backed channel owned by
   `packages/platform/src/runtime-artifacts.ts`; local and cloud assembly must use that
   same constant. `LODY_RUNTIME_BASE_URL` is only an explicit mirror override.

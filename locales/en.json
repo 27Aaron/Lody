@@ -2983,6 +2983,8 @@
   "settings.agent.setup.installingRuntime": "Installing the agent runtime…",
   "settings.agent.setup.preparingRuntime": "Downloading the agent runtime…",
   "settings.agent.setup.queued": "Waiting for the target machine…",
+  "settings.agent.setup.machineOffline": "Waiting for the target machine to come online…",
+  "settings.agent.setup.unsupportedTarget": "Update Lody on the target machine to finish this provider setup.",
   "settings.agent.setup.retryFailed": "Could not retry provider setup",
   "settings.agent.setup.runtimeInstallFailed": "The agent runtime could not be downloaded.",
   "settings.agent.setup.runtimeReady": "Agent runtime ready; checking provider access…",

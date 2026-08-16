@@ -31,6 +31,7 @@ import {
 } from '.';
 import type { PlanEntry } from '@agentclientprotocol/sdk';
 import type { ModelInfo } from './ai';
+import type { MachineProtocolCapabilities } from './machine-protocol-capabilities';
 export * from 'loro-mirror';
 import { UsageData } from 'acp-extension-core';
 
@@ -969,6 +970,8 @@ export type MachineMeta = {
   rpcVersion?: string;
   /** True when this machine can handle local project history sync/import over Streams RPC. */
   supportsLocalProjectHistoryRpc?: boolean;
+  /** Versioned daemon protocols available to remote and local clients. */
+  protocolCapabilities?: MachineProtocolCapabilities;
 };
 
 /**

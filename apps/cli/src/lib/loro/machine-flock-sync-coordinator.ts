@@ -5,7 +5,11 @@ import { formatErrorMessage } from '@/utils/format-error';
 import type { Logger } from '@/utils/logger';
 
 import { computeLoroReconnectDelayMs } from './connection-recovery';
-import { streamsRoomBinding, type StreamsRoomBinding } from './streams-room-binding';
+import {
+  isRecoverableStreamsRoomStatus,
+  streamsRoomBinding,
+  type StreamsRoomBinding,
+} from './streams-room-binding';
 import { readTimeoutEnv, withTimeout } from './timeout-utils';
 
 type MachineFlockSyncState = {
@@ -41,11 +45,9 @@ export type MachineFlockSyncRequestOptions = {
   resetBackoff?: boolean;
 };
 
-// 'detached' is deliberately NOT recoverable: no transport is attached to the
-// room (offline / pre-attach), so rejoining cannot help and must not spin.
-// The dirty flag plus the meta-room-synced retry pick the doc up on re-attach.
-const isRecoverableMachineFlockRoomStatus = (status: RepoTransportRoomStatus | null): boolean =>
-  status === 'disconnected' || status === 'error';
+// The dirty flag plus the meta-room-synced retry pick the doc up on re-attach,
+// which is why 'detached' must stay non-recoverable here too.
+const isRecoverableMachineFlockRoomStatus = isRecoverableStreamsRoomStatus;
 
 export class MachineFlockSyncCoordinator {
   private readonly repo: LoroRepo;

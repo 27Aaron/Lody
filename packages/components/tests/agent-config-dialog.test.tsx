@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
 import {
   ACP_CAPABILITY_CACHE_VERSION,
+  PROVIDER_SETUP_PROTOCOL_VERSION,
   getAcpCapabilityCacheKey,
   type AgentConfigId,
   type AgentConfigMeta,
@@ -25,13 +26,18 @@ const claudeConfigId = 'claude-config' as AgentConfigId;
 const codexConfigId = 'codex-config' as AgentConfigId;
 type RefreshCapabilities = ComponentProps<typeof AgentConfigDialog>['onRefreshCapabilities'];
 
-const createMachine = (name: string): MachineViewMeta => ({
+/** Omits `protocolCapabilities` by default, so the machine reads as legacy. */
+const createMachine = (
+  name: string,
+  protocolCapabilities?: MachineViewMeta['protocolCapabilities']
+): MachineViewMeta => ({
   id: machineId,
   name,
   cliVersion: '0.44.0',
   os: 'macOS',
   sessions: [],
   raceLimits: {},
+  ...(protocolCapabilities ? { protocolCapabilities } : {}),
   acpCapabilities: {
     [getAcpCapabilityCacheKey(claudeConfigId)]: {
       cliType: 'builtin',
@@ -172,8 +178,7 @@ describe('AgentConfigDialog', () => {
       agentType: args.agentType,
       success: true,
     }),
-    onManagedRuntimeSelected?: ComponentProps<typeof AgentConfigDialog>['onManagedRuntimeSelected'],
-    deferManagedBuiltinCreation = false
+    onManagedRuntimeSelected?: ComponentProps<typeof AgentConfigDialog>['onManagedRuntimeSelected']
   ) => {
     await act(async () => {
       root?.render(
@@ -187,7 +192,6 @@ describe('AgentConfigDialog', () => {
             onRefreshCapabilities={onRefreshCapabilities}
             onCheckBinaryStatus={onCheckBinaryStatus}
             onManagedRuntimeSelected={onManagedRuntimeSelected}
-            deferManagedBuiltinCreation={deferManagedBuiltinCreation}
           />
         </TooltipProvider>
       );
@@ -426,12 +430,10 @@ describe('AgentConfigDialog', () => {
         kind: 'create',
         initialForm: { name: 'Codex', cliType: 'builtin', agentType: 'codex' },
       },
-      createMachine('Fresh workstation'),
+      createMachine('Fresh workstation', { providerSetup: PROVIDER_SETUP_PROTOCOL_VERSION }),
       onSubmit,
       vi.fn(async () => ({ status: 'not-installed' as const })),
-      onRefreshCapabilities,
-      undefined,
-      true
+      onRefreshCapabilities
     );
 
     expect(document.body.textContent).toContain(

@@ -172,6 +172,7 @@ export interface ProvidersScreenViewProps {
   /** True when the local machine record has not yet arrived. */
   noLocalMachine: boolean;
   localMachineId?: MachineId | null;
+  localMachine?: MachineViewMeta;
   /** Open the edit dialog for an existing provider. */
   onEdit: (config: AgentConfigMeta) => void;
   /** Run the connectivity test (or re-test) for a row. */
@@ -198,6 +199,7 @@ export function ProvidersScreenView({
   testStatuses,
   noLocalMachine,
   localMachineId = null,
+  localMachine,
   onEdit,
   onTest,
   onAuthenticated,
@@ -253,6 +255,7 @@ export function ProvidersScreenView({
                 <ProviderSetupRow
                   key={setup.id}
                   setup={setup}
+                  machine={localMachine}
                   onRetry={onRetrySetup ?? (async () => undefined)}
                   onDelete={onDeleteSetup ?? (async () => undefined)}
                 />
@@ -811,6 +814,7 @@ export function ProvidersScreen({
         testStatuses={testStatuses}
         noLocalMachine={!localMachine}
         localMachineId={localMachineId}
+        localMachine={localMachine}
         onEdit={(config) => setDialogMode({ kind: 'edit', config })}
         onTest={handleTest}
         onAuthenticated={(config) => setStatus(config.id, 'passed')}
@@ -870,7 +874,6 @@ export function ProvidersScreen({
           onCheckBinaryStatus={checkBinaryStatus}
           onInstallBinary={installBinary}
           onManagedRuntimeSelected={onManagedRuntimeSelected}
-          deferManagedBuiltinCreation
         />
       ) : null}
 

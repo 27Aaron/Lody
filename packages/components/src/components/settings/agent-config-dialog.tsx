@@ -10,6 +10,7 @@ import {
   getStaticBuiltinAcpCapabilities,
   getBuiltinTitleGenerationDefaults,
   getRegistryAcpLaunchKind,
+  machineSupportsProviderSetupProtocol,
   isManagedBuiltinAgentType,
   isAcpCapabilityCacheEntryCurrent,
   parseCustomAcpCommandLine,
@@ -629,8 +630,6 @@ export type AgentConfigDialogProps = {
   onInstallBinary?: (args: BinaryActionArgs) => Promise<void>;
   /** Raise the selected managed runtime above onboarding's background queue. */
   onManagedRuntimeSelected?: (agentType: ManagedBuiltinAgentType) => void;
-  /** Let managed builtins finish download/auth/probe after this dialog closes. */
-  deferManagedBuiltinCreation?: boolean;
 };
 
 const DEFAULT_FORM: AgentConfigFormData = {
@@ -817,7 +816,6 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
     onCheckBinaryStatus,
     onInstallBinary,
     onManagedRuntimeSelected,
-    deferManagedBuiltinCreation = false,
   } = props;
   const { t } = useTranslation();
   const draftConfigIdRef = useRef<AgentConfigId | null>(null);
@@ -1035,8 +1033,14 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
     formData.cliType === 'builtin' &&
     isManagedBuiltinAgentType(formData.agentType) &&
     !hasBuiltinRuntimeOverride;
+  // Deferring hands the target daemon a durable `providerSetup` row, so it is
+  // only safe once that daemon advertises the protocol. Derived here rather
+  // than passed in: every host already gives us the target machine, and a
+  // per-caller flag can disagree with the machine it travels with.
   const backgroundManagedBuiltinSetup =
-    deferManagedBuiltinCreation && requiresBuiltinCreationVerification && usesDefaultManagedRuntime;
+    machineSupportsProviderSetupProtocol(machine) &&
+    requiresBuiltinCreationVerification &&
+    usesDefaultManagedRuntime;
 
   useEffect(() => {
     if (

@@ -3,6 +3,7 @@ import {
   getServerNow,
   type AgentConfigId,
   type MachineId,
+  type MachineViewMeta,
   type ProviderSetupTask,
 } from '@lody/shared';
 
@@ -10,6 +11,15 @@ import { ProviderSetupRow } from '@/components/settings/provider-setup-row';
 
 const machineId = 'machine-provider-setup' as MachineId;
 const now = getServerNow();
+const machine: MachineViewMeta = {
+  id: machineId,
+  name: 'Workstation',
+  cliVersion: '0.76.0',
+  os: 'linux',
+  sessions: [],
+  raceLimits: {},
+  protocolCapabilities: { providerSetup: 1 },
+};
 
 const baseSetup: ProviderSetupTask = {
   v: 1,
@@ -44,6 +54,7 @@ const meta = {
   tags: ['autodocs'],
   args: {
     setup: baseSetup,
+    machine,
     onRetry: async () => {},
     onDelete: async () => {},
   },

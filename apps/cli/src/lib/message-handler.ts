@@ -170,6 +170,7 @@ import {
   type AgentRunConfigSelection,
   type LodyOperationItemResult,
   type StoredLodyOperation,
+  CURRENT_MACHINE_PROTOCOL_CAPABILITIES,
 } from '@lody/shared';
 import { ISession, SessionManager } from '../session/session-manager';
 import { captureCli } from '@/lib/analytics/posthog';
@@ -192,6 +193,7 @@ import type {
 } from '@lody/platform';
 import { Logger } from '@/utils/logger';
 import { ProviderSetupManager } from './provider-setup-manager';
+import { MachineFlockCommandWatcher } from './loro/machine-flock-command-watcher';
 import {
   EXIT_CODE_REMOTE_RESTART,
   EXIT_CODE_REMOTE_UPGRADE,
@@ -203,7 +205,6 @@ import {
 import { formatErrorMessage } from '@/utils/format-error';
 import { startTraceSpan, traceAsync } from '@/utils/trace-span';
 import { getCliHttpFetch } from '@/utils/http-transport';
-import { streamsRoomBinding } from './loro/streams-room-binding';
 import { prepareCliStreamsGatewayBaseUrl } from './loro/streams-access';
 import { readTimeoutEnv, withTimeout } from './loro/timeout-utils';
 import {
@@ -260,7 +261,7 @@ import {
   resolveCodexImageGenerationStatusWrite,
   shouldRestoreRunningAfterPermission,
 } from './session-activity-status';
-import type { RepoRoomSubscription, RepoWatchHandle } from 'loro-repo';
+import type { RepoWatchHandle } from 'loro-repo';
 import { resolveGitBranchName } from './git/resolve-git-branch-name';
 import {
   AgentClient,
@@ -810,10 +811,7 @@ export class MessageHandler {
   private readonly deleteInFlight = new Set<SessionId>();
   private readonly deletedSessionIds = new Set<SessionId>();
   private readonly deleteLocalProjectInFlight = new Set<LocalProjectId>();
-  private machineFlockCommandWatcherPromise: Promise<void> | null = null;
-  private machineFlockCommandUnsubscribe: (() => void) | null = null;
-  private machineFlockCommandRoomSub: RepoRoomSubscription | null = null;
-  private providerSetupProcessingReady = false;
+  private machineFlockCommandWatcher: MachineFlockCommandWatcher;
   // Desktop local-transport backfill: in-flight task keys (`${sessionId}:${fileId}`)
   // so a file is never backfilled by two concurrent workers (re-enqueue dedupe).
   private readonly sessionFileBackfillInFlight = new Set<string>();
@@ -3282,6 +3280,16 @@ export class MessageHandler {
       sync: this.workspaceDocument,
       logger: this.logger,
     });
+    this.machineFlockCommandWatcher = new MachineFlockCommandWatcher({
+      repo: this.workspaceDocument.repo,
+      docId: this.getMachineFlockDocIdForMachine(),
+      logContext: this.getMachineFlockLogContext(),
+      waitForRemoteAuthority: this.cloudPort.kind !== 'local',
+      logger: this.logger,
+      onEvents: (events, { authoritative }) =>
+        this.rescanMachineCommands(getMachineCommandEventImpact(events), authoritative),
+      onReady: () => this.rescanMachineCommands(),
+    });
     this.previewService = new PreviewService({
       logger: this.logger,
       workspaceDocument: this.workspaceDocument,
@@ -3645,6 +3653,7 @@ export class MessageHandler {
     // This prevents dispatch from racing ahead of local session startup prerequisites.
     this.setupArchiveWatcher();
     this.setupDeleteWatcher();
+    void this.machineFlockCommandWatcher.start();
   }
 
   /**
@@ -3656,7 +3665,8 @@ export class MessageHandler {
     try {
       const machineRoomId = getMachineRoomId(this.machineId);
       const machineMeta = (await this.workspaceDocument.repo.getDocMeta(machineRoomId))?.meta as
-        MachineMeta | undefined;
+        | MachineMeta
+        | undefined;
       const supportsStreamsRpc = !!this.machineRpcServer;
 
       const hasMeta = !!machineMeta;
@@ -3677,6 +3687,7 @@ export class MessageHandler {
         os: process.platform,
         rpcVersion: supportsStreamsRpc ? LORO_STREAMS_RPC_VERSION : undefined,
         supportsLocalProjectHistoryRpc: supportsStreamsRpc,
+        protocolCapabilities: CURRENT_MACHINE_PROTOCOL_CAPABILITIES,
         supportRegistryAgentTypes: this.supportRegistryAgentTypes,
         sessions: [],
       });
@@ -3871,78 +3882,27 @@ export class MessageHandler {
     return `workspaceId=${this.workspaceId}, machineId=${this.machineId}, docId=${docId}`;
   }
 
-  private setupMachineFlockCommandWatcher(): void {
-    if (this.machineFlockCommandWatcherPromise) {
-      return;
+  /**
+   * Drains the durable Machine Flock command queues.
+   *
+   * `impact` narrows the drain to the families a live event actually touched;
+   * an authoritative rejoin passes nothing and rescans everything, which is the
+   * only retry path for a queue whose earlier drain threw. Keep both callers on
+   * this one method: a new command family that reaches the event path but not
+   * the rejoin path fails silently — its queue simply never drains again.
+   */
+  private rescanMachineCommands(
+    impact?: ReturnType<typeof getMachineCommandEventImpact>,
+    authoritative = true
+  ): void {
+    if (!impact || impact.archive) void this.processArchiveRequests();
+    if (!impact || impact.delete) void this.processDeleteRequests();
+    if (!impact || impact.deleteLocalProject) void this.processDeleteLocalProjectRequests();
+    // A stale local setup row must not outrun a remote cancellation, so provider
+    // setup drains only once the command room has established remote authority.
+    if ((!impact || impact.providerSetup) && authoritative) {
+      void this.providerSetupManager.kick();
     }
-
-    // Cloud/dual mode must apply the first remote snapshot before replaying a
-    // durable setup, otherwise a stale local row can outrun a remote
-    // cancellation. The OSS local platform has no remote transport by design;
-    // its opened local Flock state is already the authoritative replay source.
-    this.providerSetupProcessingReady = this.cloudPort.kind === 'local';
-    const flockDocId = this.getMachineFlockDocIdForMachine();
-    const flockContext = this.getMachineFlockLogContext();
-    this.machineFlockCommandWatcherPromise = (async () => {
-      const handle = await this.workspaceDocument.repo.openFlockDoc(flockDocId);
-      this.machineFlockCommandUnsubscribe = handle.flock.subscribe((batch) => {
-        const events = (batch as { events?: MachineFlockEvent[] }).events ?? [];
-        const impact = getMachineCommandEventImpact(events);
-        if (impact.archive) {
-          void this.processArchiveRequests();
-        }
-        if (impact.delete) {
-          void this.processDeleteRequests();
-        }
-        if (impact.deleteLocalProject) {
-          void this.processDeleteLocalProjectRequests();
-        }
-        if (impact.providerSetup && this.providerSetupProcessingReady) {
-          void this.providerSetupManager.kick();
-        }
-      });
-      this.machineFlockCommandRoomSub = await handle.joinRoom();
-      if (this.providerSetupProcessingReady) {
-        // Process setup rows restored from the local SQLite-backed repo. New
-        // rows arriving over the local data plane are handled by the watcher.
-        void this.providerSetupManager.kick();
-      } else {
-        // Binding, not classic: in cloud/dual mode this stays pending while the
-        // Streams transport is detached, then settles after the first remote
-        // snapshot once it attaches.
-        void streamsRoomBinding(this.machineFlockCommandRoomSub).firstSyncedWithRemote.then(
-          () => {
-            void this.processArchiveRequests();
-            void this.processDeleteRequests();
-            void this.processDeleteLocalProjectRequests();
-            // A restart can have a stale local setup that was cancelled remotely.
-            // Do not resume it until the first remote snapshot has been applied.
-            this.providerSetupProcessingReady = true;
-            void this.providerSetupManager.kick();
-          },
-          (error) => {
-            this.logger.debug(
-              `[machine-flock] Command room initial sync failed (${flockContext}): ${formatErrorMessage(
-                error,
-                { includeStack: true }
-              )}`
-            );
-          }
-        );
-      }
-      this.logger.debug(`[machine-flock] Command watcher registered (${flockContext})`);
-      void this.processArchiveRequests();
-      void this.processDeleteRequests();
-      void this.processDeleteLocalProjectRequests();
-    })().catch((error) => {
-      this.machineFlockCommandWatcherPromise = null;
-      this.logger.error(
-        `[machine-flock] Failed to start command watcher (${flockContext}): ${formatErrorMessage(
-          error,
-          { includeStack: true }
-        )}`
-      );
-    });
   }
 
   private async readMachineFlockCommandRows(): Promise<MachineFlockRowMap> {
@@ -4036,7 +3996,6 @@ export class MessageHandler {
     if (this.archiveWatchHandle) {
       return;
     }
-    this.setupMachineFlockCommandWatcher();
     const machineRoomId = getMachineRoomId(this.machineId);
     this.archiveWatchHandle = this.workspaceDocument.repo.watch(
       (event) => {
@@ -4201,7 +4160,8 @@ export class MessageHandler {
     }
 
     const machineMeta = (await this.workspaceDocument.repo.getDocMeta(machineRoomId))?.meta as
-      MachineLegacyMetaFields | undefined;
+      | MachineLegacyMetaFields
+      | undefined;
     if (!machineMeta?.needToArchiveSessions?.[sessionId]) {
       if (!removedFlockRow) {
         this.logger.debug(`[archive] Archive request already cleared (${sessionId})`);
@@ -4514,7 +4474,6 @@ export class MessageHandler {
     if (this.deleteWatchHandle) {
       return;
     }
-    this.setupMachineFlockCommandWatcher();
     const machineRoomId = getMachineRoomId(this.machineId);
     this.deleteWatchHandle = this.workspaceDocument.repo.watch(
       (event) => {
@@ -4751,7 +4710,8 @@ export class MessageHandler {
     }
 
     const machineMeta = (await this.workspaceDocument.repo.getDocMeta(machineRoomId))?.meta as
-      MachineLegacyMetaFields | undefined;
+      | MachineLegacyMetaFields
+      | undefined;
     if (!machineMeta?.needToDeleteSessions?.[sessionId]) {
       if (removedFlockRow || removedLaunchConfigRow) {
         this.logger.debug(`[delete] Delete Flock request removed (${sessionId})`);
@@ -6179,7 +6139,8 @@ export class MessageHandler {
 
       const machineRoomId = getMachineRoomId(this.machineId);
       const machineMeta = (await this.workspaceDocument.repo.getDocMeta(machineRoomId))?.meta as
-        MachineMeta | undefined;
+        | MachineMeta
+        | undefined;
       const existingName = machineMeta?.name?.trim();
       // The CLI startup name is only a bootstrap default. Settings-page renames own the
       // persisted display name, so reconnect/registration must not overwrite synced edits.
@@ -6193,6 +6154,7 @@ export class MessageHandler {
         os: process.platform,
         rpcVersion: supportsStreamsRpc ? LORO_STREAMS_RPC_VERSION : machineMeta?.rpcVersion,
         supportsLocalProjectHistoryRpc: supportsStreamsRpc,
+        protocolCapabilities: CURRENT_MACHINE_PROTOCOL_CAPABILITIES,
         supportRegistryAgentTypes: this.supportRegistryAgentTypes,
         sessions: machineMeta?.sessions ?? [],
       });
@@ -9572,11 +9534,7 @@ export class MessageHandler {
     this.archiveWatchHandle = null;
     this.deleteWatchHandle?.unsubscribe();
     this.deleteWatchHandle = null;
-    this.machineFlockCommandUnsubscribe?.();
-    this.machineFlockCommandUnsubscribe = null;
-    this.machineFlockCommandRoomSub?.unsubscribe();
-    this.machineFlockCommandRoomSub = null;
-    this.machineFlockCommandWatcherPromise = null;
+    this.machineFlockCommandWatcher.stop();
     this.providerSetupManager.stop();
     this.sessionActivePresence.clearAll();
     // Terminating sessions is the producer barrier: agent callbacks may still

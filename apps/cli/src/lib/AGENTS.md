@@ -142,6 +142,16 @@ control-plane path is DEPRECATED; do not add functionality to it.
   `loro/machine-flock-sync-coordinator.ts` owns the live room, dirty state, and
   exponential retry; request-scoped `syncOnce()` failures must not make local project
   add/update flows fail after the local write is durable.
+- `loro/machine-flock-command-watcher.ts` owns the machine's durable COMMAND
+  subscription (archive/delete/delete-local-project/provider-setup), separately from the
+  sync coordinator's write room. Flock rows are durable, so reconnect correctness is
+  SCAN-based, not event-based: every authoritative join rescans every queue, and join or
+  initial-sync failures retry with bounded backoff. Events are only low-latency wakeups
+  and carry `authoritative`, which gates provider setup — a stale local setup row must
+  not outrun a remote cancellation. Route both the event and rejoin paths through
+  `MessageHandler.rescanMachineCommands`: a command family wired to only one of them
+  fails silently, because its queue simply stops draining. Room-status recovery uses the
+  shared `isRecoverableStreamsRoomStatus` ('detached' is never recoverable).
 - **Streams recovery has TWO signals and they must not be recombined**
   (`loro/connection-recovery.ts`). `onStreamsOnline` is cheap, unthrottled, and
   fires on every health rising edge — it RELEASES work parked while offline

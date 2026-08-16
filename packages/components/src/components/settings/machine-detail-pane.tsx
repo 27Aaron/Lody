@@ -127,6 +127,7 @@ export function MachineProvidersSection({
             <ProviderSetupRow
               key={setup.id}
               setup={setup}
+              machine={machine}
               onRetry={onRetrySetup ?? (async () => undefined)}
               onDelete={onDeleteSetup ?? (async () => undefined)}
             />

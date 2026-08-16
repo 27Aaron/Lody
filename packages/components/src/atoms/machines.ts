@@ -71,6 +71,7 @@ const MACHINE_META_VISIBLE_KEYS: readonly (keyof MachineViewMeta)[] = [
   'needToDeleteSessions',
   'rpcVersion',
   'supportsLocalProjectHistoryRpc',
+  'protocolCapabilities',
   'raceLimits',
 ] as const;
 

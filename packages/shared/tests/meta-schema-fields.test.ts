@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import { resolveActiveAssistantTurnId, type MachineMeta, type SessionMeta } from '../src/schema';
+import {
+  MACHINE_PROTOCOL_CAPABILITIES,
+  getMachineProtocolCapabilityVersion,
+  machineSupportsProtocolCapability,
+} from '../src/machine-protocol-capabilities';
 
 describe('meta schema fields', () => {
   it('keeps legacy session meta shape readable', () => {
@@ -122,5 +127,24 @@ describe('meta schema fields', () => {
     };
 
     expect(machine.rpcVersion).toBe('0');
+  });
+
+  it('negotiates versioned machine protocols without relying on CLI versions', () => {
+    const legacyMachine = { protocolCapabilities: undefined };
+    const currentMachine = {
+      protocolCapabilities: {
+        [MACHINE_PROTOCOL_CAPABILITIES.providerSetup]: 1,
+        futureProtocol: 3,
+      },
+    };
+
+    expect(
+      machineSupportsProtocolCapability(legacyMachine, MACHINE_PROTOCOL_CAPABILITIES.providerSetup)
+    ).toBe(false);
+    expect(
+      machineSupportsProtocolCapability(currentMachine, MACHINE_PROTOCOL_CAPABILITIES.providerSetup)
+    ).toBe(true);
+    expect(getMachineProtocolCapabilityVersion(currentMachine, 'futureProtocol')).toBe(3);
+    expect(machineSupportsProtocolCapability(currentMachine, 'futureProtocol', 4)).toBe(false);
   });
 });

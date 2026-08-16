@@ -39,6 +39,19 @@ export type StreamsRoomBinding = {
  * was absent, which meant every test fake silently exercised the classic path
  * this helper exists to avoid — the bug would have survived its own tests.
  */
+/**
+ * Whether a room's Streams status is worth rejoining.
+ *
+ * 'detached' is deliberately NOT recoverable: it means the 'streams' transport
+ * is not attached to the room at all (offline / pre-attach), and reconnecting
+ * cannot change that — only `repo.addTransport` can. Recovery must not spin on
+ * it. Statuses MUST be read from the 'streams' binding (`streamsRoomBinding`):
+ * the classic surface reports a detached binding as 'disconnected', which this
+ * predicate would wrongly treat as recoverable.
+ */
+export const isRecoverableStreamsRoomStatus = (status: RepoTransportRoomStatus | null): boolean =>
+  status === 'disconnected' || status === 'error';
+
 export function streamsRoomBinding(sub: RepoRoomSubscription): StreamsRoomBinding {
   const binding = sub.subscription(STREAMS_TRANSPORT_ID);
   return {
