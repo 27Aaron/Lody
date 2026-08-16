@@ -55,7 +55,10 @@
   also owned here; the App build must not overwrite public-site SEO files.
 - `prebuild` runs `scripts/clean-output.mjs` before content generation. Keep this:
   stale Next/static prerender files in `out/` can create Vite preview redirect
-  loops during TanStack prerender.
+  loops during TanStack prerender. Downstream deployments that immediately run
+  `build` may set `LODY_SKIP_SITE_DOCS_POSTINSTALL=1` to avoid generating the same
+  content during install; never use the switch unless a later build/generate step
+  is guaranteed.
 - SEO lives in `lib/metadata.ts` and TanStack route `head()` functions. Canonical
   page URLs should match Cloudflare Pages' directory form (`/`, `/zh/`,
   `/docs/.../`, `/zh/docs/.../`); file URLs keep their extension. `/home` and

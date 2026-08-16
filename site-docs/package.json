@@ -6,13 +6,14 @@
     "clean:out": "node scripts/clean-output.mjs",
     "generate": "fumadocs-mdx && node scripts/generate-sitemap.mjs && node scripts/generate-llms.mjs",
     "generate:routes": "tsr generate",
-    "postinstall": "fumadocs-mdx && node scripts/generate-sitemap.mjs && node scripts/generate-llms.mjs",
+    "postinstall": "node scripts/postinstall.mjs",
     "predev": "corepack pnpm run generate",
     "dev": "vite dev --host 127.0.0.1 --port 3002",
     "prebuild": "corepack pnpm run clean:out && corepack pnpm run generate && corepack pnpm run generate:routes",
     "build": "vite build",
     "pretypecheck": "corepack pnpm run generate && corepack pnpm run generate:routes",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test scripts/postinstall.test.mjs"
   },
   "dependencies": {
     "@lody/components": "workspace:*",
