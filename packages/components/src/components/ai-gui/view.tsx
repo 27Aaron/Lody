@@ -1796,11 +1796,19 @@ const SystemNoticeView = ({
       return (
         <div className="flex items-center gap-3 py-4 text-xs text-muted-foreground/75">
           <DashedNoticeRule />
-          <span className="shrink-0">
-            {t('sessions.systemNotices.forkOrigin.prefix', 'This conversation was forked from')}{' '}
+          {/* min-w-0 on the wrapper + truncate on the button: a long source
+              title ellipsizes inside the column instead of pushing past it and
+              clipping at the pane edge. Truncation must live on the button —
+              on the wrapper the whole button is one atomic inline box, so the
+              ellipsis would replace the entire title. */}
+          <span className="flex min-w-0 items-baseline gap-1">
+            <span className="shrink-0">
+              {t('sessions.systemNotices.forkOrigin.prefix', 'This conversation was forked from')}
+            </span>
             <button
               type="button"
-              className="font-medium text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+              title={meta.sourceTitle}
+              className="min-w-0 truncate font-medium text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
               onClick={() => onNavigateSession?.({ sessionId: meta.sourceSessionId })}
             >
               {meta.sourceTitle}
