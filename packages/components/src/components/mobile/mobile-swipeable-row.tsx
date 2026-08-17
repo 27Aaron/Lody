@@ -60,6 +60,20 @@ export type MobileSwipeableRowProps = {
   archiveAriaLabel?: string;
   restoreAriaLabel?: string;
   deleteAriaLabel?: string;
+  /**
+   * Lift the row face above the drill-page back-swipe strip
+   * (`mobile-edge-back-swipe.tsx`, mounted at `zIndex={20}`). The face is
+   * normally `z-10`, so it AND everything inside it — including a control
+   * rendered by `children` — sits under that strip and cannot be tapped in
+   * the leading 48px on a native drill page.
+   *
+   * Set this only for a row that actually puts a control there (today: an
+   * opened-by tree opener's fold chevron). The trade is that an edge swipe
+   * starting on this row no longer navigates back; every other row still
+   * does, and the header back chip is unaffected. Same trade the composer
+   * makes with `protectFromEdgeBackZone`.
+   */
+  liftAboveEdgeSwipeZone?: boolean;
   className?: string;
 };
 
@@ -154,6 +168,7 @@ export function MobileSwipeableRow({
   archiveAriaLabel,
   restoreAriaLabel,
   deleteAriaLabel,
+  liftAboveEdgeSwipeZone = false,
   className,
 }: MobileSwipeableRowProps) {
   const { t } = useTranslation();
@@ -448,7 +463,13 @@ export function MobileSwipeableRow({
          face so it cannot cover the revealed action buttons. */}
       <motion.div
         style={{ x }}
-        className="relative z-10 w-full bg-background shadow-[0_1px_0_0_hsl(var(--background)),0_-1px_0_0_hsl(var(--background))]"
+        className={cn(
+          'relative w-full bg-background shadow-[0_1px_0_0_hsl(var(--background)),0_-1px_0_0_hsl(var(--background))]',
+          /* This element is a stacking context (positioned + transformed), so
+             nothing inside it can paint above the edge-swipe strip on its own
+             — the lift has to happen here, not on the child control. */
+          liftAboveEdgeSwipeZone ? 'z-30' : 'z-10'
+        )}
       >
         <div {...bindDrag()} onClickCapture={handleCaptureClick}>
           {children}

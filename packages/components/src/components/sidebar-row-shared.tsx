@@ -422,9 +422,16 @@ export function SessionRowLeadingSlot({
   const isTreeChild = childTree !== null;
   const hasActivity = Boolean(isWaitingPermission || isWorking || hasUnreadMessages);
   const showChildConnectors = childTree !== null && !hasActivity;
-  // Loading outranks folding: a working opener shows the spinner, not the
-  // disclosure (collapse stays reachable via the row context menu).
-  const showOpenerDisclosure = openedByTree?.kind === 'opener' && !isWorking;
+  /* Status outranks the tree on BOTH sides of the relationship: an active
+     child drops its ├/└ and an active opener drops its disclosure, because one
+     node can only say one thing and "this session needs you" beats "this
+     session has children". Folding stays reachable the same way it always is
+     on a busy row — hover swaps in ⋯, whose menu carries the same toggle.
+
+     Gated on the whole activity set, not just `isWorking`: the disclosure
+     branch REPLACES the indicator, so an unread or waiting-permission opener
+     would otherwise render a chevron and silently drop its own status mark. */
+  const openerTree = openedByTree?.kind === 'opener' && !hasActivity ? openedByTree : null;
   const restClassName = showMenuButton
     ? cn('transition-opacity duration-100', fadeClassName)
     : undefined;
@@ -438,17 +445,17 @@ export function SessionRowLeadingSlot({
         isTreeChild ? TREE_CHILD_SLOT_CLASS : 'w-3.5 justify-center'
       )}
     >
-      {showOpenerDisclosure && openedByTree?.kind === 'opener' ? (
+      {openerTree ? (
         <button
           type="button"
           data-session-opened-by-toggle=""
-          aria-label={openedByTree.label}
-          aria-expanded={openedByTree.expanded}
-          title={openedByTree.label}
+          aria-label={openerTree.label}
+          aria-expanded={openerTree.expanded}
+          title={openerTree.label}
           onClick={(event) => {
             event.preventDefault();
             event.stopPropagation();
-            openedByTree.onToggle();
+            openerTree.onToggle();
           }}
           className={cn(
             'relative z-20 flex h-3.5 w-3.5 items-center justify-center rounded-sm',
@@ -460,7 +467,7 @@ export function SessionRowLeadingSlot({
           <ChevronDown
             className={cn(
               'h-3.5 w-3.5 transition-transform duration-150 ease-out',
-              openedByTree.expanded ? 'rotate-0' : '-rotate-90'
+              openerTree.expanded ? 'rotate-0' : '-rotate-90'
             )}
             aria-hidden="true"
           />

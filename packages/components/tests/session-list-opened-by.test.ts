@@ -347,6 +347,32 @@ describe('SessionList opened-by rendering', () => {
     expect(unreadSlot?.querySelector('[data-session-row-indicator] span')).not.toBeNull();
   });
 
+  it('hides the opener disclosure for an unread or waiting opener, not just a working one', () => {
+    // The disclosure branch REPLACES the indicator, so gating only on
+    // `isWorking` makes an unread opener render a chevron and silently lose its
+    // unread dot. Every status that would draw a mark has to take the node.
+    for (const status of [{ hasUnreadMessages: true }, { isWaitingPermission: true }] as const) {
+      renderList([
+        makeRow({ sessionId: 'opener', ...status }),
+        makeRow({ sessionId: 'opened-1', openedBySessionId: 'opener' }),
+      ]);
+
+      const openerSlot = container
+        ?.querySelector('[data-sidebar-session-id="opener"]')
+        ?.querySelector('[data-session-row-leading-slot]');
+      expect(openerSlot?.querySelector('[data-session-opened-by-toggle]')).toBeNull();
+      // The status mark it would otherwise have lost.
+      expect(openerSlot?.querySelector('[data-session-row-indicator]')?.children.length).toBe(1);
+
+      // The tree itself is untouched — only the affordance yields.
+      expect(
+        container
+          ?.querySelector('[data-sidebar-session-id="opened-1"]')
+          ?.querySelectorAll('[data-session-tree-connector]')
+      ).toHaveLength(2);
+    }
+  });
+
   it('renders an active opened session as the selected row', () => {
     const store = createStore();
     container = document.createElement('div');

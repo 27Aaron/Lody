@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   Archive,
+  ChevronDown,
   ChevronLeft,
   File as FileIcon,
   Github,
@@ -28,6 +29,7 @@ import {
   SessionMergeablePill,
   SessionPrIcon,
   SessionRowAuthorAvatar,
+  type SessionRowOpenedByTreeSlot,
 } from '@/components/sidebar-row-shared';
 import { CarbonSettingsAdjust } from '@/components/icons/carbon-settings-adjust';
 import { MobileEdgeBackSwipeZone } from './mobile-edge-back-swipe';
@@ -122,6 +124,15 @@ export type MobileConversationItem = {
   isPinned?: boolean;
   /** Machine id the conversation lives on. Powers the machine filter. */
   machineId?: string | null;
+  /** PRECISE Session that created this one — `lody session create` with a
+     session in scope, which is how the `lody_session_create` MCP tool spawns
+     independent work. Presentation-only provenance; deliberately NOT
+     `parentSessionId`. See `lib/session-opened-by-tree.ts`. */
+  openedBySessionId?: string | null;
+  /** The list ROW to nest under. Differs from `openedBySessionId` when the
+     opener is a child Tab, which has no row of its own — the caller walks
+     `parentSessionId` up to the root via `buildSidebarOpenerRowResolver`. */
+  openedByRowSessionId?: string | null;
   /** Stable id for the project the conversation belongs to:
      `machineId:localProjectId` for local sessions, `owner/repo` for
      GitHub sessions. `null` for chat-only sessions with no project.
@@ -296,6 +307,122 @@ function StatusIndicator({
 }
 
 /* --------------------------------------------------------------------------
+ * Opened-by tree (`lib/session-opened-by-tree.ts`) — mobile geometry.
+ *
+ * The leading slot owns ONE node, exactly like the desktop sidebar row: it
+ * shows the fold chevron on an opener, ├/└ on an opened Session, or the status
+ * indicator — never two of them. Status wins, on both sides of the
+ * relationship: "this session needs you" beats "this session has children".
+ *
+ * That single node is why a top-level row keeps its exact flat geometry — the
+ * slot is the same 16px status slot it always was. Only an opened Session
+ * widens it (16px → 32px, left-aligned so the node stays at the same x),
+ * producing a 16px content indent without moving the node or the background.
+ * ----------------------------------------------------------------------- */
+/** Widened leading slot for an opened Session: the indent, and nothing else. */
+const TREE_CHILD_SLOT_CLASS = 'w-8 justify-start';
+/** Node centre — `ps-4` + half of the 16px slot. Shared by chevron/lines/status. */
+const TREE_NODE_START_CLASS = 'start-[23px]';
+/** 23px node → 44px, i.e. 4px shy of the child's 48px content start. */
+const TREE_ELBOW_WIDTH_CLASS = 'w-[21px]';
+const TREE_LINE_CLASS = 'bg-muted-foreground/30';
+
+function ConversationRowTreeConnector({ isLastChild }: { isLastChild: boolean }) {
+  return (
+    /* Anchored to the ROW, not the slot, so the trunk can run the row's full
+       height and meet its neighbours with no seam. */
+    <span
+      aria-hidden="true"
+      data-conversation-tree-connector=""
+      className="pointer-events-none absolute inset-0"
+    >
+      <span
+        className={cn(
+          'absolute top-0 w-px',
+          TREE_NODE_START_CLASS,
+          TREE_LINE_CLASS,
+          /* Last child stops at the elbow so the trunk does not dangle past
+             the group; every other child carries it into the next row. */
+          isLastChild ? 'h-1/2' : 'bottom-0'
+        )}
+      />
+      <span
+        className={cn(
+          'absolute top-1/2 h-px',
+          TREE_NODE_START_CLASS,
+          TREE_ELBOW_WIDTH_CLASS,
+          TREE_LINE_CLASS
+        )}
+      />
+    </span>
+  );
+}
+
+/**
+ * The opener's fold control. A SIBLING of the row button, never a child of it —
+ * a phone row is one big `<button>`, and nesting an interactive control inside
+ * a button is invalid and unreachable to assistive tech.
+ *
+ * It sits ON the leading node, so it renders only while that node is free
+ * (see `conversationRowHasActivity`). `z-30` clears the project screen's
+ * `EDGE_ZONE_PX` back-swipe strip at `zIndex={20}`, which would otherwise
+ * swallow every tap in the leading 48px — the same reason the composer carries
+ * `protectFromEdgeBackZone`.
+ */
+function ConversationRowTreeToggle({
+  expanded,
+  label,
+  onToggle,
+}: {
+  expanded: boolean;
+  label: string;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      data-conversation-tree-toggle=""
+      aria-label={label}
+      aria-expanded={expanded}
+      onClick={(event) => {
+        /* The row button is a sibling, so this never bubbles into it — but the
+           swipe wrapper listens on an ancestor, and a drag that began here
+           should not also read as a tap on the row. */
+        event.preventDefault();
+        event.stopPropagation();
+        onToggle();
+      }}
+      className={cn(
+        /* 28x36 hit box centred on the node — comfortably past the 24px
+           minimum, and it only overlaps the row's own padding + status slot. */
+        'absolute top-1/2 z-30 flex h-9 w-7 -translate-y-1/2 items-center justify-center',
+        'start-[9px] rounded-md text-muted-foreground active:bg-muted/60'
+      )}
+    >
+      <ChevronDown
+        className={cn(
+          'h-4 w-4 transition-transform duration-150 ease-out',
+          expanded ? 'rotate-0' : '-rotate-90'
+        )}
+        aria-hidden="true"
+      />
+    </button>
+  );
+}
+
+/**
+ * Whether the row's leading node is already claimed by a status mark. Exported
+ * because the list needs the same answer to decide whether the row carries a
+ * tap target in the back-swipe strip (`liftAboveEdgeSwipeZone`), and the two
+ * must not drift apart.
+ */
+export function conversationRowHasActivity(conversation: MobileConversationItem): boolean {
+  return Boolean(
+    conversation.isWaitingPermission || conversation.isWorking || conversation.hasUnreadMessages
+  );
+}
+
+/* --------------------------------------------------------------------------
  * Conversation row — Linear-inspired single line:
  *   [status circle] [team owner?] [pin?] title .............. [+/-] [worktree] [PR]
  * Always-on leading status, comfortable row height, medium title weight.
@@ -317,6 +444,7 @@ export function ConversationRow({
   isSelected = false,
   onToggleSelect,
   onLongPress,
+  treeSlot,
   secondaryField: _secondaryField = 'branch',
 }: {
   conversation: MobileConversationItem;
@@ -341,12 +469,23 @@ export function ConversationRow({
      this row. Caller is expected to start the mode + pre-select this
      id in one go (matches iOS Mail edit-mode entry). */
   onLongPress?: () => void;
+  /** This row's place in the opened-by tree (`lib/session-opened-by-tree.ts`):
+     an opener with a fold control, an opened Session with a ├/└ connector, or
+     undefined for a plain top-level row. Built by the caller with the shared
+     `buildSessionRowOpenedByTreeSlot` so the labels match the desktop sidebar. */
+  treeSlot?: SessionRowOpenedByTreeSlot;
   /** @deprecated Second-line branch/project meta is no longer shown.
      Kept so existing callers (home Chat tab, project page, list
      grouping) do not need a simultaneous API change. */
   secondaryField?: 'branch' | 'project';
 }) {
   void _secondaryField;
+  const treeChild = treeSlot?.kind === 'child' ? treeSlot : null;
+  /* One node, one meaning. An active row shows its status and drops both the
+     fold chevron and the ├/└ — same rule the desktop sidebar row applies. */
+  const hasActivity = conversationRowHasActivity(conversation);
+  const treeOpener = treeSlot?.kind === 'opener' && !hasActivity ? treeSlot : null;
+  const showChildConnectors = treeChild !== null && !hasActivity;
   const hasChanges =
     typeof conversation.addedLines === 'number' &&
     typeof conversation.deletedLines === 'number' &&
@@ -377,7 +516,7 @@ export function ConversationRow({
     enabled: Boolean(onLongPress) && !selectionMode,
   });
 
-  return (
+  const rowButton = (
     <button
       type="button"
       onClick={(event) => {
@@ -399,7 +538,7 @@ export function ConversationRow({
       className={cn(
         /* Linear issue-row cadence: ~44px min height, full-bleed press
            wash, fixed leading status so every title shares one x. */
-        'mobile-project-conversation-row flex min-h-11 w-full items-center gap-2.5 border-0 px-4 py-2.5 text-left shadow-none outline-none transition-colors',
+        'mobile-project-conversation-row relative flex min-h-11 w-full items-center gap-2.5 border-0 px-4 py-2.5 text-left shadow-none outline-none transition-colors',
         /* Solid canvas (not transparent) so nothing under the row can
            read as a divider hairline between list items. */
         selected && !selectionMode
@@ -408,24 +547,33 @@ export function ConversationRow({
         selectionMode && isSelected && 'bg-primary/10'
       )}
     >
-      {selectionMode ? (
-        <div className="flex h-4 w-4 shrink-0 items-center justify-center">
+      {showChildConnectors ? (
+        <ConversationRowTreeConnector isLastChild={treeChild.isLastChild} />
+      ) : null}
+      {/* The one leading node. An opened Session widens it (left-aligned, so
+          the node itself does not move) to indent everything after it. */}
+      <div
+        data-conversation-row-leading-slot=""
+        className={cn(
+          'flex h-4 shrink-0 items-center',
+          treeChild ? TREE_CHILD_SLOT_CLASS : 'w-4 justify-center'
+        )}
+      >
+        {selectionMode ? (
           <Checkbox
             checked={isSelected}
             tabIndex={-1}
             className="pointer-events-none h-4 w-4"
             aria-hidden="true"
           />
-        </div>
-      ) : (
-        <div className="flex h-4 w-4 shrink-0 items-center justify-center">
+        ) : (
           <StatusIndicator
             isWorking={conversation.isWorking}
             isWaitingPermission={conversation.isWaitingPermission}
             hasUnreadMessages={conversation.hasUnreadMessages}
           />
-        </div>
-      )}
+        )}
+      </div>
       <SessionRowAuthorAvatar author={conversation.owner} />
       <div className="flex min-w-0 flex-1 items-center gap-1.5">
         {conversation.isPinned ? (
@@ -459,6 +607,22 @@ export function ConversationRow({
       ) : null}
       {showPr ? <SessionPrIcon prStatus={prStatus} prCiState={conversation.prCiState} /> : null}
     </button>
+  );
+
+  /* Only a visible chevron needs the positioning wrapper that lets it sit
+     BESIDE the row button instead of inside it. Every other row — including an
+     active opener, whose node is showing status — returns the bare button, so
+     the flat DOM is unchanged for them. */
+  if (!treeOpener) return rowButton;
+  return (
+    <div className="relative">
+      {rowButton}
+      <ConversationRowTreeToggle
+        expanded={treeOpener.expanded}
+        label={treeOpener.label}
+        onToggle={treeOpener.onToggle}
+      />
+    </div>
   );
 }
 

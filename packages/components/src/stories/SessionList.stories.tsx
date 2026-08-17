@@ -714,6 +714,24 @@ export const OpenedSessionsLight: Story = {
 };
 
 /**
+ * The opener itself is WORKING. Status outranks the tree at that node, so the
+ * opener shows its spinner instead of the disclosure — the same rule an active
+ * opened Session follows when it drops its ├/└. Folding is still reachable
+ * from the row's context menu, which carries the identical toggle.
+ */
+export const OpenedSessionsActiveOpener: Story = {
+  name: 'Opened Sessions (MCP) · Active opener',
+  args: {
+    ...OPENED_SESSIONS_ARGS,
+    selectedSessionId: 'mcp-opener',
+    sessions: OPENED_SESSIONS_ARGS.sessions.map((session) =>
+      session.sessionId === 'mcp-opener' ? { ...session, isWorking: true } : session
+    ),
+  },
+  render: (args) => <TaskListDemo {...args} />,
+};
+
+/**
  * The opener folded: its opened Sessions are hidden, the opener keeps its own
  * row, and the disclosure chevron stays visible (this is the only state where
  * rows are hidden, so the affordance must not need a hover to be found).

@@ -147,13 +147,16 @@ mobile surfaces.
   `openedBySessionId` to the root: "Go to Opener Session" and the conversation's
   "Opened by" entry must still land on the exact Tab that created the Session.
   The opener and unrelated top-level rows keep the exact flat-list alignment.
-  The shared leading slot owns the node-centre affordance: an opener shows its
-  disclosure at rest and swaps it for ⋯ on row hover, and a WORKING opener
-  swaps the disclosure for the status spinner — loading outranks folding, so
-  collapse stays reachable only via the row context menu while active. An idle
-  child shows ├/└ and swaps those for ⋯ in the SAME 7px-centred position. An active child
-  (working / unread / waiting) drops the trunk and elbow and shows only the
-  status at that node — never both. Only a child widens that slot
+  The shared leading slot owns the node-centre affordance: an idle opener shows
+  its disclosure at rest and swaps it for ⋯ on row hover; an idle child shows
+  ├/└ and swaps those for ⋯ in the SAME 7px-centred position. STATUS OUTRANKS
+  THE TREE on both sides: an active (working / unread / waiting) child drops
+  the trunk and elbow, and an active opener drops its disclosure — that node
+  shows only the status, never both. Gate the opener on the whole activity set,
+  not just `isWorking`: the disclosure branch REPLACES the indicator, so an
+  unread opener would otherwise render a chevron and lose its unread dot. The
+  context menu's expand/collapse item is what keeps a busy opener foldable, so
+  it must stay wired. Only a child widens that slot
   from 14px to 26px, producing the 12px title indent without shifting the row
   background. Keep connector geometry in `sidebar-row-shared.tsx`, and keep the
   opener's context menu expand/collapse item wired to the same toggle callback.
@@ -173,7 +176,8 @@ mobile surfaces.
   navigation directions must stay reachable: the tree and the row context menu's
   "Go to Opener Session" in every sidebar list, `SessionHeaderMenu.openedByRelations`,
   and the in-conversation cards for successful create Operations / the opened
-  Session's precise opener.
+  Session's precise opener. The mobile chat lists render the same tree from the
+  same two fields, per bucket, minus the disclosure — see `mobile/AGENTS.md`.
 - Desktop update prompt: `sidebar-update-banner.tsx` plus `update-changelog-dialog.tsx`,
   driven by the pure selectors in `lib/electron-update-banner.ts`. The changelog opens
   in-app; release notes come from a remote feed and render as sanitized Markdown with

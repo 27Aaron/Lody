@@ -155,18 +155,97 @@ const baseChats: MobileConversationItem[] = [
   },
 ];
 
+/* Sessions created by another Session (`lody_session_create` MCP tool). The
+   list nests each one under its opener; `openedByRowSessionId` is the row to
+   indent under, which differs from the precise opener when an agent inside a
+   child Tab created the Session. `fanout-3` is opened by `fanout-1`, itself
+   opened by `orchestrator` — depth is capped at one, so it attaches to the
+   topmost visible ancestor. `detached` names an opener that is not in this
+   list and therefore stays a plain top-level row.
+
+   `fanout-1` is deliberately working and `fanout-2` unread: an active row
+   shows its status at the leading node INSTEAD of the ├/└, so only the idle
+   `fanout-3` draws connectors. `OpenedBySessionsActiveOpener` shows the same
+   rule applied to the opener's own fold control. */
+const openedByChats: MobileConversationItem[] = [
+  {
+    id: 'orchestrator',
+    title: '拆分 Streams 分片拓扑排查',
+    kind: 'local',
+    latestMessageAt: now - 0.2 * hour,
+    ageLabel: '12m',
+    machineId: 'zx-macbook',
+    projectKey: 'zx-macbook:lody',
+    projectLabel: 'lody',
+  },
+  {
+    id: 'fanout-1',
+    title: '子会话:核对 token-mint 响应',
+    kind: 'local',
+    latestMessageAt: now - 0.3 * hour,
+    ageLabel: '18m',
+    isWorking: true,
+    machineId: 'zx-macbook',
+    projectKey: 'zx-macbook:lody',
+    projectLabel: 'lody',
+    openedBySessionId: 'orchestrator',
+    openedByRowSessionId: 'orchestrator',
+  },
+  {
+    id: 'fanout-2',
+    title: '子会话:补 presence 分片回归测试',
+    kind: 'local',
+    latestMessageAt: now - 0.8 * hour,
+    ageLabel: '48m',
+    hasUnreadMessages: true,
+    addedLines: 64,
+    deletedLines: 3,
+    machineId: 'zx-macbook',
+    projectKey: 'zx-macbook:lody',
+    projectLabel: 'lody',
+    openedBySessionId: 'orchestrator',
+    openedByRowSessionId: 'orchestrator',
+  },
+  {
+    id: 'fanout-3',
+    title: '孙会话:写 changelog(挂到最近的可见祖先)',
+    kind: 'local',
+    latestMessageAt: now - 1.5 * hour,
+    ageLabel: '1h',
+    machineId: 'zx-macbook',
+    projectKey: 'zx-macbook:lody',
+    projectLabel: 'lody',
+    openedBySessionId: 'fanout-1',
+    openedByRowSessionId: 'fanout-1',
+  },
+  {
+    id: 'detached',
+    title: '开启者不在本列表 → 保持顶层',
+    kind: 'chat',
+    latestMessageAt: now - 4 * hour,
+    ageLabel: '4h',
+    machineId: 'lab-m2',
+    openedBySessionId: 'archived-opener',
+    openedByRowSessionId: 'archived-opener',
+  },
+  ...baseChats,
+];
+
 function StoryShell({
   groupBy,
   rowActions,
   flatHeading,
   archived = false,
+  chats: chatsOverride,
 }: {
   groupBy: MobileChatGroupBy;
   rowActions?: MobileChatListRowActions;
   flatHeading?: string;
   archived?: boolean;
+  /** Story-only dataset override; defaults to the shared mixed list. */
+  chats?: MobileConversationItem[];
 }) {
-  const [chats, setChats] = useState(baseChats);
+  const [chats, setChats] = useState(chatsOverride ?? baseChats);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const actions: MobileChatListRowActions | undefined = rowActions
@@ -246,6 +325,33 @@ export const Flat: Story = {
 
 export const GroupByProject: Story = {
   args: { groupBy: 'project' },
+};
+
+/* Sessions opened by another Session indent one level under their opener with
+   a ├/└ connector — the mobile face of the desktop sidebar's opened-by tree. */
+export const OpenedBySessions: Story = {
+  args: { groupBy: 'none', chats: openedByChats },
+};
+
+/* An active opener shows its status at the leading node instead of the fold
+   chevron — status outranks the tree on both sides of the relationship. The
+   fold stays reachable on desktop through the row context menu; on mobile an
+   active opener simply cannot be folded until it goes quiet. */
+export const OpenedBySessionsActiveOpener: Story = {
+  args: {
+    groupBy: 'none',
+    chats: openedByChats.map((chat) =>
+      chat.id === 'orchestrator' ? { ...chat, isWorking: true } : chat
+    ),
+  },
+};
+
+/* Same relationships, but resolved INSIDE each bucket: an opener and its
+   opened Sessions land in the same date group here, so the tree survives
+   grouping. A child whose opener sits in another bucket goes back to
+   top-level. */
+export const OpenedBySessionsGroupedByDate: Story = {
+  args: { groupBy: 'date', chats: openedByChats },
 };
 
 export const GroupByDate: Story = {

@@ -150,6 +150,33 @@ embedded` lazy-imported from `../tasks/tasks-workspace.tsx` (`embedded`
 - Lists: `mobile-chat-list.tsx`, `mobile-swipeable-row.tsx` (iOS-Mail-style
   row actions; also `touch-action: pan-y`), `mobile-filter-pill-bar.tsx`,
   `mobile-filter-drawer.tsx`, `mobile-inline-picker.tsx`.
+- Opened-by tree: `MobileChatListCard` runs the shared
+  `lib/session-opened-by-tree.ts` model over EACH bucket, so a Session created
+  by the `lody_session_create` MCP tool indents under its opener the same way
+  the desktop sidebar nests it. Resolving per bucket is what keeps
+  Pinned/date/project section boundaries intact; `chat-landing.tsx` fills
+  `openedBySessionId` (precise opener) and `openedByRowSessionId` (row to nest
+  under, via `buildSidebarOpenerRowResolver`) — two fields, never merged.
+  Fold state is the shared `sidebarCollapsedOpenedBySessionsAtom`, so the
+  drawer sidebar and the mobile list can never disagree.
+  The row's leading slot owns ONE node, same contract as `sidebar-row-shared`:
+  fold chevron on an opener, ├/└ on an opened Session, or the status
+  indicator — never two. STATUS WINS on both sides: an active opener drops its
+  chevron and an active opened Session drops its connectors. Consequence to
+  keep in mind: desktop still exposes the fold in the row context menu, but
+  mobile has no row context menu, so an ACTIVE opener cannot be folded until it
+  goes quiet. That was accepted deliberately; do not "fix" it by drawing both.
+  Because the node is the ordinary 16px status slot, a top-level row keeps its
+  exact flat geometry (`px-4`, `w-4`). Only an opened Session widens the slot
+  to `w-8 justify-start` — the node stays put and the CONTENT indents 16px, so
+  the row background never steps.
+  The chevron is a SIBLING of the row `<button>` (the row is one big button —
+  nesting a control inside it is invalid and unreachable to assistive tech),
+  and it needs `MobileSwipeableRow liftAboveEdgeSwipeZone`: the swipe face is a
+  `z-10` stacking context, so nothing inside it can clear the drill-page
+  `EDGE_ZONE_PX` strip at `zIndex={20}` on its own. Pass that flag ONLY when
+  the chevron actually renders — it costs the edge-back swipe on those rows
+  (same trade as the composer's `protectFromEdgeBackZone`).
 - Swipe row text: `mobile-swipeable-row.tsx` owns Pin/Archive/Restore/Delete
   visible + aria labels via `chat.mobileHome.swipeActions.*`; avoid hardcoded
   localized overrides in callers.

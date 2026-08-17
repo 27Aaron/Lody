@@ -274,6 +274,7 @@ import {
 } from '@/components/mobile/mobile-inline-picker';
 import {
   buildChildSessionsByParent,
+  buildSidebarOpenerRowResolver,
   getEffectiveSessionActivitySummary,
   getLatestPullRequestInfo,
 } from '@/components/sessions/session-list-rows';
@@ -4085,6 +4086,15 @@ function WorkspaceChatLanding({
     () => buildChildSessionsByParent(visibleAllActiveSessions),
     [visibleAllActiveSessions]
   );
+  /* Precise opener id -> the LIST ROW to nest under. Needs the full active list
+     (child Tabs included), because a Tab that called `lody_session_create` has
+     no row of its own and the created Session must nest under the Tab's root.
+     Same resolver the desktop sidebar lists use — see
+     `sessions/session-list-rows.ts`. */
+  const mobileOpenerRowResolver = useMemo(
+    () => buildSidebarOpenerRowResolver(visibleAllActiveSessions),
+    [visibleAllActiveSessions]
+  );
 
   /* Mobile home Chat tab — every non-archived conversation across the
      workspace (local + GitHub + chat-only), sorted newest-first, in
@@ -4199,6 +4209,15 @@ function WorkspaceChatLanding({
           hasUnreadMessages: activity.hasUnreadMessages,
           isPinned: Boolean(session.isPinned),
           machineId: session.machineId,
+          /* Provenance for the list's opened-by tree. TWO fields, never
+             merged: the precise opener drives navigation, the row id drives
+             nesting. See `lib/session-opened-by-tree.ts`. */
+          openedBySessionId: session.openedBySessionId ?? null,
+          openedByRowSessionId:
+            session.openedByRootSessionId ??
+            mobileOpenerRowResolver(session.openedBySessionId) ??
+            session.openedBySessionId ??
+            null,
           projectKey,
           projectLabel,
           projectAvatarUrl,
@@ -4246,6 +4265,7 @@ function WorkspaceChatLanding({
     chatExcludedRunning,
     chatScope,
     mobileChildSessionsByParent,
+    mobileOpenerRowResolver,
     liveSessionStatuses,
     mobileHomeShowArchived,
     onlineMachineIds,
@@ -5087,6 +5107,15 @@ function WorkspaceChatLanding({
           hasUnreadMessages: activity.hasUnreadMessages,
           isPinned: Boolean(session.isPinned),
           machineId: session.machineId,
+          /* See the home Chat-tab builder: precise opener for navigation, row
+             id for nesting. An opener outside this project simply leaves the
+             created Session as a top-level row (the tree's orphan fallback). */
+          openedBySessionId: session.openedBySessionId ?? null,
+          openedByRowSessionId:
+            session.openedByRootSessionId ??
+            mobileOpenerRowResolver(session.openedBySessionId) ??
+            session.openedBySessionId ??
+            null,
           projectAvatarUrl,
           isWorktree: kind === 'local' && session.isWorktree === true,
           /* Owner avatar — see the home Chat-tab builder for rationale.
@@ -5100,6 +5129,7 @@ function WorkspaceChatLanding({
   }, [
     chatScope,
     mobileChildSessionsByParent,
+    mobileOpenerRowResolver,
     liveSessionStatuses,
     mobileProjectContext,
     mobileProjectShowArchived,
