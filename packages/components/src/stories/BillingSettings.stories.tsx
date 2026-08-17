@@ -58,11 +58,20 @@ const mockInvoices: BillingInvoice[] = [
 
 const freeOverview: BillingOverviewData = {
   billingAccountId: null,
+  giftStackingSupported: true,
   effectivePlanTier: 'free',
   entitlementSource: 'free',
   offerKey: null,
   yearlyEarlyBirdEligible: false,
   promotionalEntitlementEndsAt: null,
+  giftStartsAt: null,
+  giftEndsAt: null,
+  nextBillingAt: null,
+  autoRenewAfterGift: false,
+  canResumeAfterGift: false,
+  scheduledBillingInterval: null,
+  scheduleManaged: false,
+  subscriptionSetupPending: false,
   checkoutPending: false,
   checkoutInterval: null,
   subscriptionStatus: null,
@@ -81,11 +90,20 @@ const freeOverview: BillingOverviewData = {
 
 const paidOverview: BillingOverviewData = {
   billingAccountId: 'ba_1',
+  giftStackingSupported: true,
   effectivePlanTier: 'plus',
   entitlementSource: 'stripe',
   offerKey: null,
   yearlyEarlyBirdEligible: false,
   promotionalEntitlementEndsAt: null,
+  giftStartsAt: null,
+  giftEndsAt: null,
+  nextBillingAt: null,
+  autoRenewAfterGift: false,
+  canResumeAfterGift: false,
+  scheduledBillingInterval: null,
+  scheduleManaged: false,
+  subscriptionSetupPending: false,
   checkoutPending: false,
   checkoutInterval: null,
   subscriptionStatus: 'active',
@@ -128,7 +146,9 @@ function Harness({
   // Mirror the container: a pending checkout presents the interval it was
   // created with; the user can still toggle it from the awaiting-payment row.
   const [interval, setInterval] = useState<BillingInterval>(
-    overview?.checkoutPending ? (overview.checkoutInterval ?? 'year') : 'year'
+    overview?.checkoutPending || overview?.subscriptionSetupPending
+      ? (overview.checkoutInterval ?? 'year')
+      : 'year'
   );
   return (
     <BillingSettingsView
@@ -247,6 +267,9 @@ export const PromotionalPlus: Story = {
       ...paidOverview,
       entitlementSource: 'stripe_gift',
       promotionalEntitlementEndsAt: Date.now() + 30 * DAY,
+      giftStartsAt: Date.now(),
+      giftEndsAt: Date.now() + 30 * DAY,
+      scheduleManaged: true,
       subscriptionStatus: 'active',
       billingInterval: 'month',
       currentPeriodEnd: Date.now() + 30 * DAY,
@@ -267,6 +290,39 @@ export const PromotionalPlus: Story = {
         hostedInvoiceUrl: 'https://invoice.stripe.com/i/gift-example',
       },
     ],
+  },
+};
+
+export const PromotionalPlusSetupPending: Story = {
+  args: {
+    overview: {
+      ...paidOverview,
+      entitlementSource: 'stripe_gift',
+      promotionalEntitlementEndsAt: Date.now() + 30 * DAY,
+      giftStartsAt: Date.now(),
+      giftEndsAt: Date.now() + 30 * DAY,
+      scheduleManaged: true,
+      subscriptionSetupPending: true,
+      checkoutInterval: 'year',
+      currentPeriodEnd: Date.now() + 30 * DAY,
+    },
+  },
+};
+
+export const PromotionalPlusResumableLockedPrice: Story = {
+  args: {
+    overview: {
+      ...paidOverview,
+      entitlementSource: 'stripe_gift',
+      offerKey: 'founder_monthly_500_forever',
+      promotionalEntitlementEndsAt: Date.now() + 30 * DAY,
+      giftStartsAt: Date.now() - 10 * DAY,
+      giftEndsAt: Date.now() + 30 * DAY,
+      scheduleManaged: true,
+      canResumeAfterGift: true,
+      cancelAtPeriodEnd: true,
+      currentPeriodEnd: Date.now() + 30 * DAY,
+    },
   },
 };
 

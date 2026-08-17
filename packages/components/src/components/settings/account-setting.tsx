@@ -91,16 +91,20 @@ function CloudAccountSettings({ surface }: { surface: AccountSettingsSurface }) 
     if (
       !billingOverview ||
       billingOverview.effectivePlanTier === 'free' ||
-      billingOverview.entitlementSource === 'stripe_gift'
+      (billingOverview.entitlementSource === 'stripe_gift' && !billingOverview.autoRenewAfterGift)
     ) {
       return null;
     }
     if (billingOverview.cancelAtPeriodEnd) {
+      const entitlementEnd =
+        billingOverview.giftEndsAt && billingOverview.giftEndsAt > Date.now()
+          ? billingOverview.giftEndsAt
+          : billingOverview.currentPeriodEnd;
       return {
         kind: 'cancel-scheduled',
-        formattedPeriodEnd: billingOverview.currentPeriodEnd
+        formattedPeriodEnd: entitlementEnd
           ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(
-              new Date(billingOverview.currentPeriodEnd)
+              new Date(entitlementEnd)
             )
           : null,
       };

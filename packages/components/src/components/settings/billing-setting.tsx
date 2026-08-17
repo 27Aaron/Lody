@@ -64,6 +64,7 @@ function getBillingErrorCode(error: unknown): string | null {
 const BILLING_ERROR_TOAST_KEYS: Record<string, string> = {
   workspace_already_paid: 'billing.alreadyPaidError',
   checkout_processing: 'billing.checkoutProcessingError',
+  checkout_already_completed: 'billing.checkoutProcessingError',
   checkout_superseded: 'billing.checkoutSupersededError',
   // A live gift redemption blocks starting a checkout (and vice versa).
   redemption_in_progress: 'billing.redeemInProgress',
@@ -132,7 +133,9 @@ function CloudBillingSettings() {
     return owner?.user?.name?.trim() || owner?.user?.email?.trim() || null;
   }, [activeOrganization, workspaceId]);
   const createCheckoutSession = useCloudAction(cloudOperations.billing.createCheckoutSession);
-  const reconcileWorkspaceCheckout = useCloudAction(cloudOperations.billing.reconcileWorkspaceCheckout);
+  const reconcileWorkspaceCheckout = useCloudAction(
+    cloudOperations.billing.reconcileWorkspaceCheckout
+  );
   const redeemCode = useCloudAction(cloudOperations.billing.redeemStripePromotionCode);
   const listBillingInvoices = useCloudAction(cloudOperations.billing.listBillingInvoices);
   const setSubscriptionCancelAtPeriodEnd = useCloudAction(
@@ -163,11 +166,17 @@ function CloudBillingSettings() {
   // Desktop: checkout/portal opened in the system browser; poll until Stripe
   // confirms so the app updates even if the user never clicks "back to Lody".
   const [externalCheckoutPending, setExternalCheckoutPending] = useState(false);
+  const [externalCheckoutKind, setExternalCheckoutKind] = useState<'subscription' | 'gift_setup'>(
+    'subscription'
+  );
 
   // A pending checkout already picked an interval (e.g. paid-workspace
   // creation): present that plan directly. Keyed on the value so it syncs
   // once per change and the user can still toggle afterwards.
-  const checkoutInterval = overview?.checkoutPending ? (overview.checkoutInterval ?? null) : null;
+  const checkoutInterval =
+    overview?.checkoutPending || overview?.subscriptionSetupPending
+      ? (overview.checkoutInterval ?? null)
+      : null;
   useEffect(() => {
     if (checkoutInterval) setInterval(checkoutInterval);
   }, [checkoutInterval]);
@@ -213,7 +222,10 @@ function CloudBillingSettings() {
   // checkout session against Stripe once when we return from checkout (or see
   // a pending checkout), so the reactive overview query flips to paid without
   // waiting for the webhook. Ref-guarded to run at most once per mount.
-  const shouldReconcile = checkoutSuccessReturn || overview?.checkoutPending === true;
+  const shouldReconcile =
+    checkoutSuccessReturn ||
+    overview?.checkoutPending === true ||
+    overview?.subscriptionSetupPending === true;
   useEffect(() => {
     if (!workspaceId || !shouldReconcile || reconcileStartedRef.current) return;
     reconcileStartedRef.current = true;
@@ -277,13 +289,18 @@ function CloudBillingSettings() {
     };
   }, [externalCheckoutPending, workspaceId, reconcileWorkspaceCheckout]);
 
-  // Stop waiting the moment the reactive overview flips to paid (webhook or
-  // deep-link-triggered reconcile may land before our next poll).
+  // Stop waiting the moment the reactive overview proves the operation
+  // completed. A gift member is already Plus before setup starts, so plan tier
+  // alone cannot distinguish a stale pre-Checkout overview from completion.
   useEffect(() => {
-    if (externalCheckoutPending && overview != null && overview.effectivePlanTier !== 'free') {
+    const completed =
+      externalCheckoutKind === 'gift_setup'
+        ? overview?.autoRenewAfterGift === true && overview.checkoutPending === false
+        : overview != null && overview.effectivePlanTier !== 'free';
+    if (externalCheckoutPending && completed) {
       setExternalCheckoutPending(false);
     }
-  }, [externalCheckoutPending, overview]);
+  }, [externalCheckoutKind, externalCheckoutPending, overview]);
 
   const returnUrl = (() => {
     if (typeof window === 'undefined') return undefined;
@@ -320,6 +337,15 @@ function CloudBillingSettings() {
       });
       if ((await openCheckoutUrl(result.url)) === 'external') {
         setPendingAction(null);
+        // The server decides whether Checkout charges now or only stores a
+        // payment method. Using its response avoids stale overview state
+        // making desktop polling reconcile the wrong lifecycle.
+        setExternalCheckoutKind(
+          result.checkoutKind ??
+            (overview?.entitlementSource === 'stripe_gift' && !overview.autoRenewAfterGift
+              ? 'gift_setup'
+              : 'subscription')
+        );
         setExternalCheckoutPending(true);
       }
     } catch (error) {
@@ -404,7 +430,15 @@ function CloudBillingSettings() {
     setCancelPending(true);
     try {
       await setSubscriptionCancelAtPeriodEnd({ workspaceId, cancel });
-      toast.success(t(cancel ? 'billing.cancelSuccess' : 'billing.resumeSuccess'));
+      toast.success(
+        t(
+          cancel && overview?.scheduleManaged
+            ? 'billing.cancelGiftTimelineSuccess'
+            : cancel
+              ? 'billing.cancelSuccess'
+              : 'billing.resumeSuccess'
+        )
+      );
       // Canceling clears the upcoming invoice; resuming restores it.
       reloadInvoices();
     } catch (error) {
@@ -440,6 +474,8 @@ function CloudBillingSettings() {
         toast.error(t('billing.redeemRateLimited'));
       } else if (result.status === 'workspace_already_plus') {
         toast.info(t('billing.redeemWorkspaceAlreadyPlus'));
+      } else if (result.status === 'subscription_not_eligible') {
+        toast.error(t('billing.redeemSubscriptionNotEligible'));
       } else if (result.status === 'checkout_in_progress') {
         toast.error(t('billing.redeemCheckoutInProgress'));
       } else if (result.status === 'redemption_in_progress') {
@@ -461,7 +497,7 @@ function CloudBillingSettings() {
   const paymentProcessing =
     (reconciling || checkoutSuccessReturn) &&
     overview != null &&
-    overview.effectivePlanTier === 'free';
+    (overview.effectivePlanTier === 'free' || overview.subscriptionSetupPending);
 
   return (
     <>
@@ -611,7 +647,11 @@ function CloudBillingSettings() {
             <AlertDialogTitle>{t('billing.cancelDialogTitle')}</AlertDialogTitle>
             <AlertDialogDescription>
               {t('billing.cancelDialogDescription', {
-                date: formatDate(overview?.currentPeriodEnd),
+                date: formatDate(
+                  overview?.giftEndsAt && overview.giftEndsAt > Date.now()
+                    ? overview.giftEndsAt
+                    : overview?.currentPeriodEnd
+                ),
               })}
             </AlertDialogDescription>
           </AlertDialogHeader>

@@ -200,6 +200,7 @@ type GitHubProfile = {
 type BillingOverview = {
   billingAccountId: string | null;
   planTier: PlanTier;
+  giftStackingSupported: boolean;
   checkoutPending: boolean;
   checkoutInterval: BillingInterval | null;
   offerKey:
@@ -211,6 +212,14 @@ type BillingOverview = {
   effectivePlanTier: PlanTier;
   entitlementSource: BillingEntitlementSource;
   promotionalEntitlementEndsAt: number | null;
+  giftStartsAt: number | null;
+  giftEndsAt: number | null;
+  nextBillingAt: number | null;
+  autoRenewAfterGift: boolean;
+  canResumeAfterGift: boolean;
+  scheduledBillingInterval: BillingInterval | null;
+  scheduleManaged: boolean;
+  subscriptionSetupPending: boolean;
   subscriptionStatus: string | null;
   billingInterval: BillingInterval | null;
   cancelAtPeriodEnd: boolean;
@@ -293,7 +302,7 @@ export type CloudApi = {
   billing: {
     createCheckoutSession: Action<
       CheckoutUrls & { workspaceId: string; interval: BillingInterval },
-      { url: string }
+      { url: string; checkoutKind?: 'subscription' | 'gift_setup' }
     >;
     createPaidWorkspaceCheckout: Action<
       CheckoutUrls & { name: string; slug: string; interval: BillingInterval },
@@ -369,6 +378,7 @@ export type CloudApi = {
             | 'invalid_code'
             | 'rate_limited'
             | 'workspace_already_plus'
+            | 'subscription_not_eligible'
             | 'checkout_in_progress'
             | 'redemption_in_progress'
             | 'transfer_in_progress';
