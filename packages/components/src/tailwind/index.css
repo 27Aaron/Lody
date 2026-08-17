@@ -811,6 +811,12 @@ pre,
     --input-foreground: var(--foreground);
     --input-placeholder: var(--muted-foreground);
     --input-border: 220 12% 86%;
+    /* Fill of an editable control. `--input` stays the recessed slab used by
+       the composer and by muted chips; a form field on a light canvas must not
+       be darker than the page or it reads as disabled, so it sits on white and
+       is delimited by `--input-border`. Themed builds compute the same rule in
+       `vscode-theme-css.ts`. */
+    --input-field: 0 0% 100%;
     --switch-track: 220 9% 64%;
     --ring: 220 82% 65%;
     --chart-1: 220 82% 65%;
@@ -985,6 +991,9 @@ pre,
     --input-foreground: var(--foreground);
     --input-placeholder: var(--muted-foreground);
     --input-border: var(--border);
+    /* Dark canvases already raise the field above the page, so it keeps the
+       theme fill. */
+    --input-field: var(--input);
     --switch-track: 220 13% 40%;
     --ring: 210 90% 62%;
     --chart-1: 210 90% 62%;
@@ -1293,7 +1302,7 @@ pre,
     padding: 0 10px;
     border-radius: var(--radius-md);
     border: 1px solid hsl(var(--input-border));
-    background: hsl(var(--input));
+    background: hsl(var(--input-field));
     color: hsl(var(--input-foreground));
     transition:
       box-shadow var(--dur-1) var(--ease),

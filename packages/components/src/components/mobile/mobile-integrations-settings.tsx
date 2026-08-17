@@ -455,7 +455,7 @@ function MobileCloudIntegrationsSettings() {
                 value={repoSearch}
                 onChange={(event) => setRepoSearch(event.target.value)}
                 placeholder={t('repos.search')}
-                className="rounded-md border border-input-border/70 bg-input pl-9 shadow-none"
+                className="rounded-md border border-input-border/70 bg-input-field pl-9 shadow-none"
               />
             </div>
           </div>

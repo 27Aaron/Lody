@@ -354,7 +354,7 @@ export function ChatLandingView({
         placeholder={promptPlaceholder}
         disabled={submissionPending}
         className={cn(
-          'input-scrollbar mt-3 w-full resize-none rounded-lg border border-input-border/70 bg-input px-3 py-2 text-sm text-input-foreground placeholder:text-input-placeholder focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring'
+          'input-scrollbar mt-3 w-full resize-none rounded-lg border border-input-border/70 bg-input-field px-3 py-2 text-sm text-input-foreground placeholder:text-input-placeholder focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring'
         )}
       />
       {composerStatusMessage ? (

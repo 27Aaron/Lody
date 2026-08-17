@@ -12,6 +12,13 @@ mobile surfaces.
 - Add Storybook coverage for new presentational components and meaningful states.
 - All user-visible copy must go through i18n.
 - Prefer shared primitives from `src/components/ui` over private replacements.
+- An editable control fills with `bg-input-field`, never `bg-input`. `--input` is the
+  theme's raw `input.background` and doubles as a muted chip/composer slab that may sit
+  BELOW the page color in a light theme — a recessed gray field reads as disabled.
+  `--input-field` (derived in `lib/vscode-theme/vscode-theme-css.ts` as the lighter of
+  the field and page colors) keeps a dark theme's raised fill and lifts a light theme's
+  field onto the page, where `--input-border` delimits it. Gray then means disabled
+  (`disabled:bg-muted`), so keep that pair intact.
 - `AgentActivityIndicator` animations stay CSS-only and compositor-friendly
   (`transform`/`opacity`). Do not restore canvas frame loops, React animation
   state, or timers; keep the Storybook Playwright render budgets passing.

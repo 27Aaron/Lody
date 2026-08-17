@@ -689,12 +689,22 @@ export const createLodyThemeCssVariables = (
   theme: LodyResolvedVSCodeTheme
 ): Record<string, string> => {
   const variables: Record<string, string> = {};
+  const colorByCssVariable: Record<string, string> = {};
 
   for (const rule of LODY_ALIAS_RULES) {
     const color = resolveWorkbenchAliasColor(theme, rule);
     if (color) {
+      colorByCssVariable[rule.cssVariable] = color;
       variables[rule.cssVariable] = hexColorToHslChannel(color);
     }
+  }
+
+  const inputFieldColor = resolveInputFieldColor(
+    colorByCssVariable['--input'],
+    colorByCssVariable['--background']
+  );
+  if (inputFieldColor) {
+    variables['--input-field'] = hexColorToHslChannel(inputFieldColor);
   }
 
   for (const alias of SYNTAX_ALIAS_SCOPES) {
@@ -705,6 +715,38 @@ export const createLodyThemeCssVariables = (
   }
 
   return variables;
+};
+
+/**
+ * `--input-field` is the fill of an editable form control (Input, Textarea,
+ * Select trigger), as opposed to `--input`, which stays the theme's raw
+ * `input.background` and is also used as a muted chip/pill fill.
+ *
+ * A control the user can type into must never sit DARKER than the page it is
+ * drawn on: on a light canvas a recessed gray rectangle reads as `disabled`.
+ * VS Code themes are free to recess `input.background` (Lody Light does:
+ * #E8EAED on a #FFFFFF editor background), so the field fill is the LIGHTER of
+ * the field and page colors. Dark themes are unaffected — there
+ * `input.background` is already the raised surface (Vesper: #1C1C1C on
+ * #101010) — and light themes fall back onto the page color, where the field
+ * is delimited by `--input-border` plus the focus ring instead.
+ */
+const resolveInputFieldColor = (
+  inputColor: string | undefined,
+  backgroundColor: string | undefined
+): string | undefined => {
+  if (!inputColor || !backgroundColor) {
+    return inputColor ?? backgroundColor;
+  }
+
+  return hexColorLightness(inputColor) >= hexColorLightness(backgroundColor)
+    ? inputColor
+    : backgroundColor;
+};
+
+const hexColorLightness = (color: string): number => {
+  const { r, g, b } = hexColorToRgb(color);
+  return (Math.max(r, g, b) + Math.min(r, g, b)) / 2;
 };
 
 const resolveWorkbenchAliasColor = (
