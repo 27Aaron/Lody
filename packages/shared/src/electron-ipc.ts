@@ -277,6 +277,8 @@ export type ElectronCliPhase = CliRuntimePhase | 'reconnecting' | 'stopping' | '
 export type ElectronCliState = {
   phase: ElectronCliPhase;
   desiredState: 'running' | 'stopped';
+  /** Whether this desktop should run and use a local agent runtime. */
+  localAgentEnabled: boolean;
   updatedAtMs: number;
   preventSleepEnabled: boolean;
   startupStage?: CliRuntimeStartupStage;

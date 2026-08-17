@@ -313,6 +313,7 @@ export function registerIpcHandlers(options: RegisterIpcHandlersOptions): void {
     }
     options.cliService.attachCliStateSender(event.sender)
     options.cliService.setCliAutoStartEnabled(enabledRaw)
+    options.loroDataPlaneRelay.setEnabled(enabledRaw)
     return { ok: true, enabled: enabledRaw }
   })
 

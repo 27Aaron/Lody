@@ -161,6 +161,7 @@ if (hasSingleInstanceLock) {
     const loroDataPlaneRelay = new LoroDataPlaneRelay(
       getLocalLoroDataPlaneSocketPath(mainPlatformKind)
     )
+    loroDataPlaneRelay.setEnabled(cliService.getCliAutoStartEnabled())
 
     const appUpdaterService = new AppUpdaterService({ enabled: !isLocalPlatform() })
     const notificationService = new NotificationService(() => getMainWindow())

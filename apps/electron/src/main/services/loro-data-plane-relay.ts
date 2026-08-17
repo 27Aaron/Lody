@@ -46,9 +46,12 @@ type PendingDaemonWrite = {
  * daemon would hold its room subscriptions for the life of the shared socket.
  */
 export class LoroDataPlaneRelay {
+  private readonly socketPath: string
+  private readonly createSocket: (socketPath: string) => net.Socket
   private socket: net.Socket | null = null
   private connecting: Promise<void> | null = null
   private connected = false
+  private enabled = true
   private destroyed = false
   private readonly senders = new Set<WebContents>()
   // sender → (peerId → workspaceId), for synthesized detach.
@@ -62,7 +65,34 @@ export class LoroDataPlaneRelay {
   private pendingDaemonWrites: PendingDaemonWrite[] = []
   private pendingDaemonBytes = 0
 
-  constructor(private readonly socketPath: string) {}
+  constructor(
+    socketPath: string,
+    createSocket: (socketPath: string) => net.Socket = (path) => net.createConnection(path)
+  ) {
+    this.socketPath = socketPath
+    this.createSocket = createSocket
+  }
+
+  setEnabled(enabled: boolean): void {
+    if (this.enabled === enabled || this.destroyed) return
+    this.enabled = enabled
+
+    if (enabled) {
+      if (this.senders.size > 0) {
+        void this.ensureConnected().catch(() => this.scheduleRedial())
+      }
+      return
+    }
+
+    this.clearRedialTimer()
+    this.stopPingLoop()
+    this.clearPendingDaemonWrites()
+    this.sendersPeers.clear()
+    const socket = this.socket
+    this.socket = null
+    this.setConnected(false)
+    socket?.destroy(new Error('loro_data_plane_relay_disabled'))
+  }
 
   attachSender(sender: WebContents | undefined): void {
     if (!sender || sender.isDestroyed()) return
@@ -81,7 +111,9 @@ export class LoroDataPlaneRelay {
       // transport can join immediately when the daemon is already reachable.
       sender.send('lodyLoroDataPlane:status', this.connected)
     }
-    void this.ensureConnected().catch(() => this.scheduleRedial())
+    if (this.enabled) {
+      void this.ensureConnected().catch(() => this.scheduleRedial())
+    }
   }
 
   isConnected(): boolean {
@@ -90,6 +122,7 @@ export class LoroDataPlaneRelay {
 
   send(message: LocalLoroDataPlaneClientMessage, sender?: WebContents): void {
     this.attachSender(sender)
+    if (!this.enabled) return
     this.trackPeer(message, sender)
     void this.ensureConnected()
       .then(() => this.write(message))
@@ -148,11 +181,12 @@ export class LoroDataPlaneRelay {
 
   private async ensureConnected(): Promise<void> {
     if (this.destroyed) throw new Error('loro_data_plane_relay_destroyed')
+    if (!this.enabled) throw new Error('loro_data_plane_relay_disabled')
     if (this.socket && !this.socket.destroyed) return
     if (this.connecting) return await this.connecting
 
     this.connecting = new Promise<void>((resolve, reject) => {
-      const socket = net.createConnection(this.socketPath)
+      const socket = this.createSocket(this.socketPath)
       this.socket = socket
       const splitLines = createJsonLineSplitter({
         onLine: (line) => this.handleLine(socket, line),
@@ -202,7 +236,7 @@ export class LoroDataPlaneRelay {
   }
 
   private scheduleRedial(): void {
-    if (this.destroyed || this.redialTimer) return
+    if (this.destroyed || !this.enabled || this.redialTimer) return
     if (this.senders.size === 0) return
     if (this.socket && !this.socket.destroyed) return
     const delay = Math.min(

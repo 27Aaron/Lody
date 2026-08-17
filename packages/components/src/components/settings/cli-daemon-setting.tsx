@@ -24,7 +24,7 @@ const PHASE_TONE: Record<ElectronCliState['phase'], string> = {
  */
 export function CliDaemonSetting() {
   const { t } = useTranslation();
-  const { phase, isRestarting, isTerminating, restart, terminate } = useElectronCliDaemon();
+  const { state, phase, isRestarting, isTerminating, restart, terminate } = useElectronCliDaemon();
 
   const phaseLabels: Record<ElectronCliState['phase'], string> = {
     starting: t('sidebar.cli.starting', 'Starting'),
@@ -39,6 +39,7 @@ export function CliDaemonSetting() {
 
   const busy = isRestarting || isTerminating;
   const isStopped = phase === 'stopped';
+  const localAgentEnabled = state?.localAgentEnabled === true;
 
   return (
     <div id="cli-daemon" className="scroll-mt-24">
@@ -61,7 +62,7 @@ export function CliDaemonSetting() {
             variant="outline"
             size="sm"
             className="h-7 gap-1.5 px-2 text-xs"
-            disabled={busy}
+            disabled={busy || !localAgentEnabled}
             onClick={() => void restart()}
           >
             {isRestarting ? (

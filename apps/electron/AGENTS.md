@@ -37,6 +37,9 @@ Root `AGENTS.md` also applies.
 - Cloud desktop development must likewise build and sync the CLI before
   `electron-vite dev`; the direct `apps/cli/dist` lookup is only a missing-staging
   fallback and must not let an older `resources/cli` shadow a fresh build.
+- Turning off **Run local agent** is an explicit cloud control-only mode: do not
+  probe an embedded or externally started CLI, and keep the local Loro data-plane
+  relay disconnected until the setting is enabled again.
 - `local-platform:get-snapshot` atomically supplies the persistent `local:*` user and
   the single `lw_*` workspace from the CLI catalog. Do not split this into independent
   fallbacks. A missing catalog means provisioning; malformed identities or multiple

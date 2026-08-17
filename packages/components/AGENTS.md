@@ -89,6 +89,9 @@ mobile surfaces.
 - Controls for a machine resolved as local use Electron local session control,
   independent of cloud-token or sync state. A failed local bridge is an error; never
   fall back to a remote RPC path.
+- Cloud Electron waits for the first **Run local agent** setting snapshot before
+  creating its workspace runtime. Enabled uses dual sync; disabled uses cloud-only
+  sync and must not attach the local data plane or surface its reconnect state.
 - Workspace-level rooms without a machine owner use the platform fallback. Task rooms
   and the Task Index depend on this behavior; returning no transport silently disables
   task synchronization.

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useAtomValue } from 'jotai';
 import {
   CLOUD_PLATFORM_CAPABILITIES,
   createStore,
@@ -16,6 +17,8 @@ import { cloudPlatformApi } from './cloud-platform-api';
 import { installGitHubTokenPort } from '@/lib/github-token-port';
 import { cloudGitHubTokenPort } from './cloud-github-token-port';
 import { installCloudHttpPort } from '@/lib/cloud-http-port';
+import { localAgentEnabledAtom } from '@/atoms/local-probe';
+import { resolveCloudPlatformRuntimePolicy } from './cloud-platform-runtime-policy';
 
 const CLOUD_HTTP_PORT = {
   authBaseUrl: import.meta.env.VITE_CONVEX_SITE_URL || null,
@@ -40,6 +43,12 @@ function toWorkspaceSummary(
  * the closed `platform-cloud` package without changing open UI consumers.
  */
 export function CloudPlatformProvider({ children }: { children: ReactNode }) {
+  const electron = isElectronRenderer();
+  const localAgentEnabled = useAtomValue(localAgentEnabledAtom);
+  const { syncMode: localAgentSyncMode } = resolveCloudPlatformRuntimePolicy({
+    electron,
+    localAgentEnabled,
+  });
   const session = useStableSession();
   const organization = useOrganization();
   const { createOrganization, switchOrganization } = organization;
@@ -134,9 +143,18 @@ export function CloudPlatformProvider({ children }: { children: ReactNode }) {
       },
       capabilities: CLOUD_PLATFORM_CAPABILITIES,
       cloudApi: cloudPlatformApi,
-      sync: { mode: isElectronRenderer() ? 'dual' : 'cloud' },
+      sync: {
+        mode: localAgentSyncMode,
+      },
     }),
-    [createOrganization, sessionStore, signOut, switchOrganization, workspacesStore]
+    [
+      createOrganization,
+      localAgentSyncMode,
+      sessionStore,
+      signOut,
+      switchOrganization,
+      workspacesStore,
+    ]
   );
 
   return <PlatformContext.Provider value={provider}>{children}</PlatformContext.Provider>;

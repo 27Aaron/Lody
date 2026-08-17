@@ -34,6 +34,7 @@ function Harness({ cliState }: { cliState: ElectronCliState }) {
 const runningCliState: ElectronCliState = {
   phase: 'running',
   desiredState: 'running',
+  localAgentEnabled: true,
   updatedAtMs: 0,
   preventSleepEnabled: true,
   connectivity: 'online',
@@ -54,7 +55,25 @@ export const Running: Story = {
 
 export const Stopped: Story = {
   args: {
-    cliState: { phase: 'stopped', desiredState: 'stopped', updatedAtMs: 0, preventSleepEnabled: true },
+    cliState: {
+      phase: 'stopped',
+      desiredState: 'stopped',
+      localAgentEnabled: true,
+      updatedAtMs: 0,
+      preventSleepEnabled: true,
+    },
+  },
+};
+
+export const LocalAgentDisabled: Story = {
+  args: {
+    cliState: {
+      phase: 'stopped',
+      desiredState: 'stopped',
+      localAgentEnabled: false,
+      updatedAtMs: 0,
+      preventSleepEnabled: true,
+    },
   },
 };
 

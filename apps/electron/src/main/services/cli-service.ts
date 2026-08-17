@@ -344,6 +344,7 @@ export class CliService {
   private cliState: ElectronCliState = {
     phase: 'stopped',
     desiredState: 'stopped',
+    localAgentEnabled: true,
     updatedAtMs: Date.now(),
     preventSleepEnabled: true
   }
@@ -378,6 +379,7 @@ export class CliService {
     if (typeof settings.cliAutoStartEnabled === 'boolean') {
       this.cliAutoStartEnabled = settings.cliAutoStartEnabled
     }
+    this.cliState.localAgentEnabled = this.cliAutoStartEnabled
     this.cliState.preventSleepEnabled = this.preventSleepEnabled
     this.updatePowerSaveBlocker()
   }
@@ -533,6 +535,7 @@ export class CliService {
     const settings = readElectronSettings()
     settings.cliAutoStartEnabled = enabled
     writeElectronSettings(settings)
+    this.publishCliState()
 
     if (enabled) {
       // Re-enabling brings the embedded CLI back up immediately (and on the next
@@ -563,6 +566,9 @@ export class CliService {
   }
 
   async restartAutoStart(): Promise<RestartCliResult> {
+    if (!this.cliAutoStartEnabled) {
+      return { ok: false }
+    }
     const supervisor = this.ensureSupervisor()
     try {
       await supervisor.restart()
@@ -587,9 +593,12 @@ export class CliService {
     try {
       this.sendCliMeta(this.autoStartSender, '[electron] CLI terminate requested\n')
       await supervisor.stop()
-      // stop() tears down polling with the child; keep observing so a CLI the
-      // user starts by hand still reports its machineId to renderers.
-      supervisor.startProbing()
+      // Manual termination keeps observing an external CLI only while local
+      // agents remain enabled. Disabling the setting is an explicit
+      // control-only mode and must not retain a background probe loop.
+      if (this.cliAutoStartEnabled) {
+        supervisor.startProbing()
+      }
       this.updatePowerSaveBlocker()
       this.publishCliState()
       return { ok: true }
@@ -610,6 +619,9 @@ export class CliService {
   }
 
   async getLocalMachineId(options?: MachineIdLookupOptions): Promise<string | null> {
+    if (!this.cliAutoStartEnabled) {
+      return null
+    }
     if (!options?.forceRefresh && this.cachedMachineId) {
       return this.cachedMachineId
     }
@@ -845,12 +857,10 @@ export class CliService {
     this.autoStartSender = sender
     this.attachCliStateSender(sender)
 
-    // Control-only mode: keep the embedded CLI stopped, but keep PROBING the
-    // local runtime — an externally started CLI (dev workflow) must still
-    // surface `runtime.machineId`, or renderers lose every local-machine fast
-    // path and detour local Machine RPC over the cloud transport.
+    // Control-only mode deliberately ignores even an externally started CLI.
+    // The renderer switches to its cloud transport, so retaining a supervisor
+    // probe here only creates a false reconnecting state and background work.
     if (!this.cliAutoStartEnabled) {
-      this.ensureSupervisor().startProbing()
       return
     }
 
@@ -1054,6 +1064,7 @@ export class CliService {
       return {
         phase: 'stopped',
         desiredState: 'stopped',
+        localAgentEnabled: this.cliAutoStartEnabled,
         updatedAtMs: this.cliState.updatedAtMs,
         preventSleepEnabled: this.preventSleepEnabled
       }
@@ -1063,6 +1074,7 @@ export class CliService {
     return {
       phase: supervisorState.phase,
       desiredState: supervisorState.desiredState,
+      localAgentEnabled: this.cliAutoStartEnabled,
       updatedAtMs: this.cliState.updatedAtMs,
       preventSleepEnabled: this.preventSleepEnabled,
       startupStage: supervisorState.runtime?.startupStage,
