@@ -39,6 +39,7 @@ import { Route as WorkspaceNameAuthSettingsProjectsRouteImport } from './routes/
 import { Route as WorkspaceNameAuthSettingsPreferencesRouteImport } from './routes/$workspaceName/_auth/settings/preferences'
 import { Route as WorkspaceNameAuthSettingsPeopleRouteImport } from './routes/$workspaceName/_auth/settings/people'
 import { Route as WorkspaceNameAuthSettingsMyMachinesRouteImport } from './routes/$workspaceName/_auth/settings/my-machines'
+import { Route as WorkspaceNameAuthSettingsMcpRouteImport } from './routes/$workspaceName/_auth/settings/mcp'
 import { Route as WorkspaceNameAuthSettingsMachinesRouteImport } from './routes/$workspaceName/_auth/settings/machines'
 import { Route as WorkspaceNameAuthSettingsKeyboardShortcutsRouteImport } from './routes/$workspaceName/_auth/settings/keyboard-shortcuts'
 import { Route as WorkspaceNameAuthSettingsGithubRouteImport } from './routes/$workspaceName/_auth/settings/github'
@@ -215,6 +216,12 @@ const WorkspaceNameAuthSettingsMyMachinesRoute =
     path: '/my-machines',
     getParentRoute: () => WorkspaceNameAuthSettingsRoute,
   } as any)
+const WorkspaceNameAuthSettingsMcpRoute =
+  WorkspaceNameAuthSettingsMcpRouteImport.update({
+    id: '/mcp',
+    path: '/mcp',
+    getParentRoute: () => WorkspaceNameAuthSettingsRoute,
+  } as any)
 const WorkspaceNameAuthSettingsMachinesRoute =
   WorkspaceNameAuthSettingsMachinesRouteImport.update({
     id: '/machines',
@@ -334,6 +341,7 @@ export interface FileRoutesByFullPath {
   '/$workspaceName/settings/github': typeof WorkspaceNameAuthSettingsGithubRoute
   '/$workspaceName/settings/keyboard-shortcuts': typeof WorkspaceNameAuthSettingsKeyboardShortcutsRoute
   '/$workspaceName/settings/machines': typeof WorkspaceNameAuthSettingsMachinesRoute
+  '/$workspaceName/settings/mcp': typeof WorkspaceNameAuthSettingsMcpRoute
   '/$workspaceName/settings/my-machines': typeof WorkspaceNameAuthSettingsMyMachinesRoute
   '/$workspaceName/settings/people': typeof WorkspaceNameAuthSettingsPeopleRoute
   '/$workspaceName/settings/preferences': typeof WorkspaceNameAuthSettingsPreferencesRoute
@@ -377,6 +385,7 @@ export interface FileRoutesByTo {
   '/$workspaceName/settings/github': typeof WorkspaceNameAuthSettingsGithubRoute
   '/$workspaceName/settings/keyboard-shortcuts': typeof WorkspaceNameAuthSettingsKeyboardShortcutsRoute
   '/$workspaceName/settings/machines': typeof WorkspaceNameAuthSettingsMachinesRoute
+  '/$workspaceName/settings/mcp': typeof WorkspaceNameAuthSettingsMcpRoute
   '/$workspaceName/settings/my-machines': typeof WorkspaceNameAuthSettingsMyMachinesRoute
   '/$workspaceName/settings/people': typeof WorkspaceNameAuthSettingsPeopleRoute
   '/$workspaceName/settings/preferences': typeof WorkspaceNameAuthSettingsPreferencesRoute
@@ -424,6 +433,7 @@ export interface FileRoutesById {
   '/$workspaceName/_auth/settings/github': typeof WorkspaceNameAuthSettingsGithubRoute
   '/$workspaceName/_auth/settings/keyboard-shortcuts': typeof WorkspaceNameAuthSettingsKeyboardShortcutsRoute
   '/$workspaceName/_auth/settings/machines': typeof WorkspaceNameAuthSettingsMachinesRoute
+  '/$workspaceName/_auth/settings/mcp': typeof WorkspaceNameAuthSettingsMcpRoute
   '/$workspaceName/_auth/settings/my-machines': typeof WorkspaceNameAuthSettingsMyMachinesRoute
   '/$workspaceName/_auth/settings/people': typeof WorkspaceNameAuthSettingsPeopleRoute
   '/$workspaceName/_auth/settings/preferences': typeof WorkspaceNameAuthSettingsPreferencesRoute
@@ -471,6 +481,7 @@ export interface FileRouteTypes {
     | '/$workspaceName/settings/github'
     | '/$workspaceName/settings/keyboard-shortcuts'
     | '/$workspaceName/settings/machines'
+    | '/$workspaceName/settings/mcp'
     | '/$workspaceName/settings/my-machines'
     | '/$workspaceName/settings/people'
     | '/$workspaceName/settings/preferences'
@@ -514,6 +525,7 @@ export interface FileRouteTypes {
     | '/$workspaceName/settings/github'
     | '/$workspaceName/settings/keyboard-shortcuts'
     | '/$workspaceName/settings/machines'
+    | '/$workspaceName/settings/mcp'
     | '/$workspaceName/settings/my-machines'
     | '/$workspaceName/settings/people'
     | '/$workspaceName/settings/preferences'
@@ -560,6 +572,7 @@ export interface FileRouteTypes {
     | '/$workspaceName/_auth/settings/github'
     | '/$workspaceName/_auth/settings/keyboard-shortcuts'
     | '/$workspaceName/_auth/settings/machines'
+    | '/$workspaceName/_auth/settings/mcp'
     | '/$workspaceName/_auth/settings/my-machines'
     | '/$workspaceName/_auth/settings/people'
     | '/$workspaceName/_auth/settings/preferences'
@@ -802,6 +815,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof WorkspaceNameAuthSettingsMyMachinesRouteImport
       parentRoute: typeof WorkspaceNameAuthSettingsRoute
     }
+    '/$workspaceName/_auth/settings/mcp': {
+      id: '/$workspaceName/_auth/settings/mcp'
+      path: '/mcp'
+      fullPath: '/$workspaceName/settings/mcp'
+      preLoaderRoute: typeof WorkspaceNameAuthSettingsMcpRouteImport
+      parentRoute: typeof WorkspaceNameAuthSettingsRoute
+    }
     '/$workspaceName/_auth/settings/machines': {
       id: '/$workspaceName/_auth/settings/machines'
       path: '/machines'
@@ -931,6 +951,7 @@ interface WorkspaceNameAuthSettingsRouteChildren {
   WorkspaceNameAuthSettingsGithubRoute: typeof WorkspaceNameAuthSettingsGithubRoute
   WorkspaceNameAuthSettingsKeyboardShortcutsRoute: typeof WorkspaceNameAuthSettingsKeyboardShortcutsRoute
   WorkspaceNameAuthSettingsMachinesRoute: typeof WorkspaceNameAuthSettingsMachinesRoute
+  WorkspaceNameAuthSettingsMcpRoute: typeof WorkspaceNameAuthSettingsMcpRoute
   WorkspaceNameAuthSettingsMyMachinesRoute: typeof WorkspaceNameAuthSettingsMyMachinesRoute
   WorkspaceNameAuthSettingsPeopleRoute: typeof WorkspaceNameAuthSettingsPeopleRoute
   WorkspaceNameAuthSettingsPreferencesRoute: typeof WorkspaceNameAuthSettingsPreferencesRoute
@@ -963,6 +984,7 @@ const WorkspaceNameAuthSettingsRouteChildren: WorkspaceNameAuthSettingsRouteChil
       WorkspaceNameAuthSettingsKeyboardShortcutsRoute,
     WorkspaceNameAuthSettingsMachinesRoute:
       WorkspaceNameAuthSettingsMachinesRoute,
+    WorkspaceNameAuthSettingsMcpRoute: WorkspaceNameAuthSettingsMcpRoute,
     WorkspaceNameAuthSettingsMyMachinesRoute:
       WorkspaceNameAuthSettingsMyMachinesRoute,
     WorkspaceNameAuthSettingsPeopleRoute: WorkspaceNameAuthSettingsPeopleRoute,

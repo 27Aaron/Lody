@@ -10,6 +10,7 @@ export type {
   BindingId,
   ClientId,
   MachineId,
+  McpServerId,
   RepoId,
   ReviewRunId,
   SessionId,
@@ -99,6 +100,8 @@ export * from './layout';
 export * from './code-collab';
 export * from './file-preview';
 export * from './machine-flock';
+export * from './workspace-mcp';
+export * from './workspace-flock';
 export * from './local-machine-rpc';
 export * from './local-loro-data-plane';
 export * from './local-loro-data-plane-server';

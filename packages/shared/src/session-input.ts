@@ -11,6 +11,7 @@ import type {
   VisualAnnotationReferencePayload,
 } from './ai';
 import type { SessionHistoryInput } from './schema';
+import type { McpServerId } from './ids';
 import {
   reanchorMessageTextSpansForTrim,
   sanitizeMessageTextSpans,
@@ -61,6 +62,7 @@ export type SessionConversationConfig = {
   modeId?: string;
   modelId?: string;
   configOptionValues?: Record<string, AcpConfigOptionValue>;
+  mcpServerIds?: McpServerId[];
 };
 
 export const resolveSessionConversationConfig = (
@@ -83,6 +85,7 @@ export const resolveSessionConversationConfig = (
       ...(inputConfig.configOptionValues && Object.keys(inputConfig.configOptionValues).length > 0
         ? { configOptionValues: inputConfig.configOptionValues }
         : {}),
+      ...(inputConfig.mcpServerIds ? { mcpServerIds: inputConfig.mcpServerIds } : {}),
     };
   };
 
@@ -103,6 +106,17 @@ export const resolveSessionConversationConfig = (
 
   return {};
 };
+
+/**
+ * The MCP selection a restart inherits. The catalog selection is durable only in
+ * turn input config, so fork/restore/edit-and-resend must read it back from the
+ * conversation rather than from `SessionMeta` — and an absent selection resolves
+ * to the explicit empty list every `SessionConfig` carries.
+ */
+export const resolveSessionMcpSelection = (
+  history: readonly { id: string; role: unknown; inputConfig?: unknown }[],
+  messageQueue: readonly { $cid?: unknown; acpSessionConfig?: unknown }[] = []
+): McpServerId[] => resolveSessionConversationConfig(history, messageQueue).mcpServerIds ?? [];
 
 const normalizeTextInputBlock = (
   block: Extract<SessionInputBlock, { type: 'text' }>
@@ -461,6 +475,7 @@ export const buildSessionTurnInputConfig = (args: {
   modeId?: string | null;
   modelId?: string | null;
   configOptionValues?: Record<string, AcpConfigOptionValue> | null;
+  mcpServerIds?: readonly McpServerId[] | null;
   issuePRMentions?: IssuePRMention[];
   resume?: ACPSessionConfig['resume'];
   prompt?: string;
@@ -478,6 +493,7 @@ export const buildSessionTurnInputConfig = (args: {
       args.configOptionValues && Object.keys(args.configOptionValues).length > 0
         ? args.configOptionValues
         : undefined,
+    mcpServerIds: args.mcpServerIds ? [...args.mcpServerIds] : undefined,
     issuePRMentions: args.issuePRMentions,
     resume: args.resume,
   };

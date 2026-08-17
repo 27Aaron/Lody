@@ -296,6 +296,8 @@ export class LoroDocumentManager {
   private machineExistenceWatcher: RepoWatchHandle | null = null;
   private readonly connectionRecovery: LoroConnectionRecoveryController;
   private readonly machineFlockSync: MachineFlockSyncCoordinator;
+  /** In-flight `syncFlockDocOrThrow` attempts, keyed by Flock document id. */
+  private readonly activeFlockDocSyncs = new Map<string, Promise<unknown>>();
   private detachMachineFlockMetaRoomSyncedListener: (() => void) | null = null;
   private initialMetaSyncCompleted = false;
   private readonly initialMetaSyncPromise: Promise<boolean>;
@@ -889,6 +891,14 @@ export class LoroDocumentManager {
     }
   }
 
+  /**
+   * Concurrent callers for the SAME document share one round trip. A batch of
+   * sessions starting together (dispatch drain, `session_create_many`) asks for
+   * the identical workspace Flock doc at the same moment, and N syncs of one
+   * document buy nothing but N timeout budgets. Each caller still applies its
+   * OWN timeout to the shared attempt, and a stalled sync is not piled onto —
+   * the same rule `machine-flock-sync-coordinator` already applies per machine.
+   */
   async syncFlockDocOrThrow(
     flockDocId: string,
     options: { timeoutMs?: number; reason?: string } = {}
@@ -898,12 +908,21 @@ export class LoroDocumentManager {
       options.timeoutMs ?? readTimeoutEnv('LODY_LORO_SYNC_MACHINE_FLOCK_TIMEOUT_MS', 8_000);
     const timeoutMessage = `Timeout waiting for Flock document sync (doc=${flockDocId})`;
 
+    let activeSync = this.activeFlockDocSyncs.get(flockDocId);
+    if (!activeSync) {
+      const started: Promise<unknown> = this.repo
+        .sync({ scope: 'doc', flockDocIds: [flockDocId] })
+        .finally(() => {
+          if (this.activeFlockDocSyncs.get(flockDocId) === started) {
+            this.activeFlockDocSyncs.delete(flockDocId);
+          }
+        });
+      this.activeFlockDocSyncs.set(flockDocId, started);
+      activeSync = started;
+    }
+
     try {
-      await withTimeout(
-        this.repo.sync({ scope: 'doc', flockDocIds: [flockDocId] }),
-        timeoutMs,
-        timeoutMessage
-      );
+      await withTimeout(activeSync, timeoutMs, timeoutMessage);
     } catch (error) {
       throw new Error(
         `Flock document sync failed for ${flockDocId} (${reason}): ${formatErrorMessage(error)}`,

@@ -12,6 +12,7 @@ import {
   Keyboard,
   Monitor,
   Palette,
+  Plug,
   SlidersHorizontal,
   UserRound,
 } from 'lucide-react';
@@ -27,6 +28,7 @@ export type SettingsTabId =
   | 'people'
   | 'machines'
   | 'agents'
+  | 'mcp'
   | 'projects'
   | 'github'
   | 'ai-usage'
@@ -42,6 +44,7 @@ export type SettingsPath =
   | '/$workspaceName/settings/people'
   | '/$workspaceName/settings/machines'
   | '/$workspaceName/settings/agents'
+  | '/$workspaceName/settings/mcp'
   | '/$workspaceName/settings/projects'
   | '/$workspaceName/settings/github'
   | '/$workspaceName/settings/ai-usage'
@@ -124,6 +127,14 @@ export const SETTINGS_TAB_CONFIGS: SettingsTabConfig[] = [
     path: '/$workspaceName/settings/agents',
   },
   {
+    id: 'mcp',
+    section: 'workspace',
+    labelKey: 'settings.tabs.mcp',
+    descriptionKey: 'settings.categories.mcp.description',
+    icon: Plug,
+    path: '/$workspaceName/settings/mcp',
+  },
+  {
     id: 'projects',
     section: 'workspace',
     labelKey: 'settings.tabs.projects',
@@ -194,6 +205,7 @@ export function getActiveSettingsTabId(pathname: string): SettingsTabId | null {
     ['/settings/devices', 'machines'],
     ['/settings/agents', 'agents'],
     ['/settings/agent-config', 'agents'],
+    ['/settings/mcp', 'mcp'],
     ['/settings/projects', 'projects'],
     ['/settings/github', 'github'],
     ['/settings/ai-usage', 'ai-usage'],

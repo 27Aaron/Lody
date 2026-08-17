@@ -15,7 +15,7 @@ import { ClipboardPaste, RefreshCw, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import type { AcpCommandSummary } from '@lody/shared';
-import { AttachmentAddMenu } from './attachment-add-menu';
+import { AttachmentAddMenu, type AttachmentAddMenuMcp } from './attachment-add-menu';
 import { CommentReferenceChip, type CommentReferenceChipItem } from './comment-reference-chip';
 import {
   VisualAnnotationReferenceChip,
@@ -141,6 +141,8 @@ export interface ChatComposerProps {
   onFileAddClick?: () => void;
   onFileRemove?: (id: string) => void;
   onFileRetry?: (id: string) => void;
+  /** Per-turn MCP selection, rendered as a second level of the "+" menu. */
+  mcp?: AttachmentAddMenuMcp;
   /** Comment reference items attached to this message */
   commentReferenceItems?: CommentReferenceChipItem[];
   /** Remove a comment reference by localId */
@@ -248,6 +250,7 @@ export function ChatComposer({
   onFileAddClick,
   onFileRemove,
   onFileRetry,
+  mcp,
   commentReferenceItems = [],
   onCommentReferenceRemove,
   onCommentReferenceClick,
@@ -908,6 +911,7 @@ export function ChatComposer({
                   onAddFile={onFileAddClick}
                   imageDisabled={imageAddDisabled}
                   fileDisabled={fileAddDisabled}
+                  mcp={mcp}
                 />
 
                 {/* Single row only: long model names must shrink/truncate inside

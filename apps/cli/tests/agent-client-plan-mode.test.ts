@@ -150,7 +150,7 @@ describe('AgentClient plan mode permission restoration', () => {
         });
 
         // @ts-expect-error - exercising private config builder for a focused regression test
-        const [server] = client.buildMcpServers('/tmp/lody-session');
+        const [server] = client.buildBuiltinMcpServers('/tmp/lody-session');
 
         expect(server.env).toEqual(
           expect.arrayContaining([
@@ -183,7 +183,7 @@ describe('AgentClient plan mode permission restoration', () => {
         });
 
         // @ts-expect-error - exercising private config builder for a focused regression test
-        const [server] = client.buildMcpServers('/tmp/lody-session');
+        const [server] = client.buildBuiltinMcpServers('/tmp/lody-session');
 
         expect(server.env).toContainEqual({ name: 'ELECTRON_RUN_AS_NODE', value: '1' });
       } finally {
@@ -205,7 +205,7 @@ describe('AgentClient plan mode permission restoration', () => {
         });
 
         // @ts-expect-error - exercising private config builder for a focused regression test
-        const [server] = client.buildMcpServers('/tmp/lody-session');
+        const [server] = client.buildBuiltinMcpServers('/tmp/lody-session');
 
         expect(server.env).not.toContainEqual({ name: 'ELECTRON_RUN_AS_NODE', value: '1' });
       } finally {

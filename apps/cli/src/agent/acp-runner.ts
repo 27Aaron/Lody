@@ -16,6 +16,7 @@ import type { Logger } from '@/utils/logger';
 import type { TerminalManager } from '@/session/terminal-manager';
 import {
   AgentClient,
+  type AgentClientOptions,
   type AcpWriteTextFileEvidence,
   type AgentSessionWarning,
   type CodexImageGenerationBeginEvent,
@@ -99,6 +100,7 @@ export type CreateAcpClientOptions = {
   onThreadGoalCleared?(threadId: string): void;
   onSessionTitleUpdate?(title: string): void;
   onAgentWarning?(warning: AgentSessionWarning): void;
+  loadExternalMcpServers?: AgentClientOptions['loadExternalMcpServers'];
   onCodexProposedPlan?(plan: Extract<MessageContent, { type: 'proposed_plan' }>): void;
   onCodexImageGenerationBegin?(event: CodexImageGenerationBeginEvent): void;
   onCodexImageGenerationEnd?(event: CodexImageGenerationEndEvent): void;
@@ -131,6 +133,7 @@ export const createAcpClient = async (options: CreateAcpClientOptions) => {
     onThreadGoalCleared: options.onThreadGoalCleared,
     onSessionTitleUpdate: options.onSessionTitleUpdate,
     onAgentWarning: options.onAgentWarning,
+    loadExternalMcpServers: options.loadExternalMcpServers,
     onCodexProposedPlan: options.onCodexProposedPlan,
     onCodexImageGenerationBegin: options.onCodexImageGenerationBegin,
     onCodexImageGenerationEnd: options.onCodexImageGenerationEnd,

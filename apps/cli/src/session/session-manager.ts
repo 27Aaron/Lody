@@ -34,9 +34,11 @@ import {
   buildSessionLaunchConfig,
   getMachineFlockDocId,
   getSessionRoomId,
+  normalizeMcpServerIdsForDedup,
   isLoroRepoDocDeleted,
   type SessionLaunchConfig,
   type SessionMeta,
+  type McpServerId,
 } from '@lody/shared';
 import { Logger } from '@/utils/logger';
 import { SessionConfig, SessionOutputEvent, SessionErrorEvent, SessionExitEvent } from './types';
@@ -46,6 +48,7 @@ import {
   type AcpWriteTextFileEvidence,
   type AcpStartupStageEvent,
   type AcpSessionStartTarget,
+  type AgentClientOptions,
   type AgentSessionWarning,
   type CodexImageGenerationBeginEvent,
   type CodexImageGenerationEndEvent,
@@ -118,6 +121,7 @@ import { resolveGitHubRepoWorktreeConfig } from './worktree/worktree-config-reso
 import type { AcpCapabilitiesResult } from '@/agent/acp-capability-normalization';
 import { resolveWorkspaceLocalProjectRootPathWithRetry } from '@/lib/local-project-meta';
 import { readTimeoutEnv } from '@/lib/loro/timeout-utils';
+import { loadSessionMcpCatalog } from '@/agent/session-mcp-resolver';
 import { SessionUserResolver } from './session-user-resolver';
 import {
   SessionPreparationService,
@@ -201,7 +205,10 @@ function getSessionPreparationSandboxId(sessionId: SessionId, preparationId: str
   return `${sessionId}-prepare-${preparationHash}` as SessionId;
 }
 
-type SessionPreparationCompatibility = ReturnType<typeof buildSessionLaunchConfig>;
+type SessionPreparationCompatibility = {
+  launch: ReturnType<typeof buildSessionLaunchConfig>;
+  mcpServerIds: string[];
+};
 
 type Deferred<T> = {
   promise: Promise<T>;
@@ -250,14 +257,23 @@ function createDeferred<T>(): Deferred<T> {
   };
 }
 
+/**
+ * The two halves come from different objects on the re-check paths — the launch
+ * config from the prepared process, the selection from the session that wants to
+ * claim it — so they stay separate parameters instead of one spliced record.
+ */
 function buildSessionPreparationCompatibility(
-  config: Pick<SessionConfig, 'customAcp' | 'runtimeOverrides' | 'env'> | SessionLaunchConfig | null
+  launchSource: Partial<SessionLaunchConfig> | null | undefined,
+  mcpServerIds: readonly McpServerId[] | undefined
 ): SessionPreparationCompatibility {
-  return buildSessionLaunchConfig({
-    customAcp: config?.customAcp,
-    runtimeOverrides: config?.runtimeOverrides,
-    env: config?.env,
-  });
+  return {
+    launch: buildSessionLaunchConfig({
+      customAcp: launchSource?.customAcp,
+      runtimeOverrides: launchSource?.runtimeOverrides,
+      env: launchSource?.env,
+    }),
+    mcpServerIds: normalizeMcpServerIdsForDedup(mcpServerIds),
+  };
 }
 
 function agentConfigMatchesPreparation(
@@ -371,6 +387,7 @@ export interface CreateAgentConfig {
   onThreadGoalCleared: (threadId: string) => void;
   onSessionTitleUpdate: (title: string) => void;
   onAgentWarning: (warning: AgentSessionWarning) => void;
+  loadExternalMcpServers: NonNullable<AgentClientOptions['loadExternalMcpServers']>;
   onCodexProposedPlan: (plan: Extract<MessageContent, { type: 'proposed_plan' }>) => void;
   onCodexImageGenerationBegin: (event: CodexImageGenerationBeginEvent) => void;
   onCodexImageGenerationEnd: (event: CodexImageGenerationEndEvent) => void;
@@ -586,7 +603,7 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
       !current ||
       !isDeepStrictEqual(
         resource.compatibility,
-        buildSessionPreparationCompatibility(current.config ?? null)
+        buildSessionPreparationCompatibility(current.config, resource.config.mcpServerIds)
       )
     ) {
       return null;
@@ -648,7 +665,7 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
       return await this.createSessionInnerWithAgent(config, agentStart);
     }
 
-    const compatibility = buildSessionPreparationCompatibility(config);
+    const compatibility = buildSessionPreparationCompatibility(config, config.mcpServerIds);
     const claim = this.preparationService.claim({
       sessionId,
       requesterUserId: config.requesterUserId,
@@ -671,7 +688,7 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
           current !== null &&
           isDeepStrictEqual(
             resource.compatibility,
-            buildSessionPreparationCompatibility(current.config ?? null)
+            buildSessionPreparationCompatibility(current.config, config.mcpServerIds)
           )
         );
       },
@@ -887,6 +904,7 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
       agentConfigId: spec.agentConfigId as AgentConfigId,
       agentCliType: spec.cliType,
       agentType: spec.agentType,
+      mcpServerIds: spec.runConfig?.mcpServerIds ?? [],
       customAcp: agentConfig.customAcp,
       runtimeOverrides: agentConfig.runtimeOverrides,
       project: spec.project as ProjectRef | undefined,
@@ -901,7 +919,7 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
       userName: user.name,
       userEmail: user.email,
     };
-    const compatibility = buildSessionPreparationCompatibility(config);
+    const compatibility = buildSessionPreparationCompatibility(config, config.mcpServerIds);
     const ghTokenInjected = await this.prepareGitHubRepoSessionConfig(config);
     signal.throwIfAborted();
     const launch = await resolveACPProcessLaunchAsync({
@@ -1247,6 +1265,19 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
         dispatchEvent(() => this.emit('onSessionTitleUpdate', sessionId, title)),
       onAgentWarning: (warning) =>
         dispatchEvent(() => this.emit('onAgentWarning', sessionId, warning)),
+      loadExternalMcpServers: () =>
+        loadSessionMcpCatalog({
+          repo: this.workspaceDocument.repo,
+          syncFlockDoc: (docId, { timeoutMs }) =>
+            this.workspaceDocument.syncFlockDocOrThrow(docId, {
+              timeoutMs,
+              reason: 'session-mcp-catalog-start',
+            }),
+          workspaceId: this.workspaceId,
+          sessionId,
+          selectedIds: config.mcpServerIds,
+          logger: this.logger,
+        }),
       onCodexProposedPlan: (plan) =>
         dispatchEvent(() => this.emit('onCodexProposedPlan', sessionId, plan)),
       onCodexImageGenerationBegin: (event) =>

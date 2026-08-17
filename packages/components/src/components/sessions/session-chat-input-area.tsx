@@ -22,6 +22,7 @@ import {
   type ChatComposerFileItem,
   type ChatComposerImageItem,
 } from '@/components/chat/chat-composer';
+import type { AttachmentAddMenuMcp } from '@/components/chat/attachment-add-menu';
 import { MobileSessionRunConfig } from '@/components/mobile/mobile-session-run-config';
 import type { MentionProjectSource } from '@/components/mentions/mention-project-file-source';
 import {
@@ -377,6 +378,8 @@ export interface SessionChatInputAreaProps {
     onUpgrade?: () => void;
   } | null;
   queueDisplay?: ReactNode;
+  /** Per-turn MCP selection, rendered inside the composer's "+" menu. */
+  mcp?: AttachmentAddMenuMcp;
   onModeChange: (value: string) => void;
   onModelChange: (value: string) => void;
   onConfigOptionChange?: (configId: string, value: AcpConfigOptionValue) => void;
@@ -433,6 +436,7 @@ export const SessionChatInputArea = memo(
       availableCommands,
       freeTurnLimitNotice,
       queueDisplay,
+      mcp,
       onModeChange,
       onModelChange,
       onConfigOptionChange,
@@ -2253,6 +2257,7 @@ export const SessionChatInputArea = memo(
           pendingFiles.length >= SESSION_FILE_MAX_COUNT
         }
         onFileAddClick={attachmentAddEnabled ? handleAttachmentAddClick : undefined}
+        mcp={mcp}
         onFileRemove={submissionPending || isArchived ? undefined : handleRemoveFile}
         onFileRetry={submissionPending || isArchived ? undefined : handleRetryFile}
         footerSelector={footerSelectorNode}

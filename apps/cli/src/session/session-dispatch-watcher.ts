@@ -23,6 +23,7 @@ import {
   SessionStatusFactory,
   type SessionTurnInputConfig,
   type WorkspaceId,
+  normalizeMcpServerIdSelection,
 } from '@lody/shared';
 import type { Logger } from '@/utils/logger';
 import { formatErrorMessage } from '@/utils/format-error';
@@ -1929,6 +1930,7 @@ export class SessionDispatchWatcher {
         modeId: entry.inputConfig?.modeId,
         modelId: entry.inputConfig?.modelId,
         configOptionValues: entry.inputConfig?.configOptionValues,
+        mcpServerIds: entry.inputConfig?.mcpServerIds ?? [],
         issuePRMentions: entry.inputConfig?.issuePRMentions,
         resume: entry.inputConfig?.resume ?? resolveDispatchAcpSessionId(meta),
       },
@@ -1969,6 +1971,7 @@ export class SessionDispatchWatcher {
         modeId: entry.inputConfig?.modeId,
         modelId: entry.inputConfig?.modelId,
         configOptionValues: entry.inputConfig?.configOptionValues,
+        mcpServerIds: entry.inputConfig?.mcpServerIds ?? [],
         issuePRMentions: entry.inputConfig?.issuePRMentions,
         resume: entry.inputConfig?.resume,
       },
@@ -2063,6 +2066,8 @@ export class SessionDispatchWatcher {
         )
           ? queuedItem.acpSessionConfig.configOptionValues
           : undefined,
+        mcpServerIds:
+          normalizeMcpServerIdSelection(queuedItem.acpSessionConfig?.mcpServerIds) ?? [],
         issuePRMentions: queuedItem.acpSessionConfig?.issuePRMentions,
         resume: resolveResumableAcpSessionId(meta),
       });

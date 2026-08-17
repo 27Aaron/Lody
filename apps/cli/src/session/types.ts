@@ -9,6 +9,7 @@ import {
   type WorktreeCleanupScriptConfig,
   type WorktreeSetupScriptConfig,
   WorkspaceId,
+  type McpServerId,
 } from '@lody/shared';
 import type { SessionActivePresencePhase } from '@/lib/loro/session-active-presence';
 /**
@@ -21,6 +22,8 @@ export interface SessionConfig {
   agentConfigId?: AgentConfigId;
   agentCliType: AgentConfigCliType;
   agentType: string;
+  /** Selection carried by the dispatching turn; ACP startup must not re-read history for it. */
+  mcpServerIds: McpServerId[];
   /** Launch spec for this execution request; durable default lives on the agent config. */
   customAcp?: CustomAcpLaunchSpec;
   /** Advanced runtime binary override for builtin Claude/Codex. */

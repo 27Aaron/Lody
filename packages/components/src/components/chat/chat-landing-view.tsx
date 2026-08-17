@@ -10,6 +10,7 @@ import {
   type ChatComposerFileItem,
   type ChatComposerImageItem,
 } from '@/components/chat/chat-composer';
+import type { AttachmentAddMenuMcp } from '@/components/chat/attachment-add-menu';
 import { ErrorBoundary } from '@/components/error-boundary';
 import type { MentionProjectSource } from '@/components/mentions/mention-project-file-source';
 import { ArrowUp, Bug, Download, ExternalLink, Loader2, Settings } from 'lucide-react';
@@ -85,6 +86,8 @@ export interface ChatLandingViewProps {
   onFileRemove?: (id: string) => void;
   /** Callback when retrying a failed file upload */
   onFileRetry?: (id: string) => void;
+  /** Per-turn MCP selection, rendered inside the composer's "+" menu. */
+  mcp?: AttachmentAddMenuMcp;
   /** @deprecated Use topSelector and footerSelector instead */
   selector?: ReactNode;
   /** Selector node displayed above the textarea (e.g., repo, branch) */
@@ -192,6 +195,7 @@ export function ChatLandingView({
   onFileAddClick,
   onFileRemove,
   onFileRetry,
+  mcp,
   selector,
   topSelector,
   footerSelector,
@@ -431,6 +435,7 @@ export function ChatLandingView({
         onFileAddClick={onFileAddClick}
         onFileRemove={submissionPending ? undefined : onFileRemove}
         onFileRetry={submissionPending ? undefined : onFileRetry}
+        mcp={mcp}
         topSelector={topSelector}
         footerSelector={footerSelector ?? selector}
         bottomBar={bottomBar}

@@ -1,5 +1,7 @@
 import type { AcpConfigOptionValue, AgentConfigCliType } from './ai';
+import type { McpServerId } from './ids';
 import { normalizeProjectRefForDedup } from './project';
+import { normalizeMcpServerIdsForDedup } from './workspace-mcp';
 
 const SENSITIVE_ACP_CONFIG_ID_PATTERN =
   /(?:api[_-]?key|auth|bearer|credential|password|passwd|secret|token)/i;
@@ -8,6 +10,7 @@ export type SessionPreparationRunConfig = {
   modeId?: string;
   modelId?: string;
   configOptionValues?: Record<string, AcpConfigOptionValue>;
+  mcpServerIds?: McpServerId[];
 };
 
 export type SessionPreparationClaimIdentity = {
@@ -40,6 +43,7 @@ export function buildSessionPreparationRunConfig(input: {
   modeId?: string | null;
   modelId?: string | null;
   configOptionValues?: Record<string, AcpConfigOptionValue> | null;
+  mcpServerIds?: readonly McpServerId[] | null;
 }): SessionPreparationRunConfig | undefined {
   const modeId = trimOptionalId(input.modeId);
   const modelId = trimOptionalId(input.modelId);
@@ -54,14 +58,16 @@ export function buildSessionPreparationRunConfig(input: {
     configOptionValues && Object.keys(configOptionValues).length > 0
       ? configOptionValues
       : undefined;
+  const mcpServerIds = input.mcpServerIds ? [...input.mcpServerIds] : undefined;
 
-  if (!modeId && !modelId && !nonEmptyConfigOptionValues) {
+  if (!modeId && !modelId && !nonEmptyConfigOptionValues && !mcpServerIds) {
     return undefined;
   }
   return {
     ...(modeId ? { modeId } : {}),
     ...(modelId ? { modelId } : {}),
     ...(nonEmptyConfigOptionValues ? { configOptionValues: nonEmptyConfigOptionValues } : {}),
+    ...(mcpServerIds ? { mcpServerIds } : {}),
   };
 }
 
@@ -77,6 +83,9 @@ export function normalizeSessionPreparationRunConfigForDedup(
           left.localeCompare(right)
         )
       : null,
+    ...(config.mcpServerIds === undefined
+      ? []
+      : [normalizeMcpServerIdsForDedup(config.mcpServerIds)]),
   ];
 }
 

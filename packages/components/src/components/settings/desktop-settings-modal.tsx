@@ -34,6 +34,7 @@ import { MachineAgentSettings } from './machine-agent-settings';
 import { IntegrationsSettingsComponent } from './integrations-setting';
 import { KeyboardShortcutsSetting } from './keyboard-shortcuts-setting';
 import { AboutSettingsComponent } from './about-setting';
+import { McpSetting } from './mcp-setting';
 
 /**
  * Desktop-only settings overlay. Mounted once at the app level (like the bug-report
@@ -236,6 +237,8 @@ function SettingsTabContent({ tabId }: { tabId: SettingsTabId }) {
           onSelectedMachineChange={setSelectedMachineId}
         />
       );
+    case 'mcp':
+      return <McpSetting />;
     case 'machines':
       return (
         <MachineAgentSettings

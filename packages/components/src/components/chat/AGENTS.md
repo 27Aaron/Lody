@@ -7,6 +7,13 @@
 - `chat-composer.tsx` owns the reusable composer shell: prompt textarea,
   attachment chips, status text, top/footer/bottom selector slots, image add,
   and primary/secondary action placement.
+- `attachment-add-menu.tsx` is the composer's single "+" menu and owns the
+  per-turn MCP selection (`ChatComposer mcp` → `AttachmentAddMenuMcp`), NOT the
+  footer selector row — the footer stays run config → permission → usage. MCP is
+  always a second level because the catalog is multi-select and unbounded:
+  desktop opens a hover submenu, touch has no hover so mobile pushes the panel
+  onto the same surface with a back row. Toggling never closes the menu. The
+  entry hides itself when the workspace catalog is empty.
 - `chat-landing.tsx` owns new-chat orchestration, selector state, mobile sheet
   wiring, submit behavior, and the nodes passed into `ChatComposer`.
 - `chat-landing-selectors.tsx` and `unified-project-selector.tsx` wrap shared

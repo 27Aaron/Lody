@@ -131,6 +131,7 @@ const createSessionConfig = (
   machineId: 'machine-1' as MachineId,
   agentCliType: 'builtin',
   agentType: 'codex',
+  mcpServerIds: [],
   assumeDocExisting: true,
   userName: 'Test User',
   userEmail: 'test@example.com',

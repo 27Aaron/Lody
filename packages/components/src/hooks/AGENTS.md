@@ -28,3 +28,11 @@ this file; edit `AGENTS.md` only.
   restoration, search/group-expansion suppression, and viewport resize handling
   for the mobile keyboard and terminal dock. The library observes content growth;
   it does not replace Virtua or own those product-level behaviors.
+- `use-workspace-mcp-catalog.ts` reads a ref-counted per-workspace room in
+  `lib/workspace-mcp-catalog-room.ts`; it must not open the Flock document,
+  subscribe, or join the room per mount. The catalog is ONE small document, but
+  a consumer mounts for every visible session plus every hidden child tab and
+  side chat, so per-mount leases multiply room joins and duplicate row maps for
+  one list — the same problem `use-machine-flock-rows.ts` ref-counts away. The
+  shared snapshot is also identity-stable across mounts, which is what lets the
+  selection and composer-menu memos built on it actually hit.

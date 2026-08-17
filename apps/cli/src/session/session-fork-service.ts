@@ -16,6 +16,7 @@ import {
   type SessionHistoryInput,
   type SessionMeta,
   type ProjectRef,
+  resolveSessionMcpSelection,
 } from '@lody/shared';
 import type { Logger } from '@/utils/logger';
 import type { LoroDocumentManager } from '@/lib/loro/doc';
@@ -249,6 +250,7 @@ export class SessionForkService {
             agentConfigId: source.agentConfigId,
             agentCliType: source.cliType,
             agentType: source.agentType,
+            mcpServerIds: resolveSessionMcpSelection(targetHistory),
             project,
             sessionId: targetSessionId,
             githubRepo:
@@ -618,6 +620,7 @@ export class SessionForkService {
             agentConfigId: source.agentConfigId,
             agentCliType: source.cliType,
             agentType: source.agentType,
+            mcpServerIds: resolveSessionMcpSelection(historyResult.history),
             customAcp: agentConfig.customAcp,
             runtimeOverrides: agentConfig.runtimeOverrides,
             env: agentConfig.env,
@@ -736,6 +739,7 @@ export class SessionForkService {
       agentConfigId: source.agentConfigId,
       agentCliType: source.cliType,
       agentType: source.agentType,
+      mcpServerIds: resolveSessionMcpSelection(historyResult.history),
       customAcp: agentConfig.customAcp,
       runtimeOverrides: agentConfig.runtimeOverrides,
       env: agentConfig.env,

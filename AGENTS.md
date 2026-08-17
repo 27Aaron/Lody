@@ -44,6 +44,13 @@ private service secrets, and the Web and mobile app sources.
   `packages/platform/src/runtime-artifacts.ts`; local and cloud assembly must use that
   same constant. `LODY_RUNTIME_BASE_URL` is only an explicit mirror override.
 - Never commit captured user/agent transcripts; fixtures must be synthetic.
+- Workspace MCP has exactly two durable layers: catalog entries in the workspace Flock
+  document and selected ids in each user turn input config. Do not add machine bindings.
+  Preserve `mcpServerIds: []` as an explicit empty selection; dispatch must carry the
+  driving turn's selection into ACP startup rather than rereading session history.
+- Workspace MCP catalog mutations are not shared until the committed Flock document is
+  explicitly synced. UI and CLI writers must surface upload failures as locally durable,
+  not report them as fully synced or roll them back.
 
 `pnpm check:public-boundary` is the executable repository boundary and must pass
 after changing package scope or cloud/local composition.

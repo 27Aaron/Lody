@@ -13,6 +13,7 @@ import { MESSAGE_TEXT_SPAN_KINDS } from './message-text-spans';
 import { RpcSecretPublicKeySchema } from './rpc-secret';
 import { LodyOperationIdSchema } from './session-orchestration';
 import { isSensitiveAcpConfigOptionId } from './session-preparation';
+import { normalizeMcpServerIdSelection } from './workspace-mcp';
 
 // ============================================
 // BASE ID TYPE SCHEMAS
@@ -347,6 +348,7 @@ export const ACPSessionConfigSchema = z
     modeId: z.string().optional(),
     modelId: z.string().optional(),
     configOptionValues: AcpConfigOptionValuesSchema.optional(),
+    mcpServerIds: z.array(z.string()).optional(),
     issuePRMentions: z.array(IssuePRMentionSchema).optional(),
     resume: ACPSessionIdSchema.optional(),
     chainDepth: z.number().int().nonnegative().optional(),
@@ -364,6 +366,7 @@ const LooseSessionTurnInputConfigSchema = z
     modeId: z.string().optional(),
     modelId: z.string().optional(),
     configOptionValues: AcpConfigOptionValuesSchema.optional(),
+    mcpServerIds: z.array(z.string()).optional(),
     issuePRMentions: z.array(IssuePRMentionSchema).optional(),
     resume: ACPSessionIdSchema.optional(),
     chainDepth: z.number().int().nonnegative().optional(),
@@ -449,6 +452,11 @@ export const normalizeSessionTurnInputConfig = (
   );
   if (configOptionValues) {
     normalized.configOptionValues = configOptionValues;
+  }
+
+  const mcpServerIds = normalizeMcpServerIdSelection(record.mcpServerIds);
+  if (mcpServerIds) {
+    normalized.mcpServerIds = mcpServerIds;
   }
 
   const issuePRMentions = maybeParseField(z.array(IssuePRMentionSchema), record.issuePRMentions);
@@ -865,6 +873,10 @@ export const SessionPreparationRunConfigSchema = z
         Object.entries(values).filter(([configId]) => !isSensitiveAcpConfigOptionId(configId))
       )
     ).optional(),
+    mcpServerIds: z
+      .array(z.string())
+      .transform((ids) => normalizeMcpServerIdSelection(ids) ?? [])
+      .optional(),
   })
   .strict();
 

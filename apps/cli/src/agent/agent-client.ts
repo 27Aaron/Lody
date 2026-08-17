@@ -25,6 +25,7 @@ import {
   type ModelInfo,
   parseAskUserQuestionElicitationRequest,
   buildAskUserQuestionElicitationResponse,
+  formatMcpResolutionProblem,
   getServerNow,
 } from '@lody/shared';
 import { getLocalControlSocketPath } from '@lody/shared/node/local-ipc';
@@ -63,6 +64,7 @@ import {
   parseSteerAppliedParams,
   type AcknowledgedSteerCapability,
 } from './acknowledged-steer';
+import type { SessionMcpCatalogSelector } from './session-mcp-resolver';
 
 /**
  * Checks if an error is a transport-related error that may be transient.
@@ -531,7 +533,11 @@ function extractCodexImageGenerationContentFields(content: unknown): {
   return { revisedPrompt, savedPath, image };
 }
 
-interface AgentClientOptions {
+/**
+ * Turns a loaded workspace MCP catalog into the servers this agent can mount.
+ * Synchronous: everything that needs I/O already happened in the load phase.
+ */
+export interface AgentClientOptions {
   sessionId: SessionId;
   workspaceId?: WorkspaceId;
   machineId?: MachineId;
@@ -558,6 +564,12 @@ interface AgentClientOptions {
   onThreadGoalCleared?(threadId: string): void;
   onSessionTitleUpdate?(title: string): void;
   onAgentWarning?(warning: AgentSessionWarning): void;
+  /**
+   * Starts loading the workspace MCP catalog. Invoked BEFORE `initialize`, so
+   * its remote sync overlaps process spawn and the handshake; the resolved
+   * selector is applied once the agent has advertised its MCP capabilities.
+   */
+  loadExternalMcpServers?(): Promise<SessionMcpCatalogSelector>;
   onCodexProposedPlan?(plan: Extract<MessageContent, { type: 'proposed_plan' }>): void;
   onCodexImageGenerationBegin?(event: CodexImageGenerationBeginEvent): void;
   onCodexImageGenerationEnd?(event: CodexImageGenerationEndEvent): void;
@@ -590,6 +602,7 @@ export class AgentClient implements acp.Client {
   private steerApplicationBarrier: Promise<void> | null = null;
   private activePromptCompletion: ActivePromptCompletion | null = null;
   private sessionWorkdir: string | null = null;
+  private agentMcpCapabilities: acp.McpCapabilities | undefined;
   /** Session config options returned by the agent; the source of model/mode choices and names. */
   private configOptions: acp.SessionConfigOption[] = [];
   /** Legacy top-level `models` state proves that `session/set_model` is supported. */
@@ -619,7 +632,7 @@ export class AgentClient implements acp.Client {
     )}`;
   }
 
-  private buildMcpServers(workdir: string): acp.McpServer[] {
+  private buildBuiltinMcpServers(workdir: string): acp.McpServer[] {
     if (!this.options.workspaceId || !this.options.machineId) {
       return [];
     }
@@ -689,6 +702,36 @@ export class AgentClient implements acp.Client {
         env,
       },
     ];
+  }
+
+  private async buildMcpServers(
+    workdir: string,
+    externalLoad: Promise<SessionMcpCatalogSelector> | undefined
+  ): Promise<acp.McpServer[]> {
+    const builtin = this.buildBuiltinMcpServers(workdir);
+    if (!externalLoad) {
+      return builtin;
+    }
+
+    try {
+      const external = (await externalLoad)({
+        http: this.agentMcpCapabilities?.http === true,
+      });
+      for (const problem of external.problems) {
+        this.options.onAgentWarning?.({
+          message: formatMcpResolutionProblem(problem),
+          source: 'configWarning',
+        });
+      }
+      return [...builtin, ...(external.servers as acp.McpServer[])];
+    } catch (error) {
+      const message = `Workspace MCP servers could not be loaded (${formatErrorMessage(
+        error
+      )}). The agent started with only the built-in Lody server.`;
+      this.logger.debug(`[${this.options.sessionId}] ${message}`);
+      this.options.onAgentWarning?.({ message, source: 'configWarning' });
+      return builtin;
+    }
   }
 
   async requestPermission(
@@ -1443,6 +1486,15 @@ export class AgentClient implements acp.Client {
     };
     const startupStart = performance.now();
 
+    // Off the critical path on purpose: loading the workspace MCP catalog is a
+    // remote sync plus a document read, and nothing in it depends on the
+    // `initialize` response — only the selection applied afterwards does. Start
+    // it here so it overlaps the handshake instead of stalling `newSession`.
+    // The rejection handler is attached immediately because an `initialize`
+    // failure below would otherwise leave this promise unobserved.
+    const externalMcpLoad = this.options.loadExternalMcpServers?.();
+    externalMcpLoad?.catch(() => undefined);
+
     const initStart = performance.now();
     this.options.onStartupStage?.({ type: 'initialize_start' });
 
@@ -1515,6 +1567,7 @@ export class AgentClient implements acp.Client {
     );
     this.logger.debug(`[${this.options.sessionId}] ACP initialize response received`);
     this.authMethods = [...(initResponse.authMethods ?? [])];
+    this.agentMcpCapabilities = initResponse.agentCapabilities?.mcpCapabilities;
 
     const loadSessionCapability = initResponse.agentCapabilities?.loadSession;
     this.supportsLoadSession = !!loadSessionCapability;
@@ -1578,7 +1631,7 @@ export class AgentClient implements acp.Client {
     const newSessionStart = performance.now();
     this.options.onStartupStage?.({ type: 'new_session_start' });
     let sessionResponse: acp.NewSessionResponse;
-    const mcpServers = this.buildMcpServers(workdir);
+    const mcpServers = await this.buildMcpServers(workdir, externalMcpLoad);
 
     const canLoadSession = this.supportsLoadSession && hasLoadSessionMethod;
     const canResumeSession = this.supportsResume && hasResumeMethod;
@@ -1915,7 +1968,7 @@ export class AgentClient implements acp.Client {
       throw new Error('[ACP_SESSION_UNAVAILABLE] Current ACP session is not ready');
     }
 
-    const mcpServers = this.buildMcpServers(workdir);
+    const mcpServers = await this.buildMcpServers(workdir, this.options.loadExternalMcpServers?.());
     if (!forkSessionTurnId) {
       try {
         return await withTimeout(

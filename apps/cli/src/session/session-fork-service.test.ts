@@ -3,6 +3,7 @@ import {
   SessionStatusFactory,
   type AgentConfigId,
   type MachineId,
+  type McpServerId,
   type SessionHistoryInput,
   type SessionId,
   type SessionMeta,
@@ -468,8 +469,21 @@ describe('SessionForkService durability boundary', () => {
 
   it('accepts durably before creating an independent worktree from captured HEAD', async () => {
     const capturedHead = 'b'.repeat(40);
+    const selectedMcpServerId = 'mcp-server-1' as McpServerId;
     const harness = createForkHarness(undefined, {
       worktree: { dirty: true, headSha: capturedHead },
+      sourceHistory: [
+        {
+          ...sourceHistory[0]!,
+          inputConfig: {
+            prompt: 'hello',
+            cliType: 'builtin',
+            agentType: 'codex',
+            mcpServerIds: [selectedMcpServerId],
+          },
+        },
+        sourceHistory[1]!,
+      ],
     });
 
     const result = await harness.service.fork({
@@ -498,6 +512,7 @@ describe('SessionForkService durability boundary', () => {
         deferWorktreeMetaPersistence: true,
         workdir: '/source/project-root',
         project: expect.objectContaining({ kind: 'local', useWorktree: true }),
+        mcpServerIds: [selectedMcpServerId],
       }),
       expect.objectContaining({ forkSessionId: 'acp-source' })
     );

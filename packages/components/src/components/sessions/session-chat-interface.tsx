@@ -49,6 +49,7 @@ import { matchesKeyboardEvent, parseBinding } from '@/lib/commands/key-matcher';
 import { isSessionContextCompacting } from '@/lib/session-context-compaction';
 import { hasFileTransfer, getFilesFromDataTransfer } from '@/lib/file-drop';
 import { SessionChatInputArea, type SessionChatInputAreaHandle } from './session-chat-input-area';
+import { useSessionMcpSelection } from '@/hooks/use-session-mcp-selection';
 import { MessageQueueDisplay, shouldRequestNativeQueueSteer } from './message-queue';
 import { useTranslation } from 'react-i18next';
 import { useRouter } from '@tanstack/react-router';
@@ -2333,6 +2334,10 @@ export const SessionChatInterface = memo(
       () => resolveSessionConversationConfig(sessionDoc?.history ?? [], sessionDoc?.mq ?? []),
       [sessionDoc?.history, sessionDoc?.mq]
     );
+    const mcpSelection = useSessionMcpSelection(sessionConversationConfig.mcpServerIds, {
+      existingSession: true,
+      disabled: isArchivedSession,
+    });
     // `sourceConfigKey` identifies the durable turn selected by the resolver,
     // so there is no need to hash its mode/model/option values separately.
     const sessionConversationConfigRevision = `${session.id}:${
@@ -3491,6 +3496,7 @@ export const SessionChatInterface = memo(
             modelId: turnModelId,
             configOptionValues: turnConfigOptionValues,
             issuePRMentions,
+            mcpServerIds: mcpSelection.selectedIds,
             resume: session.acpSessionId ?? undefined,
           });
 
@@ -3580,6 +3586,7 @@ export const SessionChatInterface = memo(
         guardNewBillableTurn,
         guideHistoryEntry,
         knownIssuePrItems,
+        mcpSelection.selectedIds,
         repoFullName,
         requestSessionDispatch,
         scrollChatToBottom,
@@ -3625,6 +3632,7 @@ export const SessionChatInterface = memo(
             modelId: turnModelId,
             configOptionValues: turnConfigOptionValues,
             issuePRMentions,
+            mcpServerIds: mcpSelection.selectedIds,
             resume: session.acpSessionId ?? undefined,
           });
           const queuedInputConfig: MessageQueueItemInput['acpSessionConfig'] = {
@@ -3636,6 +3644,7 @@ export const SessionChatInterface = memo(
             modelId: inputConfig.modelId ?? undefined,
             configOptionValues: inputConfig.configOptionValues ?? undefined,
             issuePRMentions: inputConfig.issuePRMentions ?? undefined,
+            mcpServerIds: [...mcpSelection.selectedIds],
             resume: inputConfig.resume ?? undefined,
             chainDepth: 0,
           };
@@ -3671,6 +3680,7 @@ export const SessionChatInterface = memo(
         currentUser?.id,
         guardNewBillableTurn,
         knownIssuePrItems,
+        mcpSelection.selectedIds,
         pushMessageQueue,
         repoFullName,
         selectedModeId,
@@ -5729,6 +5739,7 @@ export const SessionChatInterface = memo(
                           />
                         ) : null
                       }
+                      mcp={mcpSelection.menu}
                       onModeChange={handleModeChange}
                       onModelChange={handleModelChange}
                       onConfigOptionChange={handleConfigOptionChange}

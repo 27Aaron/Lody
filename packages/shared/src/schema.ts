@@ -454,6 +454,8 @@ const acpSessionConfigSchema = schema
       resume: schema.String({ required: false }),
       /** Config option values (configId → value) for setSessionConfigOption */
       configOptionValues: schema.Any({ required: false }),
+      /** Workspace MCP catalog ids selected for this session (string[]). */
+      mcpServerIds: schema.Any({ required: false }),
       chainDepth: schema.Number({ required: false }),
     },
     { required: false }

@@ -633,6 +633,7 @@ export class Session extends EventEmitter<SessionEvents> implements ISession {
           onThreadGoalCleared: callbacks.onThreadGoalCleared,
           onSessionTitleUpdate: callbacks.onSessionTitleUpdate,
           onAgentWarning: callbacks.onAgentWarning,
+          loadExternalMcpServers: callbacks.loadExternalMcpServers,
           onCodexProposedPlan: callbacks.onCodexProposedPlan,
           onCodexImageGenerationBegin: callbacks.onCodexImageGenerationBegin,
           onCodexImageGenerationEnd: callbacks.onCodexImageGenerationEnd,

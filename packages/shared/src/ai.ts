@@ -7,7 +7,7 @@ import {
 } from '@agentclientprotocol/sdk';
 import type { ToolCallContent as AcpToolCallContent, SessionMode } from '@agentclientprotocol/sdk';
 import type { PermissionOutcome } from './message';
-import type { AgentConfigId, SessionId } from './ids';
+import type { AgentConfigId, McpServerId, SessionId } from './ids';
 import type { MessageTextSpan } from './message-text-spans';
 import type { MinimalVisualAnnotationAnchor } from './visual-annotation-types';
 import type { WorktreeScriptPhase } from './project';
@@ -1514,6 +1514,8 @@ export type ACPSessionConfig = {
   modelId?: string;
   /** Config option values (configId → value) for setSessionConfigOption. */
   configOptionValues?: Record<string, AcpConfigOptionValue>;
+  /** Workspace MCP catalog ids selected for this session. */
+  mcpServerIds?: McpServerId[];
   issuePRMentions?: IssuePRMention[];
   // continue to chat
   resume?: ACPSessionId;
