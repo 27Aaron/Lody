@@ -144,6 +144,7 @@ describe('SessionDispatchWatcher', () => {
         agentType: 'codex',
         status: { type: 'idle' },
         parentSessionId: 'parent-session-1',
+        latestUserMsgId: 'turn-1',
       })),
       getHistory: vi.fn(async () => [createPendingUserTurn('turn-1', 'hello')]),
       updateHistory: vi.fn(async () => {}),
@@ -166,6 +167,7 @@ describe('SessionDispatchWatcher', () => {
             agentType: 'codex',
             status: { type: 'idle' },
             parentSessionId: 'parent-session-1',
+            latestUserMsgId: 'turn-1',
           },
         })),
         watch: vi.fn(() => ({ unsubscribe: vi.fn() })),
@@ -441,7 +443,7 @@ describe('SessionDispatchWatcher', () => {
       canUseMachine: createAllowMachineAccess(),
     });
 
-    watcher.enqueueSessionCheck(sessionId);
+    void watcher.enqueueSessionCheck(sessionId);
     await vi.waitFor(() => expect(ensureDocRoomJoined).toHaveBeenCalledTimes(1));
 
     await expect(
@@ -699,6 +701,7 @@ describe('SessionDispatchWatcher', () => {
         cliType: 'builtin',
         agentType: 'codex',
         status: { type: 'idle' },
+        latestUserMsgId: 'turn-denied',
       })),
       getHistory: vi.fn(async () => history),
       updateHistory: vi.fn(
@@ -724,6 +727,7 @@ describe('SessionDispatchWatcher', () => {
             cliType: 'builtin',
             agentType: 'codex',
             status: { type: 'idle' },
+            latestUserMsgId: 'turn-denied',
           },
         })),
         upsertDocMeta,
@@ -1125,6 +1129,7 @@ describe('SessionDispatchWatcher', () => {
         cliType: 'builtin',
         agentType: 'codex',
         status: { type: 'idle' },
+        messageQueueUpdatedAt: 1,
       })),
       getHistory: vi.fn(async () => history),
       popMessageQueue: vi.fn(async () => queue.shift() ?? null),
@@ -1151,6 +1156,7 @@ describe('SessionDispatchWatcher', () => {
             cliType: 'builtin',
             agentType: 'codex',
             status: { type: 'idle' },
+            messageQueueUpdatedAt: 1,
           },
         })),
         watch: vi.fn(() => ({ unsubscribe: vi.fn() })),
@@ -1430,6 +1436,7 @@ describe('SessionDispatchWatcher', () => {
       agentType: 'codex',
       status: { type: 'idle' as const },
       acpSessionId: 'acp-session-2b',
+      latestUserMsgId: 'turn-2b',
     } as SessionMeta;
     let metadataCallback: ((event: { kind: 'doc-metadata'; docId: string }) => void) | undefined;
 
@@ -1687,6 +1694,168 @@ describe('SessionDispatchWatcher', () => {
     }
   });
 
+  it('keeps a large idle workspace metadata-only during bootstrap', async () => {
+    vi.useFakeTimers();
+    try {
+      const roomIds = Array.from({ length: 1_000 }, (_, index) => `session-idle-${index}`);
+      const bootstrapCompleted = createDeferred();
+      const getDocMeta = vi.fn(async (roomId: string) => ({
+        meta: {
+          id: roomId.slice('session-'.length) as SessionId,
+          machineId: 'machine-1',
+          userId: 'user-1',
+          createdAt: new Date().toISOString(),
+          cliType: 'builtin',
+          agentType: 'codex',
+          status: { type: 'idle' as const },
+        } satisfies SessionMeta,
+      }));
+      const getOrCreateSessionDoc = vi.fn();
+      const workspaceDocument = {
+        repo: {
+          getMeta: () => ({
+            scan: vi.fn(async () => roomIds.map((roomId) => ({ key: ['e', roomId], value: true }))),
+          }),
+          getDocMeta,
+          watch: vi.fn(() => ({ unsubscribe: vi.fn() })),
+        },
+        getOrCreateSessionDoc,
+        onMetaRoomSynced: vi.fn(() => vi.fn()),
+      } as unknown as LoroDocumentManager;
+      const watcher = createWatcher({
+        logger: createSilentLogger(),
+        machineId: 'machine-1',
+        workspaceId: 'workspace-1' as WorkspaceId,
+        workspaceDocument,
+        executionService: {
+          getExecutionSnapshot: vi.fn(() => ({
+            hasActiveTurn: false,
+            hasBlockingPendingCreate: false,
+            hasReusableSession: false,
+          })),
+          continueSession: vi.fn(async () => {}),
+          startSession: vi.fn(async () => {}),
+          cancelSession: vi.fn(async () => ({ success: true })),
+        } as unknown as SessionExecutionService,
+        canUseMachine: createAllowMachineAccess(),
+        onStartupBootstrapComplete: bootstrapCompleted.resolve,
+      });
+
+      await watcher.start();
+      await vi.advanceTimersByTimeAsync(0);
+      await bootstrapCompleted.promise;
+
+      expect(getDocMeta).toHaveBeenCalledTimes(roomIds.length);
+      expect(getOrCreateSessionDoc).not.toHaveBeenCalled();
+      watcher.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('includes initial history checks in the bootstrap concurrency bound', async () => {
+    vi.useFakeTimers();
+    try {
+      const sessionIds = Array.from(
+        { length: 12 },
+        (_, index) => `bounded-history-${index}` as SessionId
+      );
+      const releaseHistory = createDeferred();
+      const firstBatchStarted = createDeferred();
+      const bootstrapCompleted = createDeferred();
+      const startSession = vi.fn(() => new Promise<void>(() => {}));
+      let activeHistoryReads = 0;
+      let maxActiveHistoryReads = 0;
+      let historyReadCount = 0;
+      const createMeta = (sessionId: SessionId) =>
+        ({
+          id: sessionId,
+          machineId: 'machine-1',
+          userId: 'user-1',
+          createdAt: new Date().toISOString(),
+          cliType: 'builtin',
+          agentType: 'codex',
+          status: { type: 'idle' as const },
+          latestUserMsgId: `turn-${sessionId}`,
+        }) satisfies SessionMeta;
+      const getOrCreateSessionDoc = vi.fn(async (sessionId: SessionId) => {
+        const meta = createMeta(sessionId);
+        return {
+          mirror: { subscribe: vi.fn(() => vi.fn()) },
+          getMetaState: vi.fn(async () => meta),
+          getHistory: vi.fn(async () => {
+            historyReadCount += 1;
+            activeHistoryReads += 1;
+            maxActiveHistoryReads = Math.max(maxActiveHistoryReads, activeHistoryReads);
+            if (historyReadCount === 4) {
+              firstBatchStarted.resolve();
+            }
+            await releaseHistory.promise;
+            activeHistoryReads -= 1;
+            return [createPendingUserTurn(`turn-${sessionId}`, 'hello')];
+          }),
+          updateHistory: vi.fn(async () => {}),
+          setStatus: vi.fn(async () => {}),
+        };
+      });
+      const workspaceDocument = {
+        repo: {
+          getMeta: () => ({
+            scan: vi.fn(async () =>
+              sessionIds.map((sessionId) => ({
+                key: ['e', `session-${sessionId}`],
+                value: true,
+              }))
+            ),
+          }),
+          getDocMeta: vi.fn(async (roomId: string) => ({
+            meta: createMeta(roomId.slice('session-'.length) as SessionId),
+          })),
+          watch: vi.fn(() => ({ unsubscribe: vi.fn() })),
+        },
+        getOrCreateSessionDoc,
+        onMetaRoomSynced: vi.fn(() => vi.fn()),
+      } as unknown as LoroDocumentManager;
+      const watcher = createWatcher({
+        logger: createSilentLogger(),
+        machineId: 'machine-1',
+        workspaceId: 'workspace-1' as WorkspaceId,
+        workspaceDocument,
+        executionService: {
+          getExecutionSnapshot: vi.fn(() => ({
+            hasActiveTurn: false,
+            hasBlockingPendingCreate: false,
+            hasReusableSession: false,
+          })),
+          continueSession: vi.fn(async () => {}),
+          startSession,
+          cancelSession: vi.fn(async () => ({ success: true })),
+        } as unknown as SessionExecutionService,
+        canUseMachine: createAllowMachineAccess(),
+        onStartupBootstrapComplete: bootstrapCompleted.resolve,
+      });
+
+      await watcher.start();
+      await vi.advanceTimersByTimeAsync(0);
+      await firstBatchStarted.promise;
+
+      expect({ historyReadCount, maxActiveHistoryReads }).toEqual({
+        historyReadCount: 4,
+        maxActiveHistoryReads: 4,
+      });
+
+      releaseHistory.resolve();
+      await bootstrapCompleted.promise;
+      await flushMicrotasks(20);
+      expect(historyReadCount).toBe(sessionIds.length);
+      expect(maxActiveHistoryReads).toBe(4);
+      expect(startSession).toHaveBeenCalledTimes(sessionIds.length);
+      watcher.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('coalesces meta-room recovery bursts while a bootstrap scan is in flight', async () => {
     vi.useFakeTimers();
     try {
@@ -1934,7 +2103,7 @@ describe('SessionDispatchWatcher', () => {
     expect(continueSession).not.toHaveBeenCalled();
   });
 
-  it('watches idle sessions without handled turns until a fresh pending pointer arrives', () => {
+  it('keeps idle sessions metadata-only until explicit activation', () => {
     const watcher = createWatcher({
       logger: createSilentLogger(),
       machineId: 'machine-1',
@@ -1964,7 +2133,7 @@ describe('SessionDispatchWatcher', () => {
       status: { type: 'idle' as const },
     } satisfies SessionMeta;
 
-    expect(sessionNeedsActiveWatch(baseMeta)).toBe(true);
+    expect(sessionNeedsActiveWatch(baseMeta)).toBe(false);
     expect(
       sessionNeedsActiveWatch({
         ...baseMeta,

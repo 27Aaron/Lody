@@ -36,8 +36,13 @@ delegation proofs or a shared-machine gate without a new product and security de
   and surface a `chat_failed` notice instead. The watcher must not publish or clear
   session active presence; `../lib/loro/session-active-presence.ts` is the only owner
   for start/phase/heartbeat/clear. Owned-session startup/meta bootstrap scans may contain
-  thousands of rooms; reconcile them with the fixed four-room concurrency bound rather
-  than materializing an unbounded `Promise.all`. That scan is idempotent and costs
+  thousands of rooms. Session metadata is the activation index: an idle row with no
+  pending pointer, queue watermark, cancel, active status, RPC offer, or access retry
+  stays metadata-only even when it has no `lastHandledUserMsgId`; never inspect every
+  historical Session document to infer work from history. Reconcile activated rooms
+  with the fixed four-room concurrency bound, and keep initial history/cancel checks
+  inside that bound rather than spawning unbounded promise chains. That scan is
+  idempotent and costs
   seconds of main-thread work, so `enqueueBootstrap` folds concurrent requests into a
   single queued drain (`pendingBootstrapReasons` + `bootstrapChain`) — none are dropped.
   Do not restore a per-trigger scan: `onMetaRoomSynced` fires on Streams recovery, so a

@@ -41,6 +41,7 @@ import {
   resolveResumableAcpSessionId,
   resolveSessionCancelAction,
   resolveSessionDispatchAction,
+  shouldWatchSession,
   type SessionDispatchSnapshot,
 } from './session-dispatch-logic';
 import {
@@ -122,6 +123,23 @@ type WatchedSession = {
   unsubscribe: () => void;
 };
 
+type SessionReconcileOptions = {
+  /** Keep startup's global concurrency bound around the initial room work. */
+  awaitInitialChecks?: boolean;
+};
+
+type SessionCheckOptions = {
+  /** Resolve after room/history probing, before a potentially long agent turn. */
+  resolveAfterInitialProbe?: boolean;
+  /** A metadata event may already own this session; bootstrap need not duplicate it. */
+  reuseExistingCheck?: boolean;
+};
+
+type InitialProbeObserver = {
+  complete: () => void;
+  fail: (error: unknown) => void;
+};
+
 /** A user turn pushed over Machine RPC ahead of history CRDT sync. */
 export type SessionRpcTurnOffer = {
   sessionId: SessionId;
@@ -132,7 +150,11 @@ export type SessionRpcTurnOffer = {
 };
 
 export type SessionRpcTurnOfferDisposition =
-  'accepted' | 'duplicate' | 'already-terminal' | 'not-owned' | 'error';
+  | 'accepted'
+  | 'duplicate'
+  | 'already-terminal'
+  | 'not-owned'
+  | 'error';
 
 type StashedRpcTurn = {
   entry: SessionHistoryInput;
@@ -245,12 +267,12 @@ const isConfigOptionValueRecord = (
  *
  * ### Turn-Finding Retry Strategy
  *
- * `findOrAwaitDispatchableTurn` implements a bounded search:
+ * `findOrAwaitDispatchableTurn` only waits when metadata explicitly names work:
  *
  * ```
- * Phase 1 (local): check history → try queue promotion
+ * Phase 1 (local): check history → try queue promotion → RPC stash
  * Phase 2 (pending meta): keep the history room joined and wait up to 5m
- * Phase 3 (legacy/ambiguous): waitForRemoteSync → check history → short realtime wait
+ * Otherwise: return idle; metadata/RPC events reactivate the session later
  * ```
  *
  * ### User-Visible Dispatch Recovery Contract
@@ -294,9 +316,8 @@ const isConfigOptionValueRecord = (
  * message. That is preferred over an unbounded silent wait or repeated recovery
  * loops for a turn whose prompt payload never became readable.
  *
- * Sessions without an explicit pending pointer keep the short legacy wait. They
- * may be old or ambiguous idle sessions, and surfacing a five-minute delivery
- * failure for those would be noisier than doing nothing.
+ * Sessions without an explicit activation signal stay metadata-only. History is
+ * a turn-selection source after activation, not a startup activation index.
  */
 export class SessionDispatchWatcher {
   /** Sessions this watcher is actively monitoring (keyed by sessionId → unsubscribe handle). */
@@ -435,7 +456,7 @@ export class SessionDispatchWatcher {
     }
     this.enqueueBootstrap(`access-recheck:${reason}`);
     for (const sessionId of sessionIds) {
-      this.enqueueSessionCheck(sessionId);
+      void this.enqueueSessionCheck(sessionId);
     }
   }
 
@@ -443,19 +464,61 @@ export class SessionDispatchWatcher {
    * Enqueue a dispatch check for a session. Multiple calls while a check is in-flight
    * are coalesced: exactly one follow-up check will run after the current one finishes.
    */
-  enqueueSessionCheck(sessionId: SessionId): void {
+  enqueueSessionCheck(sessionId: SessionId, options: SessionCheckOptions = {}): Promise<void> {
+    const existing = this.sessionCheckChains.get(sessionId);
+    if (options.reuseExistingCheck === true && existing !== undefined) {
+      return Promise.resolve();
+    }
+
     const previous = this.sessionCheckChains.get(sessionId) ?? Promise.resolve();
+    let probe: Promise<void> | undefined;
+    let initialProbe: InitialProbeObserver | undefined;
+    if (options.resolveAfterInitialProbe === true) {
+      let resolveProbe!: () => void;
+      let rejectProbe!: (error: unknown) => void;
+      let probeSettled = false;
+      probe = new Promise<void>((resolve, reject) => {
+        resolveProbe = resolve;
+        rejectProbe = reject;
+      });
+      initialProbe = {
+        complete: () => {
+          if (probeSettled) {
+            return;
+          }
+          probeSettled = true;
+          resolveProbe();
+        },
+        fail: (error) => {
+          if (probeSettled) {
+            return;
+          }
+          probeSettled = true;
+          rejectProbe(error);
+        },
+      };
+    }
     const next = previous
       .catch(() => {})
       .then(async () => {
-        await this.maybeHandleSession(sessionId);
+        await this.maybeHandleSession(sessionId, initialProbe);
       })
       .finally(() => {
+        initialProbe?.complete();
         if (this.sessionCheckChains.get(sessionId) === next) {
           this.sessionCheckChains.delete(sessionId);
         }
       });
     this.sessionCheckChains.set(sessionId, next);
+    // The maps own these promises even when an event handler intentionally
+    // ignores the returned handle. Attach observers to avoid unhandled rejects;
+    // callers that await either promise still receive the original rejection.
+    void next.catch(() => undefined);
+    if (probe !== undefined) {
+      void probe.catch(() => undefined);
+      return probe;
+    }
+    return next;
   }
 
   /**
@@ -613,7 +676,7 @@ export class SessionDispatchWatcher {
 
   private activateRpcTurn(sessionId: SessionId): void {
     this.rpcTurnOfferSubscribers.get(sessionId)?.forEach((notify) => notify());
-    this.enqueueSessionCheck(sessionId);
+    void this.enqueueSessionCheck(sessionId);
   }
 
   private subscribeToRpcTurnOffers(sessionId: SessionId, subscriber: () => void): () => void {
@@ -646,7 +709,7 @@ export class SessionDispatchWatcher {
   }
 
   /** Enqueue a cancel check (separate chain from dispatch — see class doc). */
-  private enqueueCancelCheck(sessionId: SessionId): void {
+  private enqueueCancelCheck(sessionId: SessionId): Promise<void> {
     const previous = this.cancelCheckChains.get(sessionId) ?? Promise.resolve();
     const next = previous
       .catch(() => {})
@@ -659,6 +722,8 @@ export class SessionDispatchWatcher {
         }
       });
     this.cancelCheckChains.set(sessionId, next);
+    void next.catch(() => undefined);
+    return next;
   }
 
   /** Scan known session existence in the background and reconcile sessions independently. */
@@ -740,7 +805,9 @@ export class SessionDispatchWatcher {
         }
         const sessionId = roomId.slice(SESSION_DOC_PREFIX.length) as SessionId;
         try {
-          await this.reconcileSessionWatch(sessionId, `bootstrap:${reason}`);
+          await this.reconcileSessionWatch(sessionId, `bootstrap:${reason}`, {
+            awaitInitialChecks: true,
+          });
           return false;
         } catch {
           return true;
@@ -768,7 +835,11 @@ export class SessionDispatchWatcher {
    * The metadata watch will notify us when an idle session gets new work,
    * at which point we lazily join its room.
    */
-  private async reconcileSessionWatch(sessionId: SessionId, trigger: string): Promise<void> {
+  private async reconcileSessionWatch(
+    sessionId: SessionId,
+    trigger: string,
+    options: SessionReconcileOptions = {}
+  ): Promise<void> {
     const roomId = getSessionRoomId(sessionId);
     let phase: SessionReconcilePhase = 'read-doc-meta';
     try {
@@ -813,7 +884,7 @@ export class SessionDispatchWatcher {
         const sessionDoc = await this.deps.workspaceDocument.getOrCreateSessionDoc(sessionId);
         phase = 'subscribe-session-doc';
         const unsubscribe = sessionDoc.mirror?.subscribe(() => {
-          this.enqueueSessionCheck(sessionId);
+          void this.enqueueSessionCheck(sessionId);
         });
         if (unsubscribe) {
           this.watchedSessions.set(sessionId, { unsubscribe });
@@ -821,8 +892,17 @@ export class SessionDispatchWatcher {
       }
 
       phase = 'enqueue-session-checks';
-      this.enqueueCancelCheck(sessionId);
-      this.enqueueSessionCheck(sessionId);
+      const cancelCheck = this.enqueueCancelCheck(sessionId);
+      const awaitInitialChecks = options.awaitInitialChecks === true;
+      const sessionCheck = this.enqueueSessionCheck(
+        sessionId,
+        awaitInitialChecks
+          ? { resolveAfterInitialProbe: true, reuseExistingCheck: true }
+          : undefined
+      );
+      if (awaitInitialChecks) {
+        await Promise.all([cancelCheck, sessionCheck]);
+      }
     } catch (error) {
       this.deps.logger.error(
         `[dispatch] Failed to reconcile session watch (sessionId=${sessionId}, roomId=${roomId}, trigger=${trigger}, phase=${phase}): ${formatErrorMessage(
@@ -840,57 +920,22 @@ export class SessionDispatchWatcher {
    * Returns true if the session is actively running, has a pending dispatch,
    * has an interrupted turn (crash recovery), or has an unprocessed cancel request.
    *
-   * A session is only considered **confidently idle** when `lastHandledUserMsgId`
-   * is set (proving turns were processed before) and no pending signals exist.
-   * When neither `latestUserMsgId` nor `lastHandledUserMsgId` is set, the session
-   * is ambiguous — it may have pending work visible only in history (legacy sessions,
-   * first-ever turn, or not-yet-synced metadata). In that case we must watch to be safe.
+   * Metadata is the activation index. An idle session without a handled marker
+   * is still idle unless one of the durable or process-local activation signals
+   * says otherwise; opening history to infer work would fan out across every
+   * historical room on startup.
    */
   private sessionNeedsActiveWatch(meta: SessionMeta): boolean {
-    const statusType = meta.status?.type;
-
-    // Active sessions always need watching
-    if (
-      statusType === 'running' ||
-      statusType === 'initializing' ||
-      statusType === 'requestPermission'
-    ) {
-      return true;
-    }
-
-    // Has a pending user message that hasn't been handled yet
-    if (meta.latestUserMsgId && meta.latestUserMsgId !== meta.lastHandledUserMsgId) {
-      return true;
-    }
-
-    if ((meta.messageQueueUpdatedAt ?? 0) > (meta.messageQueueCheckedAt ?? 0)) {
-      return true;
-    }
-
-    // Has an interrupted processing turn (crash recovery)
-    if (meta.processingUserMsgId) {
-      return true;
-    }
-
-    // Has a cancel request we haven't processed yet
-    if (meta.lastCanceledTurn && meta.lastCanceledTurn !== this.cancelSeenTurn.get(meta.id)) {
-      return true;
-    }
-
-    // A prior recovery already proved the latest dispatch pointer was unusable.
-    // Do not re-watch solely because first-turn sessions have no handled marker.
-    if (meta.lastMissingHistoryUserMsgId && !meta.latestUserMsgId) {
-      return false;
-    }
-
-    // No evidence of prior dispatch completion — the session may have pending work
-    // in history that isn't reflected in metadata (legacy sessions, first turn, or
-    // metadata not yet synced). Must watch to be safe.
-    if (!meta.lastHandledUserMsgId) {
-      return true;
-    }
-
-    return false;
+    return shouldWatchSession({
+      meta,
+      hasUnprocessedCancelRequest: Boolean(
+        typeof meta.lastCanceledTurn === 'string' &&
+        meta.lastCanceledTurn.length > 0 &&
+        meta.lastCanceledTurn !== this.cancelSeenTurn.get(meta.id)
+      ),
+      hasRpcTurnOffer: (this.rpcTurnStash.get(meta.id)?.size ?? 0) > 0,
+      hasAccessRetry: this.accessFibers.has(meta.id),
+    });
   }
 
   /**
@@ -903,7 +948,10 @@ export class SessionDispatchWatcher {
    * For `reset-stale-status`: execute the reset, then re-evaluate with updated snapshot.
    * For `no-dispatchable-turn`: attempt queue promotion and remote-sync retry.
    */
-  private async maybeHandleSession(sessionId: SessionId): Promise<void> {
+  private async maybeHandleSession(
+    sessionId: SessionId,
+    initialProbe?: InitialProbeObserver
+  ): Promise<void> {
     const span = startTraceSpan(this.deps.logger, 'dispatch.maybe_handle_session', { sessionId });
     let outcome = 'unknown';
     try {
@@ -969,6 +1017,7 @@ export class SessionDispatchWatcher {
         { sessionId },
         async () => await this.findOrAwaitDispatchableTurn(sessionId, sessionDoc, meta)
       );
+      initialProbe?.complete();
       if (!nextUserTurn) {
         if (this.hasPendingUserTurnSignal(meta)) {
           outcome = 'missing-history';
@@ -1201,9 +1250,11 @@ export class SessionDispatchWatcher {
           })
       );
     } catch (error) {
+      initialProbe?.fail(error);
       span.fail(error, { outcome: 'error' });
       throw error;
     } finally {
+      initialProbe?.complete();
       span.end({ outcome });
     }
   }
@@ -1297,7 +1348,7 @@ export class SessionDispatchWatcher {
           // Clear the handle BEFORE re-enqueuing so the re-check's dedup guard
           // passes and the inline path actually dispatches (no stall).
           this.clearAccessFiberIf(sessionId, turnId);
-          this.enqueueSessionCheck(sessionId);
+          void this.enqueueSessionCheck(sessionId);
         })
       ),
       Effect.catchTag('AccessDenied', (denied) =>
@@ -1439,6 +1490,7 @@ export class SessionDispatchWatcher {
       workspaceId: this.deps.workspaceId,
       turnId: action.turnId,
     });
+    await this.reconcileSessionWatch(sessionId, 'cancel-processed');
   }
 
   private fallbackUserProfile(userId: string): SessionUserProfile {
@@ -1687,10 +1739,6 @@ export class SessionDispatchWatcher {
     }
   }
 
-  /** Maximum time (ms) to wait for real-time collaboration updates after initial sync. */
-  private static readonly REALTIME_WAIT_TIMEOUT_MS = 30_000;
-  /** Maximum time (ms) to wait for the initial CRDT remote sync before falling through. */
-  private static readonly REMOTE_SYNC_TIMEOUT_MS = 15_000;
   /** Maximum time (ms) to wait for a pending user-turn pointer to appear in history. */
   private static readonly HISTORY_SYNC_WAIT_TIMEOUT_MS = 5 * 60_000;
   private static readonly HISTORY_SYNC_PROGRESS_LOG_MS = 30_000;
@@ -1722,14 +1770,14 @@ export class SessionDispatchWatcher {
   }
 
   /**
-   * Try to find a dispatchable turn with a three-phase strategy:
+   * Try to find a dispatchable turn with a two-phase strategy:
    *
    * 1. **Immediate**: check local history and message queue.
    * 2. **Pending meta wait**: if meta explicitly points at an unhandled user
    *    turn, keep the history room joined and wait up to 5 minutes. This covers
    *    the case where MetaDoc sync races ahead of the SessionDoc history CRDT.
-   * 3. **Short legacy wait**: sessions without an explicit pending pointer wait
-   *    for initial sync and one short real-time window only.
+   * Sessions without an explicit pointer do not wait: metadata and RPC are the
+   * activation index and will enqueue a fresh check when work arrives.
    */
   private async findOrAwaitDispatchableTurn(
     sessionId: SessionId,
@@ -1738,7 +1786,7 @@ export class SessionDispatchWatcher {
   ): Promise<SessionHistoryInput | null> {
     // Phase 1: check immediately with whatever data we have locally
     // (history → queue → RPC stash).
-    let turn = await this.checkHistoryAndQueue(sessionDoc, meta);
+    const turn = await this.checkHistoryAndQueue(sessionDoc, meta);
     if (turn) {
       return turn;
     }
@@ -1747,66 +1795,7 @@ export class SessionDispatchWatcher {
       return await this.waitForPendingUserTurnHistorySync(sessionId, sessionDoc, meta);
     }
 
-    // Phase 2 for legacy/ambiguous sessions: wait for the initial CRDT sync to
-    // complete, then re-check.
-    // Timeout prevents blocking the per-session check chain indefinitely
-    // if the network handshake hangs.
-    await this.waitForRemoteSyncOrRpcTurn(sessionId, sessionDoc);
-
-    turn = await this.checkHistoryAndQueue(sessionDoc, meta);
-    if (turn) {
-      return turn;
-    }
-
-    // Phase 3: legacy/ambiguous sessions do a short real-time wait only. There
-    // is no concrete user-turn pointer to recover, so a 5-minute error would be
-    // noisy for old idle sessions.
-    this.deps.logger.debug(
-      `[${sessionId}] No dispatchable turn after initial sync, waiting up to ${SessionDispatchWatcher.REALTIME_WAIT_TIMEOUT_MS / 1000}s for real-time updates`
-    );
-
-    turn = await this.waitForDispatchableTurnFromMirror(sessionId, sessionDoc, meta);
-    return turn;
-  }
-
-  /** Keep legacy initial-sync waits preemptible by the Machine RPC fast path. */
-  private async waitForRemoteSyncOrRpcTurn(
-    sessionId: SessionId,
-    sessionDoc: SessionDocumentHandle
-  ): Promise<void> {
-    await new Promise<void>((resolve) => {
-      let settled = false;
-      let unsubscribeRpcOffers: (() => void) | undefined;
-      const finish = () => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearTimeout(timer);
-        unsubscribeRpcOffers?.();
-        resolve();
-      };
-      const timer = SessionDispatchWatcher.setUnrefTimeout(
-        finish,
-        SessionDispatchWatcher.REMOTE_SYNC_TIMEOUT_MS
-      );
-
-      unsubscribeRpcOffers = this.subscribeToRpcTurnOffers(sessionId, finish);
-      void sessionDoc.waitForRemoteSync().then(finish, (error: unknown) => {
-        this.deps.logger.debug(
-          `[${sessionId}] Initial session history sync failed while resolving a turn: ${formatErrorMessage(
-            error
-          )}`
-        );
-        finish();
-      });
-
-      // Close the local-check-to-subscribe race if an offer was stashed just
-      // before this listener was registered.
-      if (this.rpcTurnStash.get(sessionId)?.size) {
-        finish();
-      }
-    });
+    return null;
   }
 
   private hasPendingUserTurnSignal(meta: SessionMeta): boolean {
@@ -2117,71 +2106,6 @@ export class SessionDispatchWatcher {
     watched?.unsubscribe();
     this.watchedSessions.delete(sessionId);
     await this.deps.workspaceDocument.cleanSessionDoc(sessionId, { preserveStatus: true });
-  }
-
-  /**
-   * Subscribe to mirror updates and check for a dispatchable turn on each update.
-   * Returns when a turn is found or the timeout expires.
-   */
-  private async waitForDispatchableTurnFromMirror(
-    sessionId: SessionId,
-    sessionDoc: Awaited<ReturnType<LoroDocumentManager['getOrCreateSessionDoc']>>,
-    meta: SessionMeta
-  ): Promise<SessionHistoryInput | null> {
-    return new Promise<SessionHistoryInput | null>((resolve) => {
-      let settled = false;
-      let unsubscribeMirror: (() => void) | undefined;
-      let unsubscribeRpcOffers: (() => void) | undefined;
-
-      const cleanup = () => {
-        settled = true;
-        clearTimeout(timer);
-        unsubscribeMirror?.();
-        unsubscribeRpcOffers?.();
-      };
-
-      const timer = SessionDispatchWatcher.setUnrefTimeout(() => {
-        if (settled) return;
-        cleanup();
-        this.deps.logger.debug(
-          `[${sessionId}] No dispatchable turn found after ${SessionDispatchWatcher.REALTIME_WAIT_TIMEOUT_MS / 1000}s timeout`
-        );
-        resolve(null);
-      }, SessionDispatchWatcher.REALTIME_WAIT_TIMEOUT_MS);
-
-      const onUpdate = () => {
-        if (settled) return;
-        void this.checkHistoryAndQueue(sessionDoc, meta)
-          .then((turn) => {
-            if (settled) return;
-            if (turn) {
-              cleanup();
-              this.deps.logger.debug(
-                `[${sessionId}] Found dispatchable turn after waiting for real-time updates`
-              );
-              resolve(turn);
-            }
-          })
-          .catch((err: unknown) => {
-            if (settled) return;
-            this.deps.logger.debug(
-              `[${sessionId}] Error checking history during real-time wait: ${err}`
-            );
-          });
-      };
-
-      unsubscribeRpcOffers = this.subscribeToRpcTurnOffers(sessionId, onUpdate);
-      unsubscribeMirror = sessionDoc.mirror?.subscribe(onUpdate);
-      if (!unsubscribeMirror) {
-        // No mirror available — can't wait for updates
-        cleanup();
-        resolve(null);
-        return;
-      }
-
-      // Close both the local-check-to-subscribe and RPC-stash races.
-      onUpdate();
-    });
   }
 
   /**

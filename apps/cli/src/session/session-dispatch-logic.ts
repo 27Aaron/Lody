@@ -35,6 +35,14 @@ export type SessionDispatchSnapshot = {
   hasRewriteBarrier: boolean;
 };
 
+/** Metadata and process-local signals that decide whether to open a Session Doc room. */
+export type SessionWatchSnapshot = {
+  meta: SessionMeta;
+  hasUnprocessedCancelRequest: boolean;
+  hasRpcTurnOffer: boolean;
+  hasAccessRetry: boolean;
+};
+
 // ── Action types ────────────────────────────────────────────────────────────
 
 export type DispatchAction =
@@ -54,6 +62,45 @@ export type DispatchTurnInput = {
   inputBlocks: SessionInputBlock[];
   prompt: string;
 };
+
+/**
+ * Decide whether a session needs its history room joined.
+ *
+ * Session metadata is the durable activation index. History is intentionally
+ * absent from this snapshot so startup remains O(metadata) even in workspaces
+ * with thousands of historical sessions.
+ */
+export function shouldWatchSession(snapshot: SessionWatchSnapshot): boolean {
+  const { meta, hasUnprocessedCancelRequest, hasRpcTurnOffer, hasAccessRetry } = snapshot;
+  const statusType = meta.status?.type;
+
+  if (
+    statusType === 'running' ||
+    statusType === 'initializing' ||
+    statusType === 'requestPermission'
+  ) {
+    return true;
+  }
+
+  if (
+    typeof meta.latestUserMsgId === 'string' &&
+    meta.latestUserMsgId.length > 0 &&
+    meta.latestUserMsgId !== meta.lastHandledUserMsgId
+  ) {
+    return true;
+  }
+
+  if ((meta.messageQueueUpdatedAt ?? 0) > (meta.messageQueueCheckedAt ?? 0)) {
+    return true;
+  }
+
+  return (
+    (typeof meta.processingUserMsgId === 'string' && meta.processingUserMsgId.length > 0) ||
+    hasUnprocessedCancelRequest ||
+    hasRpcTurnOffer ||
+    hasAccessRetry
+  );
+}
 
 function getImportedAcpSourceAcpSessionId(meta: SessionMeta): string | undefined {
   const externalHistory = meta.externalHistory;

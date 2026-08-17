@@ -8,8 +8,55 @@ import {
 import {
   findNextDispatchableUserTurn,
   resolveSessionDispatchAction,
+  shouldWatchSession,
 } from './session-dispatch-logic';
 import { SessionExecutionService } from './session-execution-service';
+
+describe('shouldWatchSession', () => {
+  const baseMeta = {
+    id: 'session-idle' as SessionId,
+    machineId: 'machine-1',
+    createdAt: '2026-08-03T00:00:00.000Z',
+    userId: 'user-1',
+    cliType: 'builtin',
+    agentType: 'codex',
+    status: SessionStatusFactory.idle(),
+  } satisfies SessionMeta;
+
+  const decide = (
+    meta: SessionMeta,
+    overrides: Partial<{
+      hasUnprocessedCancelRequest: boolean;
+      hasRpcTurnOffer: boolean;
+      hasAccessRetry: boolean;
+    }> = {}
+  ) =>
+    shouldWatchSession({
+      meta,
+      hasUnprocessedCancelRequest: false,
+      hasRpcTurnOffer: false,
+      hasAccessRetry: false,
+      ...overrides,
+    });
+
+  it('keeps idle metadata-only sessions closed regardless of handled-marker history', () => {
+    expect(decide(baseMeta)).toBe(false);
+    expect(decide({ ...baseMeta, lastHandledUserMsgId: 'turn-old' })).toBe(false);
+  });
+
+  it('opens rooms for every durable dispatch activation signal', () => {
+    expect(decide({ ...baseMeta, latestUserMsgId: 'turn-pending' })).toBe(true);
+    expect(decide({ ...baseMeta, processingUserMsgId: 'turn-processing' })).toBe(true);
+    expect(decide({ ...baseMeta, messageQueueUpdatedAt: 2, messageQueueCheckedAt: 1 })).toBe(true);
+    expect(decide({ ...baseMeta, status: SessionStatusFactory.running() })).toBe(true);
+  });
+
+  it('opens rooms for process-local RPC, access-retry, and cancel signals', () => {
+    expect(decide(baseMeta, { hasRpcTurnOffer: true })).toBe(true);
+    expect(decide(baseMeta, { hasAccessRetry: true })).toBe(true);
+    expect(decide(baseMeta, { hasUnprocessedCancelRequest: true })).toBe(true);
+  });
+});
 
 describe('resolveSessionDispatchAction rewrite barrier', () => {
   it('blocks stale-status repair and pending dispatch while history is being replaced', () => {

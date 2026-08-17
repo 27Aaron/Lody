@@ -1779,9 +1779,6 @@ export class SessionDocument implements LoroDocument<SessionDocMeta, SessionMeta
         // instead of burning the timeout; loro-repo resumes the sync when a
         // transport attaches later.
         if (binding.status === 'detached') {
-          this.logger.debug(
-            `[${this.sessionId}] Session doc room is detached (no transport attached); continuing offline-first (room=${this.roomId})`
-          );
           return;
         }
         const syncDocTimeoutMs = readTimeoutEnv('LODY_LORO_SYNC_DOC_TIMEOUT_MS', 8_000);
