@@ -289,6 +289,7 @@ import { TurnHistoryGate } from '@/session/turn-history-gate';
 import { SessionDispatchWatcher } from '@/session/session-dispatch-watcher';
 import { SessionUserResolver } from '@/session/session-user-resolver';
 import { SessionForkService } from '@/session/session-fork-service';
+import { createFileSessionForkOperationStore } from '@/session/session-fork-operation-store';
 import {
   SessionEditAndResendService,
   type SessionEditAndResendInput,
@@ -3616,6 +3617,7 @@ export class MessageHandler {
       logger: this.logger,
       workspaceId: this.workspaceId,
       machineId: this.machineId,
+      forkOperationStore: createFileSessionForkOperationStore(),
       isSourceBusy: (sessionId) => {
         const live = resolveSessionLiveStatus({
           presence: this.sessionActivePresence.getStatus(sessionId),

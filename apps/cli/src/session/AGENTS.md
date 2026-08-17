@@ -205,7 +205,28 @@ delegation proofs or a shared-machine gate without a new product and security de
   The target is an independent root Session (no `parentSessionId`) and must not publish Session meta
   until the final local commit; failures terminate ACP, remove the worktree/branch, and retain a
   durable failed operation receipt. Retries reuse the caller-supplied target Session id and must not
-  duplicate side effects. Startup recovery fail-closes interrupted preparing operations.
+  duplicate side effects. Startup recovery fail-closes interrupted preparing operations. Because a
+  preparing target publishes no Session meta until its final commit, the repo meta index cannot name
+  the interrupted operations — recovery discovers them from the machine-local marker store
+  (`session-fork-operation-store.ts`), recorded fail-closed at accept (before the target doc exists)
+  and cleared only after the final commit/rollback persists. The marker carries the worktree-cleanup
+  payload, so recovery never opens the source doc. A marker surviving startup is by construction an
+  anomaly (clean success clears it in the same lock as the commit), so recovery always opens the
+  named target doc and judges from it with the client's own terminal criteria (failed receipt, or
+  cleared flag plus cloned-history origin notice — never the meta record, whose write is not
+  flush-atomic with the doc's; the saga commits doc writes first — history BEFORE the flag clear —
+  and publishes meta last so a durable `acpSessionId` implies the doc writes landed). A stale
+  preparing flag with landed history is cleared and persisted, or the client's fork observer can
+  reach neither terminal branch and waits forever. Doc-landed-but-meta-missing (crash inside the
+  commit block) is repaired by republishing meta from the marker payload (`title`, `branchName`,
+  cleanup fields) with `acpSessionId` absent — the session stays visible and complete except the
+  ACP resume identity. Race discipline mirrors the
+  speculative-worktree sweep: accept, saga finalize, and recovery all hold `withForkOperationLock`
+  per target, recovery re-reads the marker inside the lock, and liveness comes from the service's
+  in-memory active-operation set — never from timestamps. Recovery must never enumerate session
+  rooms or open docs to find candidates: each open joins the room and pulls its stream, so a full
+  scan is O(all historical sessions) of Streams subscriptions at every daemon start, and it must
+  never `cleanSessionDoc` a doc it did not exclusively own (see `../lib/loro/AGENTS.md`).
 - `session-edit-and-resend-service.ts` owns same-Lody-session replacement of the last normal User
   turn for builtin Codex/Claude. Prepare provider `forkAtTurn` (or `session/new` for the first
   User) before cancelling the exact active turn, then wait for old ownership release before one

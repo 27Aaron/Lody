@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  getSessionRoomId,
   SessionStatusFactory,
   type AgentConfigId,
   type MachineId,
@@ -9,6 +10,10 @@ import {
   type SessionMeta,
 } from '@lody/shared';
 import { cloneHistoryThroughTurn, SessionForkService } from './session-fork-service';
+import type {
+  SessionForkOperationCleanup,
+  SessionForkOperationMarker,
+} from './session-fork-operation-store';
 
 const sourceSessionId = 'source-session' as SessionId;
 const targetSessionId = 'target-session' as SessionId;
@@ -47,6 +52,15 @@ function createForkHarness(
     supportsActiveTurnFork?: boolean;
     sourceHistory?: SessionHistoryInput[];
     worktree?: { dirty: boolean; headSha: string };
+    forkOperation?: unknown;
+    targetMeta?: unknown;
+    targetHistory?: SessionHistoryInput[];
+    targetDocMetaRecord?: unknown;
+    markers?: SessionForkOperationMarker[];
+    aliveRoomIds?: string[];
+    storeRecordFails?: boolean;
+    storeListGate?: Promise<void>;
+    createSessionGate?: Promise<void>;
   } = {}
 ) {
   const sourceMeta = {
@@ -75,10 +89,12 @@ function createForkHarness(
     getMetaState: vi.fn(async () => sourceMeta),
     getHistory: vi.fn(async () => options.sourceHistory ?? sourceHistory),
   };
-  let forkOperation: unknown;
+  let forkOperation: unknown = options.forkOperation;
   const targetDoc = {
     updateHistory: vi.fn(async () => undefined),
     waitUntilSynced: vi.fn(async () => false),
+    getMetaState: vi.fn(async () => options.targetMeta),
+    getHistory: vi.fn(async () => options.targetHistory ?? []),
     getForkOperation: vi.fn(() => forkOperation),
     setForkOperation: vi.fn((operation) => {
       forkOperation = operation;
@@ -90,9 +106,16 @@ function createForkHarness(
     }
   });
   const repo = {
-    getDocMeta: vi.fn(async () => undefined),
+    getDocMeta: vi.fn(async (roomId: string) =>
+      roomId === getSessionRoomId(targetSessionId) ? options.targetDocMetaRecord : undefined
+    ),
     upsertDocMeta: vi.fn(async () => undefined),
     deleteDoc: vi.fn(async () => undefined),
+    getMeta: vi.fn(() => ({
+      scan: vi.fn(async () =>
+        (options.aliveRoomIds ?? []).map((roomId) => ({ key: ['e', roomId], value: true }))
+      ),
+    })),
   };
   const workspaceDocument = {
     repo,
@@ -104,10 +127,44 @@ function createForkHarness(
       runtimeOverrides: undefined,
       env: undefined,
     })),
+    unloadDocRoom: vi.fn(async () => undefined),
+    cleanSessionDoc: vi.fn(async () => undefined),
     persistPendingChanges,
   };
+  const markers = [...(options.markers ?? [])];
+  const forkOperationStore = {
+    record: vi.fn(async (marker: SessionForkOperationMarker) => {
+      if (options.storeRecordFails === true) {
+        throw new Error('store write failed');
+      }
+      const index = markers.findIndex((entry) => entry.targetSessionId === marker.targetSessionId);
+      if (index >= 0) {
+        markers.splice(index, 1, marker);
+      } else {
+        markers.push(marker);
+      }
+    }),
+    read: vi.fn(
+      async (targetSessionId: SessionId) =>
+        markers.find((entry) => entry.targetSessionId === targetSessionId) ?? null
+    ),
+    clear: vi.fn(async (targetSessionId: SessionId) => {
+      const index = markers.findIndex((marker) => marker.targetSessionId === targetSessionId);
+      if (index >= 0) {
+        markers.splice(index, 1);
+      }
+    }),
+    list: vi.fn(async () => {
+      // Capture BEFORE the gate so tests can hand recovery a stale snapshot.
+      const snapshot = [...markers];
+      await options.storeListGate;
+      return snapshot;
+    }),
+  };
   const sessionManager = {
-    createSession: vi.fn(async () => undefined),
+    createSession: vi.fn(async () => {
+      await options.createSessionGate;
+    }),
     getSession: vi.fn((sessionId: SessionId) =>
       sessionId === sourceSessionId
         ? {
@@ -133,6 +190,7 @@ function createForkHarness(
     logger: logger as never,
     workspaceId: 'workspace-1',
     machineId,
+    forkOperationStore,
     isSourceBusy: () => options.sourceBusy === true,
     inspectGitWorkdir: options.worktree
       ? vi.fn(async () => ({
@@ -148,6 +206,9 @@ function createForkHarness(
     repo,
     sessionManager,
     targetDoc,
+    workspaceDocument,
+    forkOperationStore,
+    markers,
   };
 }
 
@@ -524,5 +585,382 @@ describe('SessionForkService durability boundary', () => {
     );
     expect(harness.targetDoc.updateHistory).toHaveBeenCalledTimes(1);
     expect(harness.targetDoc.setForkOperation).toHaveBeenLastCalledWith(undefined);
+    // The recovery marker lives exactly as long as the durable preparing operation.
+    expect(harness.forkOperationStore.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetSessionId,
+        operationId: `session-fork:${targetSessionId}`,
+      })
+    );
+    // The saga back-fills the real branch name once git answers.
+    await vi.waitFor(() =>
+      expect(harness.forkOperationStore.record).toHaveBeenCalledWith(
+        expect.objectContaining({ branchName: expect.any(String) })
+      )
+    );
+    await vi.waitFor(() => expect(harness.markers).toEqual([]));
+  });
+
+  it('fails closed when the fork operation store cannot record the operation', async () => {
+    const harness = createForkHarness(undefined, {
+      worktree: { dirty: false, headSha: 'a'.repeat(40) },
+      storeRecordFails: true,
+    });
+
+    const result = await harness.service.fork({
+      ...forkSpec,
+      targetContext: { kind: 'new-worktree' },
+    });
+
+    expect(result).toMatchObject({
+      success: false,
+      error: { code: 'TARGET_WRITE_FAILED' },
+    });
+    expect(harness.targetDoc.setForkOperation).not.toHaveBeenCalled();
+    expect(harness.sessionManager.createSession).not.toHaveBeenCalled();
+    expect(harness.markers).toEqual([]);
+  });
+
+  it('clears the recovery marker when the prepare persist fails', async () => {
+    const harness = createForkHarness('session-fork-prepare', {
+      worktree: { dirty: false, headSha: 'a'.repeat(40) },
+    });
+
+    const result = await harness.service.fork({
+      ...forkSpec,
+      targetContext: { kind: 'new-worktree' },
+    });
+
+    expect(result).toMatchObject({
+      success: false,
+      error: { code: 'TARGET_WRITE_FAILED' },
+    });
+    expect(harness.markers).toEqual([]);
+  });
+});
+
+function createDeferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (error?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+describe('SessionForkService fork operation recovery', () => {
+  const cleanupPayload: SessionForkOperationCleanup = {
+    project: { kind: 'local', localProjectId: 'local-project-1' as never },
+    branch: 'main',
+    workdir: '/source/project-root',
+    requesterUserId: 'user-1',
+    agentConfigId,
+    cliType: 'builtin',
+    agentType: 'codex',
+  };
+  const preparingOperation = {
+    id: `session-fork:${targetSessionId}`,
+    sourceSessionId,
+    sourceTurnId: 'assistant-1',
+    requestedByUserId: 'user-1',
+    targetContext: 'new-worktree' as const,
+    capturedHeadSha: 'a'.repeat(40),
+    state: 'preparing' as const,
+    phase: 'preparing-worktree' as const,
+    createdAt: '2026-08-16T00:00:00.000Z',
+    updatedAt: '2026-08-16T00:00:00.000Z',
+  };
+  const staleMarker: SessionForkOperationMarker = {
+    version: 1,
+    workspaceId: 'workspace-1',
+    machineId,
+    targetSessionId,
+    operationId: preparingOperation.id,
+    createdAt: preparingOperation.createdAt,
+    title: '(fork) Original',
+    branchName: 'lody/target-ses',
+    cleanup: cleanupPayload,
+  };
+  const forkOriginNotice = {
+    id: `session-fork-origin:${targetSessionId}`,
+    timestamp: '2026-08-16T00:01:00.000Z',
+    role: 'system',
+    items: [
+      {
+        type: 'system_notice',
+        name: 'session_fork_origin',
+        meta: { sourceSessionId, sourceTurnId: 'assistant-1', sourceTitle: 'Original' },
+      },
+    ],
+    fileDiff: [],
+    finished: true,
+    read: true,
+  } as SessionHistoryInput;
+
+  it('recovers an interrupted worktree fork without opening unrelated session docs', async () => {
+    const harness = createForkHarness(undefined, {
+      forkOperation: preparingOperation,
+      // Even a durable acpSessionId in the meta record must not count as
+      // completion — its write is not flush-atomic with the doc's history.
+      targetDocMetaRecord: {
+        meta: { acpSessionId: 'acp-target', status: SessionStatusFactory.idle() },
+      },
+      markers: [staleMarker],
+      aliveRoomIds: [
+        getSessionRoomId(targetSessionId),
+        getSessionRoomId('old-session-1' as SessionId),
+        getSessionRoomId('old-session-2' as SessionId),
+      ],
+    });
+
+    await harness.service.recoverPendingForks();
+
+    // Compensation is built from the marker payload — the source doc is never opened.
+    expect(harness.sessionManager.cleanupForkWorktree).toHaveBeenCalledTimes(1);
+    expect(harness.sessionManager.cleanupForkWorktree).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: targetSessionId,
+        project: cleanupPayload.project,
+        branch: 'main',
+        workdir: '/source/project-root',
+      })
+    );
+    expect(harness.sessionManager.terminateSession).not.toHaveBeenCalled();
+    expect(harness.targetDoc.setForkOperation).toHaveBeenLastCalledWith(
+      expect.objectContaining({ state: 'failed' })
+    );
+    expect(harness.persistPendingChanges).toHaveBeenCalledWith('session-fork-rollback');
+    expect(harness.markers).toEqual([]);
+    // The point of the store: discovery never opens docs it was not pointed at.
+    expect(harness.workspaceDocument.getOrCreateSessionDoc.mock.calls.map(([id]) => id)).toEqual([
+      targetSessionId,
+    ]);
+    // And it never tears down manager-cached docs out from under other holders.
+    expect(harness.workspaceDocument.cleanSessionDoc).not.toHaveBeenCalled();
+    expect(harness.workspaceDocument.unloadDocRoom).not.toHaveBeenCalled();
+  });
+
+  it('recovers even when the marker createdAt is unparseable', async () => {
+    const harness = createForkHarness(undefined, {
+      forkOperation: preparingOperation,
+      markers: [{ ...staleMarker, createdAt: 'not-a-date' }],
+      aliveRoomIds: [getSessionRoomId(targetSessionId)],
+    });
+
+    await harness.service.recoverPendingForks();
+
+    expect(harness.sessionManager.cleanupForkWorktree).toHaveBeenCalledTimes(1);
+    expect(harness.markers).toEqual([]);
+  });
+
+  it('treats a cleared flag with a landed origin notice as complete', async () => {
+    const harness = createForkHarness(undefined, {
+      forkOperation: undefined,
+      targetHistory: [forkOriginNotice],
+      targetDocMetaRecord: {
+        meta: { acpSessionId: 'acp-target', status: SessionStatusFactory.idle() },
+      },
+      markers: [staleMarker],
+      aliveRoomIds: [getSessionRoomId(targetSessionId)],
+    });
+
+    await harness.service.recoverPendingForks();
+
+    expect(harness.sessionManager.cleanupForkWorktree).not.toHaveBeenCalled();
+    expect(harness.targetDoc.setForkOperation).not.toHaveBeenCalled();
+    expect(harness.repo.upsertDocMeta).not.toHaveBeenCalled();
+    expect(harness.persistPendingChanges).not.toHaveBeenCalled();
+    expect(harness.markers).toEqual([]);
+  });
+
+  it('clears a stale preparing flag when the cloned history already landed', async () => {
+    const harness = createForkHarness(undefined, {
+      forkOperation: preparingOperation,
+      targetHistory: [forkOriginNotice],
+      targetDocMetaRecord: {
+        meta: { acpSessionId: 'acp-target', status: SessionStatusFactory.idle() },
+      },
+      markers: [staleMarker],
+      aliveRoomIds: [getSessionRoomId(targetSessionId)],
+    });
+
+    await harness.service.recoverPendingForks();
+
+    // The worktree belongs to a visible session — clear the flag, never the worktree.
+    expect(harness.sessionManager.cleanupForkWorktree).not.toHaveBeenCalled();
+    expect(harness.repo.upsertDocMeta).not.toHaveBeenCalled();
+    expect(harness.targetDoc.setForkOperation).toHaveBeenLastCalledWith(undefined);
+    expect(harness.persistPendingChanges).toHaveBeenCalledWith('session-fork-commit');
+    expect(harness.markers).toEqual([]);
+  });
+
+  it('republishes meta from the marker when the doc landed but meta was never published', async () => {
+    const harness = createForkHarness(undefined, {
+      forkOperation: preparingOperation,
+      targetHistory: [forkOriginNotice],
+      markers: [staleMarker],
+      aliveRoomIds: [getSessionRoomId(targetSessionId)],
+    });
+
+    await harness.service.recoverPendingForks();
+
+    expect(harness.sessionManager.cleanupForkWorktree).not.toHaveBeenCalled();
+    expect(harness.repo.upsertDocMeta).toHaveBeenCalledTimes(1);
+    const republished = harness.repo.upsertDocMeta.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(republished).toMatchObject({
+      id: targetSessionId,
+      machineId,
+      title: '(fork) Original',
+      branchName: 'lody/target-ses',
+      userId: 'user-1',
+      isWorktree: true,
+    });
+    // Unrecoverable in the repair: the next prompt starts a fresh ACP session.
+    expect(republished.acpSessionId).toBeUndefined();
+    expect(harness.targetDoc.setForkOperation).toHaveBeenLastCalledWith(undefined);
+    expect(harness.persistPendingChanges).toHaveBeenCalledWith('session-fork-commit');
+    expect(harness.markers).toEqual([]);
+  });
+
+  it('republishes meta even when the flag clear did land but meta did not', async () => {
+    const harness = createForkHarness(undefined, {
+      forkOperation: undefined,
+      targetHistory: [forkOriginNotice],
+      markers: [staleMarker],
+      aliveRoomIds: [getSessionRoomId(targetSessionId)],
+    });
+
+    await harness.service.recoverPendingForks();
+
+    expect(harness.repo.upsertDocMeta).toHaveBeenCalledTimes(1);
+    expect(harness.targetDoc.setForkOperation).not.toHaveBeenCalled();
+    expect(harness.persistPendingChanges).toHaveBeenCalledWith('session-fork-commit');
+    expect(harness.markers).toEqual([]);
+  });
+
+  it('drops the marker without compensating when the prepare write never landed', async () => {
+    const harness = createForkHarness(undefined, {
+      markers: [staleMarker],
+      aliveRoomIds: [getSessionRoomId(targetSessionId)],
+    });
+
+    await harness.service.recoverPendingForks();
+
+    expect(harness.sessionManager.cleanupForkWorktree).not.toHaveBeenCalled();
+    expect(harness.targetDoc.setForkOperation).not.toHaveBeenCalled();
+    expect(harness.markers).toEqual([]);
+  });
+
+  it('drops the marker when the doc already holds a compensated failed receipt', async () => {
+    const harness = createForkHarness(undefined, {
+      forkOperation: { ...preparingOperation, state: 'failed' },
+      markers: [staleMarker],
+      aliveRoomIds: [getSessionRoomId(targetSessionId)],
+    });
+
+    await harness.service.recoverPendingForks();
+
+    expect(harness.sessionManager.cleanupForkWorktree).not.toHaveBeenCalled();
+    expect(harness.targetDoc.setForkOperation).not.toHaveBeenCalled();
+    expect(harness.markers).toEqual([]);
+  });
+
+  it('clears the marker without opening a doc when the target room no longer exists', async () => {
+    const harness = createForkHarness(undefined, {
+      markers: [staleMarker],
+      aliveRoomIds: [],
+    });
+
+    await harness.service.recoverPendingForks();
+
+    expect(harness.workspaceDocument.getOrCreateSessionDoc).not.toHaveBeenCalled();
+    expect(harness.sessionManager.cleanupForkWorktree).not.toHaveBeenCalled();
+    expect(harness.markers).toEqual([]);
+  });
+
+  it('ignores markers from other machines or workspaces without deleting them', async () => {
+    const harness = createForkHarness(undefined, {
+      markers: [
+        { ...staleMarker, targetSessionId: 'other-workspace-target', workspaceId: 'workspace-2' },
+        { ...staleMarker, targetSessionId: 'other-machine-target', machineId: 'machine-2' },
+      ],
+      aliveRoomIds: [getSessionRoomId(targetSessionId)],
+    });
+
+    await harness.service.recoverPendingForks();
+
+    expect(harness.workspaceDocument.getOrCreateSessionDoc).not.toHaveBeenCalled();
+    expect(harness.markers).toHaveLength(2);
+  });
+
+  it('does not roll back a fork this process is currently running', async () => {
+    const createSessionGate = createDeferred();
+    const harness = createForkHarness(undefined, {
+      worktree: { dirty: false, headSha: 'a'.repeat(40) },
+      createSessionGate: createSessionGate.promise,
+      aliveRoomIds: [getSessionRoomId(targetSessionId)],
+    });
+
+    const accepted = await harness.service.fork({
+      ...forkSpec,
+      targetContext: { kind: 'new-worktree' },
+    });
+    expect(accepted).toMatchObject({ success: true, disposition: 'accepted' });
+    await vi.waitFor(() => expect(harness.sessionManager.createSession).toHaveBeenCalled());
+
+    // Recovery starts with the live saga mid-flight (blocked in createSession):
+    // it must not terminate, compensate, or fail the operation.
+    await harness.service.recoverPendingForks();
+    expect(harness.sessionManager.cleanupForkWorktree).not.toHaveBeenCalled();
+    expect(harness.sessionManager.terminateSession).not.toHaveBeenCalled();
+    expect(harness.targetDoc.setForkOperation).not.toHaveBeenCalledWith(
+      expect.objectContaining({ state: 'failed' })
+    );
+    expect(harness.markers).toHaveLength(1);
+
+    createSessionGate.resolve();
+    await vi.waitFor(() =>
+      expect(harness.persistPendingChanges).toHaveBeenCalledWith('session-fork-commit')
+    );
+    await vi.waitFor(() => expect(harness.markers).toEqual([]));
+  });
+
+  it('ignores a stale listing snapshot after a same-target retry rewrites the marker', async () => {
+    const listGate = createDeferred();
+    const createSessionGate = createDeferred();
+    const harness = createForkHarness(undefined, {
+      worktree: { dirty: false, headSha: 'a'.repeat(40) },
+      markers: [staleMarker],
+      storeListGate: listGate.promise,
+      createSessionGate: createSessionGate.promise,
+      aliveRoomIds: [getSessionRoomId(targetSessionId)],
+    });
+
+    // Recovery captures its listing snapshot (the crashed attempt's marker) and
+    // parks on the gate; the client's same-target retry then lands first.
+    const recovery = harness.service.recoverPendingForks();
+    const accepted = await harness.service.fork({
+      ...forkSpec,
+      targetContext: { kind: 'new-worktree' },
+    });
+    expect(accepted).toMatchObject({ success: true, disposition: 'accepted' });
+    await vi.waitFor(() => expect(harness.sessionManager.createSession).toHaveBeenCalled());
+
+    listGate.resolve();
+    await recovery;
+
+    expect(harness.sessionManager.cleanupForkWorktree).not.toHaveBeenCalled();
+    expect(harness.sessionManager.terminateSession).not.toHaveBeenCalled();
+    expect(harness.targetDoc.setForkOperation).not.toHaveBeenCalledWith(
+      expect.objectContaining({ state: 'failed' })
+    );
+    expect(harness.markers).toHaveLength(1);
+
+    createSessionGate.resolve();
+    await vi.waitFor(() =>
+      expect(harness.persistPendingChanges).toHaveBeenCalledWith('session-fork-commit')
+    );
+    await vi.waitFor(() => expect(harness.markers).toEqual([]));
   });
 });

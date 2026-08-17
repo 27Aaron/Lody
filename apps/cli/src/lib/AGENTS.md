@@ -52,6 +52,10 @@ control-plane path is DEPRECATED; do not add functionality to it.
   `specs/local-first-two-plane.md`). Local dispatch triggers off the renderer-authored
   `latestUserMsgId` doc-meta write (same doc-watch path as cloud dispatch)
   plus the local Machine RPC fast path.
+- `loro/AGENTS.md` — the doc-open cost contract: `getOrCreateSessionDoc` joins
+  the room and pulls its stream, so bulk/startup/recovery scans must pre-filter
+  through room-free indexes and never open docs off a workspace-wide
+  enumeration. Read it before touching anything that enumerates rooms.
 - `local-loro-data-plane-server.ts` — Electron renderer ↔ CLI **local Loro data
   plane** (protocol v7, push, peer-scoped): dedicated `lody-loro-data-plane`
   socket in the 0700 run dir; routes persistent connections to per-workspace
