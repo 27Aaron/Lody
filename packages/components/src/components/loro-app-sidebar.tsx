@@ -106,6 +106,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/ui/tooltip';
 import { SwipeActionRow } from '@/components/shared/swipe-action-row';
 import {
   SessionList,
+  shallowEqualExceptKeys,
   type SessionListPullRequestOpen,
   type SessionListRepoMove,
   type SessionListRepoState,
@@ -324,8 +325,8 @@ type LocalProjectSessionItemProps = {
   machineName?: string | null;
   /** Conversation creator, shown as the card's Author row (team scope only). */
   author?: { name?: string | null; image?: string | null } | null;
-  now: Date;
-  selectedSessionId: string | null;
+  /** Whether this row is the currently-open session (drives selected styling). */
+  isSelected: boolean;
   workspaceSlug: string | null;
   onNavigate: (sessionId: string, tabSessionId?: string) => void;
   onArchive: (sessionId: string) => void;
@@ -359,8 +360,7 @@ const LocalProjectSessionItem = memo(function LocalProjectSessionItem({
   projectName,
   machineName,
   author,
-  now,
-  selectedSessionId,
+  isSelected,
   onNavigate,
   onArchive,
   onRename,
@@ -379,8 +379,10 @@ const LocalProjectSessionItem = memo(function LocalProjectSessionItem({
   const { t } = useTranslation();
   const moreActionsLabel = t('sessions.moreActions', 'More actions');
   const title = (session.title ?? '').trim() || defaultSessionTitle;
+  // Self-ticking on the shared sidebar timer: a tick re-renders only this row's
+  // time label, not every row in the project section.
+  const now = useStableNow(SIDEBAR_RELATIVE_TIME_REFRESH_MS);
   const relativeTime = formatCompactRelativeTime(effectiveLatestMessageAt, now);
-  const isSelected = session.id === selectedSessionId;
   const showSelectedState = isSelected && !isMobile;
   const showInlineArchive = !isMobile;
   const showWorktreeIcon = session.isWorktree === true;
@@ -618,7 +620,6 @@ const LocalProjectSessionItem = memo(function LocalProjectSessionItem({
           title={title}
           isWorktree={showWorktreeIcon}
           latestMessageAt={effectiveLatestMessageAt}
-          now={now}
           repoFullName={prRepoFullName}
           folderName={projectName}
           machineName={machineName}
@@ -688,7 +689,6 @@ export type LocalProjectItemProps = {
   ) => { name?: string | null; image?: string | null } | null;
   formattedPath: string | null;
   defaultSessionTitle: string;
-  now: Date;
   selectedSessionId: string | null;
   removeProjectLabel: string;
   archiveTooltipLabel: string;
@@ -719,6 +719,22 @@ export type LocalProjectItemProps = {
   onRequestRemoval: (info: LocalProjectRemovalRequest) => void;
 };
 
+const LOCAL_PROJECT_SELECTION_PROP_KEYS: ReadonlySet<string> = new Set(['selectedSessionId']);
+
+/**
+ * `memo` equality for local-project sections: a `selectedSessionId` change only
+ * re-renders the project(s) containing the previously or newly selected row,
+ * instead of every project section in the sidebar. All other props fall back
+ * to identity comparison.
+ */
+function localProjectItemPropsEqual(prev: LocalProjectItemProps, next: LocalProjectItemProps) {
+  if (!shallowEqualExceptKeys(prev, next, LOCAL_PROJECT_SELECTION_PROP_KEYS)) return false;
+  if (prev.selectedSessionId === next.selectedSessionId) return true;
+  const contains = (id: string | null | undefined) =>
+    id != null && next.sessionsForProject.some((session) => session.id === id);
+  return !contains(prev.selectedSessionId) && !contains(next.selectedSessionId);
+}
+
 export const LocalProjectItem = memo(function LocalProjectItem({
   machineId,
   machineName,
@@ -733,7 +749,6 @@ export const LocalProjectItem = memo(function LocalProjectItem({
   resolveSessionAuthor,
   formattedPath,
   defaultSessionTitle,
-  now,
   selectedSessionId,
   removeProjectLabel,
   archiveTooltipLabel,
@@ -923,8 +938,7 @@ export const LocalProjectItem = memo(function LocalProjectItem({
                   projectName={project.name}
                   machineName={trimmedMachineName}
                   author={resolveSessionAuthor?.(session) ?? null}
-                  now={now}
-                  selectedSessionId={selectedSessionId}
+                  isSelected={session.id === selectedSessionId}
                   workspaceSlug={null}
                   onNavigate={onNavigateSession}
                   onArchive={onArchive}
@@ -950,12 +964,16 @@ export const LocalProjectItem = memo(function LocalProjectItem({
       ) : null}
     </div>
   );
-});
+}, localProjectItemPropsEqual);
 
 export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
   const { t, i18n } = useTranslation();
   const router = useRouter();
-  const location = useLocation();
+  // Narrow subscription: the sidebar only derives state from pathname + search,
+  // so hash/history-state-only navigations no longer re-render the whole tree.
+  const location = useLocation({
+    select: (l) => ({ pathname: l.pathname, search: l.search }),
+  });
   const isMobile = useIsMobile();
   const multiWorkspaceAvailable = useAppCapability('multiWorkspace');
   const { openSettings } = useOpenSettings();
@@ -1034,8 +1052,6 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
     shareWithTeam: shareSessionWithTeam,
   } = useSessionSharing({ includeLocalProjectDetails: true });
   const localMachineId = useAtomValue(localMachineIdAtom);
-  // Relative-time labels ("3m ago") on session rows refresh on this tick.
-  const now = useStableNow(SIDEBAR_RELATIVE_TIME_REFRESH_MS);
   const onlineMachineIds = useOnlineMachineIds();
 
   const selectedSessionId = useMemo(() => {
@@ -1884,7 +1900,6 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
                         resolveSessionAuthor={resolveSessionAuthor}
                         formattedPath={formattedPath}
                         defaultSessionTitle={defaultSessionTitle}
-                        now={now}
                         selectedSessionId={selectedSessionId}
                         removeProjectLabel={removeProjectLabel}
                         archiveTooltipLabel={archiveTooltipLabel}

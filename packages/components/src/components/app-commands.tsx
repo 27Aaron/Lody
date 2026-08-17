@@ -1,4 +1,4 @@
-import { useLocation, useRouter } from '@tanstack/react-router';
+import { useRouter } from '@tanstack/react-router';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { useTranslation } from 'react-i18next';
 import { currentWorkspaceSlugAtom, settingsDialogOpenAtom } from '@/atoms';
@@ -21,7 +21,6 @@ import { useTheme } from '../theme-provider';
 export function AppCommands() {
   const { t } = useTranslation();
   const router = useRouter();
-  const location = useLocation();
   const workspaceSlug = useAtomValue(currentWorkspaceSlugAtom);
   const isMobile = useIsMobile();
   const settingsModalOpen = useAtomValue(settingsDialogOpenAtom);
@@ -114,8 +113,11 @@ export function AppCommands() {
         return;
       }
       // Mobile: settings is a full-page route — toggle by navigating.
-      if (isSettingsPath(location.pathname, workspaceSlug)) {
-        const closeTo = resolveSettingsCloseTo((location.search as { from?: string }).from);
+      // Read the location at command time instead of subscribing: this component
+      // renders null and has no render-time need for it.
+      const { pathname, search } = router.state.location;
+      if (isSettingsPath(pathname, workspaceSlug)) {
+        const closeTo = resolveSettingsCloseTo((search as { from?: string }).from);
         if (closeTo) {
           void router.navigate({ to: closeTo });
         } else {

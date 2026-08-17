@@ -29,7 +29,9 @@ const MobileWorkspaceStack = lazy(() =>
    of its own. */
 
 export function MobileWorkspaceLayout({ children }: { children: ReactNode }) {
-  const location = useLocation();
+  // Only the pathname drives this layout (error boundary resets), so
+  // search-only navigations don't re-render the whole mobile shell.
+  const pathname = useLocation({ select: (l) => l.pathname });
   const [drawerOpen, setDrawerOpen] = useAtom(mobileDrawerOpenAtom);
   const params = useParams({ strict: false });
   const workspaceName = params.workspaceName;
@@ -49,14 +51,14 @@ export function MobileWorkspaceLayout({ children }: { children: ReactNode }) {
   return (
     <div className={getMobileMainLayoutRootClassName()}>
       <MobileSidebarDrawer open={drawerOpen} onOpenChange={setDrawerOpen} width={320}>
-        <ErrorBoundary name="AppSidebar" variant="section" resetKeys={[location.pathname]}>
+        <ErrorBoundary name="AppSidebar" variant="section" resetKeys={[pathname]}>
           <LoroAppSidebar className="h-full" />
         </ErrorBoundary>
       </MobileSidebarDrawer>
 
       <div className={getMobileMainLayoutContentClassName()}>
         <div className="relative min-h-0 flex-1 overflow-hidden">
-          <ErrorBoundary name="AppContent" variant="section" resetKeys={[location.pathname]}>
+          <ErrorBoundary name="AppContent" variant="section" resetKeys={[pathname]}>
             {/* On a stack route the stack owns the *visible* surface; on every
                other route it renders nothing and the route `<Outlet/>` (inside
                `children`) is the page. `children` is ALWAYS rendered either way

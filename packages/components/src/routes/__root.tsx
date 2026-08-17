@@ -137,9 +137,6 @@ function ErrorBoundaryProbe() {
 }
 
 function RootApp() {
-  const location = useLocation();
-  const navigate = useNavigate();
-  const authClient = useAuthClient();
   const {
     data: session,
     hasLocalToken,
@@ -148,19 +145,12 @@ function RootApp() {
     isPending,
     isRetrying,
     error,
-    confirmedUnauthenticated,
   } = useStableSession();
-  const userEmail = session?.user?.email;
   const isElectron = typeof window !== 'undefined' && window.__LODY_ELECTRON__ === true;
-  const isElectronFullscreen = useElectronFullscreen();
   const isNativeApp = isNativeAppShell();
   const telemetryEnabled = useAppCapability('telemetry');
   const setUser = useSetAtom(userAtom);
   const setAuthToken = useSetAtom(authTokenAtom);
-  const setCurrentWorkspaceId = useSetAtom(currentWorkspaceIdAtom);
-  const setCurrentWorkspaceSlug = useSetAtom(currentWorkspaceSlugAtom);
-  const electronSignInInProgress = useAtomValue(electronDeepLinkSignInInProgressAtom);
-  const authInvalidationRef = useRef(false);
   const currentUser = useMemo(() => {
     if (!session?.user) {
       return null;
@@ -168,20 +158,6 @@ function RootApp() {
     return normalizeCurrentUserFromSessionUser(session.user);
   }, [session?.user]);
   useDesktopWorkspaceMembershipSync(isElectron ? (currentUser?.id ?? null) : null);
-
-  useEffect(() => {
-    markStartupNavigationForEagerSync();
-    trackDeferredPostHogPageView(location.href);
-  }, [location.href]);
-
-  useEffect(() => {
-    // Defensive cleanup: on rare unmount/race conditions a Radix/vaul "modal layer" can leave
-    // `document.body` stuck with `pointer-events: none`, making the app feel frozen.
-    if (typeof document === 'undefined') return;
-    if (document.body.style.pointerEvents === 'none') {
-      document.body.style.pointerEvents = '';
-    }
-  }, [location.pathname]);
 
   useEffect(() => {
     if (typeof document === 'undefined') {
@@ -196,31 +172,6 @@ function RootApp() {
       document.body.classList.remove('native-mobile-shell');
     };
   }, [isNativeApp]);
-
-  useEffect(() => {
-    if (isPending || isRetrying || error || isOptimistic || !hasRawUser) {
-      return;
-    }
-    if (!isMissingEmail(userEmail)) {
-      return;
-    }
-    if (location.pathname === '/complete-email') {
-      return;
-    }
-    const redirectPath =
-      typeof window === 'undefined' ? location.pathname : getAppCurrentPathWithSearch();
-    void navigate({ to: '/complete-email', search: { redirect: redirectPath }, replace: true });
-  }, [
-    error,
-    hasRawUser,
-    isOptimistic,
-    isPending,
-    isRetrying,
-    location.pathname,
-    location.search,
-    navigate,
-    userEmail,
-  ]);
 
   useEffect(() => {
     if (isPending || isRetrying || error || isOptimistic) {
@@ -251,6 +202,101 @@ function RootApp() {
       setAuthToken(null);
     }
   }, [hasLocalToken, session?.session?.token, setAuthToken]);
+
+  return (
+    <LodyPostHogProvider>
+      {telemetryEnabled && <AppLaunchAnalyticsTracker isElectron={isElectron} />}
+      {telemetryEnabled && <ShortcutAnalyticsTracker />}
+      {isElectron && <DesktopDeepLinkRouter />}
+      <ThemeProvider>
+        <InterfaceFontController enabled={isElectron} />
+        <TooltipProvider skipDelayDuration={0}>
+          <AppInitializer>
+            <LanguageProvider>
+              <>
+                <Toaster />
+                <RuntimeProvider>
+                  {/* Location-driven effects and the Outlet boundary subscribe to
+                      router state in these two small components, so a navigation
+                      no longer re-renders the whole provider stack above. */}
+                  <RootLocationEffects />
+                  <RootOutletBoundary />
+                </RuntimeProvider>
+                {/* <TanStackRouterDevtools /> */}
+              </>
+            </LanguageProvider>
+          </AppInitializer>
+        </TooltipProvider>
+      </ThemeProvider>
+    </LodyPostHogProvider>
+  );
+}
+
+/**
+ * Owns every location-driven root effect (pageview tracking, auth redirects,
+ * session-expiry handling). Renders nothing; keeping the subscription here
+ * instead of in `RootApp` keeps the app-wide provider stack out of the
+ * per-navigation re-render.
+ */
+function RootLocationEffects() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const authClient = useAuthClient();
+  const {
+    data: session,
+    hasRawUser,
+    isOptimistic,
+    isPending,
+    isRetrying,
+    error,
+    confirmedUnauthenticated,
+  } = useStableSession();
+  const userEmail = session?.user?.email;
+  const electronSignInInProgress = useAtomValue(electronDeepLinkSignInInProgressAtom);
+  const setUser = useSetAtom(userAtom);
+  const setAuthToken = useSetAtom(authTokenAtom);
+  const setCurrentWorkspaceId = useSetAtom(currentWorkspaceIdAtom);
+  const setCurrentWorkspaceSlug = useSetAtom(currentWorkspaceSlugAtom);
+  const authInvalidationRef = useRef(false);
+
+  useEffect(() => {
+    markStartupNavigationForEagerSync();
+    trackDeferredPostHogPageView(location.href);
+  }, [location.href]);
+
+  useEffect(() => {
+    // Defensive cleanup: on rare unmount/race conditions a Radix/vaul "modal layer" can leave
+    // `document.body` stuck with `pointer-events: none`, making the app feel frozen.
+    if (typeof document === 'undefined') return;
+    if (document.body.style.pointerEvents === 'none') {
+      document.body.style.pointerEvents = '';
+    }
+  }, [location.pathname]);
+
+  useEffect(() => {
+    if (isPending || isRetrying || error || isOptimistic || !hasRawUser) {
+      return;
+    }
+    if (!isMissingEmail(userEmail)) {
+      return;
+    }
+    if (location.pathname === '/complete-email') {
+      return;
+    }
+    const redirectPath =
+      typeof window === 'undefined' ? location.pathname : getAppCurrentPathWithSearch();
+    void navigate({ to: '/complete-email', search: { redirect: redirectPath }, replace: true });
+  }, [
+    error,
+    hasRawUser,
+    isOptimistic,
+    isPending,
+    isRetrying,
+    location.pathname,
+    location.search,
+    navigate,
+    userEmail,
+  ]);
 
   useEffect(() => {
     if (hasRawUser && !confirmedUnauthenticated) {
@@ -300,53 +346,46 @@ function RootApp() {
     setUser,
   ]);
 
+  return null;
+}
+
+/**
+ * The root Outlet wrapped in its error boundary. Subscribes to the location
+ * (for `resetKeys`) so `RootApp` and the providers above don't have to.
+ */
+function RootOutletBoundary() {
+  const location = useLocation({
+    select: (l) => ({ pathname: l.pathname, search: l.search }),
+  });
+  const isElectron = typeof window !== 'undefined' && window.__LODY_ELECTRON__ === true;
+  const isElectronFullscreen = useElectronFullscreen();
   return (
-    <LodyPostHogProvider>
-      {telemetryEnabled && <AppLaunchAnalyticsTracker isElectron={isElectron} />}
-      {telemetryEnabled && <ShortcutAnalyticsTracker />}
-      {isElectron && <DesktopDeepLinkRouter />}
-      <ThemeProvider>
-        <InterfaceFontController enabled={isElectron} />
-        <TooltipProvider skipDelayDuration={0}>
-          <AppInitializer>
-            <LanguageProvider>
-              <>
-                <Toaster />
-                <RuntimeProvider>
-                  <ErrorBoundary
-                    name="RootOutlet"
-                    variant="page"
-                    resetKeys={[location.pathname, location.search]}
-                    showErrorDetails
-                    propagateAuthErrors={false}
-                  >
-                    <ErrorBoundaryProbe />
-                    {/* Window drag strip. Hidden in native fullscreen: the
-                        window can't be dragged there, and the strip would only
-                        block clicks on the top of the top bar. On Windows the
-                        strip is the drag band behind the titleBarOverlay
-                        caption buttons (36px, matching
-                        MAIN_WINDOW_TITLE_BAR_OVERLAY_HEIGHT in
-                        apps/electron/src/main/window-theme.ts); content clears
-                        it via the matching pt-9 in web-workspace-layout.tsx. */}
-                    {isElectron && !isElectronFullscreen && (
-                      <div
-                        className={cn(
-                          'app-region-drag fixed left-0 top-0 right-0 z-50 select-none bg-transparent',
-                          isWindowsElectronRenderer() ? 'h-9' : 'h-5'
-                        )}
-                      />
-                    )}
-                    <Outlet />
-                  </ErrorBoundary>
-                </RuntimeProvider>
-                {/* <TanStackRouterDevtools /> */}
-              </>
-            </LanguageProvider>
-          </AppInitializer>
-        </TooltipProvider>
-      </ThemeProvider>
-    </LodyPostHogProvider>
+    <ErrorBoundary
+      name="RootOutlet"
+      variant="page"
+      resetKeys={[location.pathname, location.search]}
+      showErrorDetails
+      propagateAuthErrors={false}
+    >
+      <ErrorBoundaryProbe />
+      {/* Window drag strip. Hidden in native fullscreen: the
+          window can't be dragged there, and the strip would only
+          block clicks on the top of the top bar. On Windows the
+          strip is the drag band behind the titleBarOverlay
+          caption buttons (36px, matching
+          MAIN_WINDOW_TITLE_BAR_OVERLAY_HEIGHT in
+          apps/electron/src/main/window-theme.ts); content clears
+          it via the matching pt-9 in web-workspace-layout.tsx. */}
+      {isElectron && !isElectronFullscreen && (
+        <div
+          className={cn(
+            'app-region-drag fixed left-0 top-0 right-0 z-50 select-none bg-transparent',
+            isWindowsElectronRenderer() ? 'h-9' : 'h-5'
+          )}
+        />
+      )}
+      <Outlet />
+    </ErrorBoundary>
   );
 }
 

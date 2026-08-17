@@ -925,7 +925,6 @@ function ProductionLikeTopContent({
   chatsCollapsed: boolean;
   onToggleChatsCollapsed: () => void;
 }) {
-  const now = new Date(NOW);
   const isMobile = useIsMobile();
   const [localProjectsCollapsed, setLocalProjectsCollapsed] = useState(false);
   const [githubCollapsed, setGithubCollapsed] = useState(false);
@@ -1003,7 +1002,6 @@ function ProductionLikeTopContent({
                     liveSessionStatuses={EMPTY_LIVE_SESSION_STATUSES}
                     formattedPath={project.rootPath}
                     defaultSessionTitle="Untitled"
-                    now={now}
                     selectedSessionId={null}
                     removeProjectLabel="Remove folder"
                     archiveTooltipLabel="Archive"
@@ -1057,7 +1055,6 @@ function ProductionLikeTopContent({
                   liveSessionStatuses={EMPTY_LIVE_SESSION_STATUSES}
                   formattedPath={project.rootPath}
                   defaultSessionTitle="Untitled"
-                  now={now}
                   selectedSessionId={null}
                   removeProjectLabel="Remove folder"
                   archiveTooltipLabel="Archive"

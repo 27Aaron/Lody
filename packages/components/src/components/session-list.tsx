@@ -76,7 +76,7 @@ import {
 import { SwipeActionRow } from '@/components/shared/swipe-action-row';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { useStableNow } from '@/hooks/use-stable-now';
-import { formatCompactRelativeTime } from '@/lib/format-relative-time';
+import { formatCompactRelativeTime, type RelativeTimeValue } from '@/lib/format-relative-time';
 import {
   GitHubOwnerIcon,
   SessionPrIcon,
@@ -442,7 +442,17 @@ function reconcileShowFullListByGroups(
 // session is a worktree by construction — so an inline icon on every row in
 // the GitHub group is redundant noise. Local-project sessions get the icon
 // elsewhere in LocalProjectSessionItem, where it's a meaningful distinction.
-function SessionRowTime({ relativeTime, className }: { relativeTime: string; className?: string }) {
+function SessionRowTime({
+  latestMessageAt,
+  className,
+}: {
+  latestMessageAt: RelativeTimeValue;
+  className?: string;
+}) {
+  // Self-ticking on the shared minute timer: a tick re-renders only this label
+  // instead of every row that used to receive `now` from the list root.
+  const now = useStableNow();
+  const relativeTime = formatCompactRelativeTime(latestMessageAt, now);
   return (
     <span className={cn('inline-flex items-center justify-end gap-1', className)}>
       <span className="select-none tabular-nums">{relativeTime}</span>
@@ -450,9 +460,43 @@ function SessionRowTime({ relativeTime, className }: { relativeTime: string; cla
   );
 }
 
+/**
+ * Shallow-compares two props objects while ignoring `ignoredKeys`. Used by the
+ * selection-scoped `memo` comparators below.
+ */
+export function shallowEqualExceptKeys<P extends object>(
+  prev: P,
+  next: P,
+  ignoredKeys: ReadonlySet<string>
+): boolean {
+  const keys = new Set([...Object.keys(prev), ...Object.keys(next)]);
+  for (const key of keys) {
+    if (ignoredKeys.has(key)) continue;
+    if (!Object.is(prev[key as keyof P], next[key as keyof P])) return false;
+  }
+  return true;
+}
+
+const SELECTION_PROP_KEYS: ReadonlySet<string> = new Set(['selectedSessionId']);
+
+/**
+ * `memo` equality for sidebar session groups: a `selectedSessionId` change only
+ * re-renders the group(s) containing the previously or newly selected row —
+ * a session switch no longer re-renders every group in the list. All other
+ * props fall back to identity comparison.
+ */
+function sessionGroupPropsEqual<
+  P extends { selectedSessionId?: string | null; group: SessionRowGroup },
+>(prev: P, next: P): boolean {
+  if (!shallowEqualExceptKeys(prev, next, SELECTION_PROP_KEYS)) return false;
+  if (prev.selectedSessionId === next.selectedSessionId) return true;
+  const contains = (id: string | null | undefined) =>
+    id != null && next.group.sessions.some((session) => session.sessionId === id);
+  return !contains(prev.selectedSessionId) && !contains(next.selectedSessionId);
+}
+
 type SessionGroupSectionProps = {
   group: SessionRowGroup;
-  now: Date;
   selectedSessionId?: string | null;
   activeGroupKey?: string | null;
   whetherShowFullList: boolean;
@@ -505,7 +549,6 @@ export type ContextMenuLabels = {
 
 const SessionGroupSection = memo(function SessionGroupSection({
   group,
-  now,
   selectedSessionId,
   activeGroupKey,
   whetherShowFullList,
@@ -747,7 +790,6 @@ const SessionGroupSection = memo(function SessionGroupSection({
               normalizeSessionRowId(session.openedByRowSessionId) ?? openerSessionId;
             const isSelected = session.sessionId === selectedSessionId;
             const showSelectedState = isSelected && !isMobile;
-            const relativeTime = formatCompactRelativeTime(session.latestMessageAt, now);
             const prUrl = normalizePrUrl(session.prUrl);
             const prNumber =
               typeof session.prNumber === 'number' && Number.isFinite(session.prNumber)
@@ -943,7 +985,7 @@ const SessionGroupSection = memo(function SessionGroupSection({
                       isChatSession ? (
                         <span className={cn('flex items-center gap-1.5', useAnchor && 'z-20')}>
                           <SessionRowTime
-                            relativeTime={relativeTime}
+                            latestMessageAt={session.latestMessageAt}
                             className="text-xs text-muted-foreground"
                           />
                         </span>
@@ -956,7 +998,7 @@ const SessionGroupSection = memo(function SessionGroupSection({
                         >
                           {isMobile ? (
                             <SessionRowTime
-                              relativeTime={relativeTime}
+                              latestMessageAt={session.latestMessageAt}
                               className="text-muted-foreground"
                             />
                           ) : null}
@@ -1127,7 +1169,6 @@ const SessionGroupSection = memo(function SessionGroupSection({
                 title={session.title}
                 isWorktree={session.isWorktree}
                 latestMessageAt={session.latestMessageAt}
-                now={now}
                 repoFullName={group.repoFullName}
                 machineName={session.machineName}
                 branchName={session.branchName}
@@ -1218,9 +1259,9 @@ const SessionGroupSection = memo(function SessionGroupSection({
       />
     </div>
   );
-});
+}, sessionGroupPropsEqual);
 
-function SortableRepoGroupSection({
+const SortableRepoGroupSection = memo(function SortableRepoGroupSection({
   group,
   canReorderRepos,
   ...props
@@ -1288,7 +1329,7 @@ function SortableRepoGroupSection({
       />
     </div>
   );
-}
+}, sessionGroupPropsEqual);
 
 export const SessionList = memo(function SessionList({
   sessions,
@@ -1345,7 +1386,6 @@ export const SessionList = memo(function SessionList({
     () => buildGroups(sessions, repos, chatsCollapsed, chatsGroupLabel),
     [sessions, repos, chatsCollapsed, chatsGroupLabel]
   );
-  const now = useStableNow();
   const [whetherShowFullListByGroup, setWhetherShowFullListByGroup] =
     useAtom(sidebarShowFullListAtom);
   const collapsedOpenedBySessionIds = useAtomValue(sidebarCollapsedOpenedBySessionsAtom);
@@ -1446,7 +1486,6 @@ export const SessionList = memo(function SessionList({
                     group={group as SessionRowGroup & { kind: 'repo'; repoFullName: string }}
                     canReorderRepos={canReorderRepos}
                     headerAction={groupHeaderAction}
-                    now={now}
                     selectedSessionId={selectedSessionId}
                     activeGroupKey={activeGroupKey}
                     whetherShowFullList={whetherShowFullList}
@@ -1480,7 +1519,6 @@ export const SessionList = memo(function SessionList({
                   key={group.key}
                   group={group}
                   headerAction={groupHeaderAction}
-                  now={now}
                   selectedSessionId={selectedSessionId}
                   activeGroupKey={activeGroupKey}
                   whetherShowFullList={whetherShowFullList}

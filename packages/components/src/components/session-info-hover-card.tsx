@@ -38,6 +38,7 @@ import {
 } from '@/components/sessions/session-info-chips';
 import { GitHubOwnerIcon, type SidebarRowKind } from '@/components/sidebar-row-shared';
 import { WorktreeIcon } from '@/components/icons/worktree-icon';
+import { useStableNow } from '@/hooks/use-stable-now';
 import { formatCompactRelativeTime, type RelativeTimeValue } from '@/lib/format-relative-time';
 import type { SessionSharingState } from '@/lib/session-sharing';
 import { getSessionSharingDescription, getSessionSharingLabel } from '@/components/session-sharing';
@@ -515,11 +516,17 @@ export function SessionInfoCard({
   );
 }
 
-export type SessionInfoHoverCardProps = SessionInfoCardProps & {
+export type SessionInfoHoverCardProps = Omit<SessionInfoCardProps, 'now'> & {
   /** The trigger (a sidebar row). Hovering it opens the card. */
   children: ReactNode;
   /** Skip the hover card entirely (e.g. on touch devices with no hover). */
   disabled?: boolean;
+  /**
+   * Optional fixed "now" for the card's relative times. When omitted the card
+   * ticks itself via `useStableNow()` — and only while open (the popover
+   * content stays unmounted when closed), so resting rows pay nothing.
+   */
+  now?: Date;
 };
 
 /**
@@ -547,6 +554,7 @@ let lastCardInteractionAt = Number.NEGATIVE_INFINITY;
 export function SessionInfoHoverCard({
   children,
   disabled,
+  now,
   ...cardProps
 }: SessionInfoHoverCardProps) {
   const [open, setOpen] = useState(false);
@@ -651,9 +659,20 @@ export function SessionInfoHoverCard({
           onPointerLeave={scheduleClose}
           className="z-[var(--z-popover)] outline-hidden"
         >
-          <SessionInfoCard {...cardProps} />
+          <SessionInfoCardWithNow {...cardProps} now={now} />
         </PopoverPrimitive.Content>
       </PopoverPrimitive.Portal>
     </PopoverPrimitive.Root>
   );
+}
+
+/**
+ * Renders the card with a `now`. When the caller didn't pin one, the card ticks
+ * itself — and because the popover content unmounts while closed, that
+ * subscription only exists while the card is actually open.
+ */
+function SessionInfoCardWithNow(props: Omit<SessionInfoCardProps, 'now'> & { now?: Date }) {
+  const { now: pinnedNow, ...cardProps } = props;
+  const tickingNow = useStableNow();
+  return <SessionInfoCard {...cardProps} now={pinnedNow ?? tickingNow} />;
 }
