@@ -150,7 +150,15 @@ const storyPlatform = createLocalPlatformProvider({
   }),
   workspaces: createStaticStore({
     status: 'ready',
-    workspaces: [{ id: 'workspace-storybook', name: 'Storybook Workspace' }],
+    workspaces: [
+      {
+        id: 'workspace-storybook',
+        name: 'Storybook Workspace',
+        slug: null,
+        role: 'owner',
+      },
+    ],
+    activeWorkspaceId: 'workspace-storybook',
   }),
 });
 
