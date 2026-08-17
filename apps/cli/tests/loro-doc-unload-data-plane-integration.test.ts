@@ -34,7 +34,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { LoroDoc, VersionVector } from 'loro-crdt';
 import { Mirror } from 'loro-mirror';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createLocalCloudPort } from '@lody/platform';
 import {
   base64ToBytes,
@@ -80,6 +80,14 @@ const historyEntry = (id: string, role: Role, text: string): SessionHistoryInput
   fileDiff: [],
   items: [{ type: 'text', text }],
 });
+
+const createDeferred = (): { promise: Promise<void>; resolve: () => void } => {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+};
 
 /**
  * The server half of one local data-plane socket. `send` is the only thing the
@@ -212,6 +220,16 @@ class FakeRendererPeer {
     });
   }
 
+  async leave(): Promise<void> {
+    await this.engine.handleMessage(this.connection, {
+      type: 'leave',
+      protocolVersion: LOCAL_LORO_DATA_PLANE_PROTOCOL_VERSION,
+      workspaceId: this.workspaceId,
+      peerId: this.peerId,
+      room: this.room,
+    });
+  }
+
   private encodedVersion(): string {
     return bytesToBase64(this.doc.oplogVersion().encode());
   }
@@ -285,14 +303,7 @@ describe('session GC unloads the repo doc and invalidates its local data-plane r
 
       const sessionId = await manager.createSession('local-machine', 'builtin', 'claude');
       const sessionDoc = await manager.getOrCreateSessionDoc(sessionId);
-      // The offline room settles immediately (no transport is attached). This
-      // does NOT cover the manager's join-triggered hydrate — that is fired by
-      // the peer's join further down, after this line. The hydrate
-      // (`ensureSessionDocHydratedForLocalJoin`) is a floating promise that
-      // nothing awaits; it settles before the GC below only because `docSub` is
-      // already set here, so `ensureDocRoomJoined` short-circuits on an
-      // already-resolved `remoteSyncReady`. If that hydrate ever does real
-      // work, this test becomes order-dependent and needs an explicit signal.
+      // The offline room settles immediately because no transport is attached.
       await sessionDoc.waitForRemoteSync();
       const cliEntryId = 'cli-authored-turn';
       await sessionDoc.updateHistory((history) => [
@@ -316,6 +327,160 @@ describe('session GC unloads the repo doc and invalidates its local data-plane r
       throw error;
     }
   };
+
+  it('bounds and releases renderer-only cloud reconciles without SessionDocuments', async () => {
+    applyLocalPlatformEnv();
+    const logger = createSilentLogger();
+    const identity = await loadOrCreateLocalIdentity(logger);
+    const catalog = makeLocalWorkspaceCatalog({
+      filePath: path.join(tempDir, '.lody-oss', 'workspace-catalog.json'),
+      lockName: `doc-local-only-${process.pid}`,
+      cacheTtlMs: Number.POSITIVE_INFINITY,
+    });
+    const workspace = await ensureImplicitLocalWorkspace({
+      catalog,
+      identity,
+      machineId: 'local-machine',
+      machineName: 'local-host',
+      logger,
+    });
+    const cloudPort = createLocalCloudPort({
+      identity: { userId: identity.userId },
+      workspaces: [workspace],
+    });
+    const manager = await LoroDocumentManager.create(workspace.id, identity.userId, logger, {
+      streamsTokens: cloudPort.streamsTokens,
+      cloudBilling: cloudPort.billing,
+    });
+
+    try {
+      const engine = manager.getLocalLoroDataPlaneServer();
+      if (!engine) throw new Error('Expected a local data-plane engine');
+      const joinDocRoom = vi.spyOn(manager.repo, 'joinDocRoom');
+      const unloadDoc = vi.spyOn(manager.repo, 'unloadDoc');
+      const connection = new FakeRendererConnection();
+      const docIds = Array.from({ length: 6 }, (_, index) =>
+        getSessionRoomId(`renderer-only-session-${index}` as SessionId)
+      );
+      const peers = docIds.map(
+        (docId) =>
+          new FakeRendererPeer(engine, connection, workspace.id, {
+            scope: 'doc',
+            docId,
+          })
+      );
+
+      await Promise.all(peers.map((peer) => peer.joinAndSync()));
+      await vi.waitFor(() => expect(joinDocRoom).toHaveBeenCalledTimes(4));
+
+      expect(manager.getConnectedRoomCount()).toBe(0);
+
+      await peers[0]!.leave();
+      await vi.waitFor(() => expect(joinDocRoom).toHaveBeenCalledTimes(5));
+
+      await Promise.all(peers.map((peer) => peer.leave()));
+      await vi.waitFor(() => {
+        for (const docId of docIds) {
+          expect(unloadDoc).toHaveBeenCalledWith(docId);
+        }
+      });
+      expect(manager.getConnectedRoomCount()).toBe(0);
+    } finally {
+      await manager.cleanUp({ fast: true, preserveSessionStatus: true });
+      await cloudPort.dispose();
+    }
+  });
+
+  it('serializes renderer-only unload with snapshot reads and SessionDocument takeover', async () => {
+    applyLocalPlatformEnv();
+    const logger = createSilentLogger();
+    const identity = await loadOrCreateLocalIdentity(logger);
+    const catalog = makeLocalWorkspaceCatalog({
+      filePath: path.join(tempDir, '.lody-oss', 'workspace-catalog.json'),
+      lockName: `doc-local-takeover-${process.pid}`,
+      cacheTtlMs: Number.POSITIVE_INFINITY,
+    });
+    const workspace = await ensureImplicitLocalWorkspace({
+      catalog,
+      identity,
+      machineId: 'local-machine',
+      machineName: 'local-host',
+      logger,
+    });
+    const cloudPort = createLocalCloudPort({
+      identity: { userId: identity.userId },
+      workspaces: [workspace],
+    });
+    const manager = await LoroDocumentManager.create(workspace.id, identity.userId, logger, {
+      streamsTokens: cloudPort.streamsTokens,
+      cloudBilling: cloudPort.billing,
+    });
+    const unloadGates = new Map<
+      string,
+      { started: ReturnType<typeof createDeferred>; release: ReturnType<typeof createDeferred> }
+    >();
+
+    try {
+      const engine = manager.getLocalLoroDataPlaneServer();
+      if (!engine) throw new Error('Expected a local data-plane engine');
+      const connection = new FakeRendererConnection();
+      const originalUnloadDoc = manager.repo.unloadDoc.bind(manager.repo);
+      vi.spyOn(manager.repo, 'unloadDoc').mockImplementation(async (unloadDocId) => {
+        const gate = unloadGates.get(unloadDocId);
+        gate?.started.resolve();
+        await gate?.release.promise;
+        await originalUnloadDoc(unloadDocId);
+      });
+      const beginBlockedRendererLeave = async (sessionId: SessionId) => {
+        const docId = getSessionRoomId(sessionId);
+        const gate = { started: createDeferred(), release: createDeferred() };
+        unloadGates.set(docId, gate);
+        const peer = new FakeRendererPeer(engine, connection, workspace.id, {
+          scope: 'doc',
+          docId,
+        });
+        await peer.joinAndSync();
+        await peer.leave();
+        await gate.started.promise;
+        return gate;
+      };
+
+      const snapshotSessionId = 'renderer-only-snapshot' as SessionId;
+      const snapshotGate = await beginBlockedRendererLeave(snapshotSessionId);
+      let snapshotResolved = false;
+      const snapshot = manager.getSessionHistorySnapshot(snapshotSessionId).then((history) => {
+        snapshotResolved = true;
+        return history;
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(snapshotResolved).toBe(false);
+      snapshotGate.release.resolve();
+      await expect(snapshot).resolves.toEqual([]);
+
+      const sessionId = 'renderer-only-takeover' as SessionId;
+      const takeoverGate = await beginBlockedRendererLeave(sessionId);
+      let takeoverResolved = false;
+      const takeover = manager.getOrCreateSessionDoc(sessionId).then((sessionDoc) => {
+        takeoverResolved = true;
+        return sessionDoc;
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(takeoverResolved).toBe(false);
+
+      takeoverGate.release.resolve();
+      const sessionDoc = await takeover;
+      expect(sessionDoc.isDestroyed).toBe(false);
+      expect(manager.getConnectedRoomCount()).toBe(1);
+    } finally {
+      for (const gate of unloadGates.values()) {
+        gate.release.resolve();
+      }
+      await manager.cleanUp({ fast: true, preserveSessionStatus: true });
+      await cloudPort.dispose();
+    }
+  });
 
   it('lets a renderer update authored after session GC reach the CLI', async () => {
     const harness = await createHarness();

@@ -116,6 +116,9 @@ async function createListeningHost(endpoint, record, shutdownControl) {
   const server = net.createServer((socket) => {
     sockets.add(socket);
     socket.once('close', () => sockets.delete(socket));
+    // A timed-out health probe may reset this accepted socket before the host
+    // record is written. Treat that peer disconnect as connection-local.
+    socket.on('error', () => socket.destroy());
     socket.write(`${JSON.stringify(record)}\n`);
     let buffer = '';
     let handled = false;

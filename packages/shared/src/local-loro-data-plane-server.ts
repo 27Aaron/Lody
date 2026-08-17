@@ -117,6 +117,7 @@ export type LocalLoroDataPlaneServerOptions = {
   // import. Only a single flock ENTRY above the budget is terminal.
   maxPayloadBytes?: number;
   onDocRoomJoin?: LocalLoroDocRoomJoinHandler;
+  onDocRoomLeave?: LocalLoroDocRoomJoinHandler;
   onFlockRoomJoin?: LocalLoroFlockRoomHandler;
   onFlockRoomLeave?: LocalLoroFlockRoomHandler;
   onError?: (error: unknown, context: string) => void;
@@ -242,6 +243,7 @@ export class LocalLoroDataPlaneServer {
   private presenceUnsubscribe: (() => void) | null = null;
   private machineMonitorUnsubscribe: (() => void) | null = null;
   private docRoomJoinHandler: LocalLoroDocRoomJoinHandler | null = null;
+  private docRoomLeaveHandler: LocalLoroDocRoomJoinHandler | null = null;
   private flockRoomJoinHandler: LocalLoroFlockRoomHandler | null = null;
   private flockRoomLeaveHandler: LocalLoroFlockRoomHandler | null = null;
   private readonly scheduler: LocalLoroDataPlaneScheduler;
@@ -250,6 +252,7 @@ export class LocalLoroDataPlaneServer {
   constructor(private readonly options: LocalLoroDataPlaneServerOptions) {
     this.scheduler = options.scheduler ?? createLocalLoroDataPlaneScheduler();
     this.docRoomJoinHandler = options.onDocRoomJoin ?? null;
+    this.docRoomLeaveHandler = options.onDocRoomLeave ?? null;
     this.flockRoomJoinHandler = options.onFlockRoomJoin ?? null;
     this.flockRoomLeaveHandler = options.onFlockRoomLeave ?? null;
     if (options.presenceSource) {
@@ -266,6 +269,10 @@ export class LocalLoroDataPlaneServer {
 
   setDocRoomJoinHandler(handler: LocalLoroDocRoomJoinHandler | null): void {
     this.docRoomJoinHandler = handler;
+  }
+
+  setDocRoomLeaveHandler(handler: LocalLoroDocRoomJoinHandler | null): void {
+    this.docRoomLeaveHandler = handler;
   }
 
   setFlockRoomJoinHandler(handler: LocalLoroFlockRoomHandler | null): void {
@@ -468,6 +475,7 @@ export class LocalLoroDataPlaneServer {
     this.machineMonitorReceivers.clear();
     for (const entry of this.rooms.values()) {
       entry.unsubscribe();
+      this.notifyDocRoomLeave(entry.room);
       this.notifyFlockRoomLeave(entry.room);
       entry.subscribers.clear();
     }
@@ -580,6 +588,15 @@ export class LocalLoroDataPlaneServer {
     }
     void Promise.resolve(this.flockRoomJoinHandler(flockDocId)).catch((error) => {
       this.options.onError?.(error, 'onFlockRoomJoin');
+    });
+  }
+
+  private notifyDocRoomLeave(room: LocalLoroDataPlaneRoom): void {
+    if (room.scope !== 'doc' || !this.docRoomLeaveHandler) {
+      return;
+    }
+    void Promise.resolve(this.docRoomLeaveHandler(room.docId)).catch((error) => {
+      this.options.onError?.(error, 'onDocRoomLeave');
     });
   }
 
@@ -1240,6 +1257,7 @@ export class LocalLoroDataPlaneServer {
     }
     entry.unsubscribe();
     this.rooms.delete(key);
+    this.notifyDocRoomLeave(entry.room);
     this.notifyFlockRoomLeave(entry.room);
   }
 

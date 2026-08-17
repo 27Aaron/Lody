@@ -262,6 +262,14 @@ Two things the dev build does deliberately, both load-bearing:
   pointer was NOT yet written (`if (!dispatched)`); rolling back after dispatch deletes an
   already-running session out from under the daemon and drops its generated title. Do not
   reintroduce a hard-fail Streams ack on the dispatch write.
+- A renderer joining a local data-plane Session Doc room must not call
+  `LoroDocumentManager.getOrCreateSessionDoc` or retain a live cloud room.
+  Renderers may visit thousands of historical sessions; coupling local join to a
+  `SessionDocument` retains them until GC and can starve the Host health endpoint. Use the
+  bounded raw-doc one-shot reconciliation in `loro/doc.ts`, cancel it on local leave or
+  Session activation, and unload renderer-only docs after the last peer leaves. Session
+  metadata/RPC activation owns persistent CLI cloud joins. Flock room bridging remains
+  explicitly paired to local Flock join/leave.
 
 ## Agent feedback
 

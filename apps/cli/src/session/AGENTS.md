@@ -40,8 +40,13 @@ delegation proofs or a shared-machine gate without a new product and security de
   pending pointer, queue watermark, cancel, active status, RPC offer, or access retry
   stays metadata-only even when it has no `lastHandledUserMsgId`; never inspect every
   historical Session document to infer work from history. Reconcile activated rooms
-  with the fixed four-room concurrency bound, and keep initial history/cancel checks
-  inside that bound rather than spawning unbounded promise chains. That scan is
+  with one global four-room concurrency bound shared by bootstrap and live metadata,
+  and keep initial history/cancel checks inside that bound rather than spawning
+  unbounded promise chains. Bootstrap may occupy at most three slots so a live
+  activation cannot sit behind four five-minute history probes. Live metadata events
+  must be coalesced by session before the bounded drain runs. Stop/restart generation
+  fences cover reconciliation plus the checks it enqueues; old probes may finish I/O
+  but must never subscribe, cancel, or dispatch in a new watcher lifecycle. That scan is
   idempotent and costs
   seconds of main-thread work, so `enqueueBootstrap` folds concurrent requests into a
   single queued drain (`pendingBootstrapReasons` + `bootstrapChain`) — none are dropped.

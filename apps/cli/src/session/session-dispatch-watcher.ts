@@ -54,7 +54,7 @@ import type { SessionAccessPolicyService } from './session-access-policy';
 import { mapWithConcurrency } from '@/lib/bounded-concurrency';
 import { listAliveRoomIds } from '@/lib/loro/repo-existence';
 
-const SESSION_BOOTSTRAP_RECONCILE_CONCURRENCY = 4;
+const SESSION_RECONCILE_CONCURRENCY = 4;
 
 type SessionUserResolverLike = Pick<SessionUserResolver, 'resolve' | 'clear'>;
 
@@ -126,6 +126,8 @@ type WatchedSession = {
 type SessionReconcileOptions = {
   /** Keep startup's global concurrency bound around the initial room work. */
   awaitInitialChecks?: boolean;
+  /** Reject work queued by an earlier start/stop lifecycle. */
+  lifecycleGeneration?: number;
 };
 
 type SessionCheckOptions = {
@@ -133,11 +135,31 @@ type SessionCheckOptions = {
   resolveAfterInitialProbe?: boolean;
   /** A metadata event may already own this session; bootstrap need not duplicate it. */
   reuseExistingCheck?: boolean;
+  lifecycleGeneration?: number;
 };
 
 type InitialProbeObserver = {
   complete: () => void;
   fail: (error: unknown) => void;
+};
+
+type InitialProbeRecord = {
+  promise: Promise<void>;
+  observer: InitialProbeObserver;
+  started: boolean;
+  settled: boolean;
+};
+
+type SessionReconcileLane = 'metadata' | 'bootstrap';
+
+type SessionReconcileWaiter = {
+  lane: SessionReconcileLane;
+  resolve: () => void;
+};
+
+type LifecycleCancelSubscriber = {
+  generation: number;
+  cancel: () => void;
 };
 
 /** A user turn pushed over Machine RPC ahead of history CRDT sync. */
@@ -329,6 +351,7 @@ export class SessionDispatchWatcher {
    * New events that arrive during an in-flight check are coalesced into a single follow-up.
    */
   private readonly sessionCheckChains = new Map<SessionId, Promise<void>>();
+  private readonly sessionInitialProbes = new Map<SessionId, Set<InitialProbeRecord>>();
 
   /**
    * Per-session serialized promise chains for cancel checks.
@@ -374,8 +397,16 @@ export class SessionDispatchWatcher {
   private bootstrapChain: Promise<void> = Promise.resolve();
   private readonly pendingBootstrapReasons = new Set<string>();
   private bootstrapDrainScheduled = false;
+  private metadataReconcileChain: Promise<void> = Promise.resolve();
+  private readonly pendingMetadataSessionIds = new Set<SessionId>();
+  private metadataReconcileDrainScheduled = false;
+  private activeSessionReconciles = 0;
+  private activeBootstrapReconciles = 0;
+  private readonly sessionReconcileWaiters: SessionReconcileWaiter[] = [];
   private startupBootstrapTimer: ReturnType<typeof setTimeout> | null = null;
   private started = false;
+  private lifecycleGeneration = 0;
+  private readonly lifecycleCancelSubscribers = new Set<LifecycleCancelSubscriber>();
 
   constructor(private readonly deps: SessionDispatchWatcherDeps) {
     this.userResolver = deps.userResolver;
@@ -392,6 +423,7 @@ export class SessionDispatchWatcher {
     if (this.started) {
       return;
     }
+    this.lifecycleGeneration += 1;
     this.started = true;
 
     this.detachMetaRoomSyncedListener = this.deps.workspaceDocument.onMetaRoomSynced((reason) => {
@@ -406,7 +438,7 @@ export class SessionDispatchWatcher {
           return;
         }
         const sessionId = event.docId.slice(SESSION_DOC_PREFIX.length) as SessionId;
-        this.reconcileSessionWatch(sessionId, 'metadata-watch').catch(() => undefined);
+        this.enqueueMetadataReconcile(sessionId);
       },
       { kinds: ['doc-metadata'] }
     );
@@ -420,6 +452,12 @@ export class SessionDispatchWatcher {
   }
 
   stop(): void {
+    this.started = false;
+    this.lifecycleGeneration += 1;
+    for (const subscriber of this.lifecycleCancelSubscribers) {
+      subscriber.cancel();
+    }
+    this.lifecycleCancelSubscribers.clear();
     if (this.startupBootstrapTimer) {
       clearTimeout(this.startupBootstrapTimer);
       this.startupBootstrapTimer = null;
@@ -432,6 +470,12 @@ export class SessionDispatchWatcher {
       watched.unsubscribe();
     }
     this.watchedSessions.clear();
+    for (const probes of this.sessionInitialProbes.values()) {
+      for (const probe of probes) {
+        probe.observer.complete();
+      }
+    }
+    this.sessionInitialProbes.clear();
     this.sessionCheckChains.clear();
     this.cancelCheckChains.clear();
     this.cancelSeenTurn.clear();
@@ -439,11 +483,11 @@ export class SessionDispatchWatcher {
     this.turnSourceHints.clear();
     this.rpcTurnOfferSubscribers.clear();
     this.pendingBootstrapReasons.clear();
+    this.pendingMetadataSessionIds.clear();
     for (const sessionId of [...this.accessFibers.keys()]) {
       this.interruptAccessRetry(sessionId);
     }
     this.userResolver.clear();
-    this.started = false;
   }
 
   recheckPendingAccess(reason: string): void {
@@ -460,51 +504,114 @@ export class SessionDispatchWatcher {
     }
   }
 
+  private isLifecycleActive(lifecycleGeneration?: number): boolean {
+    return (
+      lifecycleGeneration === undefined ||
+      (this.started && lifecycleGeneration === this.lifecycleGeneration)
+    );
+  }
+
+  private subscribeToLifecycleCancel(
+    lifecycleGeneration: number | undefined,
+    cancel: () => void
+  ): () => void {
+    if (lifecycleGeneration === undefined) {
+      return () => {};
+    }
+    if (!this.isLifecycleActive(lifecycleGeneration)) {
+      cancel();
+      return () => {};
+    }
+    const subscriber = { generation: lifecycleGeneration, cancel };
+    this.lifecycleCancelSubscribers.add(subscriber);
+    return () => {
+      this.lifecycleCancelSubscribers.delete(subscriber);
+    };
+  }
+
   /**
    * Enqueue a dispatch check for a session. Multiple calls while a check is in-flight
    * are coalesced: exactly one follow-up check will run after the current one finishes.
    */
   enqueueSessionCheck(sessionId: SessionId, options: SessionCheckOptions = {}): Promise<void> {
+    // Tests may drive an as-yet-unstarted watcher directly (generation 0). Once
+    // a production watcher has ever started, every check is generation-bound,
+    // including RPC/access callbacks that happen to enqueue after stop().
+    const lifecycleGeneration =
+      options.lifecycleGeneration ??
+      (this.lifecycleGeneration > 0 ? this.lifecycleGeneration : undefined);
     const existing = this.sessionCheckChains.get(sessionId);
     if (options.reuseExistingCheck === true && existing !== undefined) {
-      return Promise.resolve();
+      const probes = this.sessionInitialProbes.get(sessionId);
+      const activeProbe = [...(probes ?? [])].find((probe) => probe.started && !probe.settled);
+      if (activeProbe) {
+        return activeProbe.promise;
+      }
+      // If the chain has not started yet, its first probe is the reconcile's
+      // initial work. If a settled probe is still running post-probe agent work,
+      // any later check is a follow-up event, not part of this activation slot.
+      const hasRunningPostProbe = [...(probes ?? [])].some(
+        (probe) => probe.started && probe.settled
+      );
+      if (hasRunningPostProbe) {
+        return Promise.resolve();
+      }
+      const firstQueuedProbe = [...(probes ?? [])].find((probe) => !probe.settled);
+      return firstQueuedProbe?.promise ?? existing;
     }
 
     const previous = this.sessionCheckChains.get(sessionId) ?? Promise.resolve();
-    let probe: Promise<void> | undefined;
-    let initialProbe: InitialProbeObserver | undefined;
-    if (options.resolveAfterInitialProbe === true) {
-      let resolveProbe!: () => void;
-      let rejectProbe!: (error: unknown) => void;
-      let probeSettled = false;
-      probe = new Promise<void>((resolve, reject) => {
-        resolveProbe = resolve;
-        rejectProbe = reject;
-      });
-      initialProbe = {
-        complete: () => {
-          if (probeSettled) {
-            return;
-          }
-          probeSettled = true;
-          resolveProbe();
-        },
-        fail: (error) => {
-          if (probeSettled) {
-            return;
-          }
-          probeSettled = true;
-          rejectProbe(error);
-        },
-      };
+    let resolveProbe!: () => void;
+    let rejectProbe!: (error: unknown) => void;
+    let probeSettled = false;
+    const probe = new Promise<void>((resolve, reject) => {
+      resolveProbe = resolve;
+      rejectProbe = reject;
+    });
+    let probeRecord!: InitialProbeRecord;
+    const initialProbe: InitialProbeObserver = {
+      complete: () => {
+        if (probeSettled) {
+          return;
+        }
+        probeSettled = true;
+        probeRecord.settled = true;
+        resolveProbe();
+      },
+      fail: (error) => {
+        if (probeSettled) {
+          return;
+        }
+        probeSettled = true;
+        probeRecord.settled = true;
+        rejectProbe(error);
+      },
+    };
+    probeRecord = {
+      promise: probe,
+      observer: initialProbe,
+      started: false,
+      settled: false,
+    };
+    let probes = this.sessionInitialProbes.get(sessionId);
+    if (!probes) {
+      probes = new Set();
+      this.sessionInitialProbes.set(sessionId, probes);
     }
+    probes.add(probeRecord);
     const next = previous
       .catch(() => {})
       .then(async () => {
-        await this.maybeHandleSession(sessionId, initialProbe);
+        probeRecord.started = true;
+        await this.maybeHandleSession(sessionId, initialProbe, lifecycleGeneration);
       })
       .finally(() => {
-        initialProbe?.complete();
+        initialProbe.complete();
+        const currentProbes = this.sessionInitialProbes.get(sessionId);
+        currentProbes?.delete(probeRecord);
+        if (currentProbes?.size === 0) {
+          this.sessionInitialProbes.delete(sessionId);
+        }
         if (this.sessionCheckChains.get(sessionId) === next) {
           this.sessionCheckChains.delete(sessionId);
         }
@@ -514,11 +621,8 @@ export class SessionDispatchWatcher {
     // ignores the returned handle. Attach observers to avoid unhandled rejects;
     // callers that await either promise still receive the original rejection.
     void next.catch(() => undefined);
-    if (probe !== undefined) {
-      void probe.catch(() => undefined);
-      return probe;
-    }
-    return next;
+    void probe.catch(() => undefined);
+    return options.resolveAfterInitialProbe === true ? probe : next;
   }
 
   /**
@@ -709,12 +813,18 @@ export class SessionDispatchWatcher {
   }
 
   /** Enqueue a cancel check (separate chain from dispatch — see class doc). */
-  private enqueueCancelCheck(sessionId: SessionId): Promise<void> {
+  private enqueueCancelCheck(sessionId: SessionId, lifecycleGeneration?: number): Promise<void> {
     const previous = this.cancelCheckChains.get(sessionId) ?? Promise.resolve();
     const next = previous
       .catch(() => {})
       .then(async () => {
-        await this.maybeHandleCancelRequest(sessionId);
+        if (
+          lifecycleGeneration !== undefined &&
+          (!this.started || lifecycleGeneration !== this.lifecycleGeneration)
+        ) {
+          return;
+        }
+        await this.maybeHandleCancelRequest(sessionId, lifecycleGeneration);
       })
       .finally(() => {
         if (this.cancelCheckChains.get(sessionId) === next) {
@@ -732,15 +842,75 @@ export class SessionDispatchWatcher {
     this.scheduleBootstrapDrain();
   }
 
+  /**
+   * Fold metadata bursts by session and reconcile them with the same four-way
+   * bound used by bootstrap. Remote meta catch-up can publish thousands
+   * of events in one turn; opening every activated SessionDocument at once would
+   * otherwise monopolize the event loop and retain all of their cloud rooms.
+   */
+  private enqueueMetadataReconcile(sessionId: SessionId): void {
+    // Reinsert so a fresh event moves ahead of stale catch-up work already in
+    // the queue. The drain takes from the newest end in bounded batches.
+    this.pendingMetadataSessionIds.delete(sessionId);
+    this.pendingMetadataSessionIds.add(sessionId);
+    this.scheduleMetadataReconcileDrain();
+  }
+
+  private scheduleMetadataReconcileDrain(): void {
+    if (this.metadataReconcileDrainScheduled) {
+      return;
+    }
+    this.metadataReconcileDrainScheduled = true;
+    const lifecycleGeneration = this.lifecycleGeneration;
+    const next = this.metadataReconcileChain
+      .catch(() => {})
+      .then(async () => {
+        while (
+          this.started &&
+          lifecycleGeneration === this.lifecycleGeneration &&
+          this.pendingMetadataSessionIds.size > 0
+        ) {
+          const sessionIds = [...this.pendingMetadataSessionIds]
+            .slice(-SESSION_RECONCILE_CONCURRENCY)
+            .reverse();
+          for (const sessionId of sessionIds) {
+            this.pendingMetadataSessionIds.delete(sessionId);
+          }
+          await Promise.all(
+            sessionIds.map((sessionId) =>
+              this.withSessionReconcileSlot('metadata', async () => {
+                await this.reconcileSessionWatch(sessionId, 'metadata-watch', {
+                  awaitInitialChecks: true,
+                  lifecycleGeneration,
+                });
+              }).catch(() => undefined)
+            )
+          );
+        }
+      })
+      .finally(() => {
+        this.metadataReconcileDrainScheduled = false;
+        if (this.started && this.pendingMetadataSessionIds.size > 0) {
+          this.scheduleMetadataReconcileDrain();
+        }
+      });
+    this.metadataReconcileChain = next;
+  }
+
   private scheduleBootstrapDrain(): void {
     if (this.bootstrapDrainScheduled) {
       return;
     }
     this.bootstrapDrainScheduled = true;
+    const lifecycleGeneration = this.lifecycleGeneration;
     const next = this.bootstrapChain
       .catch(() => {})
       .then(async () => {
-        if (!this.started || this.pendingBootstrapReasons.size === 0) {
+        if (
+          !this.started ||
+          lifecycleGeneration !== this.lifecycleGeneration ||
+          this.pendingBootstrapReasons.size === 0
+        ) {
           return;
         }
 
@@ -748,8 +918,12 @@ export class SessionDispatchWatcher {
         this.pendingBootstrapReasons.clear();
         const scanReason =
           reasons.length === 1 ? (reasons[0] ?? 'unknown') : `coalesced:${reasons.join(',')}`;
-        await this.bootstrapOwnedSessions(scanReason);
-        if (reasons.includes('startup') && this.started) {
+        await this.bootstrapOwnedSessions(scanReason, lifecycleGeneration);
+        if (
+          reasons.includes('startup') &&
+          this.started &&
+          lifecycleGeneration === this.lifecycleGeneration
+        ) {
           this.deps.onStartupBootstrapComplete?.();
         }
       })
@@ -769,8 +943,9 @@ export class SessionDispatchWatcher {
     this.bootstrapChain = next;
   }
 
-  private async bootstrapOwnedSessions(reason: string): Promise<void> {
-    if (!this.started) {
+  private async bootstrapOwnedSessions(reason: string, lifecycleGeneration: number): Promise<void> {
+    const isActive = () => this.started && lifecycleGeneration === this.lifecycleGeneration;
+    if (!isActive()) {
       return;
     }
 
@@ -792,21 +967,24 @@ export class SessionDispatchWatcher {
       `[dispatch] Found ${sessionRoomIds.length} session room(s) during owned-session scan (reason=${reason})`
     );
 
-    if (!this.started) {
+    if (!isActive()) {
       return;
     }
 
     const reconcileFailures = await mapWithConcurrency(
       sessionRoomIds,
-      SESSION_BOOTSTRAP_RECONCILE_CONCURRENCY,
+      SESSION_RECONCILE_CONCURRENCY,
       async (roomId) => {
-        if (!this.started) {
+        if (!isActive()) {
           return false;
         }
         const sessionId = roomId.slice(SESSION_DOC_PREFIX.length) as SessionId;
         try {
-          await this.reconcileSessionWatch(sessionId, `bootstrap:${reason}`, {
-            awaitInitialChecks: true,
+          await this.withSessionReconcileSlot('bootstrap', async () => {
+            await this.reconcileSessionWatch(sessionId, `bootstrap:${reason}`, {
+              awaitInitialChecks: true,
+              lifecycleGeneration,
+            });
           });
           return false;
         } catch {
@@ -820,6 +998,77 @@ export class SessionDispatchWatcher {
       this.deps.logger.warn(
         `[dispatch] Owned-session bootstrap completed with ${failedCount}/${sessionRoomIds.length} session reconcile failure(s) (reason=${reason})`
       );
+    }
+  }
+
+  /**
+   * Share one global initial-room-work budget across metadata and bootstrap.
+   * Bootstrap may consume at most three slots so a live activation can always
+   * enter the fourth instead of waiting behind a five-minute history probe.
+   */
+  private async withSessionReconcileSlot<T>(
+    lane: SessionReconcileLane,
+    task: () => Promise<T>
+  ): Promise<T> {
+    await this.acquireSessionReconcileSlot(lane);
+    try {
+      return await task();
+    } finally {
+      this.releaseSessionReconcileSlot(lane);
+    }
+  }
+
+  private acquireSessionReconcileSlot(lane: SessionReconcileLane): Promise<void> {
+    if (this.canAcquireSessionReconcileSlot(lane)) {
+      this.markSessionReconcileSlotAcquired(lane);
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      this.sessionReconcileWaiters.push({ lane, resolve });
+    });
+  }
+
+  private canAcquireSessionReconcileSlot(lane: SessionReconcileLane): boolean {
+    return (
+      this.activeSessionReconciles < SESSION_RECONCILE_CONCURRENCY &&
+      (lane === 'metadata' || this.activeBootstrapReconciles < SESSION_RECONCILE_CONCURRENCY - 1)
+    );
+  }
+
+  private markSessionReconcileSlotAcquired(lane: SessionReconcileLane): void {
+    this.activeSessionReconciles += 1;
+    if (lane === 'bootstrap') {
+      this.activeBootstrapReconciles += 1;
+    }
+  }
+
+  private releaseSessionReconcileSlot(lane: SessionReconcileLane): void {
+    this.activeSessionReconciles -= 1;
+    if (lane === 'bootstrap') {
+      this.activeBootstrapReconciles -= 1;
+    }
+    this.drainSessionReconcileWaiters();
+  }
+
+  private drainSessionReconcileWaiters(): void {
+    while (this.activeSessionReconciles < SESSION_RECONCILE_CONCURRENCY) {
+      let waiterIndex = this.sessionReconcileWaiters.findIndex(
+        (waiter) => waiter.lane === 'metadata'
+      );
+      if (waiterIndex < 0 && this.activeBootstrapReconciles < SESSION_RECONCILE_CONCURRENCY - 1) {
+        waiterIndex = this.sessionReconcileWaiters.findIndex(
+          (waiter) => waiter.lane === 'bootstrap'
+        );
+      }
+      if (waiterIndex < 0) {
+        return;
+      }
+      const [waiter] = this.sessionReconcileWaiters.splice(waiterIndex, 1);
+      if (!waiter) {
+        return;
+      }
+      this.markSessionReconcileSlotAcquired(waiter.lane);
+      waiter.resolve();
     }
   }
 
@@ -840,10 +1089,18 @@ export class SessionDispatchWatcher {
     trigger: string,
     options: SessionReconcileOptions = {}
   ): Promise<void> {
+    const lifecycleGeneration = options.lifecycleGeneration ?? this.lifecycleGeneration;
+    const isActive = () => this.started && this.lifecycleGeneration === lifecycleGeneration;
+    if (!isActive()) {
+      return;
+    }
     const roomId = getSessionRoomId(sessionId);
     let phase: SessionReconcilePhase = 'read-doc-meta';
     try {
       const record = await this.deps.workspaceDocument.repo.getDocMeta(roomId);
+      if (!isActive()) {
+        return;
+      }
       const meta = isLoroRepoDocDeleted(record)
         ? undefined
         : (record?.meta as SessionMeta | undefined);
@@ -882,23 +1139,39 @@ export class SessionDispatchWatcher {
       if (!this.watchedSessions.has(sessionId)) {
         phase = 'open-session-doc';
         const sessionDoc = await this.deps.workspaceDocument.getOrCreateSessionDoc(sessionId);
+        if (!isActive()) {
+          return;
+        }
         phase = 'subscribe-session-doc';
-        const unsubscribe = sessionDoc.mirror?.subscribe(() => {
-          void this.enqueueSessionCheck(sessionId);
-        });
-        if (unsubscribe) {
-          this.watchedSessions.set(sessionId, { unsubscribe });
+        // Bootstrap and live metadata can race on the same session. Re-check
+        // after the awaited open so only one subscription is installed.
+        if (!this.watchedSessions.has(sessionId)) {
+          const unsubscribe = sessionDoc.mirror?.subscribe(() => {
+            if (isActive()) {
+              void this.enqueueSessionCheck(sessionId, { lifecycleGeneration });
+            }
+          });
+          if (unsubscribe) {
+            this.watchedSessions.set(sessionId, { unsubscribe });
+          }
         }
       }
 
+      if (!isActive()) {
+        return;
+      }
       phase = 'enqueue-session-checks';
-      const cancelCheck = this.enqueueCancelCheck(sessionId);
+      const cancelCheck = this.enqueueCancelCheck(sessionId, lifecycleGeneration);
       const awaitInitialChecks = options.awaitInitialChecks === true;
       const sessionCheck = this.enqueueSessionCheck(
         sessionId,
         awaitInitialChecks
-          ? { resolveAfterInitialProbe: true, reuseExistingCheck: true }
-          : undefined
+          ? {
+              resolveAfterInitialProbe: true,
+              reuseExistingCheck: true,
+              lifecycleGeneration,
+            }
+          : { lifecycleGeneration }
       );
       if (awaitInitialChecks) {
         await Promise.all([cancelCheck, sessionCheck]);
@@ -950,23 +1223,44 @@ export class SessionDispatchWatcher {
    */
   private async maybeHandleSession(
     sessionId: SessionId,
-    initialProbe?: InitialProbeObserver
+    initialProbe?: InitialProbeObserver,
+    lifecycleGeneration?: number
   ): Promise<void> {
     const span = startTraceSpan(this.deps.logger, 'dispatch.maybe_handle_session', { sessionId });
     let outcome = 'unknown';
+    const isActive = () =>
+      lifecycleGeneration === undefined ||
+      (this.started && lifecycleGeneration === this.lifecycleGeneration);
+    const ensureActive = () => {
+      if (!isActive()) {
+        throw new Error(`Session dispatch watcher lifecycle ended (${sessionId})`);
+      }
+    };
     try {
+      if (!isActive()) {
+        outcome = 'stale-lifecycle';
+        return;
+      }
       const sessionDoc = await traceAsync(
         this.deps.logger,
         'dispatch.open_session_doc',
         { sessionId },
         async () => await this.deps.workspaceDocument.getOrCreateSessionDoc(sessionId)
       );
+      if (!isActive()) {
+        outcome = 'stale-lifecycle';
+        return;
+      }
       const meta = await traceAsync(
         this.deps.logger,
         'dispatch.read_meta',
         { sessionId },
         async () => await sessionDoc.getMetaState()
       );
+      if (!isActive()) {
+        outcome = 'stale-lifecycle';
+        return;
+      }
       if (!meta) {
         outcome = 'no-meta';
         return;
@@ -1007,6 +1301,10 @@ export class SessionDispatchWatcher {
         } finally {
           releaseConflict();
         }
+        if (!isActive()) {
+          outcome = 'stale-lifecycle';
+          return;
+        }
         // Fall through to turn-finding below (status is now idle)
       }
 
@@ -1015,9 +1313,14 @@ export class SessionDispatchWatcher {
         this.deps.logger,
         'dispatch.find_or_await_turn',
         { sessionId },
-        async () => await this.findOrAwaitDispatchableTurn(sessionId, sessionDoc, meta)
+        async () =>
+          await this.findOrAwaitDispatchableTurn(sessionId, sessionDoc, meta, lifecycleGeneration)
       );
       initialProbe?.complete();
+      if (!isActive()) {
+        outcome = 'stale-lifecycle';
+        return;
+      }
       if (!nextUserTurn) {
         if (this.hasPendingUserTurnSignal(meta)) {
           outcome = 'missing-history';
@@ -1037,6 +1340,10 @@ export class SessionDispatchWatcher {
         { sessionId, userTurnId: nextUserTurn.id },
         async () => await sessionDoc.getMetaState()
       );
+      if (!isActive()) {
+        outcome = 'stale-lifecycle';
+        return;
+      }
       if (!freshMeta) {
         outcome = 'no-fresh-meta';
         return;
@@ -1111,8 +1418,9 @@ export class SessionDispatchWatcher {
         launchConfigPromise,
         userForRequestPromise,
       ]).then(async ([turn, launchConfig, user]) => {
+        ensureActive();
         if (dispatchAction.mode === 'create') {
-          return {
+          const result = {
             mode: 'create' as const,
             request: await traceAsync(
               this.deps.logger,
@@ -1127,8 +1435,10 @@ export class SessionDispatchWatcher {
                 )
             ),
           };
+          ensureActive();
+          return result;
         }
-        return {
+        const result = {
           mode: 'continue' as const,
           request: await traceAsync(
             this.deps.logger,
@@ -1143,11 +1453,14 @@ export class SessionDispatchWatcher {
               )
           ),
         };
+        ensureActive();
+        return result;
       });
       void requestPromise.catch(() => undefined);
 
-      const accessPromise = dispatchTurnPromise.then((turn) =>
-        traceAsync(
+      const accessPromise = dispatchTurnPromise.then(async (turn) => {
+        ensureActive();
+        const access = await traceAsync(
           this.deps.logger,
           'dispatch.verify_machine_access',
           { sessionId, userTurnId: turn.nextUserTurn.id },
@@ -1157,8 +1470,10 @@ export class SessionDispatchWatcher {
               requesterUserId: turn.requesterUserId,
               localProjectId: turn.localProjectId,
             })
-        )
-      );
+        );
+        ensureActive();
+        return access;
+      });
       let executionAccessPromise: Promise<MachineAccessVerification> = accessPromise;
       let ownerRecheckStarted = false;
       // Local-first access gate (P5/R1): the catalog policy is offline-authoritative
@@ -1176,6 +1491,10 @@ export class SessionDispatchWatcher {
               })
             )
           : ({ outcome: 'remote' } as const);
+      if (!isActive()) {
+        outcome = 'stale-lifecycle';
+        return;
+      }
       if (localAccess.outcome === 'deny') {
         outcome = 'access-denied';
         this.interruptAccessRetry(sessionId);
@@ -1205,6 +1524,7 @@ export class SessionDispatchWatcher {
 
       const dispatchSource = this.peekTurnSourceHint(sessionId, nextUserTurn.id);
       outcome = `dispatch-prepared-${dispatchAction.mode}-${dispatchSource}`;
+      ensureActive();
       await traceAsync(
         this.deps.logger,
         'dispatch.execution_prepared_session',
@@ -1218,6 +1538,7 @@ export class SessionDispatchWatcher {
             accessPromise: executionAccessPromise,
             requestPromise,
             onAccessAllowed: async () => {
+              ensureActive();
               this.interruptAccessRetry(sessionId);
               this.takeTurnSourceHint(sessionId, nextUserTurn.id);
               this.consumeStashedRpcTurn(sessionId, nextUserTurn.id);
@@ -1226,6 +1547,7 @@ export class SessionDispatchWatcher {
               }
             },
             onAccessDenied: async (access) => {
+              ensureActive();
               // Definitive: the backend gave a real authorization answer.
               // Retrying will not change it, so fail the turn visibly.
               outcome = 'access-denied';
@@ -1238,6 +1560,7 @@ export class SessionDispatchWatcher {
               );
             },
             onAccessIndeterminate: async () => {
+              ensureActive();
               // Could not verify (network blip / backend unreachable /
               // auth-looking error). Leave the turn pending and let the retry
               // fiber re-enqueue once it reaches a definitive answer.
@@ -1250,6 +1573,11 @@ export class SessionDispatchWatcher {
           })
       );
     } catch (error) {
+      if (!isActive()) {
+        initialProbe?.complete();
+        outcome = 'stale-lifecycle';
+        return;
+      }
       initialProbe?.fail(error);
       span.fail(error, { outcome: 'error' });
       throw error;
@@ -1468,9 +1796,24 @@ export class SessionDispatchWatcher {
   /**
    * Cancel logic — thin I/O shell around {@link resolveSessionCancelAction}.
    */
-  private async maybeHandleCancelRequest(sessionId: SessionId): Promise<void> {
+  private async maybeHandleCancelRequest(
+    sessionId: SessionId,
+    lifecycleGeneration?: number
+  ): Promise<void> {
+    const isActive = () =>
+      lifecycleGeneration === undefined ||
+      (this.started && lifecycleGeneration === this.lifecycleGeneration);
+    if (!isActive()) {
+      return;
+    }
     const sessionDoc = await this.deps.workspaceDocument.getOrCreateSessionDoc(sessionId);
+    if (!isActive()) {
+      return;
+    }
     const meta = await sessionDoc.getMetaState();
+    if (!isActive()) {
+      return;
+    }
 
     const action = resolveSessionCancelAction(
       meta ?? undefined,
@@ -1482,6 +1825,9 @@ export class SessionDispatchWatcher {
       return;
     }
 
+    if (!isActive()) {
+      return;
+    }
     this.cancelSeenTurn.set(sessionId, action.turnId);
     await this.deps.executionService.cancelSession({
       type: 'session/cancel',
@@ -1490,7 +1836,12 @@ export class SessionDispatchWatcher {
       workspaceId: this.deps.workspaceId,
       turnId: action.turnId,
     });
-    await this.reconcileSessionWatch(sessionId, 'cancel-processed');
+    if (!isActive()) {
+      return;
+    }
+    await this.reconcileSessionWatch(sessionId, 'cancel-processed', {
+      lifecycleGeneration,
+    });
   }
 
   private fallbackUserProfile(userId: string): SessionUserProfile {
@@ -1782,17 +2133,27 @@ export class SessionDispatchWatcher {
   private async findOrAwaitDispatchableTurn(
     sessionId: SessionId,
     sessionDoc: Awaited<ReturnType<LoroDocumentManager['getOrCreateSessionDoc']>>,
-    meta: SessionMeta
+    meta: SessionMeta,
+    lifecycleGeneration?: number
   ): Promise<SessionHistoryInput | null> {
+    const isActive = () => this.isLifecycleActive(lifecycleGeneration);
     // Phase 1: check immediately with whatever data we have locally
     // (history → queue → RPC stash).
-    const turn = await this.checkHistoryAndQueue(sessionDoc, meta);
+    const turn = await this.checkHistoryAndQueue(sessionDoc, meta, isActive);
+    if (!isActive()) {
+      return null;
+    }
     if (turn) {
       return turn;
     }
 
     if (this.hasPendingUserTurnSignal(meta)) {
-      return await this.waitForPendingUserTurnHistorySync(sessionId, sessionDoc, meta);
+      return await this.waitForPendingUserTurnHistorySync(
+        sessionId,
+        sessionDoc,
+        meta,
+        lifecycleGeneration
+      );
     }
 
     return null;
@@ -1817,8 +2178,13 @@ export class SessionDispatchWatcher {
   private async waitForPendingUserTurnHistorySync(
     sessionId: SessionId,
     sessionDoc: SessionDocumentHandle,
-    meta: SessionMeta
+    meta: SessionMeta,
+    lifecycleGeneration?: number
   ): Promise<SessionHistoryInput | null> {
+    const isActive = () => this.isLifecycleActive(lifecycleGeneration);
+    if (!isActive()) {
+      return null;
+    }
     this.deps.logger.debug(
       `[${sessionId}] Pending user turn metadata is visible but history is missing it; waiting up to ${
         SessionDispatchWatcher.HISTORY_SYNC_WAIT_TIMEOUT_MS / 1000
@@ -1836,7 +2202,9 @@ export class SessionDispatchWatcher {
       let unsubscribeMirror: (() => void) | undefined;
       let unsubscribeStatus: (() => void) | undefined;
       let unsubscribeRpcOffers: (() => void) | undefined;
+      let unsubscribeLifecycle: (() => void) | undefined;
       let progressTimer: ReturnType<typeof setInterval> | null = null;
+      let timer: ReturnType<typeof setTimeout> | null = null;
       const waitStartedAt = Date.now();
 
       const finish = (turn: SessionHistoryInput | null) => {
@@ -1844,20 +2212,31 @@ export class SessionDispatchWatcher {
           return;
         }
         settled = true;
-        clearTimeout(timer);
+        if (timer) {
+          clearTimeout(timer);
+        }
         if (progressTimer) {
           clearInterval(progressTimer);
         }
         unsubscribeMirror?.();
         unsubscribeStatus?.();
         unsubscribeRpcOffers?.();
+        unsubscribeLifecycle?.();
         resolve(turn);
       };
+
+      unsubscribeLifecycle = this.subscribeToLifecycleCancel(lifecycleGeneration, () => {
+        finish(null);
+      });
+      if (settled) {
+        return;
+      }
 
       // Mirror updates, RPC offers, and sync completion can arrive together.
       // Serialize their checks because queue promotion mutates the session doc.
       const requestTurnCheck = () => {
-        if (settled) {
+        if (settled || !isActive()) {
+          finish(null);
           return;
         }
         checkRequested = true;
@@ -1869,8 +2248,9 @@ export class SessionDispatchWatcher {
           try {
             while (checkRequested) {
               checkRequested = false;
-              const turn = await this.checkHistoryAndQueue(sessionDoc, currentMeta);
-              if (settled) {
+              const turn = await this.checkHistoryAndQueue(sessionDoc, currentMeta, isActive);
+              if (settled || !isActive()) {
+                finish(null);
                 return;
               }
               if (turn) {
@@ -1905,7 +2285,10 @@ export class SessionDispatchWatcher {
       // attempt — a single early rejoin used to race the web client's
       // background stream creation and lose.
       const scheduleReconnect = (reason: string) => {
-        if (settled || reconnectInFlight) {
+        if (settled || reconnectInFlight || !isActive()) {
+          if (!isActive()) {
+            finish(null);
+          }
           return;
         }
         reconnectInFlight = true;
@@ -1926,8 +2309,11 @@ export class SessionDispatchWatcher {
             `[${sessionId}] Session history room ${reason}; rejoin attempt ${reconnectAttempts} in ${delayMs}ms`
           );
           await SessionDispatchWatcher.sleep(delayMs);
-          if (settled) {
+          if (settled || !isActive()) {
             reconnectInFlight = false;
+            if (!isActive()) {
+              finish(null);
+            }
             return;
           }
           try {
@@ -1938,6 +2324,10 @@ export class SessionDispatchWatcher {
             );
           }
           reconnectInFlight = false;
+          if (!isActive()) {
+            finish(null);
+            return;
+          }
           requestTurnCheck();
           if (settled) {
             return;
@@ -1950,7 +2340,10 @@ export class SessionDispatchWatcher {
       };
 
       const handleRoomStatus = (status: RepoTransportRoomStatus | undefined) => {
-        if (settled || !status) {
+        if (settled || !isActive() || !status) {
+          if (!isActive()) {
+            finish(null);
+          }
           return;
         }
         if (status === 'disconnected' || status === 'error') {
@@ -1958,7 +2351,7 @@ export class SessionDispatchWatcher {
         }
       };
 
-      const timer = SessionDispatchWatcher.setUnrefTimeout(() => {
+      timer = SessionDispatchWatcher.setUnrefTimeout(() => {
         this.deps.logger.warn(
           `[${sessionId}] User turn did not arrive in history after ${
             SessionDispatchWatcher.HISTORY_SYNC_WAIT_TIMEOUT_MS / 1000
@@ -1967,7 +2360,10 @@ export class SessionDispatchWatcher {
         finish(null);
       }, SessionDispatchWatcher.HISTORY_SYNC_WAIT_TIMEOUT_MS);
       progressTimer = setInterval(() => {
-        if (settled) {
+        if (settled || !isActive()) {
+          if (!isActive()) {
+            finish(null);
+          }
           return;
         }
         this.deps.logger.warn(
@@ -1977,6 +2373,11 @@ export class SessionDispatchWatcher {
         );
       }, SessionDispatchWatcher.HISTORY_SYNC_PROGRESS_LOG_MS);
       progressTimer.unref?.();
+
+      if (!isActive()) {
+        finish(null);
+        return;
+      }
 
       // Subscribe before starting Doc Room synchronization. An RPC offer that
       // arrives during join retries is a complete turn source and must preempt
@@ -2011,12 +2412,18 @@ export class SessionDispatchWatcher {
             )}`
           );
         }
-        if (settled) {
+        if (settled || !isActive()) {
+          if (!isActive()) {
+            finish(null);
+          }
           return;
         }
 
         await sessionDoc.waitUntilSynced();
-        if (settled) {
+        if (settled || !isActive()) {
+          if (!isActive()) {
+            finish(null);
+          }
           return;
         }
 
@@ -2024,6 +2431,10 @@ export class SessionDispatchWatcher {
         // session doc. Refresh it only after initial sync, then perform one
         // final serialized source check before honoring a cleared pointer.
         currentMeta = (await sessionDoc.getMetaState()) ?? currentMeta;
+        if (!isActive()) {
+          finish(null);
+          return;
+        }
         if (!this.hasPendingUserTurnSignal(currentMeta)) {
           this.deps.logger.debug(
             `[${sessionId}] Pending user turn pointer cleared during pre-wait sync; exiting wait`
@@ -2116,22 +2527,32 @@ export class SessionDispatchWatcher {
    */
   private async checkHistoryAndQueue(
     sessionDoc: Awaited<ReturnType<LoroDocumentManager['getOrCreateSessionDoc']>>,
-    meta: SessionMeta
+    meta: SessionMeta,
+    isActive: () => boolean = () => true
   ): Promise<SessionHistoryInput | null> {
     const history = await sessionDoc.getHistory();
+    if (!isActive()) {
+      return null;
+    }
     const turn = findNextDispatchableUserTurn(history, meta);
     if (turn) {
       const repaired = await this.maybeRepairAlreadyHandledTurn(sessionDoc, meta, turn, history);
       if (repaired) {
         // The repaired entry no longer matches; re-scan so an older repaired
         // turn cannot mask a genuinely dispatchable newer one.
-        return await this.checkHistoryAndQueue(sessionDoc, meta);
+        return await this.checkHistoryAndQueue(sessionDoc, meta, isActive);
       }
       // The history copy is authoritative once it syncs; drop the RPC copy.
       this.consumeStashedRpcTurn(meta.id, turn.id);
       return turn;
     }
+    if (!isActive()) {
+      return null;
+    }
     const promoted = await this.promoteNextQueuedMessage(sessionDoc, meta, history);
+    if (!isActive()) {
+      return null;
+    }
     if (promoted) {
       this.turnSourceHints.set(`${meta.id}:${promoted.id}`, 'queue');
       return promoted;

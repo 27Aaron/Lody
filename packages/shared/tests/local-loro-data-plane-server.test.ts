@@ -97,11 +97,13 @@ function flockEntriesOf(messages: LocalLoroDataPlaneServerMessage[]): Record<str
 describe('LocalLoroDataPlaneServer doc room hydration signals', () => {
   it('notifies doc room joins and publishes room status to subscribers', async () => {
     const onDocRoomJoin = vi.fn();
+    const onDocRoomLeave = vi.fn();
     const server = new LocalLoroDataPlaneServer({
       workspaceId: WORKSPACE_ID,
       resolveDoc: async () => new LoroDoc(),
       resolveFlockDoc: async () => new CountingFlock(),
       onDocRoomJoin,
+      onDocRoomLeave,
     });
     const { connection, received } = makeConnection();
     const room = { scope: 'doc' as const, docId: 'session-1' };
@@ -130,6 +132,17 @@ describe('LocalLoroDataPlaneServer doc room hydration signals', () => {
         status: 'connecting',
       })
     );
+
+    await server.handleMessage(connection, {
+      type: 'leave',
+      protocolVersion: LOCAL_LORO_DATA_PLANE_PROTOCOL_VERSION,
+      workspaceId: WORKSPACE_ID,
+      peerId: 'peer-1',
+      room,
+    });
+    await settle();
+
+    expect(onDocRoomLeave).toHaveBeenCalledWith('session-1');
   });
 
   it('notifies flock room joins and leaves for local-first cloud bridging', async () => {

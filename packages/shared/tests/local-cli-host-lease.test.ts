@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   acquireLocalCliHostLease,
   getLocalCliHostEndpoint,
+  inspectLocalCliHost,
   requestLocalCliHostShutdown,
   type LocalCliHostEndpoint,
   type LocalCliHostLease,
@@ -73,6 +74,36 @@ describe('local CLI host lease', () => {
     expect(replacement.status).toBe('acquired');
     if (replacement.status === 'acquired') leases.push(replacement.lease);
   });
+
+  it.runIf(process.platform !== 'win32')(
+    'keeps serving after a health probe resets its accepted socket',
+    async () => {
+      const endpoint = await createEndpoint();
+      if (endpoint.kind !== 'tcp') throw new Error('Expected a TCP test endpoint');
+      const result = await acquireLocalCliHostLease({
+        endpoint,
+        instanceId: 'reset-survivor',
+        mode: 'electron',
+      });
+      expect(result.status).toBe('acquired');
+      if (result.status !== 'acquired') return;
+      leases.push(result.lease);
+
+      const socket = net.createConnection({ host: endpoint.host, port: endpoint.port });
+      await new Promise<void>((resolve, reject) => {
+        socket.once('data', () => {
+          socket.resetAndDestroy();
+          resolve();
+        });
+        socket.once('error', reject);
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      await expect(inspectLocalCliHost(endpoint)).resolves.toMatchObject({
+        instanceId: 'reset-survivor',
+      });
+    }
+  );
 
   it('authenticates daemon shutdown control without exposing the token', async () => {
     const endpoint = await createEndpoint();

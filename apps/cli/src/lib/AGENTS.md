@@ -90,7 +90,15 @@ control-plane path is DEPRECATED; do not add functionality to it.
   into `repo.joinFlockDocRoom()` and
   released on the last local peer leave; Code Collab `fi`/`fis` and machine flock
   docs must not rely on `syncOnce()` as live cloud subscription. These cloud
-  hydrates (and the session-doc equivalent) are background data relays ONLY:
+  hydrates are background data relays ONLY. A renderer-joined Session Doc uses a
+  separate four-way bounded, one-shot raw `joinDocRoom` reconciliation: never create a
+  `SessionDocument`, release after first remote sync or local leave, and unload the repo
+  doc after the last local peer leaves unless dispatch has activated the Session. This
+  preserves CLI-authored offline backfill without retaining every historical cloud room.
+  Raw join/leave and `SessionDocument` activation are serialized per doc id: activation
+  must wait for an already-started `repo.unloadDoc`, then open a fresh doc, so an in-flight
+  renderer-only release cannot evict the handle retained by dispatch.
+  For both room kinds,
   the CLI's cloud room status is never pushed to renderers as local room
   health — offline cloud failures must not poison the renderer's local
   reconnect loop (`specs/local-first-two-plane.md`). There is NO polling
