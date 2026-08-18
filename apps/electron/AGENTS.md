@@ -106,6 +106,26 @@ Root `AGENTS.md` also applies.
   hyphenated names used by Chromium `.pak` files. The after-pack assertion for
   `locales/en-US.pak` is a release gate.
 
+## Release packaging and auto-update
+
+- Always package through `scripts/package-electron.mjs` (`pnpm run package -- <args>`),
+  never `electron-builder` directly. It injects the released version via
+  `extraMetadata` so `package.json` is a fallback rather than the release source of
+  truth, and it forces `--publish never` unless a caller opts in.
+- The `publish` block in `electron-builder.yml` is what gives the public build an
+  update feed: `electron.vite.config.ts` strips every `VITE_*` value, so
+  `AppUpdaterService` finds no `VITE_ELECTRON_UPDATE_URL` and falls back to the
+  packaged `app-update.yml`. That block is also what makes electron-builder emit
+  `latest*.yml` at all. Its tag contract is `v${version}`.
+- Artifact names must stay space-free. GitHub Releases rewrites spaces in uploaded
+  asset names to periods, which would desynchronize them from the names recorded in
+  `latest*.yml`. Do not reintroduce `${productName}` into an `artifactName`.
+- macOS releases must be signed and notarized. Squirrel.Mac will not install an update
+  it cannot validate against the running app's signature, so an unsigned macOS build
+  silently has no working auto-update. Windows and Linux do not have this constraint.
+- CI packages Linux as `AppImage deb` only; `snap` stays in the target list for local
+  builds because it needs snapcraft on the machine.
+
 ## Verification
 
 - Run the repository checks after source changes. Packaging/native-dependency changes

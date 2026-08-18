@@ -1,0 +1,58 @@
+name: Desktop build
+
+# Guards the standalone-clone path that the release workflow depends on.
+#
+# Day-to-day development installs this tree from the parent composition
+# workspace, so nothing else ever exercises `pnpm install --frozen-lockfile`
+# against pnpm-lock.yaml here. Without this job a lockfile drift only surfaces
+# when a release tag is pushed, which is the worst possible time to find it.
+#
+# Packaging with `--dir` is deliberate: it is far cheaper than producing
+# installers, but it still runs the beforePack/afterPack hooks, which stage the
+# embedded CLI's native bindings and smoke-test the packed CLI runtime.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-desktop-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: 22
+  COREPACK_ENABLE_DOWNLOAD_PROMPT: 0
+
+jobs:
+  desktop-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build bundled CLI and renderer
+        run: pnpm --dir apps/electron run build
+
+      - name: Package unpacked
+        run: pnpm --dir apps/electron run package -- --dir --publish never

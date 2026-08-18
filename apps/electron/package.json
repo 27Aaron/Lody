@@ -7,6 +7,7 @@
   "description": "Lody Desktop - Electron app",
   "main": "./out/main/index.js",
   "author": "LodyAI",
+  "homepage": "https://github.com/loro-dev/lody-oss",
   "scripts": {
     "format": "prettier --write .",
     "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --test src/main/reload-shortcut.test.mjs src/main/local-platform-snapshot.test.mjs src/main/services/local-path-launcher-core.test.mjs src/main/services/image-export-core.test.mjs src/main/services/public-browser-state.test.mjs src/main/services/app-updater-metadata.test.mjs src/main/services/loro-data-plane-relay.test.mjs src/renderer/renderer-csp.test.mjs src/renderer/src/auth-callback-transaction.test.mjs src/renderer/src/auth-query-generation.test.mjs",
@@ -21,10 +22,11 @@
     "build": "pnpm run build:cli && pnpm run sync:cli && pnpm run build:app",
     "postinstall": "node scripts/postinstall.mjs",
     "sync:cli": "node scripts/sync-cli-dist.mjs",
-    "build:unpack": "pnpm run build && electron-builder --config electron-builder.yml --dir",
-    "build:win": "pnpm run build && electron-builder --config electron-builder.yml --win",
-    "build:mac": "pnpm run build && electron-builder --config electron-builder.yml --mac",
-    "build:linux": "pnpm run build && electron-builder --config electron-builder.yml --linux"
+    "package": "node scripts/package-electron.mjs",
+    "build:unpack": "pnpm run build && node scripts/package-electron.mjs --dir",
+    "build:win": "pnpm run build && node scripts/package-electron.mjs --win",
+    "build:mac": "pnpm run build && node scripts/package-electron.mjs --mac",
+    "build:linux": "pnpm run build && node scripts/package-electron.mjs --linux"
   },
   "dependencies": {
     "@better-auth/electron": "catalog:",
