@@ -1077,6 +1077,12 @@ export type ChatFailedReason =
   | 'memory_pressure'
   | 'acp_not_ready'
   | 'agent_disconnected'
+  // The prompt returned normally but the agent never emitted a single ACP
+  // update, so the turn produced nothing the user can see. Adapters are meant
+  // to surface an upstream failure as a JSON-RPC error; some swallow it and
+  // resolve the prompt instead (observed: an over-limit context answered with
+  // HTTP 400), which would otherwise be recorded as an ordinary completion.
+  | 'agent_no_output'
   | 'turn_pre_prompt_failed'
   | 'message_delivery_failed'
   | 'machine_access_denied' // requester is not authorized to use this machine (definitive backend deny)

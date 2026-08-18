@@ -1953,6 +1953,11 @@ const ChatFailedNoticeView = ({
           'sessions.systemNotices.chatFailed.agentDisconnected',
           'Agent disconnected unexpectedly'
         );
+      case 'agent_no_output':
+        return t(
+          'sessions.systemNotices.chatFailed.agentNoOutput',
+          'The agent ended the turn without producing any output — you can retry your message'
+        );
       case 'turn_pre_prompt_failed':
         return t(
           'sessions.systemNotices.chatFailed.turnPrePromptFailed',

@@ -1074,6 +1074,139 @@ describe('SessionExecutionService', () => {
     expect(notifySessionCompleted).toHaveBeenCalledTimes(1);
   });
 
+  // An adapter that swallows an upstream failure (an over-context request answered
+  // with HTTP 400 is the observed case) resolves the prompt as if the turn had
+  // succeeded. Without the no-output guard that walked the whole success path and
+  // left the user with an unanswered message and no error anywhere.
+  const runSilentPromptTurn = async (options: {
+    sessionId: string;
+    hasPromptOutputForTurn: boolean;
+  }) => {
+    let history: Array<Record<string, unknown>> = [
+      {
+        id: 'turn-user-1',
+        role: 'user',
+        status: 'pending',
+        read: false,
+      },
+    ];
+    const agentClient = {
+      isCreated: vi.fn(() => true),
+      cancel: vi.fn(async () => {}),
+      prompt: vi.fn(async () => ({ stopReason: 'end_turn' })),
+      currentModel: undefined,
+    };
+    const activeSession = {
+      sessionId: options.sessionId as SessionId,
+      acpSessionId: 'acp-silent' as ACPSessionId,
+      agentClient,
+      terminalManager: {} as unknown,
+      getWorkdir: () => '/tmp',
+      getHostWorkdir: () => '/tmp',
+      getParentSessionId: () => undefined,
+      exec: vi.fn(async () => ''),
+      terminate: vi.fn(async () => {}),
+      updateGitIdentity: vi.fn(),
+      createAgent: vi.fn(async () => 'acp-silent'),
+      applyExecutionPlaneLimits: vi.fn(async () => {}),
+    };
+    const sessionDoc = {
+      getMetaState: vi.fn(async () => ({ isArchived: false })),
+      setStatus: vi.fn(async () => {}),
+      setLastMessageAt: vi.fn(async () => {}),
+      getHistory: vi.fn(async () => history),
+      updateHistory: vi.fn(async (updater: (prev: typeof history) => typeof history) => {
+        history = updater(history);
+      }),
+    };
+    const notifySessionCompleted = vi.fn(async () => {});
+    const upsertDocMeta = vi.fn(async () => {});
+    const deps = createBaseDeps({
+      sessionManager: {
+        getSession: vi.fn(() => activeSession),
+        getPendingSession: vi.fn(() => null),
+        createSession: vi.fn(),
+        setSessionError: vi.fn(),
+        terminateSession: vi.fn(),
+        refreshGhTokenForSession: vi.fn(async () => {}),
+      } as unknown as SessionManager,
+      workspaceDocument: {
+        repo: {
+          upsertDocMeta,
+          getDocMeta: vi.fn(async () => undefined),
+        },
+        getOrCreateSessionDoc: vi.fn(async () => sessionDoc),
+        updateAcpCapabilities: vi.fn(async () => {}),
+      } as unknown as LoroDocumentManager,
+      turnFinalization: {
+        ...createBaseDeps({}).turnFinalization,
+        notifySessionCompleted,
+      },
+      observePromptOutputForTurn: vi.fn(() => options.hasPromptOutputForTurn),
+    });
+
+    const service = new SessionExecutionService(deps);
+    await service.continueSession({
+      type: 'session/chat',
+      sessionId: options.sessionId as SessionId,
+      machineId: 'machine-1',
+      workspaceId: 'workspace-1' as WorkspaceId,
+      project: undefined,
+      acpSessionConfig: { prompt: 'hi', cliType: 'builtin', agentType: 'codex' },
+      userTurnId: 'turn-user-1',
+      userId: 'user-1',
+      userName: 'User',
+      userEmail: 'user@example.com',
+    });
+
+    return {
+      deps,
+      sessionDoc,
+      notifySessionCompleted,
+      upsertDocMeta,
+      agentClient,
+      getHistory: () => history,
+    };
+  };
+
+  it('fails a turn whose prompt completed without emitting any agent output', async () => {
+    const { deps, sessionDoc, notifySessionCompleted, upsertDocMeta, agentClient, getHistory } =
+      await runSilentPromptTurn({
+        sessionId: 'session-silent-turn',
+        hasPromptOutputForTurn: false,
+      });
+
+    expect(agentClient.prompt).toHaveBeenCalled();
+    expect(deps.recordChatFailure).toHaveBeenCalledWith(
+      sessionDoc,
+      'agent_no_output',
+      expect.stringContaining('without producing any output')
+    );
+    expect(getHistory()[0]?.status).toBe('failed');
+    // Claiming the session finished would contradict the failure shown in chat.
+    expect(notifySessionCompleted).not.toHaveBeenCalled();
+    // The pointer still advances: the prompt was delivered, so re-dispatching it
+    // would repeat the same silent failure forever.
+    expect(upsertDocMeta).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        lastHandledUserMsgId: 'turn-user-1',
+        processingUserMsgId: undefined,
+      })
+    );
+  });
+
+  it('leaves a turn that emitted agent output on the normal completion path', async () => {
+    const { deps, notifySessionCompleted, getHistory } = await runSilentPromptTurn({
+      sessionId: 'session-output-turn',
+      hasPromptOutputForTurn: true,
+    });
+
+    expect(deps.recordChatFailure).not.toHaveBeenCalled();
+    expect(getHistory()[0]?.status).toBe('handled');
+    expect(notifySessionCompleted).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects a chat turn before prompt when memory pressure persists', async () => {
     let history: Array<Record<string, unknown>> = [
       {

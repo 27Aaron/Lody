@@ -3182,6 +3182,8 @@ export class MessageHandler {
       getActiveTurnId: (sessionId) => this.store.getActiveTurnId(sessionId),
       clearActiveTurnId: (sessionId, turnId) => this.clearActiveTurnIdIfMatches(sessionId, turnId),
       hasPromptOutputForTurn: (sessionId, turnId) => this.hasPromptOutputForTurn(sessionId, turnId),
+      observePromptOutputForTurn: (sessionId, turnId) =>
+        this.observePromptOutputForTurn(sessionId, turnId),
       buildAcpPromptBlocks: async (args) => await this.buildAcpPromptBlocks(args),
       applyAcpModeAndModel: async (session, acpConfig) =>
         await this.applyAcpModeAndModel(
@@ -9849,6 +9851,20 @@ export class MessageHandler {
     const hasFlushedOutput =
       state.acpFlushCountInTurn > 0 && this.store.getTurnId(sessionId) === turnId;
     return hasBufferedOutput || hasFlushedOutput;
+  }
+
+  /**
+   * Same observation as `hasPromptOutputForTurn`, but it distinguishes "this turn
+   * emitted nothing" from "we cannot tell". The two callers need opposite
+   * conservative answers on a missing session: prompt replay must refuse to
+   * retry, while the no-output guard must not accuse a turn it could not observe.
+   * `undefined` means unobservable — the transient state is gone.
+   */
+  observePromptOutputForTurn(sessionId: SessionId, turnId: string): boolean | undefined {
+    if (!this.store.has(sessionId)) {
+      return undefined;
+    }
+    return this.hasPromptOutputForTurn(sessionId, turnId);
   }
 
   /**

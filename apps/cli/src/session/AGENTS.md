@@ -112,6 +112,18 @@ delegation proofs or a shared-machine gate without a new product and security de
   DeepSeek Harness persistence compression mismatches are a distinct
   `acp_session_storage_incompatible` failure, not a generic internal error; keep
   matching narrow to the backend's artifact/compression diagnostic.
+  INVARIANT: a prompt that RESOLVES is not proof the turn succeeded. Nothing reads
+  `PromptResponse.stopReason`, and an adapter may swallow an upstream failure and
+  resolve normally (observed: an over-context request answered with HTTP 400, kept
+  only in the agent's own session file), so `handleTurnError` never sees it. The
+  no-output guard is the backstop: `turnProducedVisibleOutput` is read right after
+  the prompt returns — before `finalizeTurn` clears the turn's ACP update state —
+  and a turn that emitted no ACP update at all takes `recordSilentTurnFailure`
+  (`agent_no_output` notice + `markTurnFailed`) instead of `setDispatchHandled`,
+  and skips the completion notification. It still runs the full finalization
+  (diff stats, PR detection, auto-commit) and still ADVANCES the dispatch pointer:
+  the prompt was delivered, so re-dispatching would spin the same silent failure.
+  A missing `hasPromptOutputForTurn` dep fails open — never accuse a turn on a guess.
   Code Collab v1 turn markers and history fileDiff capture were removed. v2 may
   persist exact per-turn path/add/del caches derived from the CLI-local ACP evidence
   store after ACP finalization; diff content still comes only from the CLI store.

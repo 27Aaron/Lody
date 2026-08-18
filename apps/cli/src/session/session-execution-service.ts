@@ -130,9 +130,26 @@ type FinalizeTurnContext = {
   abortSignal?: AbortSignal;
   onAutoPromptStart?: () => void | Promise<void>;
   onAutoPromptEnd?: () => void | Promise<void>;
+  /**
+   * False when the prompt returned without the agent ever emitting output. The
+   * turn is still finalized (diff stats, PR detection, auto-commit all stay
+   * correct), but it must not be announced as a completed answer.
+   */
+  producedOutput?: boolean;
 };
 
 const TURN_FINALIZATION_STAGE_WARN_MS = 5_000;
+
+/**
+ * Shown in chat when a turn ends with no agent output at all. It names the most
+ * common upstream cause without asserting it, because the adapter discarded the
+ * real error before we could classify it.
+ */
+const SILENT_TURN_FAILURE_MESSAGE =
+  'The agent ended the turn without producing any output. The model call most likely failed ' +
+  'upstream (a context-length or rate-limit rejection is the usual cause) and the agent ' +
+  'reported it as a normal completion instead of an error. Retry your message, or start a ' +
+  'new session if this conversation has grown too long.';
 
 type TurnFinalizationEffects = {
   finalizeACPState: (sessionId: SessionId, turnId?: string) => Promise<void>;
@@ -457,6 +474,12 @@ export type SessionExecutionServiceDeps = {
    * visible agent output, because the adapter may already have acted on it.
    */
   hasPromptOutputForTurn?: (sessionId: SessionId, turnId: string) => boolean;
+  /**
+   * Same observation, but `undefined` when the session's transient state is gone
+   * and the answer is unknowable. The no-output guard needs that distinction:
+   * "emitted nothing" fails the turn, "cannot tell" must not.
+   */
+  observePromptOutputForTurn?: (sessionId: SessionId, turnId: string) => boolean | undefined;
   fetchAcpCapabilities: (
     cliType: AgentConfigCliType,
     agentType: string,
@@ -2459,6 +2482,15 @@ export class SessionExecutionService {
       return;
     }
 
+    // A turn that produced nothing is reported as a failure in chat, so pushing
+    // "your session finished" for it would contradict what the user sees.
+    if (ctx.producedOutput === false) {
+      this.deps.logger.debug(
+        `[${sessionId}] Turn ${turnId} produced no agent output; skipping session completion notification`
+      );
+      return;
+    }
+
     await this.runTurnFinalizationStage(sessionId, turnId, 'notifySessionCompleted', async () => {
       await this.deps.turnFinalization.notifySessionCompleted(sessionId, userId, turnId);
     });
@@ -3087,6 +3119,55 @@ export class SessionExecutionService {
       processingUserMsgId: undefined,
       lastMissingHistoryUserMsgId: undefined,
     });
+  }
+
+  /**
+   * Did this turn emit anything the user can see?
+   *
+   * An ACP prompt that resolves without a single `session/update` produced no
+   * answer, no tool call, nothing. The protocol says an upstream failure should
+   * come back as a JSON-RPC error — `handleTurnError` classifies those — but an
+   * adapter is free to swallow it and resolve the prompt normally, and some do
+   * (observed: an over-context request answered with HTTP 400, recorded only in
+   * the agent's own session file). Without this check that turn walks the entire
+   * success path: `Session chat completed`, status idle, `lastHandledUserMsgId`
+   * advanced, and NOTHING in the chat — the user sees an unanswered message and
+   * every retry fails the same silent way.
+   *
+   * Must be read while the turn still owns the ACP update state, i.e. right
+   * after the prompt returns and before `finalizeTurn` clears it.
+   */
+  private turnProducedVisibleOutput(sessionId: SessionId, turnId: string): boolean {
+    // No observer wired, or transient state already gone: we cannot tell, and a
+    // guess here would fail a turn that actually answered. Fail open.
+    return this.deps.observePromptOutputForTurn?.(sessionId, turnId) ?? true;
+  }
+
+  /**
+   * Terminal bookkeeping for a turn that ended without output: a visible notice,
+   * a `failed` user turn, and the dispatch pointer still advanced. Advancing it
+   * is deliberate — the prompt was delivered and re-dispatching it would spin
+   * the same silent failure forever; the notice is what makes it visible.
+   */
+  private async recordSilentTurnFailure(options: {
+    sessionId: SessionId;
+    sessionDoc: SessionDocument;
+    turnId: string;
+    userTurnId?: string;
+  }): Promise<void> {
+    this.deps.logger.warn(
+      `[${options.sessionId}] Turn ${options.turnId} completed without any agent output; ` +
+        'recording it as a failed turn instead of a silent completion'
+    );
+    this.captureTurnFailed(options.sessionId, options.turnId, 'agent_no_output', false);
+    await this.deps.recordChatFailure(
+      options.sessionDoc,
+      'agent_no_output',
+      SILENT_TURN_FAILURE_MESSAGE
+    );
+    if (options.userTurnId) {
+      await this.markTurnFailed(options.sessionId, options.sessionDoc, options.userTurnId);
+    }
   }
 
   private async markTurnFailed(
@@ -3785,6 +3866,8 @@ export class SessionExecutionService {
         const completedTurnId = runtime.turnId;
         const completedUserTurnId = runtime.userTurnId ?? executionUserTurnId;
         const completedRequesterUserId = runtime.requesterUserId ?? userId;
+        // Read before finalization clears the turn's ACP update state.
+        const producedOutput = self.turnProducedVisibleOutput(sessionId, completedTurnId);
 
         yield* self.tryPromise(() =>
           traceAsync(
@@ -3819,6 +3902,7 @@ export class SessionExecutionService {
                 turnStartWorkingTreeDiff,
                 userId: completedRequesterUserId,
                 project,
+                producedOutput,
                 isTurnCancelled: () => self.isTurnCancelled(sessionId, completedTurnId),
                 abortSignal: signal,
                 onAutoPromptStart: async () => {
@@ -3846,7 +3930,26 @@ export class SessionExecutionService {
 
         yield* abortIfCancelled();
 
-        if (completedUserTurnId) {
+        if (!producedOutput) {
+          yield* self.tryPromise(() =>
+            traceAsync(
+              self.deps.logger,
+              'execution.record_silent_turn_failure',
+              {
+                sessionId,
+                turnId: completedTurnId,
+                ...(completedUserTurnId ? { userTurnId: completedUserTurnId } : {}),
+              },
+              async () =>
+                await self.recordSilentTurnFailure({
+                  sessionId,
+                  sessionDoc,
+                  turnId: completedTurnId,
+                  ...(completedUserTurnId ? { userTurnId: completedUserTurnId } : {}),
+                })
+            )
+          );
+        } else if (completedUserTurnId) {
           yield* self.tryPromise(() =>
             traceAsync(
               self.deps.logger,
@@ -4415,6 +4518,8 @@ export class SessionExecutionService {
           const completedTurnId = runtime.turnId;
           const completedUserTurnId = runtime.userTurnId ?? userTurnId;
           const completedRequesterUserId = runtime.requesterUserId ?? sessionConfig.requesterUserId;
+          // Read before finalization clears the turn's ACP update state.
+          const producedOutput = self.turnProducedVisibleOutput(sessionId, completedTurnId);
 
           yield* self.tryPromise(() =>
             traceAsync(
@@ -4449,6 +4554,7 @@ export class SessionExecutionService {
                   turnStartWorkingTreeDiff,
                   userId: completedRequesterUserId,
                   project,
+                  producedOutput,
                   isTurnCancelled: () => self.isTurnCancelled(sessionId, completedTurnId),
                   abortSignal: signal,
                   onAutoPromptStart: async () => {
@@ -4476,7 +4582,26 @@ export class SessionExecutionService {
 
           yield* abortIfCancelled();
 
-          if (completedUserTurnId) {
+          if (!producedOutput) {
+            yield* self.tryPromise(() =>
+              traceAsync(
+                self.deps.logger,
+                'execution.record_silent_turn_failure',
+                {
+                  sessionId,
+                  turnId: completedTurnId,
+                  ...(completedUserTurnId ? { userTurnId: completedUserTurnId } : {}),
+                },
+                async () =>
+                  await self.recordSilentTurnFailure({
+                    sessionId,
+                    sessionDoc,
+                    turnId: completedTurnId,
+                    ...(completedUserTurnId ? { userTurnId: completedUserTurnId } : {}),
+                  })
+              )
+            );
+          } else if (completedUserTurnId) {
             yield* self.tryPromise(() =>
               traceAsync(
                 self.deps.logger,

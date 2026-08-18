@@ -2838,6 +2838,7 @@ export const ChatFailedReasonSchema = z.enum([
   'memory_pressure',
   'acp_not_ready',
   'agent_disconnected',
+  'agent_no_output',
   'turn_pre_prompt_failed',
   'message_delivery_failed',
   'machine_access_denied',
