@@ -138,6 +138,28 @@ const createSessionConfig = (
   ...overrides,
 });
 
+type PreparedTestCompatibility = {
+  launch: SessionLaunchConfig | undefined;
+  mcpServerIds: string[];
+};
+
+type PreparedTestResource = SessionPreparationResource & {
+  config: Pick<SessionConfig, 'mcpServerIds'>;
+  compatibility: PreparedTestCompatibility;
+  readCurrentLaunchConfig?: () => {
+    config: SessionLaunchConfig | undefined;
+    source: 'agent-config';
+  };
+};
+
+const createPreparedTestCompatibility = (
+  launchSource: Partial<SessionLaunchConfig>,
+  mcpServerIds: string[] = []
+): PreparedTestCompatibility => ({
+  launch: buildSessionLaunchConfig(launchSource),
+  mcpServerIds,
+});
+
 const deferred = <T>() => {
   let resolvePromise!: (value: T) => void;
   const promise = new Promise<T>((resolve) => {
@@ -862,11 +884,9 @@ describe('SessionManager preparation compatibility', () => {
     );
     const sessionId = 'missing-agent-config-cold-fallback' as SessionId;
     const cleanup = deferred<void>();
-    type PreparedTestResource = SessionPreparationResource & {
-      compatibility: SessionLaunchConfig | undefined;
-    };
     const prepared = {
-      compatibility: buildSessionLaunchConfig({}),
+      config: { mcpServerIds: [] },
+      compatibility: createPreparedTestCompatibility({}),
       initialized: Promise.resolve(),
       sessionReady: Promise.resolve(),
       dispose: vi.fn(async () => await cleanup.promise),
@@ -916,11 +936,9 @@ describe('SessionManager preparation compatibility', () => {
     const sessionId = 'changed-project-cold-fallback' as SessionId;
     const agentConfigId = 'agent-1' as AgentConfigId;
     const cleanup = deferred<void>();
-    type PreparedTestResource = SessionPreparationResource & {
-      compatibility: SessionLaunchConfig | undefined;
-    };
     const prepared = {
-      compatibility: buildSessionLaunchConfig({}),
+      config: { mcpServerIds: [] },
+      compatibility: createPreparedTestCompatibility({}),
       initialized: Promise.resolve(),
       sessionReady: Promise.resolve(),
       dispose: vi.fn(async () => await cleanup.promise),
@@ -989,11 +1007,9 @@ describe('SessionManager preparation compatibility', () => {
     );
     const sessionId = 'empty-launch-config' as SessionId;
     const agentConfigId = 'agent-1' as AgentConfigId;
-    type PreparedTestResource = SessionPreparationResource & {
-      compatibility: SessionLaunchConfig | undefined;
-    };
     const prepared = {
-      compatibility: buildSessionLaunchConfig({ env: {} }),
+      config: { mcpServerIds: [] },
+      compatibility: createPreparedTestCompatibility({ env: {} }),
       initialized: Promise.resolve(),
       sessionReady: Promise.resolve(),
       dispose: vi.fn(async () => undefined),
@@ -1034,7 +1050,7 @@ describe('SessionManager preparation compatibility', () => {
     await expect(internals.createSessionFromPreparationOrCold(durableConfig)).resolves.toBe(
       adoptedSession
     );
-    expect(finishPreparedSession).toHaveBeenCalledWith(durableConfig, prepared);
+    expect(finishPreparedSession).toHaveBeenCalledWith(durableConfig, prepared, undefined);
     expect(coldCreate).not.toHaveBeenCalled();
   });
 
@@ -1054,15 +1070,9 @@ describe('SessionManager preparation compatibility', () => {
     const agentConfigId = 'agent-1' as AgentConfigId;
     const preparedConfig = buildSessionLaunchConfig({ env: { PREPARED: '1' } });
     let currentConfig = preparedConfig;
-    type PreparedTestResource = SessionPreparationResource & {
-      compatibility: SessionLaunchConfig | undefined;
-      readCurrentLaunchConfig: () => {
-        config: SessionLaunchConfig | undefined;
-        source: 'agent-config';
-      };
-    };
     const prepared = {
-      compatibility: preparedConfig,
+      config: { mcpServerIds: [] },
+      compatibility: createPreparedTestCompatibility(preparedConfig ?? {}),
       readCurrentLaunchConfig: () => ({ config: currentConfig, source: 'agent-config' }),
       initialized: Promise.resolve(),
       sessionReady: Promise.resolve(),

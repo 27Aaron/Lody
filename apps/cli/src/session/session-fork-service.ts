@@ -187,6 +187,7 @@ export class SessionForkService {
       forkOperationStore: SessionForkOperationStore;
       isSourceBusy(sessionId: SessionId): boolean;
       inspectGitWorkdir?: (workdir: string) => Promise<{ dirty: boolean; headSha: string }>;
+      resolveGitBranch?: (workdir: string) => Promise<string | undefined>;
     }
   ) {}
 
@@ -968,12 +969,17 @@ export class SessionForkService {
           null
         );
       }
-      const branch = await execFileAsync('git', ['branch', '--show-current'], {
-        cwd: targetSession.getWorkdir(),
-        windowsHide: true,
-        timeout: 10_000,
-      });
-      const branchName = branch.stdout.trim() || targetMeta.baseBranch;
+      const sessionWorkdir = targetSession.getWorkdir();
+      const resolvedBranch = this.deps.resolveGitBranch
+        ? await this.deps.resolveGitBranch(sessionWorkdir)
+        : (
+            await execFileAsync('git', ['branch', '--show-current'], {
+              cwd: sessionWorkdir,
+              windowsHide: true,
+              timeout: 10_000,
+            })
+          ).stdout.trim() || undefined;
+      const branchName = resolvedBranch ?? targetMeta.baseBranch;
       // Record the real branch name so a crash inside the commit block can
       // still republish complete meta from the marker. Best-effort: the marker
       // stays valid without it.

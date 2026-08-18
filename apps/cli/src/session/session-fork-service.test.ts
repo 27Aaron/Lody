@@ -200,6 +200,7 @@ function createForkHarness(
           headSha: options.worktree!.headSha,
         }))
       : undefined,
+    resolveGitBranch: vi.fn(async () => 'lody/target-session'),
   });
 
   return {
@@ -597,7 +598,7 @@ describe('SessionForkService durability boundary', () => {
     // The saga back-fills the real branch name once git answers.
     await vi.waitFor(() =>
       expect(harness.forkOperationStore.record).toHaveBeenCalledWith(
-        expect.objectContaining({ branchName: expect.any(String) })
+        expect.objectContaining({ branchName: 'lody/target-session' })
       )
     );
     await vi.waitFor(() => expect(harness.markers).toEqual([]));
