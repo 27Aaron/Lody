@@ -1,4 +1,5 @@
 import type { ReactNode, Ref } from 'react';
+import type { DropZone } from '@/hooks/use-drop-zone';
 import { cn } from '@/lib/utils';
 import { isElectronRenderer, isMacOSElectronRenderer, useElectronFullscreen } from '@/lib/electron';
 import { getSessionChatInputAreaShellClassName } from '@/components/sessions/session-chat-input-area';
@@ -11,6 +12,9 @@ export type WebChatLandingScreenProps = {
   noMachineHint?: ReactNode;
   agentConfigHint?: ReactNode;
   leftSidebarExpandSlot?: ReactNode;
+  /** Page-level drop target (a sidebar session dragged onto the new chat). */
+  dropActive?: boolean;
+  dropHandlers?: DropZone['handlers'];
   /** Scope root for keyboard navigation — wraps the title, context switch and composer
    *  so arrow/Esc nav covers the config controls but not the surrounding page chrome. */
   navRootRef?: Ref<HTMLDivElement>;
@@ -24,6 +28,8 @@ export function WebChatLandingScreen({
   agentConfigHint,
   leftSidebarExpandSlot,
   navRootRef,
+  dropActive = false,
+  dropHandlers,
 }: WebChatLandingScreenProps) {
   const isElectron = isElectronRenderer();
   const isElectronFullscreen = useElectronFullscreen();
@@ -34,8 +40,11 @@ export function WebChatLandingScreen({
         'relative flex h-full w-full flex-1 flex-col overflow-hidden',
         'bg-background text-foreground',
         isElectron &&
-          'select-none [&_input]:select-text [&_textarea]:select-text [&_[contenteditable]]:select-text'
+          'select-none [&_input]:select-text [&_textarea]:select-text [&_[contenteditable]]:select-text',
+        // Same affordance as the conversation page's drop state.
+        dropActive && 'ring-2 ring-inset ring-primary/25'
       )}
+      {...dropHandlers}
     >
       {leftSidebarExpandSlot != null ? (
         <div

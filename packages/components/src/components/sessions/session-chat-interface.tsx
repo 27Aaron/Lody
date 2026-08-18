@@ -9,7 +9,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type DragEvent,
 } from 'react';
 import { useOpenSettings } from '../../hooks/use-open-settings';
 import { v4 as uuidv4 } from 'uuid';
@@ -48,6 +47,11 @@ import { isMac } from '@/lib/commands/platform';
 import { matchesKeyboardEvent, parseBinding } from '@/lib/commands/key-matcher';
 import { isSessionContextCompacting } from '@/lib/session-context-compaction';
 import { hasFileTransfer, getFilesFromDataTransfer } from '@/lib/file-drop';
+import {
+  hasAcceptableSessionMentionTransfer,
+  readSessionMentionDragSessionId,
+} from '@/lib/session-mention-drag';
+import { mergeDropZoneHandlers, useDropZone } from '@/hooks/use-drop-zone';
 import { SessionChatInputArea, type SessionChatInputAreaHandle } from './session-chat-input-area';
 import { useSessionMcpSelection } from '@/hooks/use-session-mcp-selection';
 import { MessageQueueDisplay, shouldRequestNativeQueueSteer } from './message-queue';
@@ -2178,8 +2182,6 @@ export const SessionChatInterface = memo(
     const deferredSearchQuery = useDeferredValue(searchQuery);
     const [activeSearchResultIndex, setActiveSearchResultIndex] = useState(0);
     const lastSearchAnalyticsKeyRef = useRef<string | null>(null);
-    const pageImageDragDepthRef = useRef(0);
-    const [isPageImageDragActive, setIsPageImageDragActive] = useState(false);
 
     const runtime = useAtomValue(activeWorkspaceRuntimeAtom);
     const queuedMessageBehavior = useAtomValue(queuedMessageBehaviorAtom);
@@ -3060,65 +3062,37 @@ export const SessionChatInterface = memo(
       setActiveSearchResultIndex(0);
     }, []);
 
-    // ── Page-level image drag-and-drop ──────────────────────────────────
-    const canHandlePageImageDrop = !isArchivedSession && !isMobile && !hideMessageArea;
-    const resetPageImageDragState = useCallback(() => {
-      pageImageDragDepthRef.current = 0;
-      setIsPageImageDragActive(false);
-    }, []);
-    const handlePageImageDragEnter = useCallback(
-      (event: DragEvent<HTMLDivElement>) => {
-        if (!canHandlePageImageDrop || !hasFileTransfer(event.dataTransfer)) {
-          return;
-        }
-        event.preventDefault();
-        event.stopPropagation();
-        event.dataTransfer.dropEffect = 'copy';
-        pageImageDragDepthRef.current += 1;
-        setIsPageImageDragActive(true);
-      },
-      [canHandlePageImageDrop]
-    );
-    const handlePageImageDragOver = useCallback(
-      (event: DragEvent<HTMLDivElement>) => {
-        if (!canHandlePageImageDrop || !hasFileTransfer(event.dataTransfer)) {
-          return;
-        }
-        event.preventDefault();
-        event.stopPropagation();
-        event.dataTransfer.dropEffect = 'copy';
-      },
-      [canHandlePageImageDrop]
-    );
-    const handlePageImageDragLeave = useCallback(
-      (event: DragEvent<HTMLDivElement>) => {
-        if (!canHandlePageImageDrop || !hasFileTransfer(event.dataTransfer)) {
-          return;
-        }
-        event.preventDefault();
-        event.stopPropagation();
-        pageImageDragDepthRef.current = Math.max(0, pageImageDragDepthRef.current - 1);
-        if (pageImageDragDepthRef.current === 0) {
-          setIsPageImageDragActive(false);
-        }
-      },
-      [canHandlePageImageDrop]
-    );
-    const handlePageImageDrop = useCallback(
-      (event: DragEvent<HTMLDivElement>) => {
-        if (!canHandlePageImageDrop || !hasFileTransfer(event.dataTransfer)) {
-          return;
-        }
-        event.preventDefault();
-        event.stopPropagation();
-        resetPageImageDragState();
-        const files = getFilesFromDataTransfer(event.dataTransfer);
+    // ── Page-level drag-and-drop ────────────────────────────────────────
+    // Two kinds land on the whole conversation, not just on the composer: image
+    // and file attachments, and a session dragged out of the sidebar, which
+    // becomes a mention of that conversation. Each zone ignores the other's
+    // transfer, so they share the container without competing for it.
+    const canHandlePageDrop = !isArchivedSession && !isMobile && !hideMessageArea;
+    const imageDropZone = useDropZone({
+      enabled: canHandlePageDrop,
+      accepts: hasFileTransfer,
+      onDrop: useCallback((dataTransfer: DataTransfer) => {
+        const files = getFilesFromDataTransfer(dataTransfer);
         if (files.length > 0) {
           inputAreaRef.current?.handleImageDrop(files);
         }
-      },
-      [canHandlePageImageDrop, resetPageImageDragState]
+      }, []),
+    });
+    const acceptsSessionMention = useCallback(
+      (dataTransfer: DataTransfer) =>
+        hasAcceptableSessionMentionTransfer(dataTransfer, { excludeSessionId: session.id }),
+      [session.id]
     );
+    const sessionMentionDropZone = useDropZone({
+      enabled: canHandlePageDrop,
+      accepts: acceptsSessionMention,
+      onDrop: useCallback((dataTransfer: DataTransfer) => {
+        const droppedSessionId = readSessionMentionDragSessionId(dataTransfer);
+        if (!droppedSessionId) return;
+        inputAreaRef.current?.insertSessionMention(droppedSessionId);
+      }, []),
+    });
+    const pageDropHandlers = mergeDropZoneHandlers(imageDropZone, sessionMentionDropZone);
 
     useEffect(() => {
       if (searchResults.length === 0) {
@@ -5436,12 +5410,9 @@ export const SessionChatInterface = memo(
       <PrLinkProvider prUrl={latestPr?.url} onOpenPrTab={prLinkHandler}>
         <SessionConversationPage
           className={className}
-          imageDragActive={isPageImageDragActive}
+          dropActive={imageDropZone.isActive || sessionMentionDropZone.isActive}
           hideMessageArea={hideMessageArea}
-          onDragEnter={handlePageImageDragEnter}
-          onDragOver={handlePageImageDragOver}
-          onDragLeave={handlePageImageDragLeave}
-          onDrop={handlePageImageDrop}
+          {...pageDropHandlers}
         >
           {!shouldHideHeader &&
             (headerVariant === 'toolbar' ? (

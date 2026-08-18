@@ -32,6 +32,17 @@ Shared mention primitive used by composer autocomplete surfaces.
   (`parseMentionNamespaceSearch`). The menu resolves its level from the same
   parse Backspace pops from, so the two cannot disagree about what is a
   namespace.
+- The menu is not the only way a range is born. `onMentionInsert` writes one
+  from outside the input (a drop, a toolbar action) and takes focus; it needs no
+  trigger span and no registered item. Both routes go through the single pure
+  `applyMentionSplice` in `mention-input-core.ts` — they used to be separate
+  copies of that arithmetic — and it in turn moves existing ranges through
+  `applyTextEditToMentions`, the same rule a typed edit uses, so there is ONE
+  definition of what an edit does to a range. A caller passing `separate` gets
+  its whitespace resolved against the INPUT's value
+  (`resolveMentionInsertPrefix`), not the caller's copy of it, which can trail
+  by a keystroke. Stays product-neutral: text, payload, and kind are all
+  arguments.
 - `MentionKind` stays product-neutral: `pasted_text` is the only member the
   primitive branches on, and every other kind is an opaque tag the menu chooses.
   Adding a mention category must not edit this package.
@@ -67,6 +78,8 @@ Shared mention primitive used by composer autocomplete surfaces.
 
 - `mention-root.tsx` owns open state, active trigger, selected values, mention
   ranges, item registration, filtering, and insertion.
+- `mention-input-core.ts` holds the pure text/range algebra both insertion
+  routes and every edit share.
 - `mention-input.tsx` owns textarea behavior: trigger detection, virtual caret
   anchor creation, controlled value sync, selection restore, and highlighter
   interaction.

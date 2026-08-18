@@ -73,6 +73,7 @@ import {
   pinnedFirstRootRank,
   type OpenedBySessionTreeNode,
 } from '@/lib/session-opened-by-tree';
+import { startSessionMentionDrag } from '@/lib/session-mention-drag';
 import { SwipeActionRow } from '@/components/shared/swipe-action-row';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { useStableNow } from '@/hooks/use-stable-now';
@@ -895,6 +896,14 @@ const SessionGroupSection = memo(function SessionGroupSection({
                 tabIndex={!useAnchor && isSelectable ? 0 : undefined}
                 aria-disabled={!isSelectable ? true : undefined}
                 data-sidebar-session-id={session.sessionId}
+                // Drag a conversation onto a chat surface to mention it there.
+                draggable
+                onDragStart={(event) =>
+                  startSessionMentionDrag(event, {
+                    sessionId: session.sessionId,
+                    title: session.title,
+                  })
+                }
                 className={cn(
                   'group relative w-full rounded-md text-left',
                   // Both chat and repo rows are a single line now; the repo row's
@@ -941,6 +950,9 @@ const SessionGroupSection = memo(function SessionGroupSection({
                   <a
                     href={sessionHref}
                     aria-label={session.title}
+                    // The overlay anchor covers the row, so it is what a drag
+                    // starts on; left draggable it would drag its link instead.
+                    draggable={false}
                     className="absolute inset-0 z-10 rounded-md focus:outline-hidden focus-visible:shadow-none"
                     onClick={handleAnchorClick}
                   />

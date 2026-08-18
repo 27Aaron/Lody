@@ -14,6 +14,7 @@ export type {
   Mention,
   MentionChip,
   MentionChipResolver,
+  MentionInsertRequest,
   MentionKind,
   MentionRootProps,
 } from './mention-root';

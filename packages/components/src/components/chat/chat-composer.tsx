@@ -22,7 +22,10 @@ import {
   type VisualAnnotationReferenceChipItem,
 } from './visual-annotation-reference-chip';
 import { cn } from '@/lib/utils';
-import { CombinedMentionTextarea } from '@/components/mentions/combined-mention-textarea';
+import {
+  CombinedMentionTextarea,
+  type CombinedMentionTextareaHandle,
+} from '@/components/mentions/combined-mention-textarea';
 import {
   getComposerMentionChip,
   wrapPastedTextChipLabel,
@@ -125,6 +128,11 @@ export interface ChatComposerProps {
   persistedMentions?: readonly PersistedMentionRange[];
   /** Identity of the draft `promptValue` belongs to; see `draftKey` there. */
   draftKey?: string;
+  /**
+   * Handle for writing a mention from outside the composer — the page-level
+   * drop target of a dragged sidebar session. See `CombinedMentionTextarea`.
+   */
+  mentionActionsRef?: Ref<CombinedMentionTextareaHandle>;
   imageItems?: ChatComposerImageItem[];
   imageAddAriaLabel?: string;
   imageAddDisabled?: boolean;
@@ -238,6 +246,7 @@ export function ChatComposer({
   onMentionRangesChange,
   persistedMentions,
   draftKey,
+  mentionActionsRef,
   imageItems = [],
   imageAddDisabled = false,
   onImageAddClick,
@@ -861,6 +870,7 @@ export function ChatComposer({
                 onMentionRangesChange={onMentionRangesChange}
                 persistedMentions={persistedMentions}
                 draftKey={draftKey}
+                mentionActionsRef={mentionActionsRef}
                 onKeyDown={onPromptKeyDown}
                 onPaste={onPromptPaste}
                 onCopy={handlePromptCopy}
@@ -963,6 +973,7 @@ export function ChatComposer({
               onMentionRangesChange={onMentionRangesChange}
               persistedMentions={persistedMentions}
               draftKey={draftKey}
+              mentionActionsRef={mentionActionsRef}
               onKeyDown={onPromptKeyDown}
               onPaste={onPromptPaste}
               onCopy={handlePromptCopy}

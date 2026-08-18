@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { startSessionMentionDrag } from '@/lib/session-mention-drag';
 import { useSidebarKeyboardNav } from '@/hooks/use-sidebar-keyboard-nav';
 import { SidebarKeyboardHighlight } from '@/components/sidebar-keyboard-highlight';
 import { useLocation, useRouter } from '@tanstack/react-router';
@@ -445,6 +446,9 @@ const LocalProjectSessionItem = memo(function LocalProjectSessionItem({
       tabIndex={0}
       aria-label={title}
       data-sidebar-session-id={session.id}
+      // Drag a conversation onto a chat surface to mention it there.
+      draggable
+      onDragStart={(event) => startSessionMentionDrag(event, { sessionId: session.id, title })}
       className={cn(
         'group w-full rounded-md px-2 text-left',
         'py-1',

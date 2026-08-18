@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
+import { startSessionMentionDrag } from '@/lib/session-mention-drag';
 import {
   Archive,
   GitBranch,
@@ -805,6 +806,11 @@ const UpdatedItemRow = memo(function UpdatedItemRow({
       tabIndex={!useAnchor && onSelect ? 0 : undefined}
       data-sidebar-updated-id={item.id}
       data-sidebar-updated-kind={item.kind}
+      // Drag a conversation onto a chat surface to mention it there.
+      draggable
+      onDragStart={(event) =>
+        startSessionMentionDrag(event, { sessionId: item.id, title: item.title })
+      }
       className={cn(
         // Named group ('row') so the archive hover-reveal scopes to the hovered row
         // only. The bucket wrapper above also uses an (unnamed) `group` for its
@@ -849,6 +855,9 @@ const UpdatedItemRow = memo(function UpdatedItemRow({
           href={href}
           aria-label={item.title}
           className="absolute inset-0 z-10 rounded-md focus:outline-hidden focus-visible:shadow-none"
+          // The overlay anchor covers the row, so it is what a drag starts on;
+          // left draggable it would drag its link instead.
+          draggable={false}
           onClick={handleAnchorClick}
         />
       ) : null}

@@ -1,9 +1,16 @@
+import { useCallback, useRef } from 'react';
 import type { ClipboardEvent, KeyboardEvent, ReactNode, Ref } from 'react';
 import type { Mention as MentionRange } from '@/ui/mention/index';
+import type { CombinedMentionTextareaHandle } from '@/components/mentions/combined-mention-textarea';
 import type { PersistedMentionRange } from '@/components/mentions/mention-persistence';
 
 import type { AcpCommandSummary, AgentConfigCliType } from '@lody/shared';
 import { cn } from '@/lib/utils';
+import { useDropZone } from '@/hooks/use-drop-zone';
+import {
+  hasAcceptableSessionMentionTransfer,
+  readSessionMentionDragSessionId,
+} from '@/lib/session-mention-drag';
 import { Button } from '@/ui/button';
 import {
   ChatComposer,
@@ -163,6 +170,28 @@ export interface ChatLandingViewProps {
   };
 }
 
+/**
+ * Landing-wide drop target for a session dragged out of the sidebar.
+ *
+ * Owned here rather than in `chat-landing.tsx` because nothing outside this
+ * layout needs it: the handle goes straight into the composer it renders, and
+ * the drop writes a mention into that composer's draft. Mobile gets the handle
+ * but no drop target — touch has no HTML5 drag.
+ */
+function useSessionMentionDrop(enabled: boolean) {
+  const mentionActionsRef = useRef<CombinedMentionTextareaHandle | null>(null);
+  const dropZone = useDropZone({
+    enabled,
+    accepts: hasAcceptableSessionMentionTransfer,
+    onDrop: useCallback((dataTransfer: DataTransfer) => {
+      const sessionId = readSessionMentionDragSessionId(dataTransfer);
+      if (!sessionId) return;
+      mentionActionsRef.current?.insertSessionMention(sessionId);
+    }, []),
+  });
+  return { mentionActionsRef, dropZone };
+}
+
 export function ChatLandingView({
   tone,
   isMobile = false,
@@ -228,6 +257,7 @@ export function ChatLandingView({
   errorLabels = {},
 }: ChatLandingViewProps) {
   const isDark = tone === 'dark';
+  const { mentionActionsRef, dropZone } = useSessionMentionDrop(!isMobile && !submissionPending);
 
   const {
     somethingWentWrong = 'Something went wrong',
@@ -422,6 +452,7 @@ export function ChatLandingView({
         pastedTextDrafts={submissionPending ? [] : pastedTextDrafts}
         onPastedTextDraftsChange={submissionPending ? undefined : onPastedTextDraftsChange}
         onMentionRangesChange={onMentionRangesChange}
+        mentionActionsRef={mentionActionsRef}
         persistedMentions={persistedMentions}
         imageItems={submissionPending ? [] : imageItems}
         imageAddDisabled={submissionPending || imageAddDisabled}
@@ -464,6 +495,8 @@ export function ChatLandingView({
   return (
     <WebChatLandingScreen
       title={title}
+      dropActive={dropZone.isActive}
+      dropHandlers={dropZone.handlers}
       navRootRef={navRootRef}
       contextSwitch={contextSwitch}
       composer={composerNode}

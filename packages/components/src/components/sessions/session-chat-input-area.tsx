@@ -22,6 +22,7 @@ import {
   type ChatComposerFileItem,
   type ChatComposerImageItem,
 } from '@/components/chat/chat-composer';
+import type { CombinedMentionTextareaHandle } from '@/components/mentions/combined-mention-textarea';
 import type { AttachmentAddMenuMcp } from '@/components/chat/attachment-add-menu';
 import { MobileSessionRunConfig } from '@/components/mobile/mobile-session-run-config';
 import type { MentionProjectSource } from '@/components/mentions/mention-project-file-source';
@@ -411,6 +412,12 @@ export type SessionChatInputAreaHandle = {
   addVisualAnnotationReference: (reference: VisualAnnotationReferencePayload) => boolean;
   toggleVisualAnnotationReference: (reference: VisualAnnotationReferencePayload) => boolean;
   handleImageDrop: (files: File[]) => void;
+  /**
+   * Mention another conversation in this draft. Returns false when nothing was
+   * written (archived draft, unknown/own session, already mentioned), so the
+   * caller can leave the gesture unacknowledged instead of implying a change.
+   */
+  insertSessionMention: (sessionId: string) => boolean;
 };
 
 export const SessionChatInputArea = memo(
@@ -702,6 +709,9 @@ export const SessionChatInputArea = memo(
      * `expandPromptMentionsRef` beside it.
      */
     const mentionRangesRef = useRef<MentionRange[]>([]);
+    // Handle into the composer's mention machinery, for mentions that originate
+    // outside it (a sidebar session dropped on the conversation).
+    const mentionActionsRef = useRef<CombinedMentionTextareaHandle | null>(null);
     const [persistedMentionRanges, setPersistedMentionRanges] = useState<PersistedMentionRange[]>(
       () => getSessionMentionRanges(session.id)
     );
@@ -1581,6 +1591,16 @@ export const SessionChatInputArea = memo(
       [disableImageUpload, enqueueFileAttachments, handleAddFiles, isArchived]
     );
 
+    const insertSessionMention = useCallback(
+      (sessionId: string) => {
+        if (isArchived) {
+          return false;
+        }
+        return mentionActionsRef.current?.insertSessionMention(sessionId) ?? false;
+      },
+      [isArchived]
+    );
+
     useImperativeHandle(
       ref,
       () => ({
@@ -1593,6 +1613,7 @@ export const SessionChatInputArea = memo(
         addVisualAnnotationReference,
         toggleVisualAnnotationReference,
         handleImageDrop,
+        insertSessionMention,
       }),
       [
         setInputText,
@@ -1601,6 +1622,7 @@ export const SessionChatInputArea = memo(
         addVisualAnnotationReference,
         toggleVisualAnnotationReference,
         handleImageDrop,
+        insertSessionMention,
       ]
     );
 
@@ -2234,6 +2256,7 @@ export const SessionChatInputArea = memo(
         pastedTextDrafts={submissionPending ? [] : pastedTextDrafts}
         onPastedTextDraftsChange={submissionPending ? undefined : handlePastedTextDraftsChange}
         onMentionRangesChange={handleMentionRangesChange}
+        mentionActionsRef={mentionActionsRef}
         persistedMentions={persistedMentionRanges}
         // This composer switches sessions in place, so the draft's identity has
         // to travel with its text — otherwise the previous session's ranges stay

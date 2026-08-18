@@ -141,6 +141,12 @@ mobile surfaces.
 - Chat landing: `src/components/chat/chat-landing.tsx`.
 - Sidebar: `loro-sidebar.tsx`, `loro-app-sidebar.tsx`, and
   `sessions/session-list-rows.ts`. Sidebar rows are sessions, not Tasks.
+  EVERY desktop session row is a drag source for a session mention
+  (`lib/session-mention-drag.ts`, dropped on the conversation page or the
+  landing) — a new row renderer that omits it makes the gesture work in some
+  lists and not others. A row whose surface is a navigation `<a>` overlay must
+  put `draggable` on the ROW and `draggable={false}` on that anchor, or the
+  browser starts a link drag instead.
   `SessionMeta.openedBySessionId` (a Session created BY another, e.g. the
   `lody_session_create` MCP tool) indents that row under its opener via
   `lib/session-opened-by-tree.ts`. EVERY session list uses it — `session-list.tsx`

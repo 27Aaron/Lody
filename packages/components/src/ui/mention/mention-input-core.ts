@@ -1,4 +1,105 @@
-import type { Mention } from './mention-root';
+import type { Mention, MentionKind } from './mention-root';
+
+/**
+ * One text edit that writes a mention, expressed as data.
+ *
+ * Both ways a range is born share this shape: committing a menu item replaces
+ * the span from the trigger to the caret, and an external insert replaces
+ * nothing at a chosen index. Keeping the arithmetic in one pure function is
+ * what keeps them from drifting — the shift rule and the caret position are the
+ * easy things to get subtly different in a second copy.
+ *
+ * `prefix` and `suffix` are written into the text but stay OUTSIDE the range:
+ * separating whitespace belongs to the sentence, not to the mention.
+ */
+export type MentionSplice = {
+  /** Start of the replaced span. */
+  replaceStart: number;
+  /** End of the replaced span; equal to `replaceStart` for a pure insert. */
+  replaceEnd: number;
+  /** Text written before the range and not covered by it. @default '' */
+  prefix?: string;
+  /** The mention text itself — exactly what the committed range covers. */
+  text: string;
+  /** Text written after the range and not covered by it. @default '' */
+  suffix?: string;
+  /** Payload recorded on the range. Ignored when `commitRange` is false. */
+  value: string;
+  kind?: MentionKind;
+  /**
+   * Whether the edit records a range at all. A navigation step rewrites the
+   * trigger span without committing a mention.
+   */
+  commitRange: boolean;
+};
+
+/**
+ * The separator an inserted mention needs in front of it, if any.
+ *
+ * Read from the text the insert actually lands in rather than from a caller's
+ * copy of it: the caller holds the controlled value, which can trail the input
+ * by a keystroke, and a missing separator would glue the mention to the
+ * previous word — where the `@` token scanner no longer finds it.
+ */
+export function resolveMentionInsertPrefix(
+  value: string,
+  at: number,
+  separate: boolean | undefined
+): string {
+  if (!separate || at <= 0) return '';
+  return /\s$/u.test(value.slice(0, at)) ? '' : ' ';
+}
+
+export type MentionSpliceResult = {
+  value: string;
+  mentions: Mention[];
+  /** Where the caret belongs once the input renders `value`. */
+  caret: number;
+};
+
+/**
+ * Apply a splice to the text and to every existing range.
+ *
+ * Existing ranges move through `applyTextEditToMentions`, the same rule a typed
+ * edit uses — including its "a range the edit cut into is gone" clause. Neither
+ * caller can produce that today (a menu commit replaces only the trigger span
+ * the user is typing in, an external insert replaces nothing), but a splice
+ * landing inside a range has exactly one correct outcome, and it is the one
+ * that rule already implements.
+ */
+export function applyMentionSplice(
+  value: string,
+  mentions: Mention[],
+  splice: MentionSplice
+): MentionSpliceResult {
+  const prefix = splice.prefix ?? '';
+  const suffix = splice.suffix ?? '';
+  const replaceStart = Math.max(0, Math.min(value.length, splice.replaceStart));
+  const replaceEnd = Math.max(replaceStart, Math.min(value.length, splice.replaceEnd));
+
+  const inserted = `${prefix}${splice.text}${suffix}`;
+  const nextValue = `${value.slice(0, replaceStart)}${inserted}${value.slice(replaceEnd)}`;
+  const delta = inserted.length - (replaceEnd - replaceStart);
+
+  const shifted = applyTextEditToMentions(mentions, replaceStart, replaceEnd, delta);
+  const rangeStart = replaceStart + prefix.length;
+
+  return {
+    value: nextValue,
+    mentions: splice.commitRange
+      ? [
+          ...shifted,
+          {
+            value: splice.value,
+            start: rangeStart,
+            end: rangeStart + splice.text.length,
+            kind: splice.kind ?? 'mention',
+          },
+        ].sort((a, b) => a.start - b.start)
+      : shifted,
+    caret: replaceStart + inserted.length,
+  };
+}
 
 export type TextDiff = {
   start: number;

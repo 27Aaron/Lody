@@ -3,6 +3,7 @@ import {
   forEachAtTokenSpan,
   type HydratedMentions,
 } from '@/components/mentions/mention-hydration';
+import type { MentionInsertRequest } from '@/ui/mention/index';
 import type { TextRewrite } from '@lody/shared';
 import type { SessionId, SessionMeta } from '@lody/shared';
 import { getEffectiveLatestMessageAt } from '@/components/sessions/session-list-rows';
@@ -142,6 +143,47 @@ export function selectSessionMentionCandidates(
     .sort((a, b) => a.score - b.score || b.item.activityAt - a.item.activityAt)
     .slice(0, limit)
     .map((entry) => entry.item);
+}
+
+// ---------------------------------------------------------------------------
+// Insertion from outside the menu (drag and drop)
+// ---------------------------------------------------------------------------
+
+/**
+ * The edit that adds a session mention to a draft nobody is typing in.
+ *
+ * Returns null when the session is already mentioned: a second range would send
+ * the same history query twice, and the gesture that produces this — dropping a
+ * sidebar row — is easy to repeat by accident.
+ *
+ * Appends rather than inserting at the caret. A drop moves no caret, and an
+ * unfocused textarea reports whatever offset it was last left at (0 on one that
+ * was never focused), so "at the caret" would mean "at the start of the draft"
+ * for the common case.
+ *
+ * It is a real range, not just text: a session token with no committed range is
+ * sent verbatim, so an insert that only appended `@<slug>` would look right in
+ * the composer and quietly reach the agent as a word.
+ */
+export function buildSessionMentionInsertion(
+  mentions: readonly { value: string; kind?: string }[],
+  item: Pick<SessionMentionItem, 'slug' | 'sessionId'>
+): MentionInsertRequest | null {
+  const alreadyMentioned = mentions.some(
+    (mention) => mention.kind === 'session' && mention.value === item.sessionId
+  );
+  if (alreadyMentioned) return null;
+
+  return {
+    text: `@${item.slug}`,
+    value: item.sessionId,
+    kind: 'session',
+    // Appended, so the separator and the trailing space keep the token
+    // whitespace-delimited — which is what the hydrator that recovers it from a
+    // reloaded draft scans for.
+    separate: true,
+    suffix: ' ',
+  };
 }
 
 // ---------------------------------------------------------------------------

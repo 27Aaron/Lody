@@ -19,6 +19,7 @@ import {
   type PathSuggestion,
 } from '@/components/mentions/file-at-mention';
 import {
+  buildSessionMentionInsertion,
   hydrateSessionMentionsFromText,
   resolveSessionMentionIds,
   useSessionMentionItems,
@@ -390,6 +391,62 @@ function SessionMentionHydrator({
 }
 
 // ============================================================================
+// Imperative insertion
+// ============================================================================
+
+/**
+ * What a surface outside the composer may write into it.
+ *
+ * Today's one caller is the drag-and-drop route: a sidebar session dropped on a
+ * chat surface. It takes an id, not a slug, because `useSessionMentionItems` is
+ * the single owner of the mentionable-session list and this component already
+ * holds it — a drop target that resolved its own slug would be a second owner
+ * re-slugging every visible session on every session-list tick.
+ */
+export type CombinedMentionTextareaHandle = {
+  /**
+   * Append a session mention. Returns false when nothing was written: an
+   * unknown/archived/own session, or one the draft already mentions.
+   */
+  insertSessionMention: (sessionId: string) => boolean;
+};
+
+/**
+ * Bridges the mention context out to `mentionActionsRef`.
+ *
+ * A child of `<Mention>` for the same reason the hydrators are: the context is
+ * only readable from inside it.
+ */
+function MentionActionsBridge({
+  actionsRef,
+  items,
+}: {
+  actionsRef: React.Ref<CombinedMentionTextareaHandle>;
+  items: readonly SessionMentionItem[];
+}) {
+  const context = useMentionContext('MentionActionsBridge');
+  const { mentions, onMentionInsert } = context;
+  React.useImperativeHandle(
+    actionsRef,
+    () => ({
+      insertSessionMention: (sessionId: string) => {
+        // Session mentions being disabled IS an empty list, so the lookup is
+        // also the enablement check — there is nothing to mention.
+        const item = items.find((candidate) => candidate.sessionId === sessionId);
+        if (!item) return false;
+        const insertion = buildSessionMentionInsertion(mentions, item);
+        if (!insertion) return false;
+        onMentionInsert(insertion);
+        return true;
+      },
+    }),
+    [items, mentions, onMentionInsert]
+  );
+
+  return null;
+}
+
+// ============================================================================
 // Main Component
 // ============================================================================
 
@@ -445,6 +502,14 @@ export interface CombinedMentionTextareaProps extends Omit<
    * only record that the region was ever a mention is the range itself.
    */
   onMentionRangesChange?: (ranges: MentionRange[]) => void;
+  /**
+   * Lets a surface outside the composer write a mention into it — the drop
+   * target of a dragged sidebar session, today.
+   *
+   * Null while the composer has no mention sources at all and renders a plain
+   * textarea; a caller must treat a false return as "nothing was inserted".
+   */
+  mentionActionsRef?: React.Ref<CombinedMentionTextareaHandle>;
 }
 
 export const CombinedMentionTextarea = React.forwardRef<
@@ -472,6 +537,7 @@ export const CombinedMentionTextarea = React.forwardRef<
       onMentionRangesChange,
       persistedMentions,
       draftKey,
+      mentionActionsRef,
       className,
       ...props
     },
@@ -731,6 +797,9 @@ export const CombinedMentionTextarea = React.forwardRef<
           items={sessionItems}
           enabled={enableSessionMentions}
         />
+        {mentionActionsRef ? (
+          <MentionActionsBridge actionsRef={mentionActionsRef} items={sessionItems} />
+        ) : null}
         {enableSkillMentions ? (
           <SkillMentionHydrator
             text={value}

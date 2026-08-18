@@ -17,12 +17,20 @@ import {
 import type { VirtualElement } from '@floating-ui/react';
 import * as React from 'react';
 import type { ContentElement } from './mention-content';
+import {
+  applyMentionSplice,
+  resolveMentionInsertPrefix,
+  type MentionSplice,
+} from './mention-input-core';
 import type { InputElement } from './mention-input';
 import type { ItemElement } from './mention-item';
 
 function getDataState(open: boolean) {
   return open ? 'open' : 'closed';
 }
+
+/** Stable empty list for the range-less splice run; never mutated. */
+const EMPTY_MENTIONS: Mention[] = [];
 
 const ROOT_NAME = 'MentionRoot';
 
@@ -117,6 +125,35 @@ type MentionChipResolver = (
   text: string
 ) => MentionChip | null | undefined;
 
+/**
+ * A mention written by something other than the menu.
+ *
+ * The menu is not the only way a mention is born — a drop, or any other gesture
+ * that happens outside the input, has to produce the SAME artefact: text plus a
+ * committed range. Nothing downstream reconstructs a range from text, so a
+ * caller that only appends text writes a mention that silently stops being one.
+ *
+ * `prefix`/`suffix` are written into the text but stay outside the range, which
+ * is how a caller adds separating whitespace without widening the mention.
+ */
+interface MentionInsertRequest {
+  /** Exactly what the committed range covers, marker included (`@fix-ci`). */
+  text: string;
+  /** Payload recorded on the range. */
+  value: string;
+  kind?: MentionKind;
+  /** Insertion index. @default end of the current value */
+  at?: number;
+  /**
+   * Prefix a single space unless the text already ends in whitespace (or the
+   * insert lands at the very start). Resolved against the input's own value, so
+   * a caller holding a stale copy of it cannot glue the mention to the previous
+   * word.
+   */
+  separate?: boolean;
+  suffix?: string;
+}
+
 interface MentionSelectionRange {
   start: number;
   end: number;
@@ -153,6 +190,14 @@ interface MentionContextValue {
   mentions: Mention[];
   onMentionsChange: React.Dispatch<React.SetStateAction<Mention[]>>;
   onMentionAdd: (value: string, triggerIndex: number, options?: { commit?: boolean }) => void;
+  /**
+   * Write a mention the menu did not produce, and take focus.
+   *
+   * Product-neutral by construction: the caller supplies the text, the payload,
+   * and the kind, so reaching this from a new mention category does not touch
+   * this package.
+   */
+  onMentionInsert: (request: MentionInsertRequest) => void;
   /**
    * Pop the text between the trigger and the caret back to the bare trigger,
    * undoing one drill-down step. Returns false when there is no trigger to pop
@@ -507,38 +552,28 @@ const MentionRoot = React.forwardRef<RootElement, MentionRootProps>((props, forw
         navigateText ??
         selectedItem?.insertText ??
         `${trigger}${selectedItem?.label ?? payloadValue}`;
-      const suffix = isNavigating ? '' : ' ';
       const sourceValue = input?.value ?? inputValue;
-      const beforeTrigger = sourceValue.slice(0, triggerIndex);
       const insertionPoint = input?.selectionStart ?? triggerIndex;
-      const afterSearchText = sourceValue.slice(insertionPoint);
-      const newValue = `${beforeTrigger}${mentionText}${suffix}${afterSearchText}`;
-
-      const replacedLength = insertionPoint - triggerIndex;
-      const insertionLength = mentionText.length + suffix.length;
-      const delta = insertionLength - replacedLength;
-
-      const newMention: Mention = {
+      const splice: MentionSplice = {
+        replaceStart: triggerIndex,
+        replaceEnd: insertionPoint,
+        text: mentionText,
+        suffix: isNavigating ? '' : ' ',
         value: payloadValue,
-        start: triggerIndex,
-        end: triggerIndex + mentionText.length,
-        kind: selectedItem?.kind ?? 'mention',
+        kind: selectedItem?.kind,
+        commitRange: !isNavigating,
       };
 
-      setMentions((prev) => {
-        const updatedMentions = prev.map((mention) => {
-          if (mention.start >= insertionPoint) {
-            return {
-              ...mention,
-              start: mention.start + delta,
-              end: mention.end + delta,
-            };
-          }
-          return mention;
-        });
-        if (isNavigating) return updatedMentions;
-        return [...updatedMentions, newMention].sort((a, b) => a.start - b.start);
-      });
+      // The text and caret do not depend on the existing ranges, so they are
+      // read from a range-less run rather than smuggled out of the updater —
+      // the updater stays pure, and `setMentions` keeps the functional form its
+      // flush-consistency contract requires.
+      const { value: newValue, caret: newCursorPosition } = applyMentionSplice(
+        sourceValue,
+        EMPTY_MENTIONS,
+        splice
+      );
+      setMentions((prev) => applyMentionSplice(sourceValue, prev, splice).mentions);
 
       setInputValue(newValue);
       if (isNavigating) {
@@ -555,7 +590,6 @@ const MentionRoot = React.forwardRef<RootElement, MentionRootProps>((props, forw
         });
       }
 
-      const newCursorPosition = triggerIndex + insertionLength;
       // Request cursor restoration through context instead of mutating input DOM
       // directly. MentionInput applies this in a layout effect after controlled
       // value is committed, which avoids timing races on mobile IME flows.
@@ -591,6 +625,44 @@ const MentionRoot = React.forwardRef<RootElement, MentionRootProps>((props, forw
       filterStore,
       onItemsFilter,
     ]
+  );
+
+  const onMentionInsert = React.useCallback(
+    (request: MentionInsertRequest) => {
+      const input = inputRef.current;
+      const sourceValue = input?.value ?? inputValue;
+      const at = Math.max(0, Math.min(sourceValue.length, request.at ?? sourceValue.length));
+      const splice: MentionSplice = {
+        replaceStart: at,
+        replaceEnd: at,
+        prefix: resolveMentionInsertPrefix(sourceValue, at, request.separate),
+        text: request.text,
+        suffix: request.suffix,
+        value: request.value,
+        kind: request.kind,
+        commitRange: true,
+      };
+
+      const { value: newValue, caret } = applyMentionSplice(sourceValue, EMPTY_MENTIONS, splice);
+      setMentions((prev) => applyMentionSplice(sourceValue, prev, splice).mentions);
+      setInputValue(newValue);
+      setValue((prev) => {
+        const next = [...(prev ?? [])];
+        if (!next.includes(request.value)) next.push(request.value);
+        return next;
+      });
+      setPendingSelection({ start: caret, end: caret, expectedValue: newValue });
+      // An open menu was anchored to a trigger span that just moved, and the
+      // caret is no longer in it. Same teardown a commit does.
+      setOpen(false);
+      setHighlightedItem(null);
+      filterStore.search = '';
+      // The gesture that inserts this happened outside the input (a drop, a
+      // toolbar action), so the caret restoration above lands on an input the
+      // user is not in. Typing is the expected next step, so take focus.
+      input?.focus();
+    },
+    [filterStore, inputValue, setInputValue, setMentions, setOpen, setValue]
   );
 
   const onNavigateBack = React.useCallback(() => {
@@ -684,6 +756,7 @@ const MentionRoot = React.forwardRef<RootElement, MentionRootProps>((props, forw
       mentions={mentions}
       onMentionsChange={setMentions}
       onMentionAdd={onMentionAdd}
+      onMentionInsert={onMentionInsert}
       onNavigateBack={onNavigateBack}
       onMentionsRemove={onMentionsRemove}
       onMentionClick={onMentionClick}
@@ -731,6 +804,7 @@ export type {
   Mention,
   MentionChip,
   MentionChipResolver,
+  MentionInsertRequest,
   MentionKind,
   MentionRootProps,
 };

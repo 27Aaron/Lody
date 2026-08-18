@@ -86,7 +86,8 @@ export function SessionConversationPageBody({
 
 export interface SessionConversationPageProps {
   className?: string;
-  imageDragActive?: boolean;
+  /** Highlights the page while an accepted drag (attachment or session) is over it. */
+  dropActive?: boolean;
   headerSlot?: ReactNode;
   subHeaderSlot?: ReactNode;
   hideMessageArea?: boolean;
@@ -101,7 +102,7 @@ export interface SessionConversationPageProps {
 
 export function SessionConversationPage({
   className,
-  imageDragActive = false,
+  dropActive = false,
   headerSlot,
   subHeaderSlot,
   hideMessageArea = false,
@@ -118,7 +119,7 @@ export function SessionConversationPage({
       className={cn(
         'relative flex flex-col',
         hideMessageArea ? '' : 'h-full',
-        imageDragActive && 'ring-2 ring-primary/25 border-primary/50',
+        dropActive && 'ring-2 ring-primary/25 border-primary/50',
         className
       )}
       onDragEnter={onDragEnter}
