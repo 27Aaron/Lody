@@ -33,6 +33,7 @@ import {
 
 type CreateMainWindowOptions = {
   icon: string
+  initialPath?: '/' | '/onboarding'
   onDidFinishLoad?: () => void
 }
 
@@ -121,11 +122,18 @@ function formatLoadFailure(details: LoadFailureDetails): string {
   ].join('\n')
 }
 
-function resolveMainRendererTarget(): ReloadTarget {
+function resolveMainRendererTarget(initialPath: '/' | '/onboarding' = '/'): ReloadTarget {
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    return { type: 'url', url: process.env['ELECTRON_RENDERER_URL'] }
+    return {
+      type: 'url',
+      url: new URL(initialPath, process.env['ELECTRON_RENDERER_URL']).toString()
+    }
   }
-  return { type: 'file', filePath: join(__dirname, '../renderer/index.html') }
+  return {
+    type: 'file',
+    filePath: join(__dirname, '../renderer/index.html'),
+    ...(initialPath === '/' ? {} : { hash: initialPath })
+  }
 }
 
 function resolveRecoveryTarget(): ReloadTarget {
@@ -313,7 +321,7 @@ export function createMainWindow(options: CreateMainWindowOptions): BrowserWindo
     }
   })
   trackMainWindowState(window)
-  const mainTarget = resolveMainRendererTarget()
+  const mainTarget = resolveMainRendererTarget(options.initialPath)
   const recoveryTarget = resolveRecoveryTarget()
   setReloadTarget(window, mainTarget)
   attachMainWindowDiagnostics(window, recoveryTarget)
@@ -372,6 +380,7 @@ export function createMainWindow(options: CreateMainWindowOptions): BrowserWindo
 
 type OpenMainWindowOptions = {
   icon: string
+  initialPath?: '/' | '/onboarding'
 }
 
 export function focusMainWindow(window: BrowserWindow): void {
@@ -389,6 +398,7 @@ export function openMainWindow(options: OpenMainWindowOptions): BrowserWindow {
   let windowRef: BrowserWindow | null = null
   const window = createMainWindow({
     icon: options.icon,
+    initialPath: options.initialPath,
     onDidFinishLoad: () => {
       const target = windowRef
       const pendingDeepLink = consumePendingDeepLink()
@@ -458,6 +468,10 @@ export function openMainWindow(options: OpenMainWindowOptions): BrowserWindow {
   })
 
   return window
+}
+
+export function setMainWindowProductReloadTarget(window: BrowserWindow): void {
+  setReloadTarget(window, resolveMainRendererTarget('/'))
 }
 
 export function openOrFocusMainWindow(options: OpenMainWindowOptions): BrowserWindow {

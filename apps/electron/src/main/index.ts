@@ -6,7 +6,7 @@ import { acquireSingleInstanceLock, registerOpenUrlHandler } from './deep-link'
 import { registerLodyProtocolClient } from './protocol-client'
 import { registerIpcHandlers } from './ipc/register-handlers'
 import { registerPublicBrowserHandlers } from './ipc/public-browser-handlers'
-import { openMainWindow, openOrFocusMainWindow } from './window'
+import { openMainWindow, openOrFocusMainWindow, setMainWindowProductReloadTarget } from './window'
 import { getMainWindow, setAppQuitting, setWindowsTrayAvailable } from './window-state'
 import { CliService } from './services/cli-service'
 import { TerminalRelay } from './services/terminal-relay'
@@ -33,6 +33,7 @@ import { desktopInstallationProfile, isLocalPlatform } from './platform'
 import { mainPlatformKind } from './platform'
 import { getLocalLoroDataPlaneSocketPath } from '@lody/shared/node/local-ipc'
 import { getLocalTerminalSocketPath } from '@lody/shared/node/local-terminal'
+import { getInitialDesktopPath, markOnboardingCompleted } from './onboarding-state'
 
 // On Linux, Electron/Chromium auto-detects the keyring backend for GNOME and KDE
 // desktops, but falls back to basic-text (unencrypted) on other desktops like
@@ -214,7 +215,11 @@ if (hasSingleInstanceLock) {
       authService,
       windowBadgeService,
       globalShortcutsService,
-      getMainWindow
+      getMainWindow,
+      completeOnboarding: (window) => {
+        markOnboardingCompleted()
+        setMainWindowProductReloadTarget(window)
+      }
     })
     registerPublicBrowserHandlers({ service: publicBrowserService, getMainWindow })
 
@@ -223,7 +228,9 @@ if (hasSingleInstanceLock) {
       getMainWindow,
       openOrFocusMainWindow: () => openOrFocusMainWindow({ icon })
     })
-    openMainWindow({ icon })
+    const initialPath = getInitialDesktopPath()
+    openMainWindow({ icon, initialPath })
+    console.info('[Electron] Initial desktop surface selected', { initialPath })
     setWindowsTrayAvailable(windowsTrayService.start())
     cliService.autoStart(getMainWindow()?.webContents ?? undefined)
     appUpdaterService.start()

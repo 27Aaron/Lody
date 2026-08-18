@@ -6,6 +6,7 @@ import type {
   CheckForElectronUpdateResult,
   CopyImageToClipboardInput,
   CopyImageToClipboardResult,
+  DesktopOnboardingCompleteResult,
   ElectronAutoLaunchStatusResult,
   ElectronCliState,
   ElectronLocalPlatformSnapshot,
@@ -249,6 +250,7 @@ declare global {
       onMenuAction?: (handler: (action: string) => void) => () => void;
       onWindowFullscreenChanged?: (handler: (isFullscreen: boolean) => void) => () => void;
       getWindowFullscreen?: () => Promise<boolean>;
+      completeOnboarding?: () => Promise<DesktopOnboardingCompleteResult>;
       getNotificationPermissionStatus?: () => Promise<GetNotificationPermissionStatusResult>;
       openSystemNotificationSettings?: () => Promise<OpenSystemNotificationSettingsResult>;
       getAutoLaunchStatus?: () => Promise<ElectronAutoLaunchStatusResult>;

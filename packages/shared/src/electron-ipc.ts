@@ -28,6 +28,10 @@ export type OpenExternalUrlResult = {
   error?: string;
 };
 
+export type DesktopOnboardingCompleteResult =
+  | { ok: true }
+  | { ok: false; error: 'untrusted_sender' | 'completion_failed'; message?: string };
+
 export const ElectronPublicBrowserBoundsSchema = z
   .object({
     x: z.number().finite().nonnegative(),

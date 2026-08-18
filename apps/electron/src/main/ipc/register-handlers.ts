@@ -12,6 +12,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type {
+  DesktopOnboardingCompleteResult,
   ElectronAuthCallbackInput,
   ElectronDevEmailPasswordSignInInput,
   SendSessionFileLocalInput,
@@ -169,6 +170,7 @@ type RegisterIpcHandlersOptions = {
   windowBadgeService: WindowBadgeService
   globalShortcutsService: GlobalShortcutsService
   getMainWindow: () => BrowserWindow | null
+  completeOnboarding: (window: BrowserWindow) => void
 }
 
 function isSetGlobalShortcutInput(value: unknown): value is SetGlobalShortcutInput {
@@ -331,6 +333,28 @@ export function registerIpcHandlers(options: RegisterIpcHandlersOptions): void {
 
   ipcMain.handle('lodyWindow:getFullscreen', (event) => {
     return BrowserWindow.fromWebContents(event.sender)?.isFullScreen() ?? false
+  })
+
+  ipcMain.handle('lodyOnboarding:complete', (event): DesktopOnboardingCompleteResult => {
+    const mainWindow = options.getMainWindow()
+    if (
+      !mainWindow ||
+      mainWindow.isDestroyed() ||
+      event.sender !== mainWindow.webContents ||
+      event.senderFrame !== event.sender.mainFrame
+    ) {
+      return { ok: false, error: 'untrusted_sender' }
+    }
+    try {
+      options.completeOnboarding(mainWindow)
+      return { ok: true }
+    } catch (error) {
+      return {
+        ok: false,
+        error: 'completion_failed',
+        message: formatUnknownError(error)
+      }
+    }
   })
 
   ipcMain.handle('lodySessionControl:send', async (event, payload: unknown) => {

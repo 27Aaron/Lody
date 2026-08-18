@@ -34,7 +34,6 @@ import {
   authTokenAtom,
   currentWorkspaceIdAtom,
   currentWorkspaceSlugAtom,
-  desktopOnboardingCompletedAtom,
   electronDeepLinkSignInInProgressAtom,
   userAtom,
 } from '@/atoms';
@@ -308,6 +307,9 @@ function RootLocationEffects() {
     if (!confirmedUnauthenticated || authInvalidationRef.current) {
       return;
     }
+    if (location.pathname === '/onboarding') {
+      return;
+    }
 
     // A desktop deep-link sign-in is mid-flight: the browser handed the token
     // back but the session has not finished resolving. The brief
@@ -417,7 +419,6 @@ function DesktopDeepLinkRouter() {
   const location = useLocation();
   const navigate = useNavigate();
   const postHog = usePostHog();
-  const onboardingCompleted = useAtomValue(desktopOnboardingCompletedAtom);
   const setElectronSignInInProgress = useSetAtom(electronDeepLinkSignInInProgressAtom);
   const localMachineId = useAtomValue(localMachineIdAtom);
   const currentUser = useAtomValue(userAtom);
@@ -593,7 +594,10 @@ function DesktopDeepLinkRouter() {
       // returning to /settings/github would leave the user behind the
       // overlay once they finish. Land them on the workspace home so the
       // overlay continues uninterrupted and the projects list refreshes.
-      const target = onboardingCompleted ? 'settings' : 'home';
+      if (location.pathname === '/onboarding') {
+        return;
+      }
+      const target = 'settings';
       const targetPath = resolveDesktopGitHubInstallDeepLinkPath(url, location.pathname, {
         target,
       });
@@ -603,14 +607,7 @@ function DesktopDeepLinkRouter() {
 
       navigateToResolvedPath(navigate, targetPath);
     });
-  }, [
-    desktopAuth,
-    location.pathname,
-    navigate,
-    onboardingCompleted,
-    postHog,
-    setElectronSignInInProgress,
-  ]);
+  }, [desktopAuth, location.pathname, navigate, postHog, setElectronSignInInProgress]);
 
   return null;
 }

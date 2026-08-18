@@ -259,8 +259,7 @@ function OpenComment({
       >
         <span
           className={cn(
-            'block h-3 w-3 rounded-full shadow-[0_0_0_2px_white] transition-transform duration-150 ease-out',
-            'bg-amber-500',
+            'block h-3 w-3 rounded-full bg-amber-500 ring-2 ring-background transition-transform duration-150 ease-out',
             isActive ? 'scale-125' : 'hover:scale-110'
           )}
         />
@@ -268,10 +267,10 @@ function OpenComment({
       <article
         data-visual-comment-id={comment.id}
         className={cn(
-          'pointer-events-auto absolute overflow-hidden rounded-xl bg-white text-slate-900 shadow-[0_10px_30px_rgba(15,23,42,0.12)] ring-1 transition-shadow duration-150',
+          'pointer-events-auto absolute overflow-hidden rounded-xl bg-popover text-popover-foreground shadow-[0_10px_30px_rgba(15,23,42,0.12)] ring-1 transition-shadow duration-150',
           isActive
-            ? 'shadow-[0_18px_45px_rgba(15,23,42,0.18)] ring-slate-300'
-            : 'ring-slate-200 hover:shadow-[0_14px_36px_rgba(15,23,42,0.14)]'
+            ? 'shadow-[0_18px_45px_rgba(15,23,42,0.18)] ring-ring/50'
+            : 'ring-border hover:shadow-[0_14px_36px_rgba(15,23,42,0.14)]'
         )}
         style={{
           left: layout.cardLeft,
@@ -293,20 +292,20 @@ function OpenComment({
             {getInitials(comment)}
           </span>
           <div className="min-w-0 flex-1">
-            <p className="flex items-center gap-1.5 text-xs font-semibold leading-4 text-slate-900">
+            <p className="flex items-center gap-1.5 text-xs font-semibold leading-4 text-popover-foreground">
               <span className="truncate">{comment.authorName ?? 'Reviewer'}</span>
               {isDraft ? (
-                <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-700">
+                <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-700 dark:bg-amber-500/15 dark:text-amber-300">
                   Draft
                 </span>
               ) : null}
               {isSubmitted ? (
-                <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-slate-600">
+                <span className="inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
                   Sent
                 </span>
               ) : null}
             </p>
-            <p className="mt-1 whitespace-pre-line break-words text-[13px] leading-5 text-slate-700">
+            <p className="mt-1 whitespace-pre-line break-words text-[13px] leading-5 text-popover-foreground/80">
               {comment.body}
             </p>
           </div>
@@ -314,7 +313,7 @@ function OpenComment({
             <button
               type="button"
               aria-label="Collapse comment"
-              className="-mr-1 -mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+              className="-mr-1 -mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-popover-foreground"
               onClick={(event) => {
                 event.stopPropagation();
                 onCollapse(comment.id);
@@ -325,7 +324,7 @@ function OpenComment({
           ) : null}
         </div>
         {onToggleResolved || onSendToChat ? (
-          <div className="mt-2 flex items-center justify-between gap-1 border-t border-slate-100 px-1.5 py-1">
+          <div className="mt-2 flex items-center justify-between gap-1 border-t border-border px-1.5 py-1">
             {onSendToChat ? (
               <button
                 type="button"
@@ -333,10 +332,10 @@ function OpenComment({
                 className={cn(
                   'inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium transition-colors',
                   isSubmitted
-                    ? 'cursor-default text-slate-400'
+                    ? 'cursor-default text-muted-foreground'
                     : isStaged
-                      ? 'text-emerald-700 hover:bg-emerald-50'
-                      : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                      ? 'text-emerald-700 hover:bg-emerald-50 dark:text-emerald-300 dark:hover:bg-emerald-500/10'
+                      : 'text-muted-foreground hover:bg-muted hover:text-popover-foreground'
                 )}
                 disabled={isSubmitted}
                 onClick={(event) => {
@@ -359,7 +358,7 @@ function OpenComment({
             {onToggleResolved ? (
               <button
                 type="button"
-                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-emerald-700 transition-colors hover:bg-emerald-50"
+                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-emerald-700 transition-colors hover:bg-emerald-50 dark:text-emerald-300 dark:hover:bg-emerald-500/10"
                 onClick={(event) => {
                   event.stopPropagation();
                   onToggleResolved({ commentId: comment.id, resolved: true });
@@ -423,8 +422,7 @@ function CollapsedComment({ comment, viewport, resolvedAnchor, onOpen }: Collaps
       >
         <span
           className={cn(
-            'block h-2.5 w-2.5 rounded-full shadow-[0_0_0_2px_white] transition-transform duration-150 ease-out',
-            'bg-amber-500',
+            'block h-2.5 w-2.5 rounded-full bg-amber-500 ring-2 ring-background transition-transform duration-150 ease-out',
             'group-hover/dot:scale-[1.6] group-focus-within/dot:scale-[1.6]'
           )}
         />
@@ -440,7 +438,7 @@ function CollapsedComment({ comment, viewport, resolvedAnchor, onOpen }: Collaps
       >
         <button
           type="button"
-          className="block w-full overflow-hidden rounded-lg bg-white text-left shadow-[0_12px_30px_rgba(15,23,42,0.18)] ring-1 ring-slate-200 outline-hidden transition-shadow hover:shadow-[0_18px_40px_rgba(15,23,42,0.22)] focus-visible:ring-2 focus-visible:ring-slate-400"
+          className="block w-full overflow-hidden rounded-lg bg-popover text-left text-popover-foreground shadow-[0_12px_30px_rgba(15,23,42,0.18)] ring-1 ring-border outline-hidden transition-shadow hover:shadow-[0_18px_40px_rgba(15,23,42,0.22)] focus-visible:ring-2 focus-visible:ring-ring"
           onClick={(event) => {
             event.stopPropagation();
             onOpen();
@@ -455,10 +453,10 @@ function CollapsedComment({ comment, viewport, resolvedAnchor, onOpen }: Collaps
               {getInitials(comment)}
             </span>
             <div className="min-w-0 flex-1">
-              <p className="flex items-center gap-1.5 text-[11px] font-semibold leading-4 text-slate-900">
+              <p className="flex items-center gap-1.5 text-[11px] font-semibold leading-4 text-popover-foreground">
                 <span className="truncate">{comment.authorName ?? 'Reviewer'}</span>
               </p>
-              <p className="mt-0.5 line-clamp-2 text-[12px] leading-snug text-slate-600">
+              <p className="mt-0.5 line-clamp-2 text-[12px] leading-snug text-popover-foreground/75">
                 {comment.body}
               </p>
             </div>

@@ -7,6 +7,7 @@ import type {
   CheckForElectronUpdateResult,
   CopyImageToClipboardInput,
   CopyImageToClipboardResult,
+  DesktopOnboardingCompleteResult,
   ElectronCliState,
   ElectronAuthCallbackInput,
   ElectronAuthCallbackSession,
@@ -523,6 +524,9 @@ const api = {
   },
   getWindowFullscreen: async (): Promise<boolean> => {
     return await ipcRenderer.invoke('lodyWindow:getFullscreen')
+  },
+  completeOnboarding: async (): Promise<DesktopOnboardingCompleteResult> => {
+    return await ipcRenderer.invoke('lodyOnboarding:complete')
   },
   getNotificationPermissionStatus: async () => {
     return await ipcRenderer.invoke('lodyNotifications:getPermissionStatus')

@@ -3,6 +3,7 @@ import type {
   CheckForElectronUpdateResult,
   CopyImageToClipboardInput,
   CopyImageToClipboardResult,
+  DesktopOnboardingCompleteResult,
   ElectronAutoLaunchStatusResult,
   ElectronAuthCallbackInput,
   ElectronAuthCallbackSession,
@@ -237,6 +238,7 @@ type LodyRendererApi = {
   onMenuAction: (handler: (action: string) => void) => () => void
   onWindowFullscreenChanged: (handler: (isFullscreen: boolean) => void) => () => void
   getWindowFullscreen: () => Promise<boolean>
+  completeOnboarding: () => Promise<DesktopOnboardingCompleteResult>
   getNotificationPermissionStatus: () => Promise<GetNotificationPermissionStatusResult>
   openSystemNotificationSettings: () => Promise<OpenSystemNotificationSettingsResult>
   getAutoLaunchStatus: () => Promise<ElectronAutoLaunchStatusResult>

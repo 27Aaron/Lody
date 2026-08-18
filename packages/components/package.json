@@ -134,6 +134,8 @@
     "date-fns": "^4.1.0",
     "debug": "^4.4.3",
     "effect": "catalog:",
+    "@paper-design/shaders-react": "^0.0.77",
+    "@web-kits/audio": "^0.1.0",
     "framer-motion": "^12.23.6",
     "fuse.js": "^7.1.0",
     "highlight.js": "^11.11.1",

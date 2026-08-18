@@ -171,7 +171,8 @@ function useLocalOrganizationState(): UseOrganizationResult {
   const session = usePlatformSession();
   return useMemo(() => {
     const user = session.status === 'authenticated' ? session.user : null;
-    const activeOrganization = workspace && user ? buildLocalActiveOrganization(workspace, user) : null;
+    const activeOrganization =
+      workspace && user ? buildLocalActiveOrganization(workspace, user) : null;
     const loading = activeOrganization === null;
     return {
       organizations: activeOrganization ? [activeOrganization] : undefined,
@@ -184,6 +185,7 @@ function useLocalOrganizationState(): UseOrganizationResult {
       loading,
       error: null,
       activeOrganization,
+      activateOrganization: () => Promise.resolve(),
       switchOrganization: () => Promise.resolve(),
       createOrganization: rejectLocalWorkspaceMutation,
       updateOrganization: rejectLocalWorkspaceMutation,
@@ -421,25 +423,30 @@ function useCloudOrganizationState(options?: UseOrganizationOptions) {
     [authClient, resolvedActiveOrganization?.id, user?.id]
   );
 
-  /**
-   * Switch active organization.
-   *
-   * This is best-effort:
-   * - Clears local workspace state for the previous org (if any).
-   * - Calls better-auth `setActive`.
-   * - Stores a human-readable error message on failure.
-   */
-  const switchOrganization = useCallback(
+  /** Switch active organization and surface failure to callers that must await it. */
+  const activateOrganization = useCallback(
     async (organizationId: string) => {
       try {
         await switchOrganizationOrThrow(organizationId);
         setMutationError(null);
       } catch (err) {
-        console.error('Failed to switch organization:', err);
         setMutationError('Failed to switch organization');
+        throw err;
       }
     },
     [switchOrganizationOrThrow]
+  );
+
+  /** Best-effort compatibility path for UI that reports failure through hook state. */
+  const switchOrganization = useCallback(
+    async (organizationId: string) => {
+      try {
+        await activateOrganization(organizationId);
+      } catch (err) {
+        console.error('Failed to switch organization:', err);
+      }
+    },
+    [activateOrganization]
   );
 
   useEffect(() => {
@@ -762,6 +769,7 @@ function useCloudOrganizationState(options?: UseOrganizationOptions) {
       (shouldSurfaceActiveOrganizationError ? activeOrganizationError : null) ||
       mutationErrorObject,
     activeOrganization: resolvedActiveOrganization,
+    activateOrganization,
     switchOrganization,
     createOrganization,
     updateOrganization,

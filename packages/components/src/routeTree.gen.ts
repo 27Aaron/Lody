@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as ResetPasswordRouteImport } from './routes/reset-password'
+import { Route as OnboardingRouteImport } from './routes/onboarding'
 import { Route as NotFoundRouteImport } from './routes/notFound'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as ForgotPasswordRouteImport } from './routes/forgot-password'
@@ -58,6 +59,11 @@ import { Route as WorkspaceNameAuthLocalMachineIdLocalProjectIdRouteImport } fro
 const ResetPasswordRoute = ResetPasswordRouteImport.update({
   id: '/reset-password',
   path: '/reset-password',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OnboardingRoute = OnboardingRouteImport.update({
+  id: '/onboarding',
+  path: '/onboarding',
   getParentRoute: () => rootRouteImport,
 } as any)
 const NotFoundRoute = NotFoundRouteImport.update({
@@ -317,6 +323,7 @@ export interface FileRoutesByFullPath {
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
   '/notFound': typeof NotFoundRoute
+  '/onboarding': typeof OnboardingRoute
   '/reset-password': typeof ResetPasswordRoute
   '/desktop/checkout-return': typeof DesktopCheckoutReturnRoute
   '/desktop/github-install': typeof DesktopGithubInstallRoute
@@ -362,6 +369,7 @@ export interface FileRoutesByTo {
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
   '/notFound': typeof NotFoundRoute
+  '/onboarding': typeof OnboardingRoute
   '/reset-password': typeof ResetPasswordRoute
   '/$workspaceName': typeof WorkspaceNameIndexRoute
   '/desktop/checkout-return': typeof DesktopCheckoutReturnRoute
@@ -408,6 +416,7 @@ export interface FileRoutesById {
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
   '/notFound': typeof NotFoundRoute
+  '/onboarding': typeof OnboardingRoute
   '/reset-password': typeof ResetPasswordRoute
   '/$workspaceName/_auth': typeof WorkspaceNameAuthRouteWithChildren
   '/desktop/checkout-return': typeof DesktopCheckoutReturnRoute
@@ -457,6 +466,7 @@ export interface FileRouteTypes {
     | '/forgot-password'
     | '/login'
     | '/notFound'
+    | '/onboarding'
     | '/reset-password'
     | '/desktop/checkout-return'
     | '/desktop/github-install'
@@ -502,6 +512,7 @@ export interface FileRouteTypes {
     | '/forgot-password'
     | '/login'
     | '/notFound'
+    | '/onboarding'
     | '/reset-password'
     | '/$workspaceName'
     | '/desktop/checkout-return'
@@ -547,6 +558,7 @@ export interface FileRouteTypes {
     | '/forgot-password'
     | '/login'
     | '/notFound'
+    | '/onboarding'
     | '/reset-password'
     | '/$workspaceName/_auth'
     | '/desktop/checkout-return'
@@ -595,6 +607,7 @@ export interface RootRouteChildren {
   ForgotPasswordRoute: typeof ForgotPasswordRoute
   LoginRoute: typeof LoginRoute
   NotFoundRoute: typeof NotFoundRoute
+  OnboardingRoute: typeof OnboardingRoute
   ResetPasswordRoute: typeof ResetPasswordRoute
   DesktopCheckoutReturnRoute: typeof DesktopCheckoutReturnRoute
   DesktopGithubInstallRoute: typeof DesktopGithubInstallRoute
@@ -610,6 +623,13 @@ declare module '@tanstack/react-router' {
       path: '/reset-password'
       fullPath: '/reset-password'
       preLoaderRoute: typeof ResetPasswordRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/onboarding': {
+      id: '/onboarding'
+      path: '/onboarding'
+      fullPath: '/onboarding'
+      preLoaderRoute: typeof OnboardingRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/notFound': {
@@ -1051,6 +1071,7 @@ const rootRouteChildren: RootRouteChildren = {
   ForgotPasswordRoute: ForgotPasswordRoute,
   LoginRoute: LoginRoute,
   NotFoundRoute: NotFoundRoute,
+  OnboardingRoute: OnboardingRoute,
   ResetPasswordRoute: ResetPasswordRoute,
   DesktopCheckoutReturnRoute: DesktopCheckoutReturnRoute,
   DesktopGithubInstallRoute: DesktopGithubInstallRoute,

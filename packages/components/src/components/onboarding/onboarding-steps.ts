@@ -1,50 +1,55 @@
-import { isLocalAppPlatform } from '@/lib/app-platform';
+import { createContext, createElement, useContext, type ReactNode } from 'react';
 
-/**
- * Single source of truth for the onboarding step ordering. Keeping the order
- * here means the indicator dots, the eyebrow counter, and the orchestrator's
- * phase enum can never drift from each other.
- *
- * The CLI loading screen sits *before* step 1 — it has no dot of its own.
- *
- * The local (open-source) platform has no cloud account, so the Convex-backed
- * workspace and invite steps do not exist there; the platform decides the
- * step list at this definition level.
- */
 const ALL_ONBOARDING_STEPS = [
+  'ceremony',
+  'login',
   'language',
   'theme',
+  'appearance',
   'workspace',
   'invite',
   'providers',
   'projects',
+  'firstTask',
+  'summary',
 ] as const;
 
 export type OnboardingStepKey = (typeof ALL_ONBOARDING_STEPS)[number];
 
-const LOCAL_PLATFORM_ONBOARDING_STEPS: readonly OnboardingStepKey[] = [
-  'language',
-  'theme',
-  'providers',
-  'projects',
-];
-
-export const ONBOARDING_STEPS: readonly OnboardingStepKey[] = isLocalAppPlatform()
-  ? LOCAL_PLATFORM_ONBOARDING_STEPS
-  : ALL_ONBOARDING_STEPS;
-
-export const ONBOARDING_TOTAL_STEPS = ONBOARDING_STEPS.length;
-
-export function isOnboardingStepEnabled(step: OnboardingStepKey): boolean {
-  return ONBOARDING_STEPS.includes(step);
+export function getDesktopOnboardingSteps(input: {
+  cloudAccount: boolean;
+  multiWorkspace: boolean;
+}): readonly OnboardingStepKey[] {
+  return [
+    'ceremony',
+    ...(input.cloudAccount ? (['login'] as const) : []),
+    ...(input.multiWorkspace ? (['workspace'] as const) : []),
+    'providers',
+    'projects',
+    'firstTask',
+  ];
 }
 
-export function getOnboardingStepPosition(step: OnboardingStepKey): {
+const OnboardingStepsContext = createContext<readonly OnboardingStepKey[]>(ALL_ONBOARDING_STEPS);
+
+export function OnboardingStepsProvider({
+  steps,
+  children,
+}: {
+  steps: readonly OnboardingStepKey[];
+  children: ReactNode;
+}) {
+  return createElement(OnboardingStepsContext.Provider, { value: steps }, children);
+}
+
+export function useOnboardingStepPosition(step: OnboardingStepKey): {
   current: number;
   total: number;
 } {
+  const steps = useContext(OnboardingStepsContext);
+  const index = steps.indexOf(step);
   return {
-    current: ONBOARDING_STEPS.indexOf(step) + 1,
-    total: ONBOARDING_TOTAL_STEPS,
+    current: index === -1 ? 1 : index + 1,
+    total: steps.length,
   };
 }

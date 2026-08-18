@@ -3,15 +3,8 @@ import { lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useOrganization } from '@/hooks/useOrganization';
 import { useAtomValue, useSetAtom } from 'jotai';
-import {
-  currentWorkspaceIdAtom,
-  desktopOnboardingCompletedAtom,
-  runtimeInitializingAtom,
-  userAtom,
-} from '@/atoms';
-import { isElectronRenderer } from '@/lib/electron';
+import { currentWorkspaceIdAtom, runtimeInitializingAtom, userAtom } from '@/atoms';
 import { WorkspaceCheckoutPendingDialog } from '@/components/workspace-checkout-pending-dialog';
-import { OnboardingOverlay } from '@/components/onboarding';
 import { ElectronSessionCompletionNotifier } from '@/components/electron-session-completion-notifier';
 import { ElectronMenuHandler } from '@/components/electron-menu-handler';
 import { AppCommands } from '@/components/app-commands';
@@ -96,7 +89,6 @@ function LocalPlatformLayoutContent({ workspaceName }: { workspaceName: string }
         <AppCommands />
         <CommandPalette />
         <AutoArchivePrWatcher />
-        <DesktopOnboardingGate />
       </LazyMainLayout>
     </RouteSuspense>
   );
@@ -382,7 +374,6 @@ function AuthedLayoutContent({
           <CommandPalette />
           <AutoArchivePrWatcher />
           <WorkspaceCheckoutPendingDialog />
-          <DesktopOnboardingGate />
         </LazyMainLayout>
       </RouteSuspense>
     );
@@ -447,23 +438,9 @@ function AuthedLayoutContent({
         <CommandPalette />
         <AutoArchivePrWatcher />
         <WorkspaceCheckoutPendingDialog />
-        <DesktopOnboardingGate />
       </LazyMainLayout>
     </RouteSuspense>
   );
-}
-
-/**
- * Mounts the desktop first-run onboarding overlay after the workspace layout
- * is up. Rendering inside `LazyMainLayout` (rather than as a sibling) keeps
- * the underlying app state — runtime, atoms, queries — alive so screens 2/3
- * can read project + provider data live, then dismount cleanly when finished.
- */
-function DesktopOnboardingGate() {
-  const completed = useAtomValue(desktopOnboardingCompletedAtom);
-  if (completed) return null;
-  if (!isElectronRenderer()) return null;
-  return <OnboardingOverlay />;
 }
 
 function AuthedWorkspaceRouteTracker() {
