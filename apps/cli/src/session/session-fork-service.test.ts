@@ -145,11 +145,13 @@ function createForkHarness(
       }
     }),
     read: vi.fn(
-      async (targetSessionId: SessionId) =>
-        markers.find((entry) => entry.targetSessionId === targetSessionId) ?? null
+      async (requestedTargetSessionId: SessionId) =>
+        markers.find((entry) => entry.targetSessionId === requestedTargetSessionId) ?? null
     ),
-    clear: vi.fn(async (targetSessionId: SessionId) => {
-      const index = markers.findIndex((marker) => marker.targetSessionId === targetSessionId);
+    clear: vi.fn(async (requestedTargetSessionId: SessionId) => {
+      const index = markers.findIndex(
+        (marker) => marker.targetSessionId === requestedTargetSessionId
+      );
       if (index >= 0) {
         markers.splice(index, 1);
       }

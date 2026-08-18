@@ -162,12 +162,12 @@ export function useStickyScroll({
   );
 
   const scrollToRealBottom = useCallback(() => {
-    const scrollElement = scrollElementRef.current;
+    const currentScrollElement = scrollElementRef.current;
     scrollViewportToRealBottom({
       itemCount: itemCountRef.current,
       vlist: vlistRef.current,
-      scrollElement,
-      bottomOffset: getScrollBottomPaddingOffset(scrollElement),
+      scrollElement: currentScrollElement,
+      bottomOffset: getScrollBottomPaddingOffset(currentScrollElement),
     });
   }, [itemCountRef, vlistRef]);
 

@@ -226,11 +226,12 @@ function HookHarness({
     itemCount,
     onAtBottomChange,
   });
+  const { scrollRef } = result;
 
   useLayoutEffect(() => {
-    result.scrollRef(scrollElement);
-    return () => result.scrollRef(null);
-  }, [result.scrollRef, scrollElement]);
+    scrollRef(scrollElement);
+    return () => scrollRef(null);
+  }, [scrollElement, scrollRef]);
 
   useEffect(() => {
     latestResult = result;

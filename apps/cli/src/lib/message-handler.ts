@@ -3642,7 +3642,9 @@ export class MessageHandler {
       logger: this.logger,
       workspaceId: this.workspaceId,
       machineId: this.machineId,
-      enqueueDispatch: (sessionId) => this.sessionDispatchWatcher.enqueueSessionCheck(sessionId),
+      enqueueDispatch: (sessionId) => {
+        void this.sessionDispatchWatcher.enqueueSessionCheck(sessionId);
+      },
     });
     this.operationCoordinator = new LodyOperationCoordinator({
       workspaceId: this.workspaceId,
@@ -9823,7 +9825,7 @@ export class MessageHandler {
    * wants to pause, so we should not automatically process the next message.
    */
   private async processMessageQueue(sessionId: SessionId): Promise<void> {
-    this.sessionDispatchWatcher.enqueueSessionCheck(sessionId);
+    void this.sessionDispatchWatcher.enqueueSessionCheck(sessionId);
   }
 
   // ============================================================================
