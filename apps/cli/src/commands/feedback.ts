@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { version as cliVersion } from '../../package.json';
+import { version as cliVersion } from '@/pkg';
 import {
   getAuthContextOrThrow,
   printJson,

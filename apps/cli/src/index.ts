@@ -5,7 +5,7 @@
 import './utils/sqlite-runtime-support';
 import './instrument';
 import { Command } from 'commander';
-import { version } from '../package.json';
+import { version } from '@/pkg';
 import { startCommand } from './commands/start';
 
 import { appCommand } from './commands/app';

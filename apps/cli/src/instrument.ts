@@ -1,6 +1,10 @@
 import { PostHog } from 'posthog-node';
 import { resolvePlatformKind } from '@lody/shared/platform-kind';
-import { name as packageName, version as packageVersion } from '../package.json';
+// The published package name stays `lody`, but the version must follow the
+// release manifest (`@/pkg`): cloud builds alias it to the composing package so
+// the bundle reports the version that was actually published to npm.
+import { name as packageName } from '../package.json';
+import { version as packageVersion } from '@/pkg';
 import { getRuntimeEnv } from './utils/runtime-env';
 import { getSystemMachineId } from './utils/const';
 import { captureCli, flushCliAnalytics } from './lib/analytics/posthog';

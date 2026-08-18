@@ -1,7 +1,7 @@
 import { Command } from 'commander';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { version } from '../../package.json';
+import { version } from '@/pkg';
 import {
   appendOutputTail,
   CliSupervisor,

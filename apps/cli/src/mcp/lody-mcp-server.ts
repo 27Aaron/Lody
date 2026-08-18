@@ -131,7 +131,7 @@ import {
   runWithOperationStoreBusyRetry,
 } from '@/orchestration/operation-store';
 import { publishTaskProposal } from '@/mcp/task-proposal';
-import { version as cliVersion } from '../../package.json';
+import { version as cliVersion } from '@/pkg';
 import { uploadTaskImages } from '@/lib/task-image-upload';
 import {
   configureWorkspaceMcpServer,

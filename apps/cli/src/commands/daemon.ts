@@ -6,7 +6,7 @@ import {
   requestLocalCliHostShutdown,
   type LocalCliHostRecord,
 } from '@lody/shared/node/local-cli-host-lease';
-import { version } from '../../package.json';
+import { version } from '@/pkg';
 import { LODY_LOG_DIR, readPidFileRecord, spawnDaemonRunnerAndAwaitReady } from './daemon-shared';
 import { flushTelemetry } from '@/instrument';
 import { captureDaemonEvent } from './analytics-events';

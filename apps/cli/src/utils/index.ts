@@ -1,5 +1,5 @@
 import path from 'path';
-import packageJson from '../../package.json';
+import packageJson from '@/pkg';
 import {
   checkClaude,
   checkCodex,

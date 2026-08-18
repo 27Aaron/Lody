@@ -2,7 +2,7 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import os from 'os';
 import { randomUUID } from 'node:crypto';
-import { version } from '../../package.json';
+import { version } from '@/pkg';
 import { Logger, createHybridLogger, getLogger } from '../utils/logger';
 import { registerProcessCleanup, reportError, unregisterProcessCleanup } from '../utils/telemetry';
 import {

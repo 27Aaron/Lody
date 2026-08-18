@@ -36,6 +36,12 @@ Two things the dev build does deliberately, both load-bearing:
 
 ## Coding rules
 
+- The CLI's own `version` must be imported from `@/pkg`, never from a relative
+  `../package.json`. Each build composition aliases `@/pkg` to the manifest that
+  actually gets published (cloud builds point it at the private composing
+  package), so a relative import bakes the stale OSS version into the published
+  bundle — this is what made `lody@0.82.1 --version` print `0.76.0`. The package
+  `name` is the exception: it stays `lody` in every composition.
 - context/cli-effect-ts.md — prefer Effect TS idioms
   for new/refactored CLI code: services via `Context.Tag` + `Layer`, typed errors,
   structured concurrency, `Schedule` retries; when raw async/await is OK; interop.
