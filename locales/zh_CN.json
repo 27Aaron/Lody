@@ -1009,6 +1009,7 @@
   "sharing.privateHelpTitle": "私密资源仅你可见",
   "sharing.privateOnlyYou": "私密 · 仅你可见",
   "sessions.addImage": "添加图片",
+  "sessions.messageChip.collapsePastedText": "收起粘贴文本",
   "sessions.forkSession": "分叉会话",
   "sessions.forkFailed": "无法分叉会话",
   "sessions.forkNoAssistant": "没有可用于分叉的助手回复",
