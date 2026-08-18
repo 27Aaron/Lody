@@ -9,6 +9,8 @@ import { Button } from '@/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/ui/popover';
 import { Progress } from '@/ui/progress';
 import { Separator } from '@/ui/separator';
+import { formatCompactNumber } from '@/lib/format-compact-number';
+import { toIntlLocaleOrEn } from '@/lib/intl-locale';
 import { cn } from '@/lib/utils';
 import { normalizeEpochMs } from '@/lib/normalize-epoch';
 import {
@@ -32,16 +34,6 @@ export type SessionUsagePopoverProps = {
   className?: string;
 };
 
-const formatTokensCompact = (value: number): string => {
-  const formatter = (maximumFractionDigits: number) =>
-    new Intl.NumberFormat(undefined, {
-      notation: 'compact',
-      maximumFractionDigits,
-    }).format(value);
-
-  return formatter(Math.abs(value) >= 100_000 ? 0 : 1);
-};
-
 export const SessionUsagePopover = memo(function SessionUsagePopover({
   contextWindowUsage,
   rateLimits,
@@ -54,6 +46,7 @@ export const SessionUsagePopover = memo(function SessionUsagePopover({
 }: SessionUsagePopoverProps) {
   const { t, i18n } = useTranslation();
   const locale: Locale = i18n.language?.startsWith('zh') ? zhCN : enUS;
+  const intlLocale = toIntlLocaleOrEn(i18n.resolvedLanguage ?? i18n.language);
   const context = getContextWindowUsageData(contextWindowUsage);
   const rateLimit = resolveAgentRateLimitForModel({ rateLimits, agentType, modelId });
   const rateLimitWindows = rateLimit
@@ -159,8 +152,9 @@ export const SessionUsagePopover = memo(function SessionUsagePopover({
           <UsageMeter
             label={t('sessions.usage.context', 'Context')}
             value={context.usedPercentage}
-            detail={`${formatTokensCompact(context.usedTokens)} / ${formatTokensCompact(
-              context.contextWindow
+            detail={`${formatCompactNumber(context.usedTokens, intlLocale)} / ${formatCompactNumber(
+              context.contextWindow,
+              intlLocale
             )}`}
           />
         ) : null}

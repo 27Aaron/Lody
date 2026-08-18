@@ -23,13 +23,15 @@ import {
   Share2,
   X,
 } from 'lucide-react';
+import i18next from 'i18next';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { Avatar, AvatarFallback, AvatarImage } from '@/ui/avatar';
 import { Button } from '@/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/ui/popover';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/ui/tooltip';
-import { toIntlLocale } from '@/lib/intl-locale';
+import { formatCompactNumber, formatUsdAmount } from '@/lib/format-compact-number';
+import { toIntlLocaleOrEn } from '@/lib/intl-locale';
 import { cn } from '@/lib/utils';
 import { ModelBrandIcon } from '@/components/icons/model-brand-icon';
 import { stripRecommended } from '@/components/shared/acp-selector-options';
@@ -84,37 +86,26 @@ const heatColor = (intensity: number) => `hsl(var(--chart-1) / ${intensity.toFix
 const EMPTY_DAY_COLOR = 'hsl(var(--muted-foreground) / 0.14)';
 const FUTURE_DAY_COLOR = 'hsl(var(--muted-foreground) / 0.05)';
 
-function formatTokens(value: number): string {
-  const abs = Math.abs(value);
-  if (abs >= 1_000_000) {
-    const fractionDigits = abs >= 100_000_000 ? 0 : 1;
-    return `${new Intl.NumberFormat(undefined, {
-      minimumFractionDigits: fractionDigits,
-      maximumFractionDigits: fractionDigits,
-    }).format(value / 1_000_000)}M`;
-  }
-  if (abs >= 1_000) {
-    const fractionDigits = abs >= 100_000 ? 0 : 1;
-    return `${new Intl.NumberFormat(undefined, {
-      minimumFractionDigits: fractionDigits,
-      maximumFractionDigits: fractionDigits,
-    }).format(value / 1_000)}K`;
-  }
-  return new Intl.NumberFormat().format(Math.round(value));
+/** Product language for compact units — never the host OS default. */
+function usageIntlLocale(): string {
+  return toIntlLocaleOrEn(i18next.resolvedLanguage ?? i18next.language);
 }
 
-function formatCost(value: number): string {
-  const abs = Math.abs(value);
-  return new Intl.NumberFormat(undefined, {
-    style: 'currency',
-    currency: 'USD',
-    // Daily costs are often fractions of a cent; two digits would render them all as $0.00.
-    maximumFractionDigits: abs > 0 && abs < 1 ? 3 : 2,
-  }).format(value);
+function formatTokens(value: number, locale: string = usageIntlLocale()): string {
+  return formatCompactNumber(value, locale);
 }
 
-function formatMetric(value: number, metric: UsageCalendarMetric): string {
-  return metric === 'tokens' ? formatTokens(value) : formatCost(value);
+function formatCost(value: number, locale: string = usageIntlLocale()): string {
+  // Daily costs are often fractions of a cent; two digits would render them all as $0.00.
+  return formatUsdAmount(value, locale);
+}
+
+function formatMetric(
+  value: number,
+  metric: UsageCalendarMetric,
+  locale: string = usageIntlLocale()
+): string {
+  return metric === 'tokens' ? formatTokens(value, locale) : formatCost(value, locale);
 }
 
 function fileStem(value: string): string {
@@ -189,9 +180,10 @@ const HEATMAP_MIN_TRACK_WIDTH =
 
 function useCalendarFormats() {
   const { i18n } = useTranslation();
-  const locale = toIntlLocale(i18n.resolvedLanguage ?? i18n.language);
+  const locale = toIntlLocaleOrEn(i18n.resolvedLanguage ?? i18n.language);
   return useMemo(
     () => ({
+      locale,
       month: new Intl.DateTimeFormat(locale, { month: 'short', timeZone: 'UTC' }),
       weekday: new Intl.DateTimeFormat(locale, { weekday: 'short', timeZone: 'UTC' }),
       /** Compact span endpoints such as "Jul 20"; the year lives in the range label. */
@@ -901,6 +893,7 @@ function UsageTokenRings({
   metric: UsageCalendarMetric;
   reduced: boolean;
 }) {
+  const { locale } = useCalendarFormats();
   const center = RING_VIEWBOX / 2;
   const slices = useMemo(() => {
     let start = 0;
@@ -959,10 +952,11 @@ function UsageTokenRings({
             {metric === 'tokens' ? (
               <NumberFlow
                 value={total}
+                locales={locale}
                 format={{ notation: 'compact', maximumFractionDigits: 1 }}
               />
             ) : (
-              formatCost(total)
+              formatCost(total, locale)
             )}
           </span>
           <span className="mt-1 w-full truncate text-[9px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
@@ -1594,6 +1588,7 @@ function UsageDayDetailPanel({
 }) {
   const { t } = useTranslation();
   const formats = useCalendarFormats();
+  const { locale } = formats;
   // While a new day is in flight the previous payload is still mounted; only
   // render numbers once they belong to the day the user actually clicked.
   const day = detail?.dayStartMs === dayStartMs ? detail : undefined;
@@ -1657,6 +1652,7 @@ function UsageDayDetailPanel({
                 {day ? (
                   <NumberFlow
                     value={day.totals.tokens}
+                    locales={locale}
                     format={{ notation: 'compact', maximumFractionDigits: 1 }}
                   />
                 ) : (
@@ -1668,7 +1664,7 @@ function UsageDayDetailPanel({
             <p className="mt-1.5 min-h-4 text-xs tabular-nums text-muted-foreground">
               {day
                 ? [
-                    formatCost(day.totals.costUSD),
+                    formatCost(day.totals.costUSD, locale),
                     day.totals.webSearchRequests > 0
                       ? t('workspace.usage.skyline.webSearches', {
                           count: day.totals.webSearchRequests,

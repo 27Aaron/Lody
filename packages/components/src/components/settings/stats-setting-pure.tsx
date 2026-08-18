@@ -1,7 +1,9 @@
-import { lazy, Suspense, type ReactNode } from 'react';
+import { lazy, Suspense, useMemo, type ReactNode } from 'react';
 import NumberFlow from '@number-flow/react';
 import { useTranslation } from 'react-i18next';
 import { Coins, DollarSign } from 'lucide-react';
+import { formatCompactNumber, formatUsdAmount } from '@/lib/format-compact-number';
+import { toIntlLocaleOrEn } from '@/lib/intl-locale';
 import { cn } from '@/lib/utils';
 import {
   UsageStackedAreaChart,
@@ -60,35 +62,19 @@ const UsageCalendarVisualization = lazy(async () => {
   return { default: module.UsageCalendarVisualization };
 });
 
-export function formatTokens(value: number): string {
-  return new Intl.NumberFormat().format(Math.round(value));
+export function formatTokens(value: number, locale?: string | null): string {
+  return new Intl.NumberFormat(locale ?? 'en').format(Math.round(value));
 }
 
-export function formatTokensCompact(value: number): string {
-  const abs = Math.abs(value);
-  const sign = value < 0 ? '-' : '';
-  const trim = (input: string) =>
-    input.includes('.') ? input.replace(/0+$/, '').replace(/\.$/, '') : input;
-  if (abs >= 1_000_000) {
-    const scaled = abs / 1_000_000;
-    const digits = scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2;
-    return `${sign}${trim(scaled.toFixed(digits))}M`;
-  }
-  if (abs >= 1_000) {
-    const scaled = abs / 1_000;
-    const digits = scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2;
-    return `${sign}${trim(scaled.toFixed(digits))}K`;
-  }
-  return `${sign}${formatTokens(abs)}`;
+export function formatTokensCompact(value: number, locale?: string | null): string {
+  return formatCompactNumber(value, locale);
 }
 
-export function formatUSD(value: number): string {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
+export function formatUSD(value: number, locale?: string | null): string {
+  return formatUsdAmount(value, locale, {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  }).format(value);
+  });
 }
 
 type NumberFlowFormat = {
@@ -105,15 +91,17 @@ function CountUpValue({
   value,
   ready,
   format,
+  locale,
   suffix,
 }: {
   value: number;
   ready: boolean;
   format: NumberFlowFormat;
+  locale: string;
   suffix?: string;
 }) {
   if (!ready) return <>—</>;
-  return <NumberFlow value={value} locales="en-US" format={format} suffix={suffix} />;
+  return <NumberFlow value={value} locales={locale} format={format} suffix={suffix} />;
 }
 
 function StatTile({
@@ -204,9 +192,14 @@ export function StatsSettingsView({
   tintMemberSeriesLabel,
   costFractionDigits = 2,
 }: StatsSettingsViewProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const locale = toIntlLocaleOrEn(i18n.resolvedLanguage ?? i18n.language);
   const windowCaption = t(`workspace.usage.window.${range}.long`);
   const costDigits = Math.max(0, Math.min(2, costFractionDigits));
+  const tokensCompact = useMemo(
+    () => (value: number) => formatTokensCompact(value, locale),
+    [locale]
+  );
   return (
     <div className="space-y-4">
       {/* Page header — no redundant "Usage" title (the settings tab already
@@ -230,10 +223,10 @@ export function StatsSettingsView({
           }
         >
           <CountUpValue
-            value={(totals?.tokens ?? 0) / 1_000_000}
+            value={totals?.tokens ?? 0}
             ready={ready}
-            format={{ maximumFractionDigits: 1 }}
-            suffix="M"
+            locale={locale}
+            format={{ notation: 'compact', maximumFractionDigits: 1 }}
           />
         </StatTile>
         <StatTile
@@ -245,6 +238,7 @@ export function StatsSettingsView({
           <CountUpValue
             value={totals?.costUSD ?? 0}
             ready={ready}
+            locale={locale}
             format={{
               style: 'currency',
               currency: 'USD',
@@ -273,8 +267,8 @@ export function StatsSettingsView({
         title={t('workspace.usage.byModel')}
         buckets={byModelBuckets}
         emptyText={t('workspace.usage.empty', 'No usage data in this range')}
-        valueFormatter={formatTokensCompact}
-        tooltipValueFormatter={formatTokensCompact}
+        valueFormatter={tokensCompact}
+        tooltipValueFormatter={tokensCompact}
         renderSeriesMarker={renderModelSeriesMarker}
         tintSeriesLabel={tintModelSeriesLabel}
       />
@@ -282,8 +276,8 @@ export function StatsSettingsView({
         title={t('workspace.usage.byUser')}
         buckets={byMemberBuckets}
         emptyText={t('workspace.usage.empty', 'No usage data in this range')}
-        valueFormatter={formatTokensCompact}
-        tooltipValueFormatter={formatTokensCompact}
+        valueFormatter={tokensCompact}
+        tooltipValueFormatter={tokensCompact}
         renderSeriesMarker={renderMemberSeriesMarker}
         tintSeriesLabel={tintMemberSeriesLabel}
       />

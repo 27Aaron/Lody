@@ -11,6 +11,8 @@ mobile surfaces.
 - Regenerate TanStack routes after changing route files.
 - Add Storybook coverage for new presentational components and meaningful states.
 - All user-visible copy must go through i18n.
+- Compact number units (K/M/B vs 万/亿) follow the product language via
+  `toIntlLocaleOrEn` / `formatCompactNumber`, never the host OS locale.
 - Prefer shared primitives from `src/components/ui` over private replacements.
 - An editable control fills with `bg-input-field`, never `bg-input`. `--input` is the
   theme's raw `input.background` and doubles as a muted chip/composer slab that may sit

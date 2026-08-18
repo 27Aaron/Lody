@@ -11,3 +11,7 @@ export const toIntlLocale = (language: string | null | undefined): string | unde
     return undefined;
   }
 };
+
+/** Prefer the product language; fall back to English so OS locale never leaks units. */
+export const toIntlLocaleOrEn = (language: string | null | undefined): string =>
+  toIntlLocale(language) ?? 'en';
