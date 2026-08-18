@@ -348,5 +348,50 @@ describe('WorktreeManager', () => {
       expect(info.branch).toBe(restoreBranch);
       expect(info.headSha).toBe(restoredHead);
     });
+
+    it('should restore an existing worktree when origin is unreachable', async () => {
+      const { remoteBareDir } = createRemoteRepo(testDir, 'main');
+      manager.updateRepoUrl(toFileUrl(remoteBareDir));
+
+      const sessionId = 'roffl01-existing-worktree' as SessionId;
+      const created = await manager.createWorktree(sessionId);
+
+      fs.rmSync(remoteBareDir, { recursive: true, force: true });
+
+      const restored = await manager.createWorktree(sessionId);
+      expect(restored.hostPath).toBe(created.hostPath);
+      expect(restored.branch).toBe(created.branch);
+      expect(restored.headSha).toBe(created.headSha);
+    });
+
+    it('should restore from an existing branch when origin is unreachable', async () => {
+      const { remoteBareDir } = createRemoteRepo(testDir, 'main');
+      manager.updateRepoUrl(toFileUrl(remoteBareDir));
+
+      const sessionId = 'roffl02-existing-branch' as SessionId;
+      const created = await manager.createWorktree(sessionId);
+
+      // Remove the worktree but keep the session branch, then kill origin.
+      // @ts-expect-error - accessing private property for testing
+      runGit(manager.bareGitDir, ['worktree', 'remove', '--force', created.hostPath]);
+      fs.rmSync(remoteBareDir, { recursive: true, force: true });
+
+      const restored = await manager.createWorktree(sessionId);
+      expect(restored.branch).toBe(created.branch);
+      expect(restored.headSha).toBe(created.headSha);
+      expect(fs.existsSync(restored.hostPath)).toBe(true);
+    });
+
+    it('should still require a reachable origin when cutting a fresh worktree', async () => {
+      const { remoteBareDir } = createRemoteRepo(testDir, 'main');
+      manager.updateRepoUrl(toFileUrl(remoteBareDir));
+      await manager.ensureRepo();
+
+      fs.rmSync(remoteBareDir, { recursive: true, force: true });
+
+      await expect(manager.createWorktree('roffl03-fresh-cut' as SessionId)).rejects.toThrow(
+        /Failed to fetch from origin/
+      );
+    });
   });
 });

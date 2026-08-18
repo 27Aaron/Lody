@@ -1292,13 +1292,11 @@ export class WorktreeManager {
   ): Promise<WorktreeInfo> {
     return withRepoLock(this.repoId, async () => {
       assertSafeSessionId(sessionId);
-      // Ensure we have latest origin refs before cutting worktrees.
-      await this.ensureRepoLocked(this.repoUrl ? 'required' : 'skip');
-
       const worktreePath = this.getWorktreeHostPath(sessionId);
       const gitAdminCwd = this.getGitAdminCwd();
 
-      // Check if worktree already exists
+      // Check if worktree already exists. Restoring an on-disk worktree only
+      // reads local git state, so it must not depend on origin being reachable.
       if (fs.existsSync(worktreePath)) {
         this.ensureWorktreeGitdirIsRelative(sessionId);
         const info = await this.getWorktreeInfo(sessionId);
@@ -1314,6 +1312,14 @@ export class WorktreeManager {
       }
 
       const existingBranchName = await this.resolveExistingBranchName(sessionId, restoreBranchName);
+
+      // Cutting a fresh branch needs up-to-date origin refs for its base, so the
+      // fetch is required there. Restoring from an existing local branch only
+      // needs local refs; fetch best-effort so an unreachable origin (offline,
+      // dead proxy) does not block the restore.
+      await this.ensureRepoLocked(
+        this.repoUrl ? (existingBranchName ? 'best-effort' : 'required') : 'skip'
+      );
 
       if (existingBranchName) {
         if (exactStartPoint) {
