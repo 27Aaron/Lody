@@ -1,8 +1,5 @@
 import * as React from 'react';
-import {
-  forEachAtTokenSpan,
-  type HydratedMentions,
-} from '@/components/mentions/mention-hydration';
+import { forEachAtTokenSpan, type HydratedMentions } from '@/components/mentions/mention-hydration';
 import { useAtomValue } from 'jotai';
 import { usePostHog } from '@posthog/react';
 import { z } from 'zod';
@@ -686,6 +683,7 @@ export const FileAtMentionTextarea = React.forwardRef<
         onValueChange={handleMentionValuesChange}
         onFilter={(options) => options}
         autoCloseOnEmpty={false}
+        loop
         className="w-full"
       >
         <FileAtMentionHydrator

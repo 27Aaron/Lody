@@ -52,10 +52,7 @@ import {
 } from '@/components/mentions/mention-skill-source';
 import { type AcpCommandSummary } from '@lody/shared';
 import { Mention, MentionInput, MentionLabel, useMentionContext } from '@/ui/mention';
-import type {
-  Mention as MentionRange,
-  MentionChipResolver,
-} from '@/ui/mention/index';
+import type { Mention as MentionRange, MentionChipResolver } from '@/ui/mention/index';
 import { Textarea, type TextareaProps } from '@/ui/textarea';
 
 // ============================================================================
@@ -717,6 +714,7 @@ export const CombinedMentionTextarea = React.forwardRef<
         onValueChange={handleMentionValuesChange}
         onFilter={(options) => options}
         autoCloseOnEmpty={false}
+        loop
         className="w-full"
       >
         <FileMentionHydrator

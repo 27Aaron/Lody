@@ -6,7 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /** Records the `enabled` argument the composer passes to the skills scan. */
 const skillScanEnabled: boolean[] = [];
-const sessionItems: Array<{ sessionId: string; title: string; slug: string }> = [];
+const sessionItems: Array<{
+  sessionId: string;
+  title: string;
+  slug: string;
+  activityAt?: number;
+}> = [];
 
 vi.mock('../src/components/mentions/mention-project-file-source', async (importOriginal) => ({
   ...(await importOriginal<object>()),
@@ -44,9 +49,12 @@ import { initI18n } from '../src/i18n';
 describe('CombinedMentionTextarea mention enablement and activation', () => {
   let root: Root;
   let container: HTMLDivElement;
+  let originalScrollIntoView: typeof HTMLElement.prototype.scrollIntoView | undefined;
 
   beforeEach(async () => {
     await initI18n('en');
+    originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = vi.fn();
     skillScanEnabled.length = 0;
     sessionItems.length = 0;
     container = document.createElement('div');
@@ -57,21 +65,33 @@ describe('CombinedMentionTextarea mention enablement and activation', () => {
   afterEach(async () => {
     await act(async () => root.unmount());
     container.remove();
+    if (originalScrollIntoView) {
+      HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
+    } else {
+      delete (
+        HTMLElement.prototype as { scrollIntoView?: typeof HTMLElement.prototype.scrollIntoView }
+      ).scrollIntoView;
+    }
   });
 
   async function render(props: {
     value: string;
     skillAgent?: { machineId?: string; cliType?: string };
   }) {
-    await act(async () => {
-      root.render(
+    function ControlledComposer() {
+      const [value, setValue] = React.useState(props.value);
+      return (
         <CombinedMentionTextarea
-          value={props.value}
-          onValueChange={() => undefined}
+          value={value}
+          onValueChange={setValue}
           skillAgent={props.skillAgent as never}
           resetOnEmpty={false}
         />
       );
+    }
+
+    await act(async () => {
+      root.render(<ControlledComposer />);
     });
   }
 
@@ -86,6 +106,11 @@ describe('CombinedMentionTextarea mention enablement and activation', () => {
    */
   function mentionTreeMounted() {
     return container.querySelector('label') !== null;
+  }
+
+  function highlightedRowText() {
+    return document.querySelector<HTMLElement>('[data-slot="mention-item"][data-highlighted]')
+      ?.textContent;
   }
 
   /** Types into the composer the way the mention primitive observes it. */
@@ -118,6 +143,34 @@ describe('CombinedMentionTextarea mention enablement and activation', () => {
     await render({ value: '' });
 
     expect(mentionTreeMounted()).toBe(true);
+  });
+
+  it('wraps ArrowUp from the first @ result and continues in reverse order', async () => {
+    sessionItems.push(
+      { sessionId: 's1', title: 'First session', slug: 'first-session', activityAt: 3 },
+      { sessionId: 's2', title: 'Second session', slug: 'second-session', activityAt: 2 },
+      { sessionId: 's3', title: 'Third session', slug: 'third-session', activityAt: 1 }
+    );
+    await render({ value: '' });
+    await typeInto('@session:');
+
+    const input = textarea();
+    if (!input) throw new Error('composer textarea missing');
+    expect(highlightedRowText()).toContain('First session');
+
+    await act(async () => {
+      input.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true })
+      );
+    });
+    expect(highlightedRowText()).toContain('Third session');
+
+    await act(async () => {
+      input.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true })
+      );
+    });
+    expect(highlightedRowText()).toContain('Second session');
   });
 
   it('does not scan skills until something asks for them', async () => {
