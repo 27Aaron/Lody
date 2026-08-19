@@ -84,7 +84,7 @@ describe('locked Kimi ACP package', () => {
         child.kill('SIGTERM');
         await Promise.race([
           once(child, 'exit'),
-          new Promise<void>((resolve) => setTimeout(resolve, 1_000)),
+          new Promise<void>((resolveTimeout) => setTimeout(resolveTimeout, 1_000)),
         ]);
         await rm(home, { recursive: true, force: true });
       }
