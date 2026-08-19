@@ -36,7 +36,7 @@ import {
   type TaskBoardColumns,
   type TaskBoardMove,
 } from './task-board-move';
-import { resolveBoardWheelScroll, type BoardWheelScroller } from './task-board-wheel';
+import { resolveBoardWheelScroll } from './task-board-wheel';
 import { cn } from '@/lib/utils';
 import { CachedAvatarImg } from '@/components/cached-avatar-img';
 import { formatShortMonthYear } from '@/lib/format-relative-time';
@@ -600,7 +600,7 @@ function BoardColumn({
   const highlight = isOver || isDropTarget;
 
   return (
-    <section className="flex h-full w-72 shrink-0 flex-col gap-2">
+    <section data-task-board-column="" className="flex h-full w-72 shrink-0 flex-col gap-2">
       <header className="flex shrink-0 items-center gap-2 px-1">
         <presentation.Icon className={cn('h-3.5 w-3.5', presentation.className)} />
         <h2 className="text-[11px] font-medium tracking-wide text-muted-foreground">
@@ -640,27 +640,14 @@ function BoardColumn({
   );
 }
 
-/** Vertical scrollers from the wheel target up to (excluding) the board root. */
-function collectVerticalScrollers(
-  target: EventTarget | null,
-  boundary: HTMLElement
-): BoardWheelScroller[] {
-  const scrollers: BoardWheelScroller[] = [];
+/** True when the wheel target sits inside a column, up to (excluding) the board. */
+function isInsideBoardColumn(target: EventTarget | null, boundary: HTMLElement): boolean {
   let node = target instanceof Element ? target : null;
   while (node && node !== boundary) {
-    if (node instanceof HTMLElement) {
-      const overflowY = getComputedStyle(node).overflowY;
-      if (overflowY === 'auto' || overflowY === 'scroll') {
-        scrollers.push({
-          scrollTop: node.scrollTop,
-          scrollHeight: node.scrollHeight,
-          clientHeight: node.clientHeight,
-        });
-      }
-    }
+    if (node instanceof HTMLElement && node.dataset.taskBoardColumn != null) return true;
     node = node.parentElement;
   }
-  return scrollers;
+  return false;
 }
 
 /**
@@ -681,7 +668,7 @@ function useBoardWheelScroll(enabled: boolean) {
       const delta = resolveBoardWheelScroll({
         deltaX: event.deltaX,
         deltaY: event.deltaY,
-        scrollers: collectVerticalScrollers(event.target, board),
+        insideColumn: isInsideBoardColumn(event.target, board),
         board,
       });
       if (delta === null) return;

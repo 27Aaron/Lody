@@ -51,6 +51,9 @@ starts now and a Task for work recorded for later.
   defaults.
 - Board view always renders every status column; list view omits empty groups. List rows
   are fixed-height single lines, not stacked cards.
+- Board wheel remaps a vertical mouse wheel to horizontal board scroll only when the
+  pointer is outside a column. A column under the pointer owns the wheel even at its
+  scroll ends — never chain that overscroll sideways.
 - Board drag-and-drop updates only the moved row's fractional `order`; cross-column
   moves also update `status`. List view is not draggable.
 - The desktop shell pins All Tasks and opens Task details as closable tabs. The URL is
