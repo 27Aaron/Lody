@@ -94,7 +94,8 @@ export function collectPendingScheduledTasksFromHistory(
     for (const rawItem of entry.items ?? []) {
       const item = asRecord(rawItem);
       if (!item || item.type !== 'tool_call' || item.status !== 'completed') continue;
-      const toolName = asString(item.title);
+      // `toolName` is the canonical name; older history pinned it into `title`.
+      const toolName = asString(item.toolName) ?? asString(item.title);
       if (!toolName) continue;
       const rawInput = asRecord(item.rawInput) ?? {};
 

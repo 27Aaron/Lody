@@ -25,7 +25,7 @@ import grokPackageJson from '../../../../packages/acp-extension-grok/package.jso
 import grokRuntimeManifestJson from '../../../../packages/acp-extension-grok/runtime-manifest.json';
 import claudeSdkManifestJson from '../../node_modules/@anthropic-ai/claude-agent-sdk/manifest.json';
 import claudeSdkPackageJson from '../../node_modules/@anthropic-ai/claude-agent-sdk/package.json';
-import kimiCodePackageJson from '../../node_modules/@moonshot-ai/kimi-code/package.json';
+import kimiRuntimeManifestJson from './kimi-runtime-manifest.json';
 
 import {
   getManagedBuiltinRuntimeByRuntimeName,
@@ -258,12 +258,12 @@ if (claudeSdkPackageJson.version !== CLAUDE_AGENT_SDK_VERSION) {
 export const CODEX_ACP_ADAPTER_VERSION = codexPackageJson.version;
 export const CLAUDE_ACP_ADAPTER_VERSION = claudePackageJson.version;
 export const CLAUDE_CODE_RUNTIME_VERSION = claudeSdkManifestJson.version;
-export const KIMI_CODE_VERSION = kimiCodePackageJson.version;
+export const KIMI_CODE_VERSION = kimiRuntimeManifestJson.version;
 export const GROK_ACP_ADAPTER_VERSION = grokPackageJson.version;
 export const GROK_BUILD_RUNTIME_VERSION = grokRuntimeManifestJson.officialRuntime.version;
 export const KIMI_CODE_MIN_NODE_VERSION = resolveMinimumNodeVersion(
-  '@moonshot-ai/kimi-code',
-  kimiCodePackageJson.engines.node
+  'Kimi managed runtime manifest',
+  `>=${kimiRuntimeManifestJson.minNodeVersion}`
 );
 
 export const BUILTIN_CODEX_CAPABILITY_SOURCE_VERSION = `builtin-codex-acp:${CODEX_ACP_ADAPTER_VERSION}+codex:${CODEX_RUNTIME_VERSION}`;
@@ -413,11 +413,11 @@ const RUNTIMES: Record<ManagedRuntimeName, RuntimeDefinition> = {
     minNodeVersion: KIMI_CODE_MIN_NODE_VERSION,
     platforms: {
       node: {
-        fileName: `moonshot-ai-kimi-code-${KIMI_CODE_VERSION}.tar.zst`,
-        sha256: 'fa791d79b4fc0890e95f5e9de2136a2b444fa7aeb7751073ccf1c7874d1dec33',
-        size: 3386360,
-        compression: 'zstd',
-        cmd: 'package/dist/main.mjs',
+        fileName: kimiRuntimeManifestJson.artifact.fileName,
+        sha256: kimiRuntimeManifestJson.artifact.sha256,
+        size: kimiRuntimeManifestJson.artifact.size,
+        compression: kimiRuntimeManifestJson.artifact.compression as 'zstd',
+        cmd: kimiRuntimeManifestJson.artifact.cmd,
       },
     },
   },

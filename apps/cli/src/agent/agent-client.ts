@@ -58,6 +58,10 @@ import {
   convertClaudeTaskLifecycleNotification,
 } from './claude-task-lifecycle';
 import {
+  KIMI_TASK_LIFECYCLE_EXTENSION_METHOD,
+  convertKimiTaskLifecycleNotification,
+} from './kimi-task-lifecycle';
+import {
   buildSteerRequestMeta,
   findActiveSteerConfigMismatch,
   parseAcknowledgedSteerCapability,
@@ -582,6 +586,37 @@ export type AcpWriteTextFileEvidence = {
   readonly newText: string;
 };
 
+export type KimiSubagentTask = {
+  taskId: string;
+  description: string;
+  status: 'running' | 'completed' | 'failed' | 'timed_out' | 'killed' | 'lost';
+  agentId?: string;
+  subagentType?: string;
+  model?: string;
+  thinkingEffort?: string;
+  startedAt: number;
+  endedAt: number | null;
+  stopReason?: string;
+};
+
+const KimiSubagentTasksSchema = z
+  .array(
+    z.object({
+      kind: z.literal('agent'),
+      taskId: z.string(),
+      description: z.string(),
+      status: z.enum(['running', 'completed', 'failed', 'timed_out', 'killed', 'lost']),
+      agentId: z.string().optional(),
+      subagentType: z.string().optional(),
+      model: z.string().optional(),
+      thinkingEffort: z.string().optional(),
+      startedAt: z.number(),
+      endedAt: z.number().nullable(),
+      stopReason: z.string().optional(),
+    })
+  )
+  .transform((tasks) => tasks.map(({ kind: _kind, ...task }) => task));
+
 export class AgentClient implements acp.Client {
   private connection: acp.ClientSideConnection | null = null;
   private lastSessionUpdateAtMs = Date.now();
@@ -595,6 +630,7 @@ export class AgentClient implements acp.Client {
   private supportsClose = false;
   private supportsFork = false;
   private supportsForkAtTurn = false;
+  private supportsKimiSubagentManagement = false;
   private authMethods: acp.AuthMethod[] = [];
   private authenticationRequired = false;
   private acknowledgedSteerCapability: AcknowledgedSteerCapability | null = null;
@@ -1220,6 +1256,41 @@ export class AgentClient implements acp.Client {
     await this.terminalManager.killTerminal(params.sessionId, params.terminalId);
     return {};
   }
+
+  async listKimiSubagents(activeOnly = false): Promise<readonly KimiSubagentTask[]> {
+    const result = await this.requestKimiSubagentExtension<{ tasks?: unknown }>(
+      '_kimi/subagents/list',
+      { activeOnly }
+    );
+    return KimiSubagentTasksSchema.parse(result.tasks);
+  }
+
+  async cancelKimiSubagent(taskId: string, reason?: string): Promise<void> {
+    await this.requestKimiSubagentExtension('_kimi/subagents/cancel', { taskId, reason });
+  }
+
+  async getKimiSubagentOutput(taskId: string, tail?: number): Promise<string> {
+    const result = await this.requestKimiSubagentExtension<{ output?: unknown }>(
+      '_kimi/subagents/output',
+      { taskId, tail }
+    );
+    return z.string().parse(result.output);
+  }
+
+  private async requestKimiSubagentExtension<T extends Record<string, unknown>>(
+    method: string,
+    params: Record<string, unknown>
+  ): Promise<T> {
+    if (!this.supportsKimiSubagentManagement) {
+      throw new Error('[ACP_KIMI_SUBAGENT_UNSUPPORTED] Kimi runtime did not advertise management');
+    }
+    const sessionId = this.acpSessionId;
+    const connection = this.connection;
+    if (!sessionId || !connection) {
+      throw new Error('[ACP_KIMI_SUBAGENT_UNAVAILABLE] ACP session is not connected');
+    }
+    return connection.request<T, Record<string, unknown>>(method, { sessionId, ...params });
+  }
   async extMethod(
     method: string,
     params: Record<string, unknown>
@@ -1295,6 +1366,10 @@ export class AgentClient implements acp.Client {
         this.tryHandleClaudeTaskLifecycleExtension(resolvedMethod, params);
         break;
       }
+      case KIMI_TASK_LIFECYCLE_EXTENSION_METHOD: {
+        this.tryHandleKimiTaskLifecycleExtension(resolvedMethod, params);
+        break;
+      }
       default:
         this.logger.debug(
           `[${this.options.sessionId}] Ignoring extension message ${resolvedMethod}`
@@ -1358,6 +1433,26 @@ export class AgentClient implements acp.Client {
       return;
     }
 
+    this.options.onUpdateMessage(result.notification);
+  }
+
+  private tryHandleKimiTaskLifecycleExtension(
+    method: string,
+    params: Record<string, unknown>
+  ): void {
+    const result = convertKimiTaskLifecycleNotification(params);
+    if (!result.ok) {
+      this.logger.debug(
+        `[${this.options.sessionId}] Dropping invalid Kimi task lifecycle update from ${method}: ${result.reason}`
+      );
+      return;
+    }
+    if (!this.isCurrentAcpSession(result.notification.sessionId)) {
+      this.logger.debug(
+        `[${this.options.sessionId}] Dropping Kimi task lifecycle update for mismatched ACP session: ${result.notification.sessionId}`
+      );
+      return;
+    }
     this.options.onUpdateMessage(result.notification);
   }
 
@@ -1607,6 +1702,18 @@ export class AgentClient implements acp.Client {
     this.acknowledgedSteerCapability = parseAcknowledgedSteerCapability(
       initResponse.agentCapabilities?._meta as Record<string, unknown> | null | undefined
     );
+    const kimiExtensionCapability = z
+      .object({
+        'lody.ai/kimi': z.object({
+          protocolVersion: z.literal(1),
+          features: z.object({ subagentManagement: z.literal(true) }).passthrough(),
+        }),
+      })
+      .partial()
+      .safeParse(initResponse.agentCapabilities?._meta);
+    this.supportsKimiSubagentManagement =
+      kimiExtensionCapability.success &&
+      kimiExtensionCapability.data['lody.ai/kimi']?.features.subagentManagement === true;
     const hasCloseMethod = typeof connection.closeSession === 'function';
     const hasForkMethod = typeof connection.unstable_forkSession === 'function';
     this.logger.debug(

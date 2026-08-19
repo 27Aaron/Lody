@@ -43,6 +43,9 @@ private service secrets, and the Web and mobile app sources.
 - Managed runtime downloads default to the public R2-backed channel owned by
   `packages/platform/src/runtime-artifacts.ts`; local and cloud assembly must use that
   same constant. `LODY_RUNTIME_BASE_URL` is only an explicit mirror override.
+- `packages/acp-extension-kimi` is an isolated submodule workspace. Do not add it
+  to the root pnpm dependency graph; Lody consumes only its separately built,
+  checksummed managed-runtime artifact and versioned ACP extension contract.
 - Never commit captured user/agent transcripts; fixtures must be synthetic.
 - Workspace MCP has exactly two durable layers: catalog entries in the workspace Flock
   document and selected ids in each user turn input config. Do not add machine bindings.
@@ -64,6 +67,7 @@ after changing package scope or cloud/local composition.
 - `packages/cloud-api`: public optional-cloud client contract
 - `packages/shared`: schemas, protocols, and cross-runtime utilities
 - `packages/loro-streams-rpc`: public Streams RPC protocol/client
+- `packages/acp-extension-kimi`: independently built Kimi runtime source and Lody ACP extensions
 - `site-docs`: public documentation site
 
 ## Checks and commits

@@ -277,6 +277,7 @@ export class UsageTrackingService {
       case 'claude':
         return update;
       case 'codex':
+      case 'kimi':
         if (!update.modelUsage) return update;
         for (const [model, usage] of Object.entries(update.modelUsage)) {
           let costUSD = 0;

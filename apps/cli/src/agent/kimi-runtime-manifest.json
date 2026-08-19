@@ -1,0 +1,15 @@
+{
+  "name": "kimi-code",
+  "version": "0.37.0-lody.2ef003649368",
+  "sourceVersion": "0.37.0",
+  "sourceCommit": "2ef003649368f9c4e03320f467a8e7bda1685d9c",
+  "kind": "node-package",
+  "minNodeVersion": "22.19.0",
+  "artifact": {
+    "fileName": "lody-kimi-code-0.37.0-lody.2ef003649368-7374024e958253e1.tar.zst",
+    "sha256": "7374024e958253e174ee365c3313c6c9d6299b59992825894c371062fd3c234d",
+    "size": 3253827,
+    "compression": "zstd",
+    "cmd": "package/dist/main.mjs"
+  }
+}

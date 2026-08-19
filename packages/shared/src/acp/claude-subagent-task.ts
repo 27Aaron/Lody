@@ -23,6 +23,8 @@ import type { SubagentTaskPayload } from '../ai';
  * appears in persisted history.
  */
 export const LODY_CLAUDE_TASK_LIFECYCLE_RAW_INPUT_KEY = 'lodyClaudeTaskLifecycle';
+/** Provider-neutral carrier used by newer builtin ACP adapters. */
+export const LODY_SUBAGENT_TASK_LIFECYCLE_RAW_INPUT_KEY = 'lodySubagentTaskLifecycle';
 
 export const SUBAGENT_TASK_EVENTS = [
   'task_started',
@@ -66,7 +68,9 @@ export const SubagentTaskPayloadSchema = z.object({
  */
 export const parseSubagentTaskWire = (rawInput: unknown): SubagentTaskPayload | null => {
   if (!isRecord(rawInput)) return null;
-  const carrier = rawInput[LODY_CLAUDE_TASK_LIFECYCLE_RAW_INPUT_KEY];
+  const carrier =
+    rawInput[LODY_SUBAGENT_TASK_LIFECYCLE_RAW_INPUT_KEY] ??
+    rawInput[LODY_CLAUDE_TASK_LIFECYCLE_RAW_INPUT_KEY];
   if (!isRecord(carrier)) return null;
   const parsed = SubagentTaskPayloadSchema.safeParse(carrier);
   return parsed.success ? (parsed.data as SubagentTaskPayload) : null;

@@ -1413,6 +1413,13 @@ export type MessageContent =
       /** Small provider-neutral marker for tool-like status rows rendered in the transcript. */
       activityKind?: 'context_compaction' | 'codex_retry';
       /**
+       * The agent's canonical name for this tool, when it published one. ACP
+       * `title` is human-facing — an agent that describes its calls puts the
+       * rendered schedule there — so anything that must recognize a specific
+       * tool reads this instead. See `collectPendingScheduledTasksFromHistory`.
+       */
+      toolName?: string;
+      /**
        * IANA timezone of the machine that ran a scheduling tool (Cron / ScheduleWakeup),
        * captured at persist time. Cron expressions are local-time to that machine, so the
        * scheduled-tasks panel needs this to resolve fire times in the right zone. Only set

@@ -161,7 +161,10 @@ export function canShowSubscriptionRateLimits({
 }): boolean {
   if (
     cliType !== 'builtin' ||
-    (agentType !== 'claude' && agentType !== 'codex' && agentType !== 'grok')
+    (agentType !== 'claude' &&
+      agentType !== 'codex' &&
+      agentType !== 'grok' &&
+      agentType !== 'kimi')
   ) {
     return false;
   }

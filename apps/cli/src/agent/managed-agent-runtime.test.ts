@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import claudePackageLock from '../../../../packages/acp-extension-claude/package-lock.json';
 import codexPackageLock from '../../../../packages/acp-extension-codex/package-lock.json';
 import claudeSdkManifest from '../../node_modules/@anthropic-ai/claude-agent-sdk/manifest.json';
-import kimiCodePackageJson from '../../node_modules/@moonshot-ai/kimi-code/package.json';
+import kimiRuntimeManifestJson from './kimi-runtime-manifest.json';
 import grokRuntimeManifest from '../../../../packages/acp-extension-grok/runtime-manifest.json';
 
 import {
@@ -107,9 +107,9 @@ describe('ManagedAgentRuntimeManager', () => {
     expect(CLAUDE_CODE_RUNTIME_VERSION).toBe(claudeSdkManifest.version);
   });
 
-  it('matches the exact locked Kimi package and Node engine', () => {
-    expect(KIMI_CODE_VERSION).toBe(kimiCodePackageJson.version);
-    expect(kimiCodePackageJson.engines.node).toBe(`>=${KIMI_CODE_MIN_NODE_VERSION}`);
+  it('matches the pinned Kimi runtime manifest and Node engine', () => {
+    expect(KIMI_CODE_VERSION).toBe(kimiRuntimeManifestJson.version);
+    expect(kimiRuntimeManifestJson.minNodeVersion).toBe(KIMI_CODE_MIN_NODE_VERSION);
   });
 
   it('maps the Kimi node package to one platform-independent artifact', () => {

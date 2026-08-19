@@ -37,7 +37,7 @@ test('skips generation when the site-docs postinstall switch is enabled', () => 
   assert.match(result.stdout, /Skipping @lody\/site-docs postinstall generation\./u);
 });
 
-test('delegates the normal postinstall path to the package generate script', async () => {
+test('delegates a JavaScript package-manager entry to the package generate script', async () => {
   const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'lody-site-postinstall-'));
   temporaryDirectories.push(temporaryDirectory);
   const packageManagerEntry = path.join(temporaryDirectory, 'package-manager.mjs');
@@ -57,4 +57,33 @@ test('delegates the normal postinstall path to the package generate script', asy
 
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout.trim()), ['run', 'generate']);
+});
+
+test('delegates a native package-manager entry to the package generate script', async () => {
+  const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'lody-site-postinstall-'));
+  temporaryDirectories.push(temporaryDirectory);
+  const nativeEntryProbe = path.join(temporaryDirectory, 'native-entry-probe.cjs');
+  await writeFile(
+    nativeEntryProbe,
+    `if (process.argv[1] !== ${JSON.stringify(scriptPath)}) {
+  console.log(JSON.stringify(process.argv.slice(1)));
+  process.exit(0);
+}
+`,
+    'utf8'
+  );
+
+  const result = spawnSync(process.execPath, [scriptPath], {
+    encoding: 'utf8',
+    env: testEnvironment({
+      LODY_SKIP_SITE_DOCS_POSTINSTALL: '0',
+      NODE_OPTIONS: `--require=${JSON.stringify(nativeEntryProbe)}`,
+      npm_execpath: process.execPath,
+    }),
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const [scriptArgument, ...args] = JSON.parse(result.stdout.trim());
+  assert.equal(path.basename(scriptArgument), 'run');
+  assert.deepEqual(args, ['generate']);
 });

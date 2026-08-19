@@ -56,7 +56,8 @@ export const SessionUsagePopover = memo(function SessionUsagePopover({
     : [];
   const hasRateLimit = rateLimitWindows.length > 0;
   const isRateLimitUnavailable = rateLimit?.limits.apiUnavailable === true;
-  const hasRateLimitDetails = hasRateLimit || isRateLimitUnavailable;
+  const wallet = rateLimit?.limits.extraUsage ?? null;
+  const hasRateLimitDetails = hasRateLimit || isRateLimitUnavailable || wallet !== null;
   const triggerValue =
     context?.usedPercentage ??
     (showRateLimitWithoutContext ? rateLimitWindows[0]?.usedPercent : undefined);
@@ -182,12 +183,50 @@ export const SessionUsagePopover = memo(function SessionUsagePopover({
                 {t('sessions.usage.unavailable', 'The provider did not report usage for this plan')}
               </div>
             )}
+            {wallet ? (
+              <div className="space-y-1 border-t border-border/60 pt-2 text-[11px]">
+                <div className="flex justify-between gap-3">
+                  <span className="text-muted-foreground">
+                    {t('sessions.usage.extraBalance', 'Extra usage balance')}
+                  </span>
+                  <span className="font-mono tabular-nums">
+                    {formatMoney(wallet.balanceCents, wallet.currency, i18n.language)}
+                  </span>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <span className="text-muted-foreground">
+                    {t('sessions.usage.monthlySpend', 'Monthly spend')}
+                  </span>
+                  <span className="font-mono tabular-nums">
+                    {formatMoney(wallet.monthlyUsedCents, wallet.currency, i18n.language)}
+                    {wallet.monthlyChargeLimitEnabled
+                      ? ` / ${formatMoney(
+                          wallet.monthlyChargeLimitCents,
+                          wallet.currency,
+                          i18n.language
+                        )}`
+                      : ''}
+                  </span>
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : null}
       </PopoverContent>
     </Popover>
   );
 });
+
+function formatMoney(cents: number, currency: string, locale?: string): string {
+  try {
+    return new Intl.NumberFormat(locale, {
+      style: 'currency',
+      currency: currency || 'USD',
+    }).format(cents / 100);
+  } catch {
+    return `${(cents / 100).toFixed(2)} ${currency || 'USD'}`;
+  }
+}
 
 function UsageRing({ value }: { value: number }) {
   const percentage = Math.min(100, Math.max(0, value));

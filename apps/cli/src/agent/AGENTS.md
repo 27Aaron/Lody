@@ -102,6 +102,12 @@ arrive: context/message-flow.md "Upstream".
   official, unmodified R2-managed runtime in `GROK_PATH`. The submodule owns the
   private-wire contract and minimum official version; it is never the source for
   production runtime binaries.
+  Kimi is different: `packages/acp-extension-kimi` owns the Lody-maintained runtime
+  source and its versioned `lody.ai/kimi` ACP extension. Release automation must build
+  that isolated workspace into the minimal checksummed Node-package artifact; the
+  desktop still downloads the artifact and must not depend on the submodule workspace.
+  Extension methods stay capability-gated, begin with `_`, and never carry provider
+  credentials or raw authentication output.
   Its artifact base URL is injected from `CloudPort.runtimeArtifacts`; do not read
   deployment environment or derive the channel inside the runtime manager. Local
   and cloud process assembly share the public R2-backed default owned by

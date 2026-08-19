@@ -2919,6 +2919,8 @@ export const NonSystemNoticeMessageContentSchema = z.discriminatedUnion('type', 
     rawInput: z.record(z.string(), z.unknown()).optional(),
     rawOutput: z.record(z.string(), z.unknown()).optional(),
     activityKind: z.enum(['context_compaction', 'codex_retry']).optional(),
+    // Canonical tool name, when the agent published one (ACP `title` is human-facing).
+    toolName: z.string().optional(),
     // IANA timezone of the machine that ran a scheduling tool (cron is local-time to it).
     schedulingTimeZone: z.string().optional(),
     permissionRequest: PermissionRequestInfoSchema.optional(),

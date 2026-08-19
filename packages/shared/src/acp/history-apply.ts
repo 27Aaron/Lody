@@ -43,6 +43,20 @@ const SCHEDULING_TOOL_NAMES = new Set<string>([
   'ScheduleWakeup',
 ]);
 
+/**
+ * The canonical tool name behind a `tool_call` update. ACP `title` is
+ * human-facing — an agent that describes its calls puts the rendered schedule
+ * there ("Scheduling cron ..."), not the tool name — so identity rides in
+ * `_meta` instead. The provider-neutral `_meta.toolName` wins;
+ * `_meta.claudeCode.toolName` stays the fallback for adapters that only
+ * publish the Claude shape.
+ */
+const resolveAcpToolName = (meta: unknown): string | undefined => {
+  const neutral = (meta as { toolName?: unknown } | null | undefined)?.toolName;
+  if (typeof neutral === 'string' && neutral.length > 0) return neutral;
+  return getClaudeCodeToolName(meta);
+};
+
 /** Narrow an unstructured ACP `rawInput`/`rawOutput` to the plain-object shape history stores. */
 const asRecordOrUndefined = (value: unknown): Record<string, unknown> | undefined =>
   value && typeof value === 'object' && !Array.isArray(value)
@@ -902,6 +916,7 @@ const mergeToolCallMessage = (
       incoming.schedulingTimeZone !== undefined
         ? incoming.schedulingTimeZone
         : prev.schedulingTimeZone,
+    toolName: incoming.toolName ?? prev.toolName,
     activityKind: incoming.activityKind !== undefined ? incoming.activityKind : prev.activityKind,
   };
 };
@@ -1176,17 +1191,17 @@ export const buildMessageContentFromNotification = (
         deriveLocationsFromRawInput(update.rawInput);
       // Scheduling tools are the one exception to stripping rawInput/rawOutput: the
       // scheduled-tasks panel derives entirely from history, so it needs the schedule and
-      // the created job id. Persist them (small, stable) and pin the persisted `title` to
-      // the canonical tool name the deriver switches on (ACP `title` may differ).
-      const schedulingToolName = getClaudeCodeToolName((update as ToolCallUpdateWithMeta)._meta);
+      // the created job id. Persist them (small, stable) plus the canonical tool name the
+      // deriver switches on; `title` stays whatever the agent chose to show.
+      const toolName = resolveAcpToolName((update as ToolCallUpdateWithMeta)._meta);
       const activityKind = getToolCallActivityKind((update as ToolCallUpdateWithMeta)._meta);
-      const isSchedulingTool =
-        schedulingToolName !== undefined && SCHEDULING_TOOL_NAMES.has(schedulingToolName);
+      const isSchedulingTool = toolName !== undefined && SCHEDULING_TOOL_NAMES.has(toolName);
       return [
         {
           type: 'tool_call',
           toolCallId: update.toolCallId,
-          title: isSchedulingTool ? schedulingToolName : update.title,
+          title: update.title,
+          toolName,
           kind: update.kind || undefined,
           status: update.status || 'pending',
           content: content.length ? content : undefined,

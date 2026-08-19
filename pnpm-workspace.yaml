@@ -1,5 +1,7 @@
 packages:
   - packages/*
+  # Full upstream-derived runtime workspace; built and validated independently.
+  - '!packages/acp-extension-kimi'
   - apps/cli
   - apps/electron
   - site-docs

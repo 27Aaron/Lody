@@ -7,6 +7,9 @@
 [submodule "packages/acp-extension-grok"]
 	path = packages/acp-extension-grok
 	url = https://github.com/LodyAI/acp-extension-grok.git
+[submodule "packages/acp-extension-kimi"]
+	path = packages/acp-extension-kimi
+	url = https://github.com/LodyAI/acp-extension-kimi.git
 [submodule "packages/acp-extension-dsh"]
 	path = packages/acp-extension-dsh
 	url = https://github.com/LodyAI/acp-extension-dsh.git

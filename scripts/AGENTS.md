@@ -26,6 +26,12 @@ maintenance commands here.
   from public repository inputs.
 - Never generate files containing local absolute paths, credentials, real
   transcripts, or private repository source.
+- `package-kimi-runtime.mjs` builds the isolated Kimi submodule and emits only
+  the ACP runtime entry, its search worker, and a generated package descriptor.
+  It owns a frozen install of that isolated workspace, requires Node 24.15 or
+  newer for source builds, and must verify byte-for-byte archive reproducibility.
+  A clean submodule is required for a publishable manifest; dirty artifacts are
+  development-only and must never be uploaded to the managed-runtime channel.
 
 ## Install ownership
 

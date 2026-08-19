@@ -4,6 +4,8 @@ import {
   convertClaudeTaskLifecycleNotification,
   LODY_CLAUDE_TASK_LIFECYCLE_RAW_INPUT_KEY,
 } from './claude-task-lifecycle';
+import { LODY_SUBAGENT_TASK_LIFECYCLE_RAW_INPUT_KEY } from '@lody/shared';
+import { convertKimiTaskLifecycleNotification } from './kimi-task-lifecycle';
 
 describe('convertClaudeTaskLifecycleNotification', () => {
   it('converts task_started into a bounded synthetic tool call', () => {
@@ -156,5 +158,27 @@ describe('convertClaudeTaskLifecycleNotification', () => {
     });
 
     expect(result.ok).toBe(false);
+  });
+});
+
+describe('convertKimiTaskLifecycleNotification', () => {
+  it('uses the provider-neutral carrier and Kimi fallback actor', () => {
+    const result = convertKimiTaskLifecycleNotification({
+      sessionId: 'kimi-session-1',
+      message: {
+        subtype: 'task_started',
+        task_id: 'agent-1',
+        description: 'Explore the repository',
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.notification).toMatchObject({
+      sessionId: 'kimi-session-1',
+      update: { title: 'Kimi task: Explore the repository', status: 'in_progress' },
+    });
+    expect(result.notification.update.rawInput).toHaveProperty(
+      LODY_SUBAGENT_TASK_LIFECYCLE_RAW_INPUT_KEY
+    );
   });
 });

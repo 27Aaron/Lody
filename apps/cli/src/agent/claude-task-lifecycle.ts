@@ -89,10 +89,17 @@ type TaskLifecycleAcpStatus = NonNullable<
 >;
 
 export type ClaudeTaskLifecycleConversionResult =
-  { ok: true; notification: AcpSessionNotification } | { ok: false; reason: string };
+  | { ok: true; notification: AcpSessionNotification }
+  | { ok: false; reason: string };
 
-export const convertClaudeTaskLifecycleNotification = (
-  params: unknown
+export type TaskLifecycleConversionOptions = {
+  rawInputKey: string;
+  defaultActor: string;
+};
+
+export const convertTaskLifecycleNotification = (
+  params: unknown,
+  options: TaskLifecycleConversionOptions
 ): ClaudeTaskLifecycleConversionResult => {
   const parsed = ClaudeTaskLifecycleParamsSchema.safeParse(params);
   if (!parsed.success) {
@@ -106,7 +113,8 @@ export const convertClaudeTaskLifecycleNotification = (
         buildTaskLifecycleAcpNotification(
           parsed.data.sessionId,
           parsed.data.acpSessionId,
-          parsed.data.message
+          parsed.data.message,
+          options
         )
       ),
     };
@@ -118,10 +126,19 @@ export const convertClaudeTaskLifecycleNotification = (
   }
 };
 
+export const convertClaudeTaskLifecycleNotification = (
+  params: unknown
+): ClaudeTaskLifecycleConversionResult =>
+  convertTaskLifecycleNotification(params, {
+    rawInputKey: LODY_CLAUDE_TASK_LIFECYCLE_RAW_INPUT_KEY,
+    defaultActor: 'Claude task',
+  });
+
 const buildTaskLifecycleAcpNotification = (
   sessionId: string,
   sourceSessionId: string | undefined,
-  message: ClaudeTaskLifecycleMessage
+  message: ClaudeTaskLifecycleMessage,
+  options: TaskLifecycleConversionOptions
 ) => {
   const taskId = message.task_id;
   const event = message.subtype;
@@ -136,7 +153,7 @@ const buildTaskLifecycleAcpNotification = (
       : undefined;
   const lastToolName =
     event === 'task_progress' ? sanitizeText(message.last_tool_name, MAX_TITLE_LENGTH) : undefined;
-  const title = buildTitle(message, rawStatus);
+  const title = buildTitle(message, rawStatus, options.defaultActor);
   const contentText = buildContentText({ description, summary, rawStatus, usage, lastToolName });
   const lifecycle = buildLifecycleMeta({
     message,
@@ -155,7 +172,7 @@ const buildTaskLifecycleAcpNotification = (
     kind: 'think' as const,
     status,
     rawInput: {
-      [LODY_CLAUDE_TASK_LIFECYCLE_RAW_INPUT_KEY]: lifecycle,
+      [options.rawInputKey]: lifecycle,
     },
     ...(contentText
       ? {
@@ -251,8 +268,12 @@ const mapTaskStatus = (
   }
 };
 
-const buildTitle = (message: ClaudeTaskLifecycleMessage, rawStatus: string | undefined): string => {
-  const actor = sanitizeTitleText(message.subagent_type) ?? 'Claude task';
+const buildTitle = (
+  message: ClaudeTaskLifecycleMessage,
+  rawStatus: string | undefined,
+  defaultActor: string
+): string => {
+  const actor = sanitizeTitleText(message.subagent_type) ?? defaultActor;
   const detail =
     sanitizeTitleText(message.description) ??
     (message.subtype === 'task_notification' ? sanitizeTitleText(message.summary) : undefined) ??

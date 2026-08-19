@@ -7,14 +7,17 @@ if (process.env.LODY_SKIP_SITE_DOCS_POSTINSTALL === '1') {
 }
 
 const packageManagerEntry = process.env.npm_execpath;
-if (!packageManagerEntry || !/\.(?:cjs|mjs|js)$/iu.test(packageManagerEntry)) {
+if (!packageManagerEntry) {
   throw new Error(
-    '@lody/site-docs postinstall must be launched through pnpm so the package-manager entrypoint is explicit'
+    '@lody/site-docs postinstall must be launched through pnpm so npm_execpath is available'
   );
 }
 
 const packageRoot = fileURLToPath(new URL('../', import.meta.url));
-const result = spawnSync(process.execPath, [packageManagerEntry, 'run', 'generate'], {
+const isJavaScriptEntry = /\.(?:cjs|mjs|js)$/iu.test(packageManagerEntry);
+const command = isJavaScriptEntry ? process.execPath : packageManagerEntry;
+const args = isJavaScriptEntry ? [packageManagerEntry, 'run', 'generate'] : ['run', 'generate'];
+const result = spawnSync(command, args, {
   cwd: packageRoot,
   env: process.env,
   stdio: 'inherit',
