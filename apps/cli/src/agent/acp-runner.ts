@@ -66,6 +66,7 @@ import {
   resolveAcpLauncher,
 } from './acp-analytics';
 import { withoutElectronBootstrapCredentials } from '@/electron-bootstrap-env';
+import { withLoopbackNoProxy } from '@lody/shared/proxy-env';
 import { withAcpSessionStartSlot } from './acp-session-start-gate';
 
 export type CreateAcpClientOptions = {
@@ -385,12 +386,17 @@ export const startLocalAcpAgent = async (options: StartLocalAcpAgentOptions) => 
   // merging the agent-specific env. withDefaultAcpPathEntries still runs as a
   // last-resort fallback for environments where the shell probe yields nothing.
   const loginShellEnv = await getLoginShellEnv();
-  const mergedStartupEnv = withoutElectronBootstrapCredentials(
-    withLodyNpmCacheForNpx(
-      launch.command,
-      withDefaultAcpPathEntries(
-        mergeACPProcessEnv(launch, mergeLoginShellEnv(env, loginShellEnv)),
-        options.agentType
+  // withLoopbackNoProxy runs outermost so a proxy contributed by the login
+  // shell is covered too: the agent reaches Lody's MCP HTTP host over
+  // loopback, and a proxy that intercepts that kills MCP entirely.
+  const mergedStartupEnv = withLoopbackNoProxy(
+    withoutElectronBootstrapCredentials(
+      withLodyNpmCacheForNpx(
+        launch.command,
+        withDefaultAcpPathEntries(
+          mergeACPProcessEnv(launch, mergeLoginShellEnv(env, loginShellEnv)),
+          options.agentType
+        )
       )
     )
   );

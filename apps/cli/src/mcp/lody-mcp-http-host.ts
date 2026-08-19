@@ -214,8 +214,13 @@ const parseSessionContextHeaders = (req: http.IncomingMessage): McpSessionContex
   };
 };
 
-const reject = (res: http.ServerResponse, status: number, message: string): void => {
-  res.writeHead(status, { 'content-type': 'application/json' }).end(
+const reject = (
+  res: http.ServerResponse,
+  status: number,
+  message: string,
+  extraHeaders: http.OutgoingHttpHeaders = {}
+): void => {
+  res.writeHead(status, { 'content-type': 'application/json', ...extraHeaders }).end(
     JSON.stringify({
       jsonrpc: '2.0',
       error: { code: -32000, message },
@@ -233,6 +238,15 @@ async function handleRequest(
   const url = new URL(req.url ?? '/', 'http://127.0.0.1');
   if (url.pathname !== '/mcp') {
     reject(res, 404, 'Not found');
+    return;
+  }
+
+  // Stateless JSON mode has no server-initiated stream, so the spec's answer to
+  // GET is 405. Handing it to the SDK instead opens an SSE response that can
+  // never carry anything and is never closed, and a strict client (Grok's Rust
+  // rmcp) reports that hang as a transport failure rather than as an MCP error.
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    reject(res, 405, 'Method not allowed', { allow: 'POST' });
     return;
   }
 

@@ -32,6 +32,10 @@
       "types": "./src/electron-ipc.ts",
       "import": "./src/electron-ipc.ts"
     },
+    "./proxy-env": {
+      "types": "./src/proxy-env.ts",
+      "import": "./src/proxy-env.ts"
+    },
     "./browser-url": {
       "types": "./src/browser-url.ts",
       "import": "./src/browser-url.ts"

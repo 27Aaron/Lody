@@ -11,6 +11,15 @@ Root and `apps/cli/AGENTS.md` instructions apply.
 - Dedicated credential fields accept `${VAR}` references or daemon environment passthrough,
   not literal secrets. Tool responses must never echo connection values.
 - Configurations affect only later turns or sessions; the running Agent does not hot-load them.
+- The MCP HTTP host answers a strict HTTP client (Grok's Rust `rmcp`), which reports a
+  never-completing response as a transport failure, not an MCP error. Every request must
+  reach a terminated response: `GET /mcp` is answered with 405 rather than handed to the
+  SDK, which in stateless JSON mode opens an SSE stream it can never write to or close.
+- Agent child processes reach the host over loopback, so a proxy must never intercept it.
+  `@lody/shared/proxy-env` `withLoopbackNoProxy` is applied last when assembling agent env
+  (`session.ts` `buildShellEnv`, `acp-runner.ts`) and writes BOTH `NO_PROXY` and
+  `no_proxy`: clients disagree about a present-but-empty value, and Rust `reqwest` reads
+  the uppercase spelling first and treats an empty one as "bypass nothing".
 - Bound every Agent-authored persisted field, collection, complete configuration, and catalog.
   Serialize per-workspace Agent configuration writes before checking local name/count bounds;
   the shared CRDT is not a global CAS. Keep catalog writes locally durable while surfacing sync

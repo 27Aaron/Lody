@@ -35,6 +35,7 @@ import {
 import { scrubInheritedClaudeAuthEnv, shouldScrubClaudeAuthEnv } from '@/agent/claude-env-conflict';
 import { getCachedLoginShellEnvSync, getLoginShellEnv } from '@/agent/login-shell-env';
 import { mergeLoginShellEnv, withDefaultAcpPathEntries } from '@/agent/setting';
+import { withLoopbackNoProxy } from '@lody/shared/proxy-env';
 import { ShellTerminalManager, TerminalManager } from './terminal-manager';
 import { decodeBuffer } from '@/utils/encoding';
 import {
@@ -468,7 +469,11 @@ export class Session extends EventEmitter<SessionEvents> implements ISession {
     const agentEnv = shouldScrubClaudeAuthEnv(this.config.agentCliType, this.config.agentType)
       ? scrubInheritedClaudeAuthEnv(withLoginShell, { ...configEnv, ...extraEnv })
       : withLoginShell;
-    return withDefaultAcpPathEntries(agentEnv, this.config.agentType);
+    // The child talks to Lody's own loopback services (MCP HTTP host, preview
+    // gateway); a proxy inherited from the host process or the login shell
+    // must never intercept those. Runs last so a proxy contributed by the
+    // login shell is covered too.
+    return withLoopbackNoProxy(withDefaultAcpPathEntries(agentEnv, this.config.agentType));
   }
 
   async createAgent(callbacks: CreateAgentConfig): Promise<string> {
