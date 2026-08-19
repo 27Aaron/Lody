@@ -150,10 +150,11 @@ export function ThemeProvider({
   }, [resolvedTheme]);
 
   // On Electron, keep the OS-drawn window chrome (notably the Windows title bar)
-  // matching the in-app theme. A no-op on web where `window.api` is undefined.
+  // matching the in-app theme. Preserve `system` as the native source; rerun
+  // when its resolved mode changes so Electron can repaint explicit surfaces.
   useEffect(() => {
-    window.api?.setNativeTheme?.(resolvedTheme);
-  }, [resolvedTheme]);
+    window.api?.setNativeTheme?.(theme);
+  }, [resolvedTheme, theme]);
 
   useEffect(() => {
     const handleStorageChange = (e: StorageEvent) => {

@@ -13,7 +13,11 @@ import {
   shouldMaximizeMainWindowOnLaunch,
   trackMainWindowState
 } from './window-persistence'
-import { getMainWindowBackgroundColor, getMainWindowTitleBarOverlay } from './window-theme'
+import {
+  getInitialMainWindowThemeSource,
+  getMainWindowBackgroundColor,
+  getMainWindowTitleBarOverlay
+} from './window-theme'
 import { formatUnknownError, normalizeExternalHttpUrl } from './utils'
 import { describeDeepLinkForAuthDebug } from './auth-debug'
 import {
@@ -293,6 +297,7 @@ function attachMainWindowDiagnostics(window: BrowserWindow, recoveryTarget: Relo
 
 export function createMainWindow(options: CreateMainWindowOptions): BrowserWindow {
   const shouldMaximizeOnLaunch = shouldMaximizeMainWindowOnLaunch()
+  nativeTheme.themeSource = getInitialMainWindowThemeSource(options.initialPath)
   const resolvedTheme = nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
   const window = new BrowserWindow({
     ...getMainWindowConstructorOptions(),

@@ -64,6 +64,7 @@ Root `AGENTS.md` also applies.
   exposing them through `ElectronUpdaterState`; renderer code must use the shared
   safe Markdown renderer rather than raw HTML.
 - Theme changes must also update the native window color in `window-theme.ts`.
+- The onboarding window must be native Light before its first renderer paint; normal product windows start from the System theme source.
   Windows title-bar geometry must stay aligned across
   `MAIN_WINDOW_TITLE_BAR_OVERLAY_HEIGHT`, the `h-9` drag strip in
   `routes/__root.tsx`, and the `pt-9` offset in `web-workspace-layout.tsx`.

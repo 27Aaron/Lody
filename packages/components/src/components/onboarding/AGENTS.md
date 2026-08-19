@@ -5,5 +5,6 @@
 - Build the flow from platform capabilities. Local builds must not import or call cloud auth, workspace, or GitHub implementations.
 - Provider and local-project selections carry exact IDs. The first session may start only when the selected provider and project belong to the same machine.
 - Completion stays in the existing router and navigates to the created session when one exists. Reload recovery must target the normal product root after completion.
+- Desktop onboarding owns the app theme for its whole route lifetime: enter and reload in `light`, and restore the persisted source to `system` only after completion succeeds or the route unmounts.
 - `ceremony/intro-sequence.tsx` owns the four-beat illustrated intro. Keep its approved assets and direction in `intro-illustration-direction.md`; setup screens must not replace it with a generic welcome card.
 - Setup screens use the real `TourStill` product composition. Its Browser beat includes the production Visual Annotation surfaces; do not replace the tour with a hand-built mock.

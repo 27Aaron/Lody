@@ -1,4 +1,11 @@
 export type ResolvedWindowTheme = 'light' | 'dark'
+export type NativeWindowThemeSource = ResolvedWindowTheme | 'system'
+
+export function getInitialMainWindowThemeSource(
+  initialPath: '/' | '/onboarding' = '/'
+): NativeWindowThemeSource {
+  return initialPath === '/onboarding' ? 'light' : 'system'
+}
 
 const WINDOW_BACKGROUND_COLORS: Record<ResolvedWindowTheme, string> = {
   light: '#FFFFFF',

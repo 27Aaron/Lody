@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { desktopOnboardingDraftAtom, desktopOnboardingPhaseAtom } from '@/atoms/onboarding';
 import { currentWorkspaceSlugAtom } from '@/atoms/workspace-context';
 import { OnboardingOverlay, type DesktopOnboardingCompletion } from '@/components/onboarding';
+import { useOnboardingThemeLifecycle } from '@/components/onboarding/use-onboarding-theme-lifecycle';
 import { isElectronRenderer } from '@/lib/electron';
 
 export const Route = createFileRoute('/onboarding')({
@@ -19,6 +20,7 @@ function DesktopOnboardingRoute() {
   const setPhase = useSetAtom(desktopOnboardingPhaseAtom);
   const setDraft = useSetAtom(desktopOnboardingDraftAtom);
   const completionPending = useRef(false);
+  const completeThemeLifecycle = useOnboardingThemeLifecycle();
 
   const complete = useCallback(
     (completion: DesktopOnboardingCompletion) => {
@@ -33,6 +35,7 @@ function DesktopOnboardingRoute() {
           );
           return;
         }
+        completeThemeLifecycle();
         setPhase(null);
         setDraft({ agentConfigId: null, project: null });
         const targetWorkspace = completion.workspaceSlug ?? workspaceSlug;
@@ -58,7 +61,7 @@ function DesktopOnboardingRoute() {
         toast.error(error instanceof Error ? error.message : String(error));
       });
     },
-    [navigate, setDraft, setPhase, t, workspaceSlug]
+    [completeThemeLifecycle, navigate, setDraft, setPhase, t, workspaceSlug]
   );
 
   if (!isElectronRenderer()) return <Navigate to="/" replace />;
