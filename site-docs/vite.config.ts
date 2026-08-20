@@ -12,6 +12,10 @@ import { collectSitePaths } from './scripts/site-paths.mjs';
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const componentsSrc = path.resolve(dirname, '../packages/components/src');
 const siteSrc = dirname;
+const loroCrdtBrowserEntry = path.resolve(
+  componentsSrc,
+  '../node_modules/loro-crdt/browser/index.js'
+);
 
 /**
  * packages/components peers React 18 for the product app. Landing imports its
@@ -42,6 +46,23 @@ function forceSingletonDeps(): Plugin {
       );
       if (!hit) return null;
       return this.resolve(source, importer, { ...options, skipSelf: true });
+    },
+  };
+}
+
+/**
+ * `loro-crdt` exposes a bundler entry for development, but Vite's source
+ * module graph can evaluate its Wasm glue twice. The browser entry owns a
+ * single glue instance and loads the Wasm file explicitly. Keep SSR on its
+ * normal entry because the browser build relies on XMLHttpRequest.
+ */
+function useBrowserLoroBuildForClient(): Plugin {
+  return {
+    name: 'site-docs-client-loro-browser-build',
+    enforce: 'pre',
+    resolveId(source, _importer, options) {
+      if (source === 'loro-crdt' && !options?.ssr) return loroCrdtBrowserEntry;
+      return null;
     },
   };
 }
@@ -156,6 +177,12 @@ const alias = [
 export default defineConfig({
   server: {
     port: 3002,
+    fs: {
+      // The workspace's single pnpm store lives above `lody-oss`. Loro's Wasm
+      // sidecar must be served from that store when the landing preview imports
+      // product components.
+      allow: [path.resolve(dirname, '../..')],
+    },
   },
   resolve: {
     alias,
@@ -173,6 +200,7 @@ export default defineConfig({
   },
   plugins: [
     forceSingletonDeps(),
+    useBrowserLoroBuildForClient(),
     tanstackStart({
       prerender: {
         enabled: true,
@@ -211,6 +239,9 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
+    // Do not flatten loro-mirror ahead of resolution: its pre-bundle follows
+    // its peer dependency directly to Loro's development bundler entry.
+    exclude: ['loro-mirror', 'loro-crdt'],
     include: [
       'debug',
       'next-themes',

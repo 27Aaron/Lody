@@ -1,5 +1,5 @@
 import { atom } from 'jotai';
-import { LoroDoc } from 'loro-crdt';
+import type { LoroDoc } from 'loro-crdt';
 import type { LoroRepo } from 'loro-repo';
 import type {
   InferInputType,
@@ -43,6 +43,7 @@ import type {
   WorkspaceId,
   LocalProjectId,
   previewVisualCommentDocSchema,
+  sessionDocSchema,
   CodeCollabV2Error,
   CodeCollabV2InitDirectoryOk,
   CodeCollabV2InitDirectoryRequest,
@@ -64,7 +65,6 @@ import type {
 } from '@lody/shared';
 import type { LocalProjectGitStateRpcResponse } from '@lody/loro-streams-rpc';
 import type { WorkspaceWriter } from '../providers/workspace-writer';
-import { sessionDocSchema } from '@lody/shared';
 import { readStoredAuthToken } from '@/lib/auth-bootstrap';
 import type { RoomSyncState } from '@/lib/room-sync-state';
 import { currentWorkspaceIdAtom, currentWorkspaceSlugAtom } from './workspace-context';

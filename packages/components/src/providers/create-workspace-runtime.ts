@@ -55,7 +55,6 @@ import {
   type MachineAcpBinaryInstallResponse,
   type MachineAcpBinaryProgressMessage,
   getServerNow,
-  LocalLoroTransportAdapter,
   collectOnlineMachineIdsFromPresence,
   previewVisualCommentDocSchema,
   streamsSnapshotCodec,
@@ -66,6 +65,7 @@ import {
   type LoroStreamsTokenProviderEvent,
   type SyncReason,
 } from '@lody/shared';
+import { LocalLoroTransportAdapter } from '@lody/shared/local-loro-transport';
 import type { TaskId, WorkspaceId } from '@lody/shared';
 import { createDirectWorkspaceWriter } from './workspace-writer-impl';
 import {

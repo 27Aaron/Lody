@@ -52,10 +52,10 @@ import {
   type AcpCapabilityCacheEntry,
   type SessionForkOperation,
   SessionForkOperationSchema,
-  createLocalLoroDataPlaneScheduler,
-  LocalLoroDataPlaneServer,
   type LodyPresenceStateMap,
 } from '@lody/shared';
+import { LocalLoroDataPlaneServer } from '@lody/shared/local-loro-data-plane-server';
+import { createLocalLoroDataPlaneScheduler } from '@lody/shared/local-loro-data-plane-scheduler';
 import { v4 as uuidv4 } from 'uuid';
 import { getLogger, type Logger } from '@/utils/logger';
 import { captureException, captureMessage } from '@/instrument';

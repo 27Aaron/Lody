@@ -14,7 +14,6 @@ import {
   type LocalProjectControlErrorCode,
   type LocalProjectControlRequest,
   type LocalProjectControlResponse,
-  type LocalLoroDataPlaneServer,
   type LocalProjectId,
   type LocalSessionControlRequest,
   type LocalSessionControlResponse,
@@ -22,6 +21,7 @@ import {
   type SessionId,
   type SessionMeta,
 } from '@lody/shared';
+import type { LocalLoroDataPlaneServer } from '@lody/shared/local-loro-data-plane-server';
 import pkg from '@/pkg';
 import { Logger } from '@/utils/logger';
 import { Lody } from '@/lib/lody';

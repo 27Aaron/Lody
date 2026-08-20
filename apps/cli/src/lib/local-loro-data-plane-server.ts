@@ -6,10 +6,12 @@ import {
   LOCAL_LORO_DATA_PLANE_MAX_FRAME_BYTES,
   LOCAL_LORO_DATA_PLANE_PROTOCOL_VERSION,
   type LocalLoroDataPlaneClientMessage,
-  type LocalLoroDataPlaneServer,
-  type LocalLoroDataPlaneServerConnection,
   type LocalLoroDataPlaneServerMessage,
 } from '@lody/shared';
+import type {
+  LocalLoroDataPlaneServer,
+  LocalLoroDataPlaneServerConnection,
+} from '@lody/shared/local-loro-data-plane-server';
 import { getLocalLoroDataPlaneSocketPath } from '@lody/shared/node/local-ipc';
 import type { Logger } from '@/utils/logger';
 import { formatErrorMessage } from '@/utils/format-error';

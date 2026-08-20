@@ -1,4 +1,4 @@
-import type { LocalLoroDataPlaneConnection } from '@lody/shared';
+import type { LocalLoroDataPlaneConnection } from '@lody/shared/local-loro-transport';
 
 /** Bridges Electron's preload push API to the local Loro transport. */
 export function createLocalLoroDataPlaneConnection(): {

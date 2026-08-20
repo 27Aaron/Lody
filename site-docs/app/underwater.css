@@ -100,15 +100,18 @@
   height: 100%;
 }
 
-/* Legibility + fog + vignette painted on top of the canvas. LIGHT theme lightens
-   behind the hero copy (dark ink); DARK theme darkens behind it (light ink). */
+/* Legibility + fog + vignette painted on top of the canvas. The lower edge
+   follows the active theme so it fades softly into the page in either mode. */
 .underwater-bg__overlay {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  /* Sky-blue light theme needs no whitening or vignette — dark ink reads on the
-     clean sky blue directly. */
-  background: none;
+  background: linear-gradient(
+    to top,
+    hsl(0 0% 100% / 0.72) 0%,
+    hsl(0 0% 100% / 0.18) 12%,
+    hsl(0 0% 100% / 0) 30%
+  );
 }
 
 .dark .underwater-bg__overlay {
@@ -1642,8 +1645,8 @@
   padding-bottom: clamp(1.25rem, 3vh, 2.25rem);
 }
 
-/* A soft black door settles quickly over the point-cloud during the product
-   stage, stays deep through the content stack, then ends before the closing CTA. */
+/* A theme-aware veil settles quickly over the point-cloud during the product
+   stage, spans the content stack, then ends before the closing CTA. */
 .uw-middle-door {
   position: relative;
   isolation: isolate;
@@ -1655,6 +1658,18 @@
   z-index: -1;
   content: '';
   pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    rgb(252 254 255 / 0) 0%,
+    rgb(248 252 255 / 0.62) 2%,
+    rgb(244 250 255 / 0.86) 7%,
+    rgb(244 250 255 / 0.86) 78%,
+    rgb(244 250 255 / 0.42) 94%,
+    rgb(252 254 255 / 0) 100%
+  );
+}
+
+.dark .uw-middle-door::before {
   background: linear-gradient(
     to bottom,
     rgb(1 7 12 / 0) 0%,
