@@ -69,6 +69,18 @@ import { getAgentMetaByIdAtomFamily } from '@/atoms/agents';
 import { sessionMetaAtomFamily } from '@/atoms/doc-meta';
 import { authTokenAtom } from '@/atoms/runtime';
 import { useStickyScroll } from '@/hooks/use-sticky-scroll';
+import { ConversationOutlineRail } from './conversation-outline-rail';
+import { useLatestRef } from '@/hooks/use-latest-ref';
+import { observeResizeOnAnimationFrame } from '@/lib/resize-observer';
+import {
+  buildConversationOutline,
+  buildOutlineAnchors,
+  resolveActiveOutlineIndex,
+  reuseConversationOutline,
+  reuseOutlineAnchors,
+  type ConversationOutlineAnchor,
+  type ConversationOutlineEntry,
+} from '@/lib/conversation-outline';
 import {
   AlertCircle,
   ArrowDown,
@@ -271,6 +283,15 @@ export type MessageFileDiffEntriesByTurn = Readonly<
 >;
 
 const EMPTY_EDITED_FILE_ENTRIES: readonly AssistantEditedFileEntry[] = [];
+
+/** How close an outline jump has to land before it counts as arrived. */
+const OUTLINE_JUMP_TOLERANCE_PX = 2;
+/**
+ * One correction is normally enough — arriving measures the target's rows, so
+ * the re-issued jump uses real offsets. The bound only exists so a target that
+ * genuinely cannot reach the top (the list's tail) stops retrying.
+ */
+const OUTLINE_JUMP_MAX_CORRECTIONS = 3;
 
 export type ChatStreamItem = SessionMessageItem | EmptySessionItem;
 
@@ -1132,11 +1153,24 @@ export const SessionChatStreamView = forwardRef<
     const pendingExpandedGroupRowKeyRef = useRef<string | null>(null);
     const groupExpansionAutoScrollSuppressedRef = useRef(false);
     const releaseGroupExpansionSuppressionRef = useRef(false);
+    /**
+     * An outline jump in flight. Declared here, beside the other suppression
+     * state, because `autoScrollSuppressedRef` below reads it — see
+     * `handleOutlineJump` for what maintains it.
+     */
+    const pendingOutlineJumpRef = useRef<{ rowIndex: number; attempts: number } | null>(null);
+    /**
+     * Every reason this component has to stop follow-output. Group expansion
+     * releases in the layout effect of its own commit; an outline jump releases
+     * when the jump finishes (see `pendingOutlineJumpRef`), because an event
+     * handler cannot count on a commit happening at all.
+     */
     const autoScrollSuppressedRef = useMemo(
       () => ({
         get current() {
           return (
             groupExpansionAutoScrollSuppressedRef.current ||
+            pendingOutlineJumpRef.current !== null ||
             Boolean(suppressStickyAutoScrollRef?.current)
           );
         },
@@ -1210,6 +1244,36 @@ export const SessionChatStreamView = forwardRef<
     ]);
     const leadingRowCount = leadingContent == null ? 0 : 1;
 
+    /**
+     * The gap between the viewport's scroll space and Virtua's item-offset
+     * space — the viewport's top padding (`--conversation-top-inset` plus
+     * `py-6`), which Virtua does not account for. Measured from the DOM rather
+     * than assumed, and only on mount / viewport resize; see
+     * `measureItemOffsetDelta`.
+     */
+    const itemOffsetDeltaRef = useRef(0);
+
+    /**
+     * Put a row's top at the viewport's top edge.
+     *
+     * THE one place that turns a row index into a scroll, so every jump in this
+     * component lands in the same coordinate space that
+     * `resolveActiveOutlineIndex` reads positions back out of. Without the
+     * `offset` compensation a jump settles a padding's worth low, and the
+     * outline rail then reports the round BEFORE the one that was asked for.
+     * (`scrollViewportToRealBottom` compensates the bottom padding the same way.)
+     */
+    const scrollRowToTop = useCallback(
+      (rowIndex: number, smooth = false) => {
+        vlistRef.current?.scrollToIndex(rowIndex + leadingRowCount, {
+          align: 'start',
+          smooth,
+          offset: itemOffsetDeltaRef.current,
+        });
+      },
+      [leadingRowCount]
+    );
+
     useLayoutEffect(() => {
       const rowKey = pendingExpandedGroupRowKeyRef.current;
       if (!rowKey) return undefined;
@@ -1224,16 +1288,14 @@ export const SessionChatStreamView = forwardRef<
       pendingExpandedGroupRowKeyRef.current = null;
       // Descendant layout effects run before this parent effect, so Virtua has
       // committed and measured the expanded row set when this call runs.
-      vlistRef.current?.scrollToIndex(rowIndex + leadingRowCount, {
-        align: 'start',
-        smooth: false,
-      });
+      scrollRowToTop(rowIndex);
       releaseGroupExpansionSuppressionRef.current = true;
       return undefined;
-    }, [leadingRowCount, virtualRows]);
+    }, [scrollRowToTop, virtualRows]);
 
     const {
       scrollRef: scrollContainerRef,
+      scrollElement: scrollViewportElement,
       isSticky,
       scrollToBottom,
       handleScroll,
@@ -1256,18 +1318,177 @@ export const SessionChatStreamView = forwardRef<
       groupExpansionAutoScrollSuppressedRef.current = false;
     });
 
+    // ---- Outline rail ------------------------------------------------------
+    // The left table of contents. Everything here is derived from `items` and
+    // from Virtua's index math; the rail never inspects the DOM of the message
+    // rows, because virtualization means most rounds have no DOM at all.
+    const isMobile = useIsMobile();
+    const previousOutlineRef = useRef<readonly ConversationOutlineEntry[] | undefined>(undefined);
+    const outlineEntries = useMemo(() => {
+      // `items` gets a new identity on every streamed delta, so this runs at
+      // token rate. `buildConversationOutline` is per-message memoized and
+      // `reuseConversationOutline` hands back the previous ARRAY when nothing
+      // visible changed, which is what keeps the tick list from re-rendering.
+      const next = reuseConversationOutline(
+        previousOutlineRef.current,
+        buildConversationOutline(items)
+      );
+      previousOutlineRef.current = next;
+      return next;
+    }, [items]);
+    const previousAnchorsRef = useRef<readonly ConversationOutlineAnchor[] | undefined>(undefined);
+    const outlineAnchors = useMemo(() => {
+      // `virtualRows` is rebuilt per delta, so this runs at token rate too;
+      // reusing the array keeps everything derived from it identity-stable.
+      const next = reuseOutlineAnchors(
+        previousAnchorsRef.current,
+        buildOutlineAnchors(virtualRows, outlineEntries)
+      );
+      previousAnchorsRef.current = next;
+      return next;
+    }, [outlineEntries, virtualRows]);
+    const [activeOutlineIndex, setActiveOutlineIndex] = useState(-1);
+
+    // Measured, not assumed: the rect difference also absorbs any border or
+    // start spacer, which a `padding-top` read would miss. Never on a scroll
+    // path — `getBoundingClientRect` forces layout.
+    const measureItemOffsetDelta = useCallback(() => {
+      const content = scrollViewportElement?.firstElementChild;
+      if (!scrollViewportElement || !(content instanceof HTMLElement)) return;
+      itemOffsetDeltaRef.current =
+        content.getBoundingClientRect().top -
+        scrollViewportElement.getBoundingClientRect().top +
+        scrollViewportElement.scrollTop;
+    }, [scrollViewportElement]);
+
+    const syncActiveOutlineIndex = useCallback(() => {
+      const vlist = vlistRef.current;
+      if (!vlist || outlineAnchors.length === 0) {
+        setActiveOutlineIndex(-1);
+        return;
+      }
+      // `scrollSize` / `viewportSize` are the scroller's own cached
+      // scrollHeight / offsetHeight, so this costs no layout read.
+      const maxScrollOffset = vlist.scrollSize - vlist.viewportSize;
+      const isAtEnd = maxScrollOffset > 0 && vlist.scrollOffset >= maxScrollOffset - 2;
+      // O(log rounds) offset lookups, and setState bails out when the round is
+      // unchanged — which it is for the overwhelming majority of scroll events.
+      const next = resolveActiveOutlineIndex(
+        outlineAnchors,
+        (rowIndex) => vlist.getItemOffset(rowIndex + leadingRowCount),
+        vlist.scrollOffset - itemOffsetDeltaRef.current,
+        isAtEnd
+      );
+      setActiveOutlineIndex(next);
+    }, [leadingRowCount, outlineAnchors]);
+
+    // Read the sync through a ref so this effect keys on the ELEMENT alone.
+    // Depending on the callback would re-run it — two `getBoundingClientRect`
+    // and an observer teardown/rebuild — on every streamed delta, which is
+    // exactly the forced layout the measurement comment above rules out.
+    const syncActiveOutlineIndexRef = useLatestRef(syncActiveOutlineIndex);
+    const measureItemOffsetDeltaRef = useLatestRef(measureItemOffsetDelta);
+    useEffect(() => {
+      if (!scrollViewportElement) return undefined;
+      const remeasure = () => {
+        measureItemOffsetDeltaRef.current();
+        syncActiveOutlineIndexRef.current();
+      };
+      remeasure();
+      return observeResizeOnAnimationFrame(scrollViewportElement, remeasure);
+    }, [measureItemOffsetDeltaRef, scrollViewportElement, syncActiveOutlineIndexRef]);
+
+    /** How far a pending jump still is from its target, in item-offset space. */
+    const outlineJumpDrift = useCallback(
+      (rowIndex: number): number => {
+        const vlist = vlistRef.current;
+        if (!vlist) return 0;
+        const targetOffset = vlist.getItemOffset(rowIndex + leadingRowCount);
+        return Math.abs(vlist.scrollOffset - itemOffsetDeltaRef.current - targetOffset);
+      },
+      [leadingRowCount]
+    );
+
+    /**
+     * A jump into rows Virtua has never measured lands on ESTIMATED offsets.
+     * Virtua does re-issue internally as measurements arrive, but it gives up
+     * after 150ms of silence (`core/index.js`), and a React commit plus the
+     * ResizeObserver round trip for a screenful of message rows routinely takes
+     * longer than that — so a far jump settles a round short. Arriving is what
+     * measures the rows, so re-issuing once the scroll settles converges.
+     *
+     * While a jump is pending it also suppresses follow-output, so a jump upward
+     * out of a sticky conversation is not pulled straight back to the bottom.
+     * Tying suppression to this ref rather than to a render is deliberate: the
+     * release must not depend on a commit that React can skip.
+     */
+    const handleOutlineJump = useCallback(
+      (outlineIndex: number) => {
+        const anchor = outlineAnchors.find((item) => item.outlineIndex === outlineIndex);
+        if (!anchor) return;
+        pendingOutlineJumpRef.current = { rowIndex: anchor.rowIndex, attempts: 0 };
+        scrollRowToTop(anchor.rowIndex);
+        // Clicking the round already at the top scrolls nowhere, so no
+        // `onScrollEnd` will arrive to clear the pending jump — and suppression
+        // would stay armed until some unrelated render happened to release it.
+        if (outlineJumpDrift(anchor.rowIndex) <= OUTLINE_JUMP_TOLERANCE_PX) {
+          pendingOutlineJumpRef.current = null;
+        }
+        setActiveOutlineIndex(outlineIndex);
+      },
+      [outlineAnchors, outlineJumpDrift, scrollRowToTop]
+    );
+
+    const handleStreamScrollEnd = useCallback(() => {
+      const pending = pendingOutlineJumpRef.current;
+      if (!pending) return;
+      if (
+        outlineJumpDrift(pending.rowIndex) <= OUTLINE_JUMP_TOLERANCE_PX ||
+        pending.attempts >= OUTLINE_JUMP_MAX_CORRECTIONS
+      ) {
+        // Not settling within the bound means the target simply cannot reach the
+        // top — the last rounds are shorter than the viewport, so the scroll
+        // clamps. Stop rather than retry against a wall.
+        pendingOutlineJumpRef.current = null;
+        return;
+      }
+      pendingOutlineJumpRef.current = {
+        rowIndex: pending.rowIndex,
+        attempts: pending.attempts + 1,
+      };
+      scrollRowToTop(pending.rowIndex);
+    }, [outlineJumpDrift, scrollRowToTop]);
+
+    // Any real input abandons the correction: a reader who starts scrolling
+    // must never be yanked back by a jump they have already moved on from.
+    useEffect(() => {
+      if (!scrollViewportElement) return undefined;
+      const abandon = () => {
+        pendingOutlineJumpRef.current = null;
+      };
+      const options = { passive: true } as const;
+      scrollViewportElement.addEventListener('wheel', abandon, options);
+      scrollViewportElement.addEventListener('touchstart', abandon, options);
+      scrollViewportElement.addEventListener('keydown', abandon, options);
+      return () => {
+        scrollViewportElement.removeEventListener('wheel', abandon);
+        scrollViewportElement.removeEventListener('touchstart', abandon);
+        scrollViewportElement.removeEventListener('keydown', abandon);
+      };
+    }, [scrollViewportElement]);
+
     // Desktop-only top fade: shown only when content has scrolled under the top
     // edge, so it reads as "more conversation above" without dimming the first
     // message while the list sits at its start. setState with an unchanged
     // boolean bails out, so per-scroll-event updates are effectively free.
-    const isMobile = useIsMobile();
     const [isScrolledFromTop, setIsScrolledFromTop] = useState(false);
     const handleStreamScroll = useCallback(
       (offset: number) => {
         handleScroll(offset);
         setIsScrolledFromTop(offset > 0);
+        syncActiveOutlineIndex();
       },
-      [handleScroll]
+      [handleScroll, syncActiveOutlineIndex]
     );
 
     const scrollToIndex = useCallback(
@@ -1293,12 +1514,9 @@ export const SessionChatStreamView = forwardRef<
           virtualIndex = virtualRows.findIndex((row) => row.messageIndex === messageIndex);
         }
         if (virtualIndex === -1) return;
-        vlistRef.current?.scrollToIndex(virtualIndex + leadingRowCount, {
-          align: 'start',
-          smooth: smooth ?? true,
-        });
+        scrollRowToTop(virtualIndex, smooth ?? true);
       },
-      [activeSearchBlockId, items, leadingRowCount, virtualRows]
+      [activeSearchBlockId, items, scrollRowToTop, virtualRows]
     );
 
     useImperativeHandle(ref, () => ({ scrollToBottom, scrollToIndex }), [
@@ -1396,6 +1614,7 @@ export const SessionChatStreamView = forwardRef<
                 ref={vlistRef}
                 shift={false}
                 onScroll={handleStreamScroll}
+                onScrollEnd={handleStreamScrollEnd}
                 // Pre-render extra items outside the viewport to reduce blank areas
                 // during fast scrolling (especially on mobile). This is 4x Virtua's
                 // default (200px) — generous, but deliberately not the previous 2000px:
@@ -1467,6 +1686,18 @@ export const SessionChatStreamView = forwardRef<
             {!isMobile && isScrolledFromTop ? (
               <div className="pointer-events-none absolute inset-x-0 top-0 h-12 bg-gradient-to-b from-background to-transparent" />
             ) : null}
+            {/* Round outline. An overlay SIBLING of the scroll viewport, never a
+                Virtua row — and never a child of the viewport either, because
+                sticky scroll takes the content element from that div's
+                `firstElementChild`. Touch has no hover, so mobile is excluded
+                rather than shipped without its preview card. */}
+            {isMobile ? null : (
+              <ConversationOutlineRail
+                entries={outlineEntries}
+                activeIndex={activeOutlineIndex}
+                onJumpToRound={handleOutlineJump}
+              />
+            )}
             {showScrollToLatest && !isSticky && (
               /* Full-bleed overlay; ConversationColumn carries the shared
                  horizontal gutter so the button lines up with the composer. */

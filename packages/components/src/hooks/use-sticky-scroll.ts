@@ -30,6 +30,14 @@ export interface UseStickyScrollOptions {
 export interface UseStickyScrollResult {
   /** Attach directly to the scroll viewport that owns the Virtua virtualizer. */
   scrollRef: RefCallback<HTMLDivElement>;
+  /**
+   * The bound viewport, for consumers that need its geometry. Exposed so they
+   * do not compose a second callback ref onto {@link scrollRef} to recover it —
+   * that binding has one owner on purpose (see AGENTS.md), and a wrapper in
+   * front of it re-attaches this hook's listeners whenever the wrapper's
+   * identity changes.
+   */
+  scrollElement: HTMLDivElement | null;
   /** Whether the view is currently locked to the bottom. */
   isSticky: boolean;
   /** Force-scroll to bottom and re-enable sticky mode. */
@@ -242,5 +250,5 @@ export function useStickyScroll({
     suppressAutoScrollRef,
   });
 
-  return { scrollRef: setScrollRef, isSticky, scrollToBottom, handleScroll };
+  return { scrollRef: setScrollRef, scrollElement, isSticky, scrollToBottom, handleScroll };
 }

@@ -18,6 +18,12 @@ import type { MessageQueueItem, SessionId } from '@lody/shared';
 import { TooltipProvider } from '@/ui/tooltip';
 import { cn } from '@/lib/utils';
 import { observeResizeOnAnimationFrame } from '@/lib/resize-observer';
+import {
+  NO_SCROLL_EDGE_OVERFLOW,
+  buildScrollEdgeFadeMask,
+  readScrollEdgeOverflow,
+  scrollEdgeOverflowEquals,
+} from '@/lib/scroll-edge-fade';
 import { MessageQueueRow } from './message-queue-row';
 import { useMessageQueueEditing } from './use-message-queue-editing';
 
@@ -36,13 +42,6 @@ export type MessageQueueDisplayProps = {
 
 const FADE_PX = 20;
 
-function buildFadeMask(top: boolean, bottom: boolean): string | undefined {
-  if (!top && !bottom) return undefined;
-  const topStop = top ? `${FADE_PX}px` : '0';
-  const bottomStop = bottom ? `calc(100% - ${FADE_PX}px)` : '100%';
-  return `linear-gradient(to bottom, transparent 0, #000 ${topStop}, #000 ${bottomStop}, transparent 100%)`;
-}
-
 export function MessageQueueDisplay({
   sessionId,
   items,
@@ -57,8 +56,7 @@ export function MessageQueueDisplay({
 }: MessageQueueDisplayProps) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [hasOverflowTop, setHasOverflowTop] = useState(false);
-  const [hasOverflowBottom, setHasOverflowBottom] = useState(false);
+  const [overflow, setOverflow] = useState(NO_SCROLL_EDGE_OVERFLOW);
 
   const editing = useMessageQueueEditing(items, { onEditStart, onEditCancel, onEditSave });
 
@@ -73,9 +71,8 @@ export function MessageQueueDisplay({
   const updateOverflow = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const { scrollTop, scrollHeight, clientHeight } = el;
-    setHasOverflowTop(scrollTop > 1);
-    setHasOverflowBottom(scrollTop + clientHeight < scrollHeight - 1);
+    const next = readScrollEdgeOverflow(el);
+    setOverflow((current) => (scrollEdgeOverflowEquals(current, next) ? current : next));
   }, []);
 
   useLayoutEffect(() => {
@@ -110,7 +107,7 @@ export function MessageQueueDisplay({
     return null;
   }
 
-  const fadeMask = buildFadeMask(hasOverflowTop, hasOverflowBottom);
+  const fadeMask = buildScrollEdgeFadeMask(overflow, FADE_PX);
 
   // Single rounded shell with header row; rows below use divide-y to feel like one continuous list
   // rather than a stack of independent cards. Bottom corners stay square so it visually attaches

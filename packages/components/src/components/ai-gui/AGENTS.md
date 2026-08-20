@@ -102,6 +102,76 @@ context/message-flow.md.
   every imperative/search/group `scrollToIndex` target. Do not absolutely overlay it or persist a
   synthetic history entry. `session_create` Operation completions render one navigable relation
   card per successful target and select only that target Session's title from doc meta.
+- **Outline rail** (`conversation-outline-rail.tsx` + `src/lib/conversation-outline.ts`):
+  the left table of contents, one tick per ROUND (a user turn plus the work it
+  produced), hover card showing the round's opening words. Three invariants:
+  - **Data comes from `items`, never from the DOM.** The list is virtualized, so
+    most rounds have no element — an IntersectionObserver / item-registration
+    design (shadcn `MessageScroller`'s approach) silently omits them. Reader
+    position likewise comes from Virtua's index math (`getItemOffset` +
+    `resolveActiveOutlineIndex`), and the active round is the LAST one whose
+    anchor is above the viewport top, so it stays set through a long turn.
+  - **It is an overlay SIBLING of the scroll viewport**, next to the top fade and
+    the scroll-to-latest button. Not a Virtua row (it would scroll away), and not
+    a child of the viewport either — `use-sticky-scroll.ts` takes the content
+    element from that div's `firstElementChild`.
+  - **Reader position must not re-render the tick list.** It never enters the
+    list's props: the active round is painted by one absolutely-positioned bar
+    (fixed pitch, pure arithmetic, no measurement) and `aria-current` is synced
+    imperatively. Hover MAGNIFICATION is the deliberate exception — it changes
+    every tick at once, but it is driven by pointer entry rather than by
+    scrolling at frame rate, and each tick is memoized on its own width so a
+    move only re-renders the few inside the bell. The outline itself is rebuilt
+    at token rate, so `buildConversationOutline` memoizes per message and only
+    ever runs the markdown cleanup over a bounded prefix — never a whole answer.
+    Same lesson as `hooks/use-incremental-search-blocks.ts`.
+  - **Magnification blends the bell in, it does not add it on**
+    (`conversation-outline-rail-geometry.ts`). Ticks rest at a width set by how
+    much was said in the round, so ADDING a Gaussian let a heavy neighbour
+    outgrow the tick under the cursor. `outlineTickWidth` interpolates toward
+    the bell weighted by the bell itself, which keeps the pointer's own tick
+    the longest and the run of them reading as one normal distribution, while
+    distant ticks keep the resting texture. `RAIL_TRACK_WIDTH` is derived from
+    the peak, not written down separately: the strip is `overflow-y: auto`,
+    which makes the x axis `auto` too, so a tick wider than the track would
+    scroll the rail sideways instead of extending.
+  - **`scrollRowToTop` is the ONLY place a row index becomes a scroll.** It adds
+    `leadingRowCount` and compensates the viewport's top padding, which Virtua's
+    `align: 'start'` does not know about. That compensation is not cosmetic: the
+    rail reads positions back out of the same coordinate space, so a call site
+    that skips it lands a padding's worth low and the rail then reports the round
+    BEFORE the one that was asked for. Group expansion, outline jumps, and the
+    imperative/search `scrollToIndex` all go through it — do not add a fourth
+    direct `vlistRef.scrollToIndex` call.
+  - **A jump into unmeasured rows must be re-issued once it settles.** Virtua
+    scrolls on ESTIMATED offsets there. It _does_ re-issue internally as
+    measurements arrive, but gives up after 150ms of measurement silence
+    (`virtua/lib/core/index.js`), and a React commit plus the ResizeObserver
+    round trip for a screenful of message rows routinely exceeds that — so a far
+    jump settles a round short. (It is NOT that `shift={false}` disables
+    correction; that was the original, wrong diagnosis.) Arriving is what
+    measures the rows, so `handleStreamScrollEnd` re-runs the same jump until it
+    is within `OUTLINE_JUMP_TOLERANCE_PX`, bounded by
+    `OUTLINE_JUMP_MAX_CORRECTIONS` (the list's tail genuinely cannot reach the
+    top, so it must stop rather than retry against the clamp). Any wheel / touch
+    / keydown on the viewport abandons the pending correction — a reader who has
+    started scrolling must never be yanked back.
+    `OUTLINE_ANCHOR_TOLERANCE_PX` then has to EXCEED the jump tolerance: a jump
+    settles a hair above its target, and an exact-to-the-pixel "has this round
+    started" test reported the previous round while its successor visibly owned
+    the top edge.
+  - **Follow-output suppression for a jump is tied to `pendingOutlineJumpRef`,
+    not to a render.** Group expansion can release in the layout effect of its
+    own commit because it _runs_ in one; a jump is an event handler, and React
+    skips the commit when `setActiveOutlineIndex` gets the value it already has
+    — which is exactly what clicking the current round does. Keying suppression
+    on the pending ref means the release cannot be skipped.
+  - Tests: `tests/conversation-outline.test.ts`,
+    `tests/conversation-outline-active.test.ts`,
+    `tests/conversation-outline-rail-geometry.test.ts`. The
+    `ExtremeConversation` story (120 rounds, turns up to 220 paragraphs, a round
+    with no reply, CJK and degenerate titles) is what surfaces the jump and
+    tolerance behaviour; the comfortable stories do not.
 - `markdown-renderer.tsx` — assistant markdown (story: `MarkdownRenderer.stories.tsx`).
   Keep Streamdown in streaming mode for incomplete Markdown, but do not enable its
   word-level `animated` option: it wraps every word in an opacity-animated span and can
