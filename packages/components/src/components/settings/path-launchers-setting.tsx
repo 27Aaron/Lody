@@ -190,7 +190,6 @@ export function PathLaunchersSettings({
             'settings.pathLaunchers.description',
             'Pick the app the Open button uses in session headers.'
           )}
-          labelColumnClassName="sm:grid-cols-[minmax(0,1fr)_auto]"
         >
           <Select
             open={selectOpen}

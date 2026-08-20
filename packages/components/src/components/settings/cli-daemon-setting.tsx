@@ -50,9 +50,8 @@ export function CliDaemonSetting() {
           'The background process that runs local agents and terminals.'
         )}
         alignTop
-        labelColumnClassName="sm:grid-cols-[minmax(0,1fr)_auto]"
       >
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
           <span className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs text-muted-foreground">
             <span className={cn('h-1.5 w-1.5 rounded-full', PHASE_TONE[phase])} />
             {phaseLabels[phase]}

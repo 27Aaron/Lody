@@ -189,7 +189,6 @@ export function AppearanceSettingsView({
                 {fontLoadStatus}
               </span>
             }
-            labelColumnClassName="sm:grid-cols-[minmax(0,1fr)_auto]"
           >
             <OptionSelector
               value={interfaceFontFamily}
@@ -233,7 +232,6 @@ export function AppearanceSettingsView({
             'settings.conversationFontSize.helper',
             'Adjusts message body text in conversations.'
           )}
-          labelColumnClassName="sm:grid-cols-[minmax(0,1fr)_auto]"
         >
           <PreviewSelect
             value={conversationFontSize}
@@ -249,7 +247,6 @@ export function AppearanceSettingsView({
           <CompactRow
             label={t('settings.terminal.fontFamily.label', 'Font')}
             helper={fontLoadStatus}
-            labelColumnClassName="sm:grid-cols-[minmax(0,1fr)_auto]"
           >
             <OptionSelector
               value={terminalFontFamily}
@@ -286,10 +283,7 @@ export function AppearanceSettingsView({
               )}
             />
           </CompactRow>
-          <CompactRow
-            label={t('settings.terminal.fontSize.label', 'Font size')}
-            labelColumnClassName="sm:grid-cols-[minmax(0,1fr)_auto]"
-          >
+          <CompactRow label={t('settings.terminal.fontSize.label', 'Font size')}>
             <Input
               type="number"
               min={TERMINAL_FONT_SIZE_MIN}

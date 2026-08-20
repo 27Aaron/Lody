@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react';
 import { GeneralSettingsComponent } from '@/components/settings';
-import { MemoryRouter } from 'react-router-dom';
+import { RoutedStory, SettingsStoryProviders } from './settings-story-shell';
 
 /**
  * GeneralSettings 组件的 Storybook 故事
@@ -15,9 +15,11 @@ const meta = {
   tags: ['autodocs'],
   decorators: [
     (Story) => (
-      <MemoryRouter>
-        <Story />
-      </MemoryRouter>
+      <SettingsStoryProviders>
+        <RoutedStory>
+          <Story />
+        </RoutedStory>
+      </SettingsStoryProviders>
     ),
   ],
 } satisfies Meta<typeof GeneralSettingsComponent>;

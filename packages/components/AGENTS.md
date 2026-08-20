@@ -14,6 +14,10 @@ mobile surfaces.
 - Compact number units (K/M/B vs 万/亿) follow the product language via
   `toIntlLocaleOrEn` / `formatCompactNumber`, never the host OS locale.
 - Prefer shared primitives from `src/components/ui` over private replacements.
+- A settings row (`settings/compact-layout.tsx`) is one grid: the label column takes the
+  remaining space and the control column hugs its content. Never size either column from a
+  viewport breakpoint — settings render in a panel far narrower than the window, and the
+  panel clips its overflow, so a `md:`-width label column silently hides the control.
 - An editable control fills with `bg-input-field`, never `bg-input`. `--input` is the
   theme's raw `input.background` and doubles as a muted chip/composer slab that may sit
   BELOW the page color in a light theme — a recessed gray field reads as disabled.

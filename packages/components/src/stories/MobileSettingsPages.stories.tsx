@@ -1,7 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react';
 import { fn } from 'storybook/test';
 import type { ReactNode } from 'react';
-import { useState } from 'react';
 import { Provider as JotaiProvider } from 'jotai';
 import { useHydrateAtoms } from 'jotai/utils';
 import {
@@ -10,12 +9,6 @@ import {
   createStaticStore,
 } from '@lody/platform';
 import { PlatformContext } from '@lody/platform/react';
-import {
-  RouterProvider,
-  createMemoryHistory,
-  createRootRoute,
-  createRouter,
-} from '@tanstack/react-router';
 
 import { currentWorkspaceSlugAtom, userAtom } from '@/atoms';
 import { MobileAboutSettings } from '@/components/mobile/mobile-about-settings';
@@ -27,6 +20,7 @@ import { SettingsCategoryList } from '@/components/settings/settings-category-li
 import { StableSessionContext, type StableSessionValue } from '@/hooks/useStableSession';
 import type { LodyAuthClient } from '@/lib/auth';
 import { AuthProvider } from '@/providers/convex-provider';
+import { RoutedStory } from './settings-story-shell';
 
 /* Renders the real mobile settings pages (home category list + per-area
    sub-pages) inside the production `MobileSettingsLayout` chrome, so visual
@@ -141,24 +135,6 @@ function StoryProviders({ children }: { children: ReactNode }) {
       </PlatformContext.Provider>
     </JotaiProvider>
   );
-}
-
-/* The settings pages call `useParams({ strict: false })` (via `useClearCache`),
-   which still throws without a nearest route match. Render the story through a
-   real (memory) router so the page sits inside a matched route component —
-   the global preview router only renders stories outside any route. */
-function createStoryRouter(children: ReactNode) {
-  const rootRoute = createRootRoute({ component: () => <>{children}</> });
-  return createRouter({
-    routeTree: rootRoute,
-    history: createMemoryHistory({ initialEntries: ['/'] }),
-    context: {},
-  });
-}
-
-function RoutedStory({ children }: { children: ReactNode }) {
-  const [router] = useState(() => createStoryRouter(children));
-  return <RouterProvider router={router} />;
 }
 
 function PhoneFrame({ title, children }: { title: string; children: ReactNode }) {
