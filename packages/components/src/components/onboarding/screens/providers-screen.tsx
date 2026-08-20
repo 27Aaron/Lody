@@ -350,16 +350,15 @@ export function ProvidersScreenView({
                           />
                         </div>
                         <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                              {config.name}
-                            </span>
-                            <ProviderStatusBadge status={status} />
-                          </div>
+                          <div className="truncate text-sm font-medium">{config.name}</div>
                           <div className="truncate text-xs text-muted-foreground">
                             {labelForAgent(config.cliType, config.agentType)}
                           </div>
                         </div>
+                        {/* Sibling of the two-line text column, so the badge
+                            centres against the whole row instead of riding the
+                            name's baseline. */}
+                        <ProviderStatusBadge status={status} />
                       </button>
                       <div className="flex shrink-0 items-center gap-1 pr-3">
                         <Button variant="ghost" size="sm" onClick={() => onEdit(config)}>
@@ -983,7 +982,7 @@ function ProviderStatusBadge({ status }: { status: ProviderTestStatus }) {
   const { t } = useTranslation();
   if (status === 'testing') {
     return (
-      <Badge variant="outline" className="gap-1 whitespace-nowrap text-[10px]">
+      <Badge variant="outline" className="shrink-0 gap-1 whitespace-nowrap text-[10px]">
         <Loader2 className="h-2.5 w-2.5 animate-spin" />
         {t('onboarding.providers.statusTesting', 'Testing')}
       </Badge>
@@ -993,7 +992,7 @@ function ProviderStatusBadge({ status }: { status: ProviderTestStatus }) {
     return (
       <Badge
         variant="outline"
-        className="gap-1 whitespace-nowrap border-primary/40 bg-primary/10 text-[10px] text-primary"
+        className="shrink-0 gap-1 whitespace-nowrap border-primary/40 bg-primary/10 text-[10px] text-primary"
       >
         <CheckCircle2 className="h-2.5 w-2.5" />
         {t('onboarding.providers.statusPassed', 'Verified')}
@@ -1004,7 +1003,7 @@ function ProviderStatusBadge({ status }: { status: ProviderTestStatus }) {
     return (
       <Badge
         variant="outline"
-        className="gap-1 whitespace-nowrap border-destructive/40 text-[10px] text-destructive"
+        className="shrink-0 gap-1 whitespace-nowrap border-destructive/40 text-[10px] text-destructive"
       >
         <XCircle className="h-2.5 w-2.5" />
         {t('onboarding.providers.statusFailed', 'Failed')}
@@ -1015,14 +1014,17 @@ function ProviderStatusBadge({ status }: { status: ProviderTestStatus }) {
     return (
       <Badge
         variant="outline"
-        className="whitespace-nowrap text-[10px] text-amber-600 dark:text-amber-400"
+        className="shrink-0 whitespace-nowrap text-[10px] text-amber-600 dark:text-amber-400"
       >
         {t('onboarding.providers.statusNeedsAuth', 'Sign in')}
       </Badge>
     );
   }
   return (
-    <Badge variant="outline" className="whitespace-nowrap text-[10px] text-muted-foreground">
+    <Badge
+      variant="outline"
+      className="shrink-0 whitespace-nowrap text-[10px] text-muted-foreground"
+    >
       {t('onboarding.providers.statusUntested', 'Untested')}
     </Badge>
   );
