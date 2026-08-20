@@ -364,9 +364,11 @@ The adapter packages in `apps/cli/package.json` are public submodule dependencie
 Adapter bugs/behaviors should be fixed in their package sources first:
 
 - `claude` → `packages/acp-extension-claude`, source:
-  https://github.com/loro-dev/acp-extension-claude
+  https://github.com/LodyAI/acp-extension-claude
 - `codex` → `packages/acp-extension-codex`, source:
-  https://github.com/loro-dev/acp-extension-codex
+  https://github.com/LodyAI/acp-extension-codex
+- shared extension contracts → `packages/acp-extension-core`, source:
+  https://github.com/LodyAI/acp-extension-core
 - `deepseek` → `packages/acp-extension-dsh`, source:
   https://github.com/LodyAI/acp-extension-dsh
 

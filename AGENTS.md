@@ -46,6 +46,9 @@ private service secrets, and the Web and mobile app sources.
 - `packages/acp-extension-kimi` is an isolated submodule workspace. Do not add it
   to the root pnpm dependency graph; Lody consumes only its separately built,
   checksummed managed-runtime artifact and versioned ACP extension contract.
+- `packages/acp-extension-core` is a public submodule workspace sourced from
+  `LodyAI/acp-extension-core`. Keep shared ACP extension contracts there and consume
+  them through the root pnpm workspace; do not duplicate those contracts locally.
 - Never commit captured user/agent transcripts; fixtures must be synthetic.
 - Workspace MCP has exactly two durable layers: catalog entries in the workspace Flock
   document and selected ids in each user turn input config. Do not add machine bindings.
@@ -67,6 +70,7 @@ after changing package scope or cloud/local composition.
 - `packages/cloud-api`: public optional-cloud client contract
 - `packages/shared`: schemas, protocols, and cross-runtime utilities
 - `packages/loro-streams-rpc`: public Streams RPC protocol/client
+- `packages/acp-extension-core`: shared public ACP extension contracts
 - `packages/acp-extension-kimi`: independently built Kimi runtime source and Lody ACP extensions
 - `site-docs`: public documentation site
 
