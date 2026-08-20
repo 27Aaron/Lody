@@ -39,8 +39,11 @@ export type SidebarChatScope = 'my' | 'team';
  * Chat scope filter - persisted to localStorage
  * 'my' = Show only current user's tasks
  * 'team' = Show all team tasks
+ *
+ * Default to the team view so a participant who has not chosen a scope sees
+ * the complete workspace. An explicit choice remains persisted below.
  */
-export const chatScopeAtom = atomWithStorage<SidebarChatScope>('lody-sidebar-chat-scope', 'my');
+export const chatScopeAtom = atomWithStorage<SidebarChatScope>('lody-sidebar-chat-scope', 'team');
 
 // ============================================================================
 // Repo State (Collapse + Ordering)
