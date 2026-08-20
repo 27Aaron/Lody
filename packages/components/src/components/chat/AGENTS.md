@@ -53,6 +53,14 @@
   chips or a below-composer agent/permission row. Usage reads subscription rate
   limits from the selected agent's Machine Flock metadata and remains hidden for
   custom or environment-overridden providers.
+- The desktop run config menu's "Recently used" group (`lib/recent-run-configs.ts`)
+  is device-local localStorage history keyed per workspace, recorded only when a
+  chat is actually STARTED — never when a knob moves. A row offers a whole
+  combination (agent + model + every config option) and is filtered to agents on
+  the selected machine; the current combination never appears. Applying one sets
+  the agent first and must wait for that agent's own reconcile pass (see
+  `use-acp-session-config-selection.ts`) before writing model/options, or the
+  seeded per-agent defaults overwrite them.
 - `chat-landing-view.tsx` is the render-only landing layout around
   `ChatComposer`; keep stateful data loading in `chat-landing.tsx`. Its one
   piece of local state is the session-mention drop target: a session dragged

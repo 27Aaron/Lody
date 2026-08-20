@@ -106,6 +106,16 @@ import {
   githubBranchesCache,
   persistAgentSessionDefaults,
 } from '@/lib/local-storage-cache';
+import {
+  buildRecentRunConfigItems,
+  describeRunConfigSelection,
+  getRecentRunConfigKey,
+  readRecentRunConfigs,
+  recordRecentRunConfig,
+  resolveApplicableConfigOptionValues,
+  sanitizeConfigOptionValues,
+  type RecentRunConfigRecord,
+} from '@/lib/recent-run-configs';
 import { useAcpSelectorOptions } from '@/hooks/use-acp-selector-options';
 import { useAvailableCommands } from '@/hooks/use-available-commands';
 import { useOrganization } from '@/hooks/useOrganization';
@@ -1009,6 +1019,7 @@ function WorkspaceChatLanding({
      (settings ≠ where you go to create something new). */
   const [mobileCreateWorkspaceOpen, setMobileCreateWorkspaceOpen] = useState(false);
   const {
+    state: sessionConfigSelectionState,
     selectedModeId,
     selectedModelId,
     configOptionValues,
@@ -1509,6 +1520,89 @@ function WorkspaceChatLanding({
     selectorOptions,
     dispatch: dispatchSessionConfigSelection,
   });
+
+  /* ── Recently used run configurations ──
+     Device-local history of whole combinations (agent + model + every config
+     option) the user has actually started a chat with, surfaced at the top of
+     the desktop run-config menu. */
+  const [recentRunConfigRecords, setRecentRunConfigRecords] = useState<RecentRunConfigRecord[]>([]);
+  useEffect(() => {
+    setRecentRunConfigRecords(readRecentRunConfigs(workspaceId));
+  }, [workspaceId]);
+  const currentRunConfigFace = useMemo(
+    () =>
+      describeRunConfigSelection({
+        modelOptions,
+        selectedModelId,
+        configOptionSelectors,
+        configOptionValues,
+      }),
+    [configOptionSelectors, configOptionValues, modelOptions, selectedModelId]
+  );
+  const currentRunConfigKey = useMemo(
+    () =>
+      selectedAgent
+        ? getRecentRunConfigKey({
+            agentId: selectedAgent.agentId,
+            machineId: selectedAgent.machineId,
+            modelId: currentRunConfigFace.modelId,
+            configOptionValues: sanitizeConfigOptionValues(configOptionValues),
+          })
+        : null,
+    [configOptionValues, currentRunConfigFace.modelId, selectedAgent]
+  );
+  /* Picking an entry switches the agent first; its model and options can only
+     be applied after that agent's own reconcile pass has seeded the selection
+     state, or the seeded defaults would overwrite them. */
+  const [pendingRecentRunConfig, setPendingRecentRunConfig] =
+    useState<RecentRunConfigRecord | null>(null);
+  useEffect(() => {
+    if (!pendingRecentRunConfig || !selectedAgent) return;
+    if (
+      selectedAgent.agentId !== pendingRecentRunConfig.agentId ||
+      selectedAgent.machineId !== pendingRecentRunConfig.machineId
+    ) {
+      setPendingRecentRunConfig(null);
+      return;
+    }
+    if (
+      sessionConfigSelectionState.targetKey !==
+      `${selectedAgent.machineId}:${selectedAgent.agentId}`
+    ) {
+      return;
+    }
+    // A cold agent reports no models until its capabilities resolve; applying
+    // then would silently drop the recorded model. Wait — unless the user has
+    // meanwhile picked a model themselves, which outranks the entry.
+    if (pendingRecentRunConfig.modelId && modelOptions.length === 0) {
+      if (sessionConfigSelectionState.model.origin === 'user') {
+        setPendingRecentRunConfig(null);
+      }
+      return;
+    }
+    setPendingRecentRunConfig(null);
+    if (
+      pendingRecentRunConfig.modelId &&
+      modelOptions.some((option) => option.value === pendingRecentRunConfig.modelId)
+    ) {
+      setSelectedModelName(pendingRecentRunConfig.modelId);
+    }
+    for (const { configId, value } of resolveApplicableConfigOptionValues(
+      pendingRecentRunConfig,
+      configOptionSelectors
+    )) {
+      handleConfigOptionChange(configId, value);
+    }
+  }, [
+    configOptionSelectors,
+    handleConfigOptionChange,
+    modelOptions,
+    pendingRecentRunConfig,
+    selectedAgent,
+    sessionConfigSelectionState.model.origin,
+    sessionConfigSelectionState.targetKey,
+    setSelectedModelName,
+  ]);
   const availableCommands = useAvailableCommands({
     configId: selectedConfig?.id,
     cliType: selectedConfig?.cliType,
@@ -2796,6 +2890,24 @@ function WorkspaceChatLanding({
         modelId: modelOptions.length > 0 ? selectedModelId : null,
         configOptionValues,
       });
+      // A recent entry is a configuration the user actually RAN, so it is
+      // recorded here — after the session was accepted — not when a knob moves.
+      setRecentRunConfigRecords(
+        recordRecentRunConfig(
+          workspaceId,
+          {
+            agentId: selectedAgent.agentId,
+            machineId: selectedAgent.machineId,
+            modelId: currentRunConfigFace.modelId,
+            modelLabel: currentRunConfigFace.modelLabel,
+            reasoningLabel: currentRunConfigFace.reasoningLabel,
+            planOn: currentRunConfigFace.planOn,
+            fastOn: currentRunConfigFace.fastOn,
+            configOptionValues: sanitizeConfigOptionValues(configOptionValues),
+          },
+          Date.now()
+        )
+      );
       handoffSessionPreparation(sessionId);
 
       capturePostHogEvent(postHog, 'session/start_requested', {
@@ -3152,6 +3264,38 @@ function WorkspaceChatLanding({
     () => (scopedMachineId ? [scopedMachineId] : undefined),
     [scopedMachineId]
   );
+  /* Recent entries are offered only for agents the menu itself can select: one
+     recorded on another machine must not silently move the chat off the
+     selected one. */
+  const recentRunConfigAgentConfigs = useMemo(
+    () =>
+      scopedMachineId
+        ? executorConfigs.filter((config) => config.machineId === scopedMachineId)
+        : executorConfigs,
+    [executorConfigs, scopedMachineId]
+  );
+  const recentRunConfigItems = useMemo(
+    () =>
+      buildRecentRunConfigItems({
+        records: recentRunConfigRecords,
+        agentConfigs: recentRunConfigAgentConfigs,
+        currentKey: currentRunConfigKey,
+      }),
+    [currentRunConfigKey, recentRunConfigAgentConfigs, recentRunConfigRecords]
+  );
+  const handleRecentRunConfigSelect = useCallback(
+    (id: string) => {
+      const record = recentRunConfigRecords.find((entry) => getRecentRunConfigKey(entry) === id);
+      if (!record) return;
+      const config = recentRunConfigAgentConfigs.find(
+        (entry) => entry.id === record.agentId && entry.machineId === record.machineId
+      );
+      if (!config) return;
+      setSelectedAgent({ agentId: config.id, machineId: config.machineId });
+      setPendingRecentRunConfig(record);
+    },
+    [recentRunConfigAgentConfigs, recentRunConfigRecords]
+  );
   const desktopMachineOptions = useMemo(
     () =>
       Array.from(selectableMachines.values()).map((machine) => ({
@@ -3252,6 +3396,8 @@ function WorkspaceChatLanding({
           configOptionSelectors={configOptionSelectors}
           configOptionValues={configOptionValues}
           onConfigOptionChange={handleConfigOptionChange}
+          recentRunConfigs={recentRunConfigItems}
+          onRecentRunConfigSelect={handleRecentRunConfigSelect}
         />
         <DesktopPermissionModeButton
           modeOptions={modeOptions}
