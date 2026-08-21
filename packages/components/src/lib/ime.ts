@@ -1,10 +1,13 @@
 interface ImeAwareKeyboardEvent {
   key: string;
-  nativeEvent: {
-    isComposing?: boolean;
-    keyCode?: number;
-    which?: number;
-  };
+  nativeEvent: Omit<NativeImeAwareKeyboardEvent, 'key'>;
+}
+
+interface NativeImeAwareKeyboardEvent {
+  key: string;
+  isComposing?: boolean;
+  keyCode?: number;
+  which?: number;
 }
 
 /**
@@ -14,15 +17,22 @@ interface ImeAwareKeyboardEvent {
  * only expose composition via key=Process or keyCode/which=229.
  */
 export function isImeComposingKeyboardEvent(event: ImeAwareKeyboardEvent): boolean {
-  const { nativeEvent } = event;
-  if (nativeEvent.isComposing) {
-    return true;
-  }
-  if (event.key === 'Process') {
-    return true;
-  }
+  return isImeComposingNativeKeyboardEvent({
+    key: event.key,
+    isComposing: event.nativeEvent.isComposing,
+    keyCode: event.nativeEvent.keyCode,
+    which: event.nativeEvent.which,
+  });
+}
 
-  return nativeEvent.keyCode === 229 || nativeEvent.which === 229;
+/**
+ * Native-event variant for window/document listeners and Radix dismiss layers.
+ */
+export function isImeComposingNativeKeyboardEvent(event: NativeImeAwareKeyboardEvent): boolean {
+  if (event.isComposing) return true;
+  if (event.key === 'Process') return true;
+
+  return event.keyCode === 229 || event.which === 229;
 }
 
 interface DuplicatedImeCommitEchoInput {

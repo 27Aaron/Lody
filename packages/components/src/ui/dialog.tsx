@@ -2,6 +2,7 @@ import React from 'react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
 
+import { isImeComposingNativeKeyboardEvent } from '@/lib/ime';
 import { cn } from '@/lib/utils';
 
 const Dialog = DialogPrimitive.Root;
@@ -61,13 +62,22 @@ const DialogContent = React.forwardRef<
     /** Skip the enter/exit animation so the dialog appears instantly. */
     noAnimation?: boolean;
   }
->(({ className, overlayClassName, noAnimation, children, ...props }, ref) => (
+>(({ className, overlayClassName, noAnimation, children, onEscapeKeyDown, ...props }, ref) => (
   <DialogPortal>
     <DialogOverlay className={overlayClassName} noAnimation={noAnimation} />
     <DialogPrimitive.Content
       ref={ref}
       data-lody-dialog-content=""
       className={cn(dialogBaseClasses, !noAnimation && dialogAnimationClasses, className)}
+      onEscapeKeyDown={(event) => {
+        // Esc first cancels an active IME preedit. Treating the same keydown as
+        // dialog dismissal loses any draft held by a form inside the dialog.
+        if (isImeComposingNativeKeyboardEvent(event)) {
+          event.preventDefault();
+          return;
+        }
+        onEscapeKeyDown?.(event);
+      }}
       {...props}
     >
       {children}
@@ -88,13 +98,20 @@ const DialogContentWithoutClose = React.forwardRef<
     /** Skip the enter/exit animation so the dialog appears instantly. */
     noAnimation?: boolean;
   }
->(({ className, overlayClassName, noAnimation, children, ...props }, ref) => (
+>(({ className, overlayClassName, noAnimation, children, onEscapeKeyDown, ...props }, ref) => (
   <DialogPortal>
     <DialogOverlay className={overlayClassName} noAnimation={noAnimation} />
     <DialogPrimitive.Content
       ref={ref}
       data-lody-dialog-content=""
       className={cn(dialogBaseClasses, !noAnimation && dialogAnimationClasses, className)}
+      onEscapeKeyDown={(event) => {
+        if (isImeComposingNativeKeyboardEvent(event)) {
+          event.preventDefault();
+          return;
+        }
+        onEscapeKeyDown?.(event);
+      }}
       {...props}
     >
       {children}

@@ -13,6 +13,7 @@ import {
 } from '@/atoms/focus-layer';
 import { toggleSidebarCollapsedAtom } from '@/atoms/sidebar-state';
 import { getCommandKeybindings, useCommand } from '@/lib/commands';
+import { isImeComposingNativeKeyboardEvent } from '@/lib/ime';
 import { useIsMobile } from './use-mobile';
 
 // Re-export types from atoms for convenience
@@ -348,6 +349,9 @@ export function useKeyboardNavigation() {
     if (isMobile) return undefined;
 
     const handler = (e: KeyboardEvent) => {
+      // Esc cancels an active IME preedit. It must not also leave the composer
+      // focus layer after the browser/IME has handled that same keydown.
+      if (isImeComposingNativeKeyboardEvent(e)) return;
       if (isPopupOpen()) return;
 
       if (e.metaKey || e.ctrlKey) return;
