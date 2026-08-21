@@ -1,14 +1,12 @@
 import { useTranslation } from 'react-i18next';
-import { Check, Moon, Sun } from 'lucide-react';
+import { Check, Monitor, Moon, Sun } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { cn } from '@/lib/utils';
-import { useResolvedTheme, useTheme } from '../../../theme-provider';
+import { useTheme, type Theme } from '../../../theme-provider';
 import { OnboardingShell, OnboardingBackButton, OnboardingNextButton } from '../onboarding-shell';
 
-type Mode = 'light' | 'dark';
-
 interface ModeOption {
-  value: Mode;
+  value: Theme;
   labelKey: string;
   labelDefault: string;
   Icon: (props: { className?: string }) => JSX.Element;
@@ -27,12 +25,18 @@ const MODE_OPTIONS: ModeOption[] = [
     labelDefault: 'Dark',
     Icon: (props) => <Moon {...props} strokeWidth={1.6} />,
   },
+  {
+    value: 'system',
+    labelKey: 'onboarding.theme.system',
+    labelDefault: 'System',
+    Icon: (props) => <Monitor {...props} strokeWidth={1.6} />,
+  },
 ];
 
 export interface ThemeScreenViewProps {
-  /** Selected mode (light/dark). */
-  mode: Mode;
-  onModeChange: (next: Mode) => void;
+  /** Selected mode (light/dark/system). */
+  mode: Theme;
+  onModeChange: (next: Theme) => void;
   onBack: () => void;
   onNext: () => void;
 }
@@ -46,7 +50,7 @@ export function ThemeScreenView({ mode, onModeChange, onBack, onNext }: ThemeScr
       stepKey="theme"
       size="wide"
       title={t('onboarding.theme.title', 'Pick a look')}
-      description={t('onboarding.theme.description', 'Choose light or dark.')}
+      description={t('onboarding.theme.description', 'Choose light, dark, or follow your system.')}
       secondaryAction={<OnboardingBackButton onClick={onBack} />}
       primaryAction={<OnboardingNextButton onClick={onNext} />}
     >
@@ -54,7 +58,7 @@ export function ThemeScreenView({ mode, onModeChange, onBack, onNext }: ThemeScr
         <div className="text-xs font-medium tracking-wider text-muted-foreground/80">
           {t('onboarding.theme.modeHeading', 'Mode')}
         </div>
-        <div role="radiogroup" className="grid gap-2 sm:grid-cols-2">
+        <div role="radiogroup" className="grid gap-2 sm:grid-cols-3">
           {MODE_OPTIONS.map((option) => {
             const selected = mode === option.value;
             return (
@@ -100,22 +104,17 @@ interface ThemeScreenProps {
 }
 
 /**
- * Container that wires the global light/dark mode. The app ships a single
- * light theme (Lody Light) and a single dark theme (Vesper), so the
- * only choice here is the base mode. Click commits — no hover preview, since
- * that proved jarring during onboarding.
+ * Container that wires the global appearance mode. The app ships a single
+ * light palette (Lody Light) and a single dark palette (Vesper); the choice
+ * here is light, dark, or follow the OS. Click commits — no hover preview,
+ * since that proved jarring during onboarding.
  */
 export function ThemeScreen({ onBack, onNext }: ThemeScreenProps) {
   const { theme, setTheme } = useTheme();
-  const resolvedTheme = useResolvedTheme();
-
-  // The provider may still hold 'system' (its first-run default); show the
-  // effective mode so a tile is always selected.
-  const mode: Mode = theme === 'system' ? resolvedTheme : theme;
 
   return (
     <ThemeScreenView
-      mode={mode}
+      mode={theme}
       onModeChange={(next) => setTheme(next)}
       onBack={onBack}
       onNext={onNext}

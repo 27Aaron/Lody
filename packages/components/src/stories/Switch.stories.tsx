@@ -15,19 +15,16 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-function SwitchShowcase({ themeId, mode }: { themeId?: string; mode: 'dark' | 'light' }) {
-  const { setTheme, setVSCodeThemeId } = useTheme();
+function SwitchShowcase({ mode }: { mode: 'dark' | 'light' }) {
+  const { setTheme } = useTheme();
 
   useEffect(() => {
     setTheme(mode);
-    setVSCodeThemeId(mode, themeId);
-  }, [mode, themeId, setTheme, setVSCodeThemeId]);
+  }, [mode, setTheme]);
 
   return (
     <div className="min-w-[320px] space-y-6 rounded-lg bg-background p-6 text-foreground">
-      <h2 className="text-sm font-semibold">
-        {themeId ?? 'Lody default'} ({mode})
-      </h2>
+      <h2 className="text-sm font-semibold">Lody {mode}</h2>
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <Label className="text-sm">Disabled toggle (off)</Label>
@@ -58,19 +55,4 @@ export const Default: Story = {
 export const DefaultDark: Story = {
   render: () => <SwitchShowcase mode="dark" />,
   globals: { theme: 'dark' },
-};
-
-export const Vesper: Story = {
-  render: () => <SwitchShowcase themeId="vesper" mode="dark" />,
-  globals: { theme: 'dark' },
-};
-
-export const GruvboxDark: Story = {
-  render: () => <SwitchShowcase themeId="gruvbox-material-dark" mode="dark" />,
-  globals: { theme: 'dark' },
-};
-
-export const GruvboxLight: Story = {
-  render: () => <SwitchShowcase themeId="gruvbox-material-light" mode="light" />,
-  globals: { theme: 'light' },
 };

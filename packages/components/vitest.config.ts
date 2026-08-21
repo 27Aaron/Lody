@@ -17,6 +17,7 @@ export default defineConfig({
     // misplaced one fail loudly rather than look like coverage it is not.
     include: ['tests/**/*.test.ts', 'tests/**/*.test.tsx', 'src/**/*.test.ts', 'src/**/*.test.tsx'],
     environment: 'node',
+    setupFiles: ['tests/setup.ts'],
     // Keep diagnostics from failing tests while avoiding the substantial I/O
     // produced by expected logs from hundreds of passing files.
     silent: 'passed-only',

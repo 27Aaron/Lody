@@ -2,7 +2,7 @@ import { useCallback, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAtom } from 'jotai';
 import type { SupportedLanguage } from '@lody/shared';
-import { Check, ChevronDown, Moon, Sun } from 'lucide-react';
+import { Check, ChevronDown, Monitor, Moon, Sun } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 import { conversationFontSizeAtom, languageAtom, type ConversationFontSize } from '@/atoms';
@@ -17,23 +17,25 @@ import { MobileSettingsRow, MobileSettingsSection } from '@/components/mobile/mo
 import { currentSupportedLanguages, languageCodeToName } from '../../i18n';
 import { cn } from '@/lib/utils';
 import { withOneSignal } from '@/lib/onesignal';
-import { useTheme } from '../../theme-provider';
+import { useTheme, type Theme } from '../../theme-provider';
 
 export function MobileAppearanceSettings() {
   const { t, i18n } = useTranslation();
-  const { theme, resolvedTheme, setTheme, previewTheme } = useTheme();
+  const { theme, setTheme } = useTheme();
   const [language, setLanguage] = useAtom(languageAtom);
   const [conversationFontSize, setConversationFontSize] = useAtom(conversationFontSizeAtom);
-  const themeValue: 'light' | 'dark' = theme === 'system' ? resolvedTheme : theme;
   const selectedThemeLabel =
-    themeValue === 'light' ? t('settings.theme.light') : t('settings.theme.dark');
+    theme === 'light'
+      ? t('settings.theme.light')
+      : theme === 'dark'
+        ? t('settings.theme.dark')
+        : t('settings.theme.system');
 
   const handleThemeChange = useCallback(
-    (value: 'light' | 'dark') => {
-      previewTheme(value);
+    (value: Theme) => {
       setTheme(value);
     },
-    [previewTheme, setTheme]
+    [setTheme]
   );
 
   const languageOptions: MobileInlinePickerOption<SupportedLanguage>[] =
@@ -86,10 +88,10 @@ export function MobileAppearanceSettings() {
         <MobileInlinePickerRowSlot>
           <MobileSettingsRow label={t('settings.theme.label')}>
             <ThemeModeMenuTrigger
-              value={themeValue}
+              value={theme}
               onChange={handleThemeChange}
               selectedLabel={selectedThemeLabel}
-              selectedIcon={themeIconFor(themeValue)}
+              selectedIcon={themeIconFor(theme)}
             />
           </MobileSettingsRow>
         </MobileInlinePickerRowSlot>
@@ -131,12 +133,14 @@ export function MobileAppearanceSettings() {
   );
 }
 
-function themeIconFor(value: 'light' | 'dark') {
-  return value === 'light' ? (
-    <Sun className="h-4 w-4" aria-hidden="true" />
-  ) : (
-    <Moon className="h-4 w-4" aria-hidden="true" />
-  );
+function themeIconFor(value: Theme) {
+  if (value === 'light') {
+    return <Sun className="h-4 w-4" aria-hidden="true" />;
+  }
+  if (value === 'dark') {
+    return <Moon className="h-4 w-4" aria-hidden="true" />;
+  }
+  return <Monitor className="h-4 w-4" aria-hidden="true" />;
 }
 
 function ThemeModeMenuTrigger({
@@ -145,14 +149,14 @@ function ThemeModeMenuTrigger({
   selectedLabel,
   selectedIcon,
 }: {
-  value: 'light' | 'dark';
-  onChange: (next: 'light' | 'dark') => void;
+  value: Theme;
+  onChange: (next: Theme) => void;
   selectedLabel: ReactNode;
   selectedIcon?: ReactNode;
 }) {
   const { t } = useTranslation();
   const modeTiles: Array<{
-    value: 'light' | 'dark';
+    value: Theme;
     label: string;
     icon: ReactNode;
   }> = [
@@ -165,6 +169,11 @@ function ThemeModeMenuTrigger({
       value: 'dark',
       label: String(t('settings.theme.dark')),
       icon: <Moon className="h-4 w-4" aria-hidden="true" />,
+    },
+    {
+      value: 'system',
+      label: String(t('settings.theme.system')),
+      icon: <Monitor className="h-4 w-4" aria-hidden="true" />,
     },
   ];
 
@@ -195,7 +204,7 @@ function ThemeModeMenuTrigger({
         expansionPanelClassName="p-0"
       >
         {() => (
-          <div role="radiogroup" className="grid grid-cols-2 gap-2 p-2">
+          <div role="radiogroup" className="grid grid-cols-3 gap-2 p-2">
             {modeTiles.map((tile) => {
               const selected = tile.value === value;
               return (

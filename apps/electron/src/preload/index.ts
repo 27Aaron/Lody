@@ -592,6 +592,15 @@ const api = {
   setNativeTheme: (source: 'dark' | 'light' | 'system') => {
     ipcRenderer.send('lodyApp:setNativeTheme', source)
   },
+  onNativeThemeUpdated: (handler: (resolved: 'light' | 'dark') => void) => {
+    const listener = (_event: unknown, resolved: unknown) => {
+      if (resolved === 'light' || resolved === 'dark') {
+        handler(resolved)
+      }
+    }
+    ipcRenderer.on('lodyApp:nativeThemeUpdated', listener)
+    return () => ipcRenderer.removeListener('lodyApp:nativeThemeUpdated', listener)
+  },
   notifyRendererMounted: () => {
     try {
       ipcRenderer.send('lody:notify-renderer-mounted')

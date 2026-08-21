@@ -275,6 +275,7 @@ declare global {
       getCliAutoStartEnabled?: () => Promise<{ enabled: boolean }>;
       setLanguage?: (locale: string) => void;
       setNativeTheme?: (source: 'dark' | 'light' | 'system') => void;
+      onNativeThemeUpdated?: (handler: (resolved: 'light' | 'dark') => void) => () => void;
     };
   }
 }

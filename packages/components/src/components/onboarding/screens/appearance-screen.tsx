@@ -1,12 +1,12 @@
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { motion } from 'framer-motion';
-import { Moon, Sun } from 'lucide-react';
+import { Monitor, Moon, Sun } from 'lucide-react';
 import { useAtom } from 'jotai';
 import type { SupportedLanguage } from '@lody/shared';
 import { cn } from '@/lib/utils';
 import { languageAtom } from '@/atoms/settings';
-import { useResolvedTheme, useTheme } from '../../../theme-provider';
+import { useTheme, type Theme } from '../../../theme-provider';
 import { OnboardingShell, OnboardingBackButton, OnboardingNextButton } from '../onboarding-shell';
 import { playHover, playSelect } from '../ceremony/ui-sounds';
 
@@ -40,11 +40,11 @@ interface SegmentOption<T extends string> {
 /**
  * A segmented control.
  *
- * Two mutually exclusive answers to one question, presented as one object.
+ * A closed set of answers to one question, presented as one object.
  * Separate bordered tiles say "here are two things"; a segmented control says
- * "here is one setting, currently on the left" — which is what both of these
- * are. The selected pill is a shared layout element, so switching slides rather
- * than blinking, and there is never a frame with two or zero pills.
+ * "here is one setting, currently on this option" — which is what both of
+ * these are. The selected pill is a shared layout element, so switching slides
+ * rather than blinking, and there is never a frame with two or zero pills.
  */
 function Segmented<T extends string>({
   label,
@@ -113,12 +113,10 @@ function Segmented<T extends string>({
   );
 }
 
-type Mode = 'light' | 'dark';
-
 export interface AppearanceScreenViewProps {
-  /** Effective light/dark mode. */
-  mode: Mode;
-  onModeChange: (next: Mode) => void;
+  /** Selected appearance mode (light, dark, or follow the OS). */
+  mode: Theme;
+  onModeChange: (next: Theme) => void;
   language: SupportedLanguage;
   onLanguageChange: (next: SupportedLanguage) => void;
   onBack: () => void;
@@ -163,6 +161,11 @@ export function AppearanceScreenView({
               label: t('onboarding.theme.dark', 'Dark'),
               icon: <Moon className="h-3.5 w-3.5" strokeWidth={1.8} />,
             },
+            {
+              value: 'system',
+              label: t('onboarding.theme.system', 'System'),
+              icon: <Monitor className="h-3.5 w-3.5" strokeWidth={1.8} />,
+            },
           ]}
         />
         <Segmented
@@ -190,21 +193,16 @@ interface AppearanceScreenProps {
 }
 
 /**
- * Wires the global light/dark mode and the interface language.
+ * Wires the global appearance mode and the interface language.
  *
- * The app ships one light theme (Lody Light) and one dark theme (Vesper), so
- * the only theme choice is the base mode. Click commits — no hover preview,
- * which proved jarring when the whole window flipped under the pointer.
+ * The app ships one light palette (Lody Light) and one dark palette (Vesper);
+ * the theme choice is light, dark, or follow the OS. Click commits — no hover
+ * preview, which proved jarring when the whole window flipped under the pointer.
  */
 export function AppearanceScreen({ onBack, onNext }: AppearanceScreenProps) {
   const { i18n } = useTranslation();
   const { theme, setTheme } = useTheme();
-  const resolvedTheme = useResolvedTheme();
   const [language, setLanguage] = useAtom(languageAtom);
-
-  // The provider may still hold 'system' (its first-run default); show the
-  // effective mode so a segment is always selected.
-  const mode: Mode = theme === 'system' ? resolvedTheme : theme;
 
   const handleLanguage = (next: SupportedLanguage) => {
     setLanguage(next);
@@ -216,7 +214,7 @@ export function AppearanceScreen({ onBack, onNext }: AppearanceScreenProps) {
 
   return (
     <AppearanceScreenView
-      mode={mode}
+      mode={theme}
       onModeChange={(next) => setTheme(next)}
       language={language}
       onLanguageChange={handleLanguage}

@@ -15,7 +15,7 @@ function ThemePreviewWrapper({ children }: { children: React.ReactNode }) {
 }
 
 function InteractiveThemeScreen() {
-  const [mode, setMode] = useState<'light' | 'dark'>('dark');
+  const [mode, setMode] = useState<'light' | 'dark' | 'system'>('dark');
   return <ThemeScreenView mode={mode} onModeChange={setMode} onBack={fn()} onNext={fn()} />;
 }
 
@@ -52,6 +52,12 @@ export const DarkMode: Story = {
 export const LightMode: Story = {
   args: {
     mode: 'light',
+  },
+};
+
+export const SystemMode: Story = {
+  args: {
+    mode: 'system',
   },
 };
 

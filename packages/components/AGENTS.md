@@ -51,6 +51,9 @@ mobile surfaces.
   intentionally public or narrowly token-scoped DTO.
 - Renderer and worker builds that cannot use native top-level await must use
   `vite-top-level-await-fixed.ts`. Do not bypass its audited-version assertion.
+- System theme state, persistence, and browser preference tracking are owned by
+  `next-themes`. Keep Lody's wrapper focused on preview state, fixed VS Code theme
+  application, and the Electron native-theme bridge.
 
 ## Crash surfaces
 

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { MobileAppearanceSettings } from '../src/components/mobile/mobile-appearance-settings';
 import { AppearanceSettingsView } from '../src/components/settings/appearance-setting';
+import type { Theme } from '../src/theme-provider';
 import { initI18n } from '../src/i18n';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../src/ui/dialog';
 
@@ -22,7 +23,7 @@ function setInputValue(input: HTMLInputElement, value: string): void {
 }
 
 function AppearanceHarness({ isElectron }: { isElectron: boolean }) {
-  const [theme, setTheme] = useState<'light' | 'dark'>('light');
+  const [theme, setTheme] = useState<Theme>('light');
   const [interfaceFontFamily, setInterfaceFontFamily] = useState('Atkinson Hyperlegible');
   const [terminalFontFamily, setTerminalFontFamily] = useState('Maple Mono');
   const [fontSize, setFontSize] = useState(13);
@@ -78,6 +79,30 @@ describe('AppearanceSettingsView', () => {
     Element.prototype.scrollIntoView = originalScrollIntoView;
     root = undefined;
     container = undefined;
+  });
+
+  it('lets the user pick System in the theme selector', async () => {
+    await act(async () => root?.render(<AppearanceHarness isElectron={false} />));
+
+    const themeTrigger = Array.from(container?.querySelectorAll('button') ?? []).find((node) =>
+      node.textContent?.includes('Light')
+    );
+    expect(themeTrigger).toBeTruthy();
+
+    await act(async () => {
+      themeTrigger?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    const systemOption = Array.from(document.body.querySelectorAll('[data-preview-item]')).find(
+      (node) => node.textContent?.includes('System')
+    );
+    expect(systemOption).toBeTruthy();
+
+    await act(async () => {
+      systemOption?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(themeTrigger?.textContent).toContain('System');
   });
 
   it('shows theme and language while hiding Electron-only settings outside Electron', async () => {

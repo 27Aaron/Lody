@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAtom } from 'jotai';
-import { Moon, SquareTerminal, Sun } from 'lucide-react';
+import { Monitor, Moon, SquareTerminal, Sun } from 'lucide-react';
 
 import {
   conversationFontSizeAtom,
@@ -20,7 +20,7 @@ import { useIsMobile } from '@/hooks/use-mobile';
 import { buildInterfaceFontFamily, listSystemFontFamilies } from '@/lib/local-fonts';
 import { Input } from '@/ui/input';
 import { LanguageSelector } from '../../i18n';
-import { useTheme, type ResolvedTheme } from '../../theme-provider';
+import { useTheme, type Theme } from '../../theme-provider';
 import { settingContainerClass } from '.';
 import { CompactRow, CompactSection } from './compact-layout';
 import { PreviewSelect, type PreviewSelectOption } from './preview-select';
@@ -28,9 +28,9 @@ import { PreviewSelect, type PreviewSelectOption } from './preview-select';
 export type SystemFontLoadState = 'idle' | 'loading' | 'loaded' | 'error';
 
 export interface AppearanceSettingsViewProps {
-  theme: ResolvedTheme;
-  onThemePreview: (value: ResolvedTheme) => void;
-  onThemeCommit: (value: ResolvedTheme) => void;
+  theme: Theme;
+  onThemePreview: (value: Theme) => void;
+  onThemeCommit: (value: Theme) => void;
   onThemeCancel: () => void;
   conversationFontSize: ConversationFontSize;
   onConversationFontSizeChange: (value: ConversationFontSize) => void;
@@ -86,7 +86,7 @@ export function AppearanceSettingsView({
 }: AppearanceSettingsViewProps) {
   const { t } = useTranslation();
 
-  const themeOptions: PreviewSelectOption<ResolvedTheme>[] = [
+  const themeOptions: PreviewSelectOption<Theme>[] = [
     {
       value: 'light',
       label: (
@@ -102,6 +102,15 @@ export function AppearanceSettingsView({
         <div className="flex items-center gap-2">
           <Moon className="h-4 w-4" />
           <span>{t('settings.theme.dark')}</span>
+        </div>
+      ),
+    },
+    {
+      value: 'system',
+      label: (
+        <div className="flex items-center gap-2">
+          <Monitor className="h-4 w-4" />
+          <span>{t('settings.theme.system')}</span>
         </div>
       ),
     },
@@ -337,7 +346,7 @@ export function AppearanceSettingsView({
 }
 
 function DesktopAppearanceSettings() {
-  const { theme, resolvedTheme, setTheme, previewTheme } = useTheme();
+  const { theme, setTheme, previewTheme } = useTheme();
   const [conversationFontSize, setConversationFontSize] = useAtom(conversationFontSizeAtom);
   const [interfaceFontFamily, setInterfaceFontFamily] = useAtom(interfaceFontFamilyAtom);
   const [terminalFontFamily, setTerminalFontFamily] = useAtom(terminalFontFamilyAtom);
@@ -345,17 +354,16 @@ function DesktopAppearanceSettings() {
   const [systemFontFamilies, setSystemFontFamilies] = useState<string[]>([]);
   const [systemFontLoadState, setSystemFontLoadState] = useState<SystemFontLoadState>('idle');
   const isElectron = typeof window !== 'undefined' && window.__LODY_ELECTRON__ === true;
-  const themeValue: ResolvedTheme = theme === 'system' ? resolvedTheme : theme;
-  const savedThemeRef = useRef<ResolvedTheme>(themeValue);
+  const savedThemeRef = useRef<Theme>(theme);
 
   const handleThemePreview = useCallback(
-    (value: ResolvedTheme) => {
+    (value: Theme) => {
       previewTheme(value);
     },
     [previewTheme]
   );
   const handleThemeCommit = useCallback(
-    (value: ResolvedTheme) => {
+    (value: Theme) => {
       savedThemeRef.current = value;
       setTheme(value);
     },
@@ -383,7 +391,7 @@ function DesktopAppearanceSettings() {
 
   return (
     <AppearanceSettingsView
-      theme={themeValue}
+      theme={theme}
       onThemePreview={handleThemePreview}
       onThemeCommit={handleThemeCommit}
       onThemeCancel={handleThemeCancel}

@@ -9,7 +9,7 @@ import { getAppCurrentPathWithSearch } from '@/lib/app-location';
 import { isSettingsPath, resolveSettingsCloseTo } from '@/lib/settings-navigation';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { useOpenSettings } from '@/hooks/use-open-settings';
-import { useTheme } from '../theme-provider';
+import { nextCycledTheme, useTheme } from '../theme-provider';
 
 /**
  * App-shell commands that aren't tied to a single session: browser-style history
@@ -25,7 +25,7 @@ export function AppCommands() {
   const isMobile = useIsMobile();
   const settingsModalOpen = useAtomValue(settingsDialogOpenAtom);
   const { openSettings, closeSettings } = useOpenSettings();
-  const { resolvedTheme, setTheme } = useTheme();
+  const { theme, setTheme } = useTheme();
 
   // window.history.back()/forward() (not router.history — TanStack doesn't expose it);
   // both are safe no-ops at the history boundaries, so no `when` gating is needed.
@@ -50,9 +50,8 @@ export function AppCommands() {
     title: t('commands.app.cycleTheme', 'Cycle Theme'),
     category: 'View',
     keybindings: getCommandKeybindings('app.cycleTheme'),
-    // Only light + dark exist now, so "cycle" is a straight toggle.
     run: () => {
-      setTheme(resolvedTheme === 'dark' ? 'light' : 'dark');
+      setTheme(nextCycledTheme(theme));
     },
   });
 

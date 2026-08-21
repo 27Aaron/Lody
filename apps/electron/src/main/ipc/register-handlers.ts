@@ -5,6 +5,7 @@ import {
   ipcMain,
   nativeTheme,
   shell,
+  systemPreferences,
   type IpcMainEvent,
   type IpcMainInvokeEvent
 } from 'electron'
@@ -65,7 +66,12 @@ import {
   persistRendererFatalError,
   requestRendererReload
 } from '../renderer-recovery'
-import { getMainWindowBackgroundColor, getMainWindowTitleBarOverlay } from '../window-theme'
+import {
+  applyResolvedWindowTheme,
+  resolveNativeWindowTheme
+} from '../window-theme'
+
+let osAppearanceWatchInstalled = false
 
 function isShowSessionCompletionNotificationInput(
   payload: unknown
@@ -1083,19 +1089,42 @@ export function registerIpcHandlers(options: RegisterIpcHandlersOptions): void {
 
   // Keep OS-drawn window surfaces in sync with the in-app theme. The explicit
   // background color also covers pixels exposed before Chromium paints a resize.
-  ipcMain.on('lodyApp:setNativeTheme', (event, source: unknown) => {
+  // Chromium's prefers-color-scheme in the renderer often does not fire when
+  // macOS appearance changes, even with themeSource=system — so also push the
+  // resolved mode to every window's webContents.
+  const syncNativeThemeWindows = (): void => {
+    const resolvedTheme = resolveNativeWindowTheme(nativeTheme.shouldUseDarkColors)
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (window.isDestroyed()) continue
+      applyResolvedWindowTheme(window, resolvedTheme, process.platform)
+      window.webContents.send('lodyApp:nativeThemeUpdated', resolvedTheme)
+    }
+  }
+
+  ipcMain.on('lodyApp:setNativeTheme', (_event, source: unknown) => {
     if (source === 'dark' || source === 'light' || source === 'system') {
       nativeTheme.themeSource = source
-      const resolvedTheme = nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
-      const window = findWindow(event.sender)
-      window?.setBackgroundColor(getMainWindowBackgroundColor(resolvedTheme))
-      // Windows draws the caption buttons as an overlay on the page; retint it
-      // so the strip stays on the same canvas after a theme switch.
-      if (process.platform === 'win32') {
-        window?.setTitleBarOverlay(getMainWindowTitleBarOverlay(resolvedTheme))
-      }
+      syncNativeThemeWindows()
     }
   })
+
+  if (!osAppearanceWatchInstalled) {
+    osAppearanceWatchInstalled = true
+    nativeTheme.on('updated', syncNativeThemeWindows)
+    // macOS Control Center appearance switches often skip Chromium
+    // prefers-color-scheme and nativeTheme.updated; this notification is
+    // the OS-level signal VS Code uses.
+    if (process.platform === 'darwin') {
+      systemPreferences.subscribeNotification(
+        'AppleInterfaceThemeChangedNotification',
+        () => {
+          // shouldUseDarkColors can still be the previous value in this
+          // callback; read it on the next turn.
+          setImmediate(syncNativeThemeWindows)
+        }
+      )
+    }
+  }
 
   ipcMain.on('lody:notify-renderer-mounted', (event) => {
     const window = findWindow(event.sender)
