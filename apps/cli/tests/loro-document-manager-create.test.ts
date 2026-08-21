@@ -3,11 +3,11 @@ import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import {
-  LocalLoroDataPlaneServer,
   LOCAL_LORO_DATA_PLANE_PROTOCOL_VERSION,
   type LocalLoroDataPlaneServerMessage,
-  type WorkspaceId,
-} from '@lody/shared';
+} from '@lody/shared/local-loro-data-plane';
+import { LocalLoroDataPlaneServer } from '@lody/shared/local-loro-data-plane-server';
+import type { WorkspaceId } from '@lody/shared';
 
 import type { Logger } from '../src/utils/logger';
 

@@ -27,11 +27,11 @@
 import { describe, expect, it } from 'vitest';
 import { LoroDoc } from 'loro-crdt';
 import {
-  LocalLoroDataPlaneServer,
-  LocalLoroTransportAdapter,
   type LocalLoroDataPlaneClientMessage,
   type LocalLoroDataPlaneServerMessage,
-} from '@lody/shared';
+} from '@lody/shared/local-loro-data-plane';
+import { LocalLoroDataPlaneServer } from '@lody/shared/local-loro-data-plane-server';
+import { LocalLoroTransportAdapter } from '@lody/shared/local-loro-transport';
 import type { RepoTransportRoomStatus } from 'loro-repo';
 import { createRoomSyncTracker } from '../src/providers/room-sync-tracker';
 import { createRoomSyncRegistry } from '../src/providers/room-sync-registry';

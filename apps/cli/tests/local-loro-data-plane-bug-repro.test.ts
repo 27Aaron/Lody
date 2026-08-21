@@ -25,10 +25,10 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { LoroDoc } from 'loro-crdt';
 import {
   createJsonLineSplitter,
-  LocalLoroDataPlaneServer,
   LOCAL_LORO_DATA_PLANE_PROTOCOL_VERSION,
   type LocalLoroDataPlaneServerMessage,
-} from '@lody/shared';
+} from '@lody/shared/local-loro-data-plane';
+import { LocalLoroDataPlaneServer } from '@lody/shared/local-loro-data-plane-server';
 import { getLocalLoroDataPlaneSocketPath } from '@lody/shared/node/local-ipc';
 import {
   startLocalLoroDataPlaneServer,
