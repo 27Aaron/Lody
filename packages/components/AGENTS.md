@@ -148,7 +148,10 @@ mobile surfaces.
   EVERY desktop session row is a drag source for a session mention
   (`lib/session-mention-drag.ts`, dropped on the conversation page or the
   landing) — a new row renderer that omits it makes the gesture work in some
-  lists and not others. A row whose surface is a navigation `<a>` overlay must
+  lists and not others. Session tabs in `session-tab-bar.tsx` are the same
+  gesture: parent tabs HTML5-drag, child session tabs arm the in-flight store
+  from dnd-kit. `startSessionMentionDrag` / `armSessionMentionDrag` light
+  `ConversationDropOverlay` immediately, before `dragenter`. A row whose surface is a navigation `<a>` overlay must
   put `draggable` on the ROW and `draggable={false}` on that anchor, or the
   browser starts a link drag instead.
   `SessionMeta.openedBySessionId` (a Session created BY another, e.g. the

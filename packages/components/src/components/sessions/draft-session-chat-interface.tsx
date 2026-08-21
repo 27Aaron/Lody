@@ -91,6 +91,7 @@ export type DraftSessionChatInterfaceHandle = {
   setInputText: (text: string) => void;
   focusInput: () => void;
   addCommentReference: (reference: CommentReferencePayload) => boolean;
+  insertSessionMention: (sessionId: string) => boolean;
 };
 
 export const DraftSessionChatInterface = memo(
@@ -396,6 +397,9 @@ export const DraftSessionChatInterface = memo(
           },
           addCommentReference: (reference: CommentReferencePayload) => {
             return inputAreaRef.current?.addCommentReference(reference) ?? false;
+          },
+          insertSessionMention: (sessionId: string) => {
+            return inputAreaRef.current?.insertSessionMention(sessionId) ?? false;
           },
         }),
         [buildSendPayload, draft.prompt, onSendDraft]

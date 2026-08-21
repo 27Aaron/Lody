@@ -1060,6 +1060,8 @@
   "sharing.privateHelpTitle": "私密资源仅你可见",
   "sharing.privateOnlyYou": "私密 · 仅你可见",
   "sessions.addImage": "添加图片",
+  "sessions.drop.mention": "拖放到这里以引用此对话",
+  "sessions.drop.files": "拖放到这里以添加附件",
   "sessions.messageChip.collapsePastedText": "收起粘贴文本",
   "sessions.forkSession": "分叉会话",
   "sessions.forkFailed": "无法分叉会话",

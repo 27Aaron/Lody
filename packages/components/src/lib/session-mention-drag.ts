@@ -1,9 +1,16 @@
 /**
  * Dragging a sidebar session onto a chat surface, as a data transfer.
  *
- * The drop turns into a session mention in that surface's composer. Everything
- * here is pure so both ends — the sidebar rows that start the drag and the
- * pages that accept it — agree on the format without importing each other.
+ * The drop turns into a session mention in that surface's composer. Transfer
+ * format stays here so both ends — sidebar rows and session tabs that start
+ * the drag, and the pages that accept it — agree without importing each other.
+ *
+ * A tiny in-memory store also tracks the drag WHILE it is in flight. HTML5
+ * `dragenter` only fires after the pointer is already over a surface, which is
+ * too late to show the drop mask; the store lets landing/session pages light up
+ * as soon as a sidebar row or session tab is picked up. HTML5 drags clear on
+ * `window` `dragend` (capture). Pointer-driven tab-strip drags (dnd-kit) have
+ * no HTML5 `dragend` and must call `clearSessionMentionDrag` themselves.
  */
 
 /** Marks the drag as ours. Present on every session drag. */
@@ -34,6 +41,78 @@ function toTypeArray(dataTransfer: DragTypes | null | undefined): string[] {
   return Array.from(dataTransfer.types);
 }
 
+let inFlightSessionId: string | null = null;
+const inFlightListeners = new Set<() => void>();
+let dragEndBound = false;
+
+function notifySessionMentionDragListeners(): void {
+  for (const listener of inFlightListeners) listener();
+}
+
+function setInFlightSessionId(next: string | null): void {
+  if (inFlightSessionId === next) return;
+  inFlightSessionId = next;
+  notifySessionMentionDragListeners();
+}
+
+function onWindowDragEnd(): void {
+  clearSessionMentionDrag();
+}
+
+function bindWindowDragEnd(): void {
+  if (dragEndBound || typeof window === 'undefined') return;
+  dragEndBound = true;
+  window.addEventListener('dragend', onWindowDragEnd, true);
+}
+
+function unbindWindowDragEnd(): void {
+  if (!dragEndBound || typeof window === 'undefined') return;
+  dragEndBound = false;
+  window.removeEventListener('dragend', onWindowDragEnd, true);
+}
+
+/** Session id currently being dragged out of the sidebar or a session tab, if any. */
+export function getInFlightSessionMentionDragId(): string | null {
+  return inFlightSessionId;
+}
+
+/**
+ * Marks the conversation column that accepts a session-mention drop.
+ *
+ * Tab-strip drags use dnd-kit (no HTML5 `dataTransfer`), so drop detection
+ * is `elementFromPoint` + this attribute rather than `onDrop`.
+ */
+export const SESSION_MENTION_DROP_LAYER_ATTR = 'data-session-mention-drop-layer';
+
+export function isPointOverSessionMentionDropLayer(x: number, y: number): boolean {
+  if (typeof document === 'undefined') return false;
+  const node = document.elementFromPoint(x, y);
+  return Boolean(node?.closest(`[${SESSION_MENTION_DROP_LAYER_ATTR}]`));
+}
+
+/**
+ * Lights up drop surfaces without an HTML5 transfer.
+ *
+ * Used by the tab strip's pointer drag (dnd-kit). The caller must clear
+ * (`clearSessionMentionDrag`) on drag end/cancel — there is no `dragend`.
+ */
+export function armSessionMentionDrag(sessionId: string): void {
+  setInFlightSessionId(sessionId);
+}
+
+export function subscribeSessionMentionDrag(onStoreChange: () => void): () => void {
+  inFlightListeners.add(onStoreChange);
+  return () => {
+    inFlightListeners.delete(onStoreChange);
+  };
+}
+
+/** Ends the in-flight drag. Tests call this between cases. */
+export function clearSessionMentionDrag(): void {
+  unbindWindowDragEnd();
+  setInFlightSessionId(null);
+}
+
 /**
  * What a sidebar row's `onDragStart` does. Paired with `draggable` on the row.
  *
@@ -52,6 +131,8 @@ export function startSessionMentionDrag(
   dataTransfer.setData(`${SESSION_MENTION_DRAG_ID_PREFIX}${payload.sessionId.toLowerCase()}`, '');
   // A drop outside any of our surfaces still leaves something readable behind.
   dataTransfer.setData('text/plain', payload.title?.trim() || payload.sessionId);
+  setInFlightSessionId(payload.sessionId);
+  bindWindowDragEnd();
 }
 
 /** The dragged session id, readable during `dragover`. */

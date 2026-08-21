@@ -28,6 +28,11 @@ Session conversation page chain:
     `pt-9` in `web-workspace-layout.tsx`, both gated the same way — so no page
     (this bar included) reserves its own right-side inset for the caption buttons.
     Mobile never renders `SessionTabBar`; it uses `MobileSessionTabSheet` instead.
+    Desktop session tabs (not drafts or file/diff viewers) are mention drag
+    sources: the parent tab uses HTML5 drag, child session tabs arm the
+    in-flight store from the strip's dnd-kit pointer drag. Dropping onto the
+    conversation inserts a mention of that tab; dropping onto another tab
+    still reorders. Pointer-over-conversation wins over closest-tab collision.
     Desktop tabs share width equally whenever all can reach `ACTIVE_TAB_MIN_WIDTH`;
     below that threshold the active tab keeps that width and the others share the remainder.
     **The tab pills' top border shares one line with the sidebar and side-panel

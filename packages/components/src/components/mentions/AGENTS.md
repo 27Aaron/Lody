@@ -99,17 +99,22 @@ Product-level mention sources built on `src/ui/mention`.
   `useMentionPromptExpansion` rewrites **the range** — not a text match — into
   an id-bearing MCP instruction on send. It is still the only type whose
   displayed text differs from what the agent receives.
-- A session dragged out of the sidebar onto a chat surface becomes a mention of
-  it. The drop must produce a REAL range, not just `@<slug>` text — a token with
-  no range is sent verbatim (below), so a text-only append would look right in
-  the composer and reach the agent as a word. The route is
-  `CombinedMentionTextarea`'s `mentionActionsRef`
+- A session dragged out of the sidebar **or a session tab** onto a chat surface
+  becomes a mention of it. The drop must produce a REAL range, not just
+  `@<slug>` text — a token with no range is sent verbatim (below), so a
+  text-only append would look right in the composer and reach the agent as a
+  word. The route is `CombinedMentionTextarea`'s `mentionActionsRef`
   (`insertSessionMention(sessionId)`) onto the primitive's `onMentionInsert`;
   it takes an ID because `useSessionMentionItems` stays the single owner of the
   list, and it returns false — insert nothing — for an unknown/own session or
   one the draft already mentions. Transfer format and the self-drop check live
-  in `lib/session-mention-drag.ts`; the drop targets are the conversation page
-  and the landing, through `hooks/use-drop-zone.ts`.
+  in `lib/session-mention-drag.ts`. Sidebar rows and the parent tab use HTML5
+  drag; child session tabs share the strip's dnd-kit pointer drag (a drop on
+  another tab still reorders; a drop on the conversation mentions). Draft and
+  file/diff tabs are not mention sources. The conversation COLUMN paints one
+  `ConversationDropOverlay` via `SessionMentionDropLayer`. Do not put that mask
+  inside each keep-alive tab page: hidden panes and draft tabs make a per-page
+  overlay vanish or stack on the wrong surface.
 - A session token with no committed range is sent verbatim. A stale token the
   agent can ignore beats a confidently wrong session id, so the rewrite never
   resolves a slug itself.

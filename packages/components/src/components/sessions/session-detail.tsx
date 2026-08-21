@@ -68,6 +68,7 @@ import {
   type DraftSessionChatInterfaceHandle,
   type DraftSessionSendPayload,
 } from '@/components/sessions/draft-session-chat-interface';
+import { SessionMentionDropLayer } from '@/components/sessions/session-mention-drop-layer';
 import { BaseHeader } from '@/components/page-headers/base-header';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { usePublishSessionViewing } from '@/hooks/use-publish-session-viewing';
@@ -1109,6 +1110,9 @@ const SessionDetail = ({
     () => draftTabs.find((draft) => draft.id === activeTabSessionId) ?? null,
     [activeTabSessionId, draftTabs]
   );
+  // A draft tab is not a session: mentioning the parent there is valid. Do not
+  // fall back to `activeTabSession.id` — that resolves drafts to the parent.
+  const sessionMentionExcludeId = activeDraftTab ? null : activeTabSessionId;
   const activeCommentReferenceKeys =
     commentReferenceKeysBySession[activeTabSessionId] ?? EMPTY_COMMENT_REFERENCE_KEYS;
 
@@ -1752,6 +1756,13 @@ const SessionDetail = ({
       }
     },
     [flushPendingInitialTurn]
+  );
+
+  const handleInsertDroppedSessionMention = useCallback(
+    (droppedSessionId: string) => {
+      chatRefsMap.current.get(activeTabSessionId)?.insertSessionMention(droppedSessionId);
+    },
+    [activeTabSessionId]
   );
 
   const handleSessionCommentReferencesChange = useCallback(
@@ -5481,6 +5492,7 @@ const SessionDetail = ({
       archivedChildSessions={archivedChildSessions}
       onTabRestore={handleTabRestore}
       onTabReorder={handleSessionTabReorder}
+      onMentionSession={handleInsertDroppedSessionMention}
       leftSlot={leftSidebarExpandButton}
       rightSlot={desktopHeaderToolbar}
       className={cn(
@@ -5540,7 +5552,11 @@ const SessionDetail = ({
   };
 
   const desktopChatSurfaces = (
-    <>
+    <SessionMentionDropLayer
+      enabled
+      excludeSessionId={sessionMentionExcludeId}
+      onDropSessionId={handleInsertDroppedSessionMention}
+    >
       {[activeSession, ...visibleChildSessions].map((tabSession) => {
         const isActive = tabSession.id === activeTabSessionId;
         const externalHistoryRefresh = externalHistoryRefreshBySessionId[tabSession.id];
@@ -5550,11 +5566,12 @@ const SessionDetail = ({
         return (
           <div
             key={tabSession.id}
-            className={isActive ? 'h-full' : 'hidden h-full'}
+            className={cn('absolute inset-0', !isActive && 'hidden')}
             aria-hidden={!isActive}
           >
             <SessionChatInterface
               {...getSharedChatSurfaceProps(tabSession, isActive)}
+              paintSessionMentionOverlay={false}
               isChildTab={tabSession.id !== sessionId}
               isExternalHistoryRefreshing={externalHistoryRefresh !== undefined}
               externalHistoryProviderLabel={externalHistoryProviderLabel}
@@ -5579,7 +5596,7 @@ const SessionDetail = ({
         return (
           <div
             key={draft.id}
-            className={isActive ? 'h-full' : 'hidden h-full'}
+            className={cn('absolute inset-0', !isActive && 'hidden')}
             aria-hidden={!isActive}
           >
             <DraftSessionChatInterface
@@ -5594,7 +5611,7 @@ const SessionDetail = ({
           </div>
         );
       })}
-    </>
+    </SessionMentionDropLayer>
   );
 
   const desktopViewerSurfaces = viewerTabs.map((tab) => {

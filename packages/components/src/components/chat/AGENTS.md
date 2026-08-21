@@ -66,8 +66,10 @@
   piece of local state is the session-mention drop target: a session dragged
   from the sidebar onto the landing writes a mention into the composer this
   layout renders, and nothing above it participates, so plumbing the handle up
-  to `chat-landing.tsx` would buy nothing. Desktop only — touch has no HTML5
-  drag, so the mobile branch passes the handle but installs no drop target.
+  to `chat-landing.tsx` would buy nothing. `ConversationDropOverlay` paints the
+  page-level mask as soon as the sidebar drag starts, not only after `dragenter`.
+  Desktop only — touch has no HTML5 drag, so the mobile branch passes the handle
+  but installs no drop target.
 - `comment-reference-*` and `visual-annotation-reference-*` own attachment chip
   state and rendering for references attached to outgoing messages.
 - Landing attachment uploads use two sibling hooks in `hooks/`:

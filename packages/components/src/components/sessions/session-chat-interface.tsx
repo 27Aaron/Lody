@@ -47,11 +47,8 @@ import { isMac } from '@/lib/commands/platform';
 import { matchesKeyboardEvent, parseBinding } from '@/lib/commands/key-matcher';
 import { isSessionContextCompacting } from '@/lib/session-context-compaction';
 import { hasFileTransfer, getFilesFromDataTransfer } from '@/lib/file-drop';
-import {
-  hasAcceptableSessionMentionTransfer,
-  readSessionMentionDragSessionId,
-} from '@/lib/session-mention-drag';
 import { mergeDropZoneHandlers, useDropZone } from '@/hooks/use-drop-zone';
+import { useSessionMentionDropZone } from '@/hooks/use-session-mention-drag';
 import { SessionChatInputArea, type SessionChatInputAreaHandle } from './session-chat-input-area';
 import { useSessionMcpSelection } from '@/hooks/use-session-mcp-selection';
 import { MessageQueueDisplay, shouldRequestNativeQueueSteer } from './message-queue';
@@ -1770,6 +1767,12 @@ interface SessionChatInterfaceProps {
    * them in the tab row — no title, no PR badge (the context strip owns PR).
    */
   headerVariant?: 'page' | 'toolbar';
+  /**
+   * When false, this surface still accepts a session-mention drop but does not
+   * paint the page mask. Used under `SessionMentionDropLayer`, which owns one
+   * overlay for the whole keep-alive tab stack.
+   */
+  paintSessionMentionOverlay?: boolean;
   /** All-Changes totals for the context strip; null/undefined hides the diffstat. */
   changesDiffStat?: { add: number; del: number } | null;
   /** Called when the context strip's diffstat is clicked. */
@@ -1808,6 +1811,7 @@ export type SessionChatInterfaceHandle = {
   copyConversationHistory: () => Promise<void>;
   openSearch: () => void;
   getLastAssistantTurnId: () => string | null;
+  insertSessionMention: (sessionId: string) => boolean;
 };
 
 export type DispatchInputBlocksOptions = {
@@ -1898,6 +1902,7 @@ export const SessionChatInterface = memo(
       browserActionSession,
       onOpenBrowser,
       headerVariant = 'page',
+      paintSessionMentionOverlay = true,
       changesDiffStat,
       onOpenAllChanges,
       onForkLastAssistant,
@@ -3078,20 +3083,15 @@ export const SessionChatInterface = memo(
         }
       }, []),
     });
-    const acceptsSessionMention = useCallback(
-      (dataTransfer: DataTransfer) =>
-        hasAcceptableSessionMentionTransfer(dataTransfer, { excludeSessionId: session.id }),
-      [session.id]
-    );
-    const sessionMentionDropZone = useDropZone({
-      enabled: canHandlePageDrop,
-      accepts: acceptsSessionMention,
-      onDrop: useCallback((dataTransfer: DataTransfer) => {
-        const droppedSessionId = readSessionMentionDragSessionId(dataTransfer);
-        if (!droppedSessionId) return;
-        inputAreaRef.current?.insertSessionMention(droppedSessionId);
-      }, []),
-    });
+    const { dropZone: sessionMentionDropZone, overlayActive: sessionMentionOverlay } =
+      useSessionMentionDropZone({
+        enabled: canHandlePageDrop,
+        excludeSessionId: session.id,
+        observeInFlight: paintSessionMentionOverlay && isVisible,
+        onDropSessionId: useCallback((droppedSessionId: string) => {
+          inputAreaRef.current?.insertSessionMention(droppedSessionId);
+        }, []),
+      });
     const pageDropHandlers = mergeDropZoneHandlers(imageDropZone, sessionMentionDropZone);
 
     useEffect(() => {
@@ -4545,6 +4545,9 @@ export const SessionChatInterface = memo(
         copyConversationHistory: handleCopyConversationHistory,
         openSearch,
         getLastAssistantTurnId: () => lastCompletedAssistantMessageId,
+        insertSessionMention: (sessionId: string) => {
+          return inputAreaRef.current?.insertSessionMention(sessionId) ?? false;
+        },
       }),
       [
         dispatchInputBlocks,
@@ -5410,7 +5413,8 @@ export const SessionChatInterface = memo(
       <PrLinkProvider prUrl={latestPr?.url} onOpenPrTab={prLinkHandler}>
         <SessionConversationPage
           className={className}
-          dropActive={imageDropZone.isActive || sessionMentionDropZone.isActive}
+          dropActive={imageDropZone.isActive || sessionMentionOverlay}
+          dropKind={sessionMentionOverlay ? 'session-mention' : 'files'}
           hideMessageArea={hideMessageArea}
           {...pageDropHandlers}
         >

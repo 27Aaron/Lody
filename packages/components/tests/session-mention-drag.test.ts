@@ -1,35 +1,27 @@
-import { describe, expect, it } from 'vitest';
+// @vitest-environment jsdom
+
+import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   SESSION_MENTION_DRAG_TYPE,
+  SESSION_MENTION_DROP_LAYER_ATTR,
+  armSessionMentionDrag,
+  clearSessionMentionDrag,
+  getInFlightSessionMentionDragId,
   hasAcceptableSessionMentionTransfer,
+  isPointOverSessionMentionDropLayer,
   readSessionMentionDragSessionId,
   startSessionMentionDrag,
 } from '../src/lib/session-mention-drag';
-
-/**
- * A DataTransfer stand-in that lowercases type names the way browsers do — the
- * detail the id-in-the-type-name trick has to survive.
- */
-function createTransfer() {
-  const data = new Map<string, string>();
-  return {
-    effectAllowed: 'none' as string,
-    get types() {
-      return Array.from(data.keys());
-    },
-    setData(type: string, value: string) {
-      data.set(type.toLowerCase(), value);
-    },
-    getData(type: string) {
-      return data.get(type.toLowerCase()) ?? '';
-    },
-  };
-}
+import { createSessionMentionTransfer } from './helpers/session-mention-transfer';
 
 describe('session mention drag transfer', () => {
+  afterEach(() => {
+    clearSessionMentionDrag();
+  });
+
   it('carries the id in the payload and in a type name', () => {
-    const transfer = createTransfer();
+    const transfer = createSessionMentionTransfer();
     startSessionMentionDrag({ dataTransfer: transfer }, { sessionId: 'sess_AbC', title: 'Fix CI' });
 
     expect(transfer.effectAllowed).toBe('copy');
@@ -40,7 +32,7 @@ describe('session mention drag transfer', () => {
   });
 
   it('falls back to the id when the session has no title', () => {
-    const transfer = createTransfer();
+    const transfer = createSessionMentionTransfer();
     startSessionMentionDrag({ dataTransfer: transfer }, { sessionId: 'sess_1', title: '   ' });
     expect(transfer.getData('text/plain')).toBe('sess_1');
   });
@@ -52,7 +44,7 @@ describe('session mention drag transfer', () => {
   });
 
   it('refuses the conversation the surface already is, before the drop', () => {
-    const transfer = createTransfer();
+    const transfer = createSessionMentionTransfer();
     startSessionMentionDrag({ dataTransfer: transfer }, { sessionId: 'sess_AbC' });
 
     // Case-insensitive: the type name the check reads has been lowercased.
@@ -66,6 +58,55 @@ describe('session mention drag transfer', () => {
   });
 
   it('reads nothing from a transfer without our payload', () => {
-    expect(readSessionMentionDragSessionId(createTransfer())).toBeNull();
+    expect(readSessionMentionDragSessionId(createSessionMentionTransfer())).toBeNull();
+  });
+
+  it('arms the in-flight store as soon as a sidebar drag starts', () => {
+    expect(getInFlightSessionMentionDragId()).toBeNull();
+    const transfer = createSessionMentionTransfer();
+    startSessionMentionDrag({ dataTransfer: transfer }, { sessionId: 'sess_AbC' });
+
+    expect(getInFlightSessionMentionDragId()).toBe('sess_AbC');
+  });
+
+  it('clears the in-flight store on dragend', () => {
+    startSessionMentionDrag(
+      { dataTransfer: createSessionMentionTransfer() },
+      { sessionId: 'sess_1' }
+    );
+    expect(getInFlightSessionMentionDragId()).toBe('sess_1');
+
+    if (typeof window === 'undefined') {
+      clearSessionMentionDrag();
+    } else {
+      window.dispatchEvent(new Event('dragend'));
+    }
+    expect(getInFlightSessionMentionDragId()).toBeNull();
+  });
+
+  it('arms a pointer drag without an HTML5 transfer', () => {
+    armSessionMentionDrag('sess_tab');
+    expect(getInFlightSessionMentionDragId()).toBe('sess_tab');
+    clearSessionMentionDrag();
+    expect(getInFlightSessionMentionDragId()).toBeNull();
+  });
+
+  it('detects a point over the conversation drop layer', () => {
+    const layer = document.createElement('div');
+    layer.setAttribute(SESSION_MENTION_DROP_LAYER_ATTR, '');
+    const inner = document.createElement('span');
+    layer.appendChild(inner);
+    document.body.appendChild(layer);
+    const original = document.elementFromPoint?.bind(document);
+    document.elementFromPoint = () => inner;
+    try {
+      expect(isPointOverSessionMentionDropLayer(10, 10)).toBe(true);
+      document.elementFromPoint = () => document.body;
+      expect(isPointOverSessionMentionDropLayer(10, 10)).toBe(false);
+    } finally {
+      if (original) document.elementFromPoint = original;
+      else Reflect.deleteProperty(document, 'elementFromPoint');
+      layer.remove();
+    }
   });
 });

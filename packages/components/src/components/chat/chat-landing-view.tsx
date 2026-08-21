@@ -6,11 +6,7 @@ import type { PersistedMentionRange } from '@/components/mentions/mention-persis
 
 import type { AcpCommandSummary, AgentConfigCliType } from '@lody/shared';
 import { cn } from '@/lib/utils';
-import { useDropZone } from '@/hooks/use-drop-zone';
-import {
-  hasAcceptableSessionMentionTransfer,
-  readSessionMentionDragSessionId,
-} from '@/lib/session-mention-drag';
+import { useSessionMentionDropZone } from '@/hooks/use-session-mention-drag';
 import { Button } from '@/ui/button';
 import {
   ChatComposer,
@@ -180,16 +176,17 @@ export interface ChatLandingViewProps {
  */
 function useSessionMentionDrop(enabled: boolean) {
   const mentionActionsRef = useRef<CombinedMentionTextareaHandle | null>(null);
-  const dropZone = useDropZone({
+  const { dropZone, overlayActive } = useSessionMentionDropZone({
     enabled,
-    accepts: hasAcceptableSessionMentionTransfer,
-    onDrop: useCallback((dataTransfer: DataTransfer) => {
-      const sessionId = readSessionMentionDragSessionId(dataTransfer);
-      if (!sessionId) return;
+    onDropSessionId: useCallback((sessionId: string) => {
       mentionActionsRef.current?.insertSessionMention(sessionId);
     }, []),
   });
-  return { mentionActionsRef, dropZone };
+  return {
+    mentionActionsRef,
+    dropZone,
+    overlayActive,
+  };
 }
 
 export function ChatLandingView({
@@ -257,7 +254,9 @@ export function ChatLandingView({
   errorLabels = {},
 }: ChatLandingViewProps) {
   const isDark = tone === 'dark';
-  const { mentionActionsRef, dropZone } = useSessionMentionDrop(!isMobile && !submissionPending);
+  const { mentionActionsRef, dropZone, overlayActive } = useSessionMentionDrop(
+    !isMobile && !submissionPending
+  );
 
   const {
     somethingWentWrong = 'Something went wrong',
@@ -495,7 +494,8 @@ export function ChatLandingView({
   return (
     <WebChatLandingScreen
       title={title}
-      dropActive={dropZone.isActive}
+      dropActive={overlayActive}
+      dropKind="session-mention"
       dropHandlers={dropZone.handlers}
       navRootRef={navRootRef}
       contextSwitch={contextSwitch}
