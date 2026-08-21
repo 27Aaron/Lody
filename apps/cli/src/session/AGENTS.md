@@ -140,6 +140,9 @@ delegation proofs or a shared-machine gate without a new product and security de
 - `session-manager.ts` / `session.ts` — session/process lifecycle, workdirs and
   worktrees. `Session.createAgent` acquires the shared ACP start gate before
   spawn so a parent session cannot restore or start many Codex children at once.
+  ACP terminal creation must pass the protocol's executable and argument array
+  directly to `SessionSandbox.spawn`; never rebuild them into a shell command,
+  because doing so changes argument semantics and consumes Windows path backslashes.
   Child tab sessions must reuse the parent workspace directory: local/GitHub
   parents reconstruct via workdir/worktree data, and chat-only parents fall back to the
   parent's default `~/.lody/chats/<parentSessionId>` path when the parent process is no

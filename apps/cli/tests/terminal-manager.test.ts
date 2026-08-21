@@ -48,6 +48,36 @@ function createProcessHandle(terminate: SessionProcessHandle['terminate']): Sess
 }
 
 describe('ShellTerminalManager', () => {
+  it('preserves a Windows executable path and structured arguments', async () => {
+    const processHandle = createProcessHandle(async () => {});
+    const sandbox: SessionSandbox = {
+      enabled: false,
+      description: 'noop',
+      applyLimits: async () => {},
+      spawn: vi.fn(async () => processHandle),
+      terminate: async () => {},
+      cleanup: async () => {},
+    };
+    const manager = new ShellTerminalManager({
+      logger: createSilentLogger(),
+      sessionLabel: 'test-session',
+      getActiveAcpSessionId: () => 'acp-1',
+      resolveWorkdir: (cwd) => cwd ?? process.cwd(),
+      buildEnv: () => process.env,
+      sandbox,
+    });
+    const bashPath = 'C:\\Users\\test\\scoop\\apps\\git\\current\\bin\\bash.exe';
+    const shellCommand = "cd '/c/workspace' && printf 'hello'";
+
+    await manager.createTerminal('acp-1', bashPath, ['-c', shellCommand], 'C:\\workspace');
+
+    expect(sandbox.spawn).toHaveBeenCalledWith(
+      bashPath,
+      ['-c', shellCommand],
+      expect.objectContaining({ cwd: 'C:\\workspace', captureOutput: true })
+    );
+  });
+
   it('uses process handle termination instead of child.kill when stopping terminals', async () => {
     const terminate = vi.fn(async () => {});
     const processHandle = createProcessHandle(terminate);
