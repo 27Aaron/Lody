@@ -86,6 +86,7 @@ describe('resolveBuiltinACPSetting', () => {
       });
 
       expect(launch.command).toBe('npx');
+      expect(launch.args).toContain('--force');
       expect(launch.args).toEqual(
         expect.arrayContaining([
           '--prefer-offline',
