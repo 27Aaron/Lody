@@ -476,10 +476,11 @@ export function selectLatestCatalogItems(
   return [...items].sort(compareCatalogItems).slice(0, MAX_LOCAL_PROJECT_HISTORY_CATALOG_SESSIONS);
 }
 
-function getHistoryCatalogStatus(
-  existing?: ExistingHistorySession
-): LocalProjectHistoryCatalogItem['status'] {
+export function getHistoryCatalogStatus(existing?: {
+  meta: SessionMeta;
+}): LocalProjectHistoryCatalogItem['status'] {
   if (!existing) return 'available';
+  if (existing.meta.externalHistory?.status === 'metadata_only') return 'available';
   return existing.meta.externalHistory?.status === 'sync_conflict' ? 'sync_conflict' : 'imported';
 }
 
@@ -539,22 +540,6 @@ function buildExternalHistoryMeta(args: {
     lastSyncAt: getServerNow(),
     status: args.status ?? 'synced',
     conflictReason: args.conflictReason,
-  };
-}
-
-function buildMetadataOnlyExternalHistoryMeta(args: {
-  provider: LocalProjectHistoryProvider;
-  sourceAcpSessionId: ACPSessionId;
-  sourceUpdatedAt?: string | null;
-}): ExternalAcpHistorySyncMeta {
-  return {
-    provider: args.provider,
-    source: 'local-acp-history',
-    sourceAcpSessionId: args.sourceAcpSessionId,
-    sourceUpdatedAt: args.sourceUpdatedAt ?? undefined,
-    importedTurnCount: 0,
-    lastSyncAt: getServerNow(),
-    status: 'metadata_only',
   };
 }
 
@@ -686,10 +671,23 @@ export class LocalProjectHistorySyncService {
           (await this.findExistingHistorySession(args.localProjectId, selectedId)) ??
           snapshot.existingByImportKey.get(importKey);
         if (!existing) {
+          const replayNotifications = await loadHistorySessionReplay({
+            provider: this.provider,
+            rootPath: args.rootPath,
+            acpSessionId,
+            logger: this.logger,
+          });
+          const materialized = materializeReplay({
+            provider: this.provider,
+            acpSessionId,
+            replayNotifications,
+            userId: this.context.userId,
+          });
           const importedSession = await this.importNewSession({
             info,
             acpSessionId,
             project,
+            materialized,
           });
           snapshot.existingByImportKey.set(importKey, importedSession);
           summary.imported += 1;
@@ -710,7 +708,7 @@ export class LocalProjectHistorySyncService {
           acpSessionId,
           message: formatErrorMessage(error),
         });
-        this.logger.debug(
+        this.logger.warn(
           `[${this.providerKey}-history-sync] Failed to import ${getProviderLabel(
             this.provider
           )} session ${acpSessionId}: ${formatErrorMessage(error)}`
@@ -1038,6 +1036,7 @@ export class LocalProjectHistorySyncService {
     info: SessionInfo;
     acpSessionId: ACPSessionId;
     project: ProjectRef;
+    materialized: MaterializedReplay;
   }): Promise<ExistingHistorySession> {
     const sessionId = uuidV4() as SessionId;
     const roomId = getSessionRoomId(sessionId);
@@ -1059,14 +1058,51 @@ export class LocalProjectHistorySyncService {
       // generator to replace them later, same as web-created draft titles.
       titleSource: 'draft',
       lastMessageAt,
-      externalHistory: buildMetadataOnlyExternalHistoryMeta({
+      externalHistory: buildExternalHistoryMeta({
         provider: this.provider,
         sourceAcpSessionId: args.acpSessionId,
         sourceUpdatedAt: args.info.updatedAt,
+        materialized: args.materialized,
       }),
     };
 
-    await this.manager.repo.upsertDocMeta(roomId, meta);
+    try {
+      const sessionDoc = await this.manager.getOrCreateSessionDoc(sessionId);
+      await sessionDoc.updateHistory(() => args.materialized.history);
+      await writeSessionImportedTurnHashes(sessionDoc, args.materialized.turnHashes);
+      await this.manager.repo.upsertDocMeta(roomId, meta);
+      const synced = await sessionDoc.waitUntilSynced();
+      if (!synced) {
+        this.logger.warn(
+          `[${this.providerKey}-history-sync] Imported history for ${sessionId} did not ` +
+            'confirm remote sync before unload; it remains locally durable and will retry sync.'
+        );
+      }
+    } catch (error) {
+      await this.manager.repo.deleteDoc(roomId).catch((cleanupError) => {
+        this.logger.warn(
+          `[${this.providerKey}-history-sync] Failed to delete incomplete imported session ` +
+            `${sessionId}: ${formatErrorMessage(cleanupError)}`
+        );
+      });
+      await this.manager
+        .cleanSessionDoc(sessionId, { preserveStatus: true })
+        .catch((cleanupError) => {
+          this.logger.warn(
+            `[${this.providerKey}-history-sync] Failed to unload incomplete imported session ` +
+              `${sessionId}: ${formatErrorMessage(cleanupError)}`
+          );
+        });
+      throw error;
+    }
+    await this.manager
+      .cleanSessionDoc(sessionId, { preserveStatus: true })
+      .catch((cleanupError) => {
+        this.logger.warn(
+          `[${this.providerKey}-history-sync] Failed to unload imported session ` +
+            `${sessionId}: ${formatErrorMessage(cleanupError)}`
+        );
+      });
     return { sessionId, meta };
   }
 
@@ -1191,7 +1227,9 @@ export class LocalProjectHistorySyncService {
       );
     }
     await this.manager.cleanSessionDoc(args.existing.sessionId, { preserveStatus: true });
-    return suffix.length > 0 ? 'refreshed' : 'skipped';
+    return externalHistory.status === 'metadata_only' || suffix.length > 0
+      ? 'refreshed'
+      : 'skipped';
   }
 
   private async markConflict(

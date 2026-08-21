@@ -82,6 +82,7 @@ import { AddLocalProjectDialogContainer } from '@/components/local-projects/add-
 import { ProjectSkillsTab } from './project-skills-tab';
 import type { ProjectSkillsSource } from '@/hooks/use-project-skills';
 import { useAppCapability } from '@/lib/app-platform';
+import { getVisibleLocalProjectHistoryFailures } from '@/lib/local-project-history-catalog';
 
 export type ProjectSettingsRow = {
   key: string;
@@ -1424,6 +1425,9 @@ export function ProjectHistoryImportPanel({
     : t('workspace.projects.historyNotSyncedYet', {
         defaultValue: 'Not synced yet',
       });
+  const syncFailures = state.syncSummary
+    ? getVisibleLocalProjectHistoryFailures(state.syncSummary)
+    : null;
 
   const updateSelection = (selectedIds: string[]) => {
     onHistorySelectionChange?.(row, state.provider, selectedIds);
@@ -1520,7 +1524,24 @@ export function ProjectHistoryImportPanel({
         ) : null}
         {state.syncSummary && (
           <div className="shrink-0 border-b border-tab-border px-3 py-1.5 text-[11px] text-muted-foreground">
-            {formatHistorySyncSummary(state.syncSummary, t)}
+            <div>{formatHistorySyncSummary(state.syncSummary, t)}</div>
+            {syncFailures && syncFailures.failures.length > 0 ? (
+              <ul className="mt-1 space-y-0.5 text-destructive">
+                {syncFailures.failures.map((failure) => (
+                  <li key={failure.acpSessionId} className="break-words">
+                    {failure.acpSessionId}: {failure.message}
+                  </li>
+                ))}
+                {syncFailures.remaining > 0 ? (
+                  <li>
+                    {t('workspace.projects.historySyncMoreFailures', {
+                      defaultValue: '{{count}} more failures',
+                      count: syncFailures.remaining,
+                    })}
+                  </li>
+                ) : null}
+              </ul>
+            ) : null}
           </div>
         )}
         {catalogSessions.length > 0 && (

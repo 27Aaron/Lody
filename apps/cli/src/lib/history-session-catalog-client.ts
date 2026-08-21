@@ -28,6 +28,7 @@ import {
 
 const ACP_OPERATION_TIMEOUT_MS = 120_000;
 const ACP_PROCESS_EXIT_TIMEOUT_MS = 3_000;
+const LODY_READ_SESSION_HISTORY_METHOD = '_lody/session/history/read';
 export const MAX_LOCAL_PROJECT_HISTORY_CATALOG_SESSIONS = 100;
 
 function waitForChildProcessExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
@@ -235,6 +236,58 @@ export type HistorySessionCatalogPage = {
   nextCursor?: string | null;
 };
 
+type HistoryReplayConnection = Pick<acp.ClientSideConnection, 'loadSession' | 'request'>;
+
+function getLodyReadSessionHistoryMethod(initResponse: acp.InitializeResponse): string | null {
+  const meta = initResponse.agentCapabilities?._meta;
+  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return null;
+  const lody = (meta as Record<string, unknown>).lody;
+  if (!lody || typeof lody !== 'object' || Array.isArray(lody)) return null;
+  const capability = (lody as Record<string, unknown>).readSessionHistory;
+  if (!capability || typeof capability !== 'object' || Array.isArray(capability)) return null;
+  const record = capability as Record<string, unknown>;
+  return record.version === 1 && record.method === LODY_READ_SESSION_HISTORY_METHOD
+    ? LODY_READ_SESSION_HISTORY_METHOD
+    : null;
+}
+
+export async function requestHistorySessionReplay(args: {
+  provider: LocalProjectHistoryProvider;
+  acpSessionId: ACPSessionId;
+  cwd: string;
+  connection: HistoryReplayConnection;
+  initResponse: acp.InitializeResponse;
+}): Promise<void> {
+  if (args.provider.cliType === 'builtin' && args.provider.agentType === 'codex') {
+    const method = getLodyReadSessionHistoryMethod(args.initResponse);
+    if (!method) {
+      throw new Error(
+        `${getProviderLabel(args.provider)} ACP agent does not advertise ` +
+          'agentCapabilities._meta.lody.readSessionHistory version 1'
+      );
+    }
+    await withTimeout(
+      args.connection.request(method, {
+        sessionId: args.acpSessionId as unknown as acp.SessionId,
+      }),
+      `${getProviderLabel(args.provider)} ACP readSessionHistory (${args.acpSessionId})`
+    );
+    return;
+  }
+
+  if (!args.initResponse.agentCapabilities?.loadSession) {
+    throw new Error(`${getProviderLabel(args.provider)} ACP agent does not advertise loadSession`);
+  }
+  await withTimeout(
+    args.connection.loadSession({
+      sessionId: args.acpSessionId as unknown as acp.SessionId,
+      cwd: args.cwd,
+      mcpServers: [],
+    }),
+    `${getProviderLabel(args.provider)} ACP loadSession (${args.acpSessionId})`
+  );
+}
+
 export async function listPaginatedHistorySessions(
   cwd: string,
   listPage: (params: { cwd: string; cursor?: string | null }) => Promise<HistorySessionCatalogPage>,
@@ -338,19 +391,13 @@ export async function loadHistorySessionReplay(args: {
   });
 
   try {
-    if (!initResponse.agentCapabilities?.loadSession) {
-      throw new Error(
-        `${getProviderLabel(args.provider)} ACP agent does not advertise loadSession`
-      );
-    }
-    await withTimeout(
-      connection.loadSession({
-        sessionId: args.acpSessionId as unknown as acp.SessionId,
-        cwd,
-        mcpServers: [],
-      }),
-      `${getProviderLabel(args.provider)} ACP loadSession (${args.acpSessionId})`
-    );
+    await requestHistorySessionReplay({
+      provider: args.provider,
+      acpSessionId: args.acpSessionId,
+      cwd,
+      connection,
+      initResponse,
+    });
     return collector.notifications;
   } catch (error) {
     const message = `Failed to load ${getProviderLabel(args.provider)} session ${

@@ -2863,6 +2863,7 @@
   "workspace.projects.historySyncSection": "对话同步",
   "workspace.projects.historySyncSectionHelper": "从其他 ACP agent 中导入该项目的历史对话。",
   "workspace.projects.historySyncSummary": "已导入 {{imported}}，已刷新 {{refreshed}}，已跳过 {{skipped}}，冲突 {{conflicted}}，失败 {{failed}}",
+  "workspace.projects.historySyncMoreFailures": "另有 {{count}} 个失败项",
   "workspace.projects.historyTablistLabel": "历史提供方",
   "workspace.projects.historyUnknownTime": "时间未知",
   "workspace.projects.importSelectedHistory": "导入",

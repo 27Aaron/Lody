@@ -154,6 +154,11 @@ control-plane path is DEPRECATED; do not add functionality to it.
   `loro/machine-flock-sync-coordinator.ts` owns the live room, dirty state, and
   exponential retry; request-scoped `syncOnce()` failures must not make local project
   add/update flows fail after the local write is durable.
+- Builtin Codex local-project history import is read-only: require
+  `_meta.lody.readSessionHistory` v1 and call its advertised method; never fall back to
+  `loadSession`, which resumes the thread and can contend with its active writer. Publish a new
+  imported Session only after history and its cursor are durable; legacy `metadata_only` shells
+  remain selectable so the next import can finish hydration.
 - `loro/machine-flock-command-watcher.ts` owns the machine's durable COMMAND
   subscription (archive/delete/delete-local-project/provider-setup), separately from the
   sync coordinator's write room. Flock rows are durable, so reconnect correctness is

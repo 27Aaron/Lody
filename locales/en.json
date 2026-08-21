@@ -2866,6 +2866,7 @@
   "workspace.projects.historySyncSection": "Conversation sync",
   "workspace.projects.historySyncSectionHelper": "Import history conversations from other ACP agents for this project.",
   "workspace.projects.historySyncSummary": "Imported {{imported}}, refreshed {{refreshed}}, skipped {{skipped}}, conflicts {{conflicted}}, failed {{failed}}",
+  "workspace.projects.historySyncMoreFailures": "{{count}} more failures",
   "workspace.projects.historyTablistLabel": "History providers",
   "workspace.projects.historyUnknownTime": "Unknown time",
   "workspace.projects.importSelectedHistory": "Import",
