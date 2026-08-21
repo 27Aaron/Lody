@@ -34,7 +34,7 @@ import {
   buildSessionLaunchConfig,
   getMachineFlockDocId,
   getSessionRoomId,
-  normalizeMcpServerIdsForDedup,
+  normalizeSessionPreparationRunConfigForDedup,
   isLoroRepoDocDeleted,
   type SessionLaunchConfig,
   type SessionMeta,
@@ -205,11 +205,6 @@ function getSessionPreparationSandboxId(sessionId: SessionId, preparationId: str
   return `${sessionId}-prepare-${preparationHash}` as SessionId;
 }
 
-type SessionPreparationCompatibility = {
-  launch: ReturnType<typeof buildSessionLaunchConfig>;
-  mcpServerIds: string[];
-};
-
 type Deferred<T> = {
   promise: Promise<T>;
   resolve(value: T): void;
@@ -219,7 +214,7 @@ type Deferred<T> = {
 type PreparedSessionRuntime = SessionPreparationResource & {
   session: Session;
   config: SessionConfig;
-  compatibility: SessionPreparationCompatibility;
+  compatibility: ReturnType<typeof buildSessionPreparationCompatibility>;
   readCurrentLaunchConfig?: (sessionMeta: SessionMeta) => SessionLaunchConfigResolution | null;
   workspaceReady: Promise<PreparedWorktree | null>;
   agentResult: Promise<string>;
@@ -264,15 +259,19 @@ function createDeferred<T>(): Deferred<T> {
  */
 function buildSessionPreparationCompatibility(
   launchSource: Partial<SessionLaunchConfig> | null | undefined,
-  mcpServerIds: readonly McpServerId[] | undefined
-): SessionPreparationCompatibility {
+  mcpServerIds: readonly McpServerId[] | undefined,
+  configOptionValues?: SessionConfig['configOptionValues']
+) {
   return {
     launch: buildSessionLaunchConfig({
       customAcp: launchSource?.customAcp,
       runtimeOverrides: launchSource?.runtimeOverrides,
       env: launchSource?.env,
     }),
-    mcpServerIds: normalizeMcpServerIdsForDedup(mcpServerIds),
+    runConfig: normalizeSessionPreparationRunConfigForDedup({
+      mcpServerIds: mcpServerIds ? [...mcpServerIds] : undefined,
+      configOptionValues,
+    }),
   };
 }
 
@@ -603,7 +602,11 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
       !current ||
       !isDeepStrictEqual(
         resource.compatibility,
-        buildSessionPreparationCompatibility(current.config, resource.config.mcpServerIds)
+        buildSessionPreparationCompatibility(
+          current.config,
+          resource.config.mcpServerIds,
+          resource.config.configOptionValues
+        )
       )
     ) {
       return null;
@@ -665,7 +668,11 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
       return await this.createSessionInnerWithAgent(config, agentStart);
     }
 
-    const compatibility = buildSessionPreparationCompatibility(config, config.mcpServerIds);
+    const compatibility = buildSessionPreparationCompatibility(
+      config,
+      config.mcpServerIds,
+      config.configOptionValues
+    );
     const claim = this.preparationService.claim({
       sessionId,
       requesterUserId: config.requesterUserId,
@@ -688,7 +695,11 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
           current !== null &&
           isDeepStrictEqual(
             resource.compatibility,
-            buildSessionPreparationCompatibility(current.config, config.mcpServerIds)
+            buildSessionPreparationCompatibility(
+              current.config,
+              config.mcpServerIds,
+              config.configOptionValues
+            )
           )
         );
       },
@@ -904,6 +915,7 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
       agentConfigId: spec.agentConfigId as AgentConfigId,
       agentCliType: spec.cliType,
       agentType: spec.agentType,
+      configOptionValues: spec.runConfig?.configOptionValues,
       mcpServerIds: spec.runConfig?.mcpServerIds ?? [],
       customAcp: agentConfig.customAcp,
       runtimeOverrides: agentConfig.runtimeOverrides,
@@ -919,7 +931,11 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
       userName: user.name,
       userEmail: user.email,
     };
-    const compatibility = buildSessionPreparationCompatibility(config, config.mcpServerIds);
+    const compatibility = buildSessionPreparationCompatibility(
+      config,
+      config.mcpServerIds,
+      config.configOptionValues
+    );
     const ghTokenInjected = await this.prepareGitHubRepoSessionConfig(config);
     signal.throwIfAborted();
     const launch = await resolveACPProcessLaunchAsync({

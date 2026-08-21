@@ -7,6 +7,7 @@ import {
   buildSessionPreparationClaimKey,
   buildSessionPreparationRequestKey,
   buildSessionLaunchConfig,
+  normalizeSessionPreparationRunConfigForDedup,
   type AgentConfigId,
   type LocalProjectId,
   type MachineId,
@@ -138,27 +139,26 @@ const createSessionConfig = (
   ...overrides,
 });
 
-type PreparedTestCompatibility = {
-  launch: SessionLaunchConfig | undefined;
-  mcpServerIds: string[];
-};
+const createPreparedTestCompatibility = (
+  launchSource: Partial<SessionLaunchConfig>,
+  mcpServerIds: SessionConfig['mcpServerIds'] = [],
+  configOptionValues?: SessionConfig['configOptionValues']
+) => ({
+  launch: buildSessionLaunchConfig(launchSource),
+  runConfig: normalizeSessionPreparationRunConfigForDedup({
+    mcpServerIds,
+    configOptionValues,
+  }),
+});
 
 type PreparedTestResource = SessionPreparationResource & {
-  config: Pick<SessionConfig, 'mcpServerIds'>;
-  compatibility: PreparedTestCompatibility;
+  config: Pick<SessionConfig, 'mcpServerIds' | 'configOptionValues'>;
+  compatibility: ReturnType<typeof createPreparedTestCompatibility>;
   readCurrentLaunchConfig?: () => {
     config: SessionLaunchConfig | undefined;
     source: 'agent-config';
   };
 };
-
-const createPreparedTestCompatibility = (
-  launchSource: Partial<SessionLaunchConfig>,
-  mcpServerIds: string[] = []
-): PreparedTestCompatibility => ({
-  launch: buildSessionLaunchConfig(launchSource),
-  mcpServerIds,
-});
 
 const deferred = <T>() => {
   let resolvePromise!: (value: T) => void;
@@ -870,6 +870,70 @@ describe('SessionManager durable create ownership', () => {
 });
 
 describe('SessionManager preparation compatibility', () => {
+  it('rejects a prepared session with different initial config option values', async () => {
+    const manager = new SessionManager(
+      createLogger(),
+      'token',
+      'machine-1' as MachineId,
+      'workspace-1' as WorkspaceId,
+      createWorkspaceDocument(new Map()),
+      {
+        sessionSandboxFactory: async () => createNoopSessionSandbox(),
+        cloudPort: createTestCloudPort(),
+      }
+    );
+    const sessionId = 'changed-grok-permission-cold-fallback' as SessionId;
+    const agentConfigId = 'agent-grok' as AgentConfigId;
+    const prepared = {
+      config: {
+        mcpServerIds: [],
+        configOptionValues: { permission_mode: 'always-approve' },
+      },
+      compatibility: createPreparedTestCompatibility({}, [], { permission_mode: 'always-approve' }),
+      initialized: Promise.resolve(),
+      sessionReady: Promise.resolve(),
+      dispose: vi.fn(async () => undefined),
+    } satisfies PreparedTestResource;
+    const identity = {
+      requestedByUserId: 'user-1',
+      agentConfigId,
+      cliType: 'builtin' as const,
+      agentType: 'grok',
+    };
+    const internals = manager as unknown as {
+      preparationService: SessionPreparationService<PreparedTestResource>;
+      createSessionFromPreparationOrCold(config: SessionConfig): Promise<ISession>;
+      createSessionInnerWithAgent(config: SessionConfig): Promise<ISession>;
+    };
+    internals.preparationService.start({
+      preparationId: 'prepare-grok-always-approve',
+      sessionId,
+      requesterUserId: 'user-1',
+      requestKey: buildSessionPreparationRequestKey(identity),
+      claimKey: buildSessionPreparationClaimKey(identity),
+      create: async () => prepared,
+    });
+    await vi.waitFor(() =>
+      expect(internals.preparationService.getState(sessionId)).toBe('session-ready')
+    );
+    const coldSession = { sessionId } as ISession;
+    const coldCreate = vi
+      .spyOn(internals, 'createSessionInnerWithAgent')
+      .mockResolvedValue(coldSession);
+    const durableConfig = createSessionConfig({
+      sessionId,
+      agentConfigId,
+      agentType: 'grok',
+      configOptionValues: { permission_mode: 'ask' },
+    });
+
+    await expect(internals.createSessionFromPreparationOrCold(durableConfig)).resolves.toBe(
+      coldSession
+    );
+    expect(prepared.dispose).toHaveBeenCalledTimes(1);
+    expect(coldCreate).toHaveBeenCalledWith(durableConfig, undefined);
+  });
+
   it('waits for a published preparation to release its worktree when durable launch config is absent', async () => {
     const manager = new SessionManager(
       createLogger(),

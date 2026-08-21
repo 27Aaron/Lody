@@ -10,6 +10,10 @@ arrive: context/message-flow.md "Upstream".
 
 - `agent-client.ts` — the ACP connection: initialize/session lifecycle, client
   capabilities (fs, elicitation), permission/fs request handling, update callbacks.
+  Config selected by the driving turn travels on every session establishment as
+  `_meta.lody.sessionConfig`; provider-specific startup translation belongs in the
+  ACP adapter. `session/set_config_option` remains the live-session switch, and a
+  successful selection becomes the startup state of a later replacement.
   Goal session-info updates use provider-neutral `_meta.goal`; keep the
   `_meta.codex.goal` reader only as a compatibility fallback for older Codex adapters.
   A present neutral field wins, including `null`, so malformed new metadata is not

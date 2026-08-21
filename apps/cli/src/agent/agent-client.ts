@@ -5,7 +5,7 @@ import { performance } from 'perf_hooks';
 import { Logger } from '@/utils/logger';
 import * as acp from '@agentclientprotocol/sdk';
 import { z } from 'zod';
-import { SessionUsageUpdate, UsageData } from 'acp-extension-core';
+import type { SessionUsageUpdate, UsageData } from 'acp-extension-core';
 import {
   ACPSessionId,
   MODEL_THOUGHT_LEVEL_META_KEY,
@@ -551,6 +551,8 @@ export interface AgentClientOptions {
     cliType: AgentConfigCliType;
     agentType: string;
   };
+  /** Config selected before ACP session establishment. */
+  configOptionValues?: SessionTurnInputConfig['configOptionValues'];
   /** Launcher family (npx/uvx/local) for ACP startup analytics; non-PII. */
   launcher?: AcpLauncher;
   /** Set to false to disable terminal capability advertisement. Defaults to true. */
@@ -641,6 +643,8 @@ export class AgentClient implements acp.Client {
   private agentMcpCapabilities: acp.McpCapabilities | undefined;
   /** Session config options returned by the agent; the source of model/mode choices and names. */
   private configOptions: acp.SessionConfigOption[] = [];
+  /** Desired config retained across same-client replacement sessions. */
+  private readonly configOptionValues: NonNullable<SessionTurnInputConfig['configOptionValues']>;
   /** Legacy top-level `models` state proves that `session/set_model` is supported. */
   private legacySessionModelState: LegacySessionModelState | null = null;
   public currentModel?: ModelInfo;
@@ -657,6 +661,7 @@ export class AgentClient implements acp.Client {
     this.logger = options.logger;
     this.terminalManager = options.terminalManager;
     this.terminalEnabled = options.terminalEnabled ?? true;
+    this.configOptionValues = { ...(options.configOptionValues ?? {}) };
   }
 
   private describePromptDiagnosticContext(): string {
@@ -1515,9 +1520,28 @@ export class AgentClient implements acp.Client {
       : undefined;
   }
 
-  private getGrokSessionMeta() {
+  private getSessionStartMeta(forkSessionTurnId?: string) {
     const clientIdentifier = this.getGrokClientIdentifier();
-    return clientIdentifier ? { _meta: { clientIdentifier } } : {};
+    const lody = {
+      ...(forkSessionTurnId !== undefined
+        ? { forkAtTurn: { version: 1 as const, turnId: forkSessionTurnId } }
+        : {}),
+      ...(Object.keys(this.configOptionValues).length > 0
+        ? {
+            sessionConfig: {
+              version: 1 as const,
+              configOptionValues: { ...this.configOptionValues },
+            },
+          }
+        : {}),
+    };
+    if (clientIdentifier === undefined && Object.keys(lody).length === 0) return {};
+    return {
+      _meta: {
+        ...(clientIdentifier !== undefined ? { clientIdentifier } : {}),
+        ...(Object.keys(lody).length > 0 ? { lody } : {}),
+      },
+    };
   }
 
   private isCurrentAcpSession(acpSessionId: string): boolean {
@@ -1555,7 +1579,7 @@ export class AgentClient implements acp.Client {
     const connection = new acp.ClientSideConnection(() => this, stream);
     this.connection = connection;
     const grokClientIdentifier = this.getGrokClientIdentifier();
-    const grokSessionMeta = this.getGrokSessionMeta();
+    const sessionStartMeta = this.getSessionStartMeta();
     this.logger.debug(
       `[${this.options.sessionId}] Starting ACP client (workdir=${workdir} resumeSessionId=${
         resumeSessionId ?? 'none'
@@ -1817,18 +1841,7 @@ export class AgentClient implements acp.Client {
               sessionId: forkSessionId as unknown as acp.SessionId,
               cwd: workdir,
               mcpServers,
-              ...(forkSessionTurnId
-                ? {
-                    _meta: {
-                      lody: {
-                        forkAtTurn: {
-                          version: 1,
-                          turnId: forkSessionTurnId,
-                        },
-                      },
-                    },
-                  }
-                : {}),
+              ...this.getSessionStartMeta(forkSessionTurnId),
             }),
             startupAbort
           ),
@@ -1878,7 +1891,7 @@ export class AgentClient implements acp.Client {
               sessionId: resumeSessionId,
               cwd: workdir,
               mcpServers,
-              ...grokSessionMeta,
+              ...sessionStartMeta,
             }),
             startupAbort
           ),
@@ -1937,7 +1950,7 @@ export class AgentClient implements acp.Client {
               sessionId: resumeSessionId,
               cwd: workdir,
               mcpServers,
-              ...grokSessionMeta,
+              ...sessionStartMeta,
             }),
             startupAbort
           ),
@@ -1997,7 +2010,7 @@ export class AgentClient implements acp.Client {
       try {
         sessionResponse = await withTimeout(
           withAbort(
-            connection.newSession({ cwd: workdir, mcpServers, ...grokSessionMeta }),
+            connection.newSession({ cwd: workdir, mcpServers, ...sessionStartMeta }),
             startupAbort
           ),
           this.logger,
@@ -2079,7 +2092,7 @@ export class AgentClient implements acp.Client {
     if (!forkSessionTurnId) {
       try {
         return await withTimeout(
-          connection.newSession({ cwd: workdir, mcpServers, ...this.getGrokSessionMeta() }),
+          connection.newSession({ cwd: workdir, mcpServers, ...this.getSessionStartMeta() }),
           this.logger,
           'connection.newSession.editAndResend',
           this.options.sessionId,
@@ -2106,14 +2119,7 @@ export class AgentClient implements acp.Client {
           sessionId: sourceSessionId as unknown as acp.SessionId,
           cwd: workdir,
           mcpServers,
-          _meta: {
-            lody: {
-              forkAtTurn: {
-                version: 1,
-                turnId: forkSessionTurnId,
-              },
-            },
-          },
+          ...this.getSessionStartMeta(forkSessionTurnId),
         }),
         this.logger,
         'connection.unstable_forkSession.editAndResend',
@@ -2471,6 +2477,8 @@ export class AgentClient implements acp.Client {
         this.currentModel = this.resolveModelInfo(this.currentModel.modelId);
       }
     }
+
+    if (result) this.configOptionValues[configId] = value;
 
     this.logger.debug(
       `[${this.options.sessionId}] ACP session config option set: ${configId}=${value}`

@@ -48,7 +48,7 @@ import type {
 } from '@lody/shared';
 
 import { createStdinWritableStream, createStdoutReadableStream } from '@/utils/stream';
-import { SessionUsageUpdate, UsageData } from 'acp-extension-core';
+import type { SessionUsageUpdate, UsageData } from 'acp-extension-core';
 import {
   appendStderrTail,
   AcpStartupProcessError,
@@ -78,6 +78,7 @@ export type CreateAcpClientOptions = {
     cliType: AgentConfigCliType;
     agentType: string;
   };
+  configOptionValues?: AgentClientOptions['configOptionValues'];
   /** Launcher family (npx/uvx/local) for ACP startup analytics; non-PII. */
   launcher?: AcpLauncher;
   resumeSessionId?: ACPSessionId;
@@ -122,6 +123,7 @@ export const createAcpClient = async (options: CreateAcpClientOptions) => {
     machineId: options.machineId,
     terminalManager: options.terminalManager,
     agentConfig: options.agentConfig,
+    configOptionValues: options.configOptionValues,
     launcher: options.launcher,
     terminalEnabled: options.terminalEnabled,
     onStartupStage: options.onStartupStage,

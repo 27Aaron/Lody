@@ -10,6 +10,7 @@ import {
   type WorktreeSetupScriptConfig,
   WorkspaceId,
   type McpServerId,
+  type SessionTurnInputConfig,
 } from '@lody/shared';
 import type { SessionActivePresencePhase } from '@/lib/loro/session-active-presence';
 /**
@@ -22,6 +23,8 @@ export interface SessionConfig {
   agentConfigId?: AgentConfigId;
   agentCliType: AgentConfigCliType;
   agentType: string;
+  /** Config selected by the driving turn and carried into ACP session startup. */
+  configOptionValues?: SessionTurnInputConfig['configOptionValues'];
   /** Selection carried by the dispatching turn; ACP startup must not re-read history for it. */
   mcpServerIds: McpServerId[];
   /** Launch spec for this execution request; durable default lives on the agent config. */
