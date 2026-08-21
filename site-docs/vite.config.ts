@@ -56,7 +56,7 @@ function forceSingletonDeps(): Plugin {
  * single glue instance and loads the Wasm file explicitly. Keep SSR on its
  * normal entry because the browser build relies on XMLHttpRequest.
  */
-function useBrowserLoroBuildForClient(): Plugin {
+function createBrowserLoroBuildForClientPlugin(): Plugin {
   return {
     name: 'site-docs-client-loro-browser-build',
     enforce: 'pre',
@@ -200,7 +200,7 @@ export default defineConfig({
   },
   plugins: [
     forceSingletonDeps(),
-    useBrowserLoroBuildForClient(),
+    createBrowserLoroBuildForClientPlugin(),
     tanstackStart({
       prerender: {
         enabled: true,
