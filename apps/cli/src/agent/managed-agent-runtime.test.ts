@@ -12,6 +12,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import claudePackageLock from '../../../../packages/acp-extension-claude/package-lock.json';
 import codexPackageLock from '../../../../packages/acp-extension-codex/package-lock.json';
 import claudeSdkManifest from '../../node_modules/@anthropic-ai/claude-agent-sdk/manifest.json';
+import claudeRuntimeManifestJson from './claude-runtime-manifest.json';
+import codexRuntimeManifestJson from './codex-runtime-manifest.json';
 import kimiRuntimeManifestJson from './kimi-runtime-manifest.json';
 import grokRuntimeManifest from '../../../../packages/acp-extension-grok/runtime-manifest.json';
 
@@ -98,6 +100,11 @@ describe('ManagedAgentRuntimeManager', () => {
     expect(CODEX_RUNTIME_VERSION).toBe(
       codexPackageLock.packages['node_modules/@openai/codex']?.version
     );
+    expect(CODEX_RUNTIME_VERSION).toBe(codexRuntimeManifestJson.version);
+    const manager = new ManagedAgentRuntimeManager({ rootDir });
+    expect(manager.getDefinition('codex').platforms).toMatchObject(
+      codexRuntimeManifestJson.artifacts
+    );
   });
 
   it('matches the exact locked Claude SDK and its embedded Claude Code version', () => {
@@ -105,6 +112,12 @@ describe('ManagedAgentRuntimeManager', () => {
       claudePackageLock.packages['node_modules/@anthropic-ai/claude-agent-sdk']?.version
     );
     expect(CLAUDE_CODE_RUNTIME_VERSION).toBe(claudeSdkManifest.version);
+    expect(CLAUDE_AGENT_SDK_VERSION).toBe(claudeRuntimeManifestJson.sdkVersion);
+    expect(CLAUDE_CODE_RUNTIME_VERSION).toBe(claudeRuntimeManifestJson.version);
+    const manager = new ManagedAgentRuntimeManager({ rootDir });
+    expect(manager.getDefinition('claude-code').platforms).toMatchObject(
+      claudeRuntimeManifestJson.artifacts
+    );
   });
 
   it('matches the pinned Kimi runtime manifest and Node engine', () => {

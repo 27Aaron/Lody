@@ -25,6 +25,8 @@ import grokPackageJson from '../../../../packages/acp-extension-grok/package.jso
 import grokRuntimeManifestJson from '../../../../packages/acp-extension-grok/runtime-manifest.json';
 import claudeSdkManifestJson from '../../node_modules/@anthropic-ai/claude-agent-sdk/manifest.json';
 import claudeSdkPackageJson from '../../node_modules/@anthropic-ai/claude-agent-sdk/package.json';
+import claudeRuntimeManifestJson from './claude-runtime-manifest.json';
+import codexRuntimeManifestJson from './codex-runtime-manifest.json';
 import kimiRuntimeManifestJson from './kimi-runtime-manifest.json';
 
 import {
@@ -242,22 +244,33 @@ export function isNodeVersionAtLeast(current: string, required: string): boolean
   return true;
 }
 
-export const CODEX_RUNTIME_VERSION = resolveSingleDependencyVersion(
+const CODEX_DEPENDENCY_VERSION = resolveSingleDependencyVersion(
   '@openai/codex',
   codexPackageJson.dependencies['@openai/codex']
 );
-export const CLAUDE_AGENT_SDK_VERSION = resolveSingleDependencyVersion(
+export const CODEX_RUNTIME_VERSION = codexRuntimeManifestJson.version;
+if (CODEX_RUNTIME_VERSION !== CODEX_DEPENDENCY_VERSION) {
+  throw new Error(
+    `Codex runtime manifest ${CODEX_RUNTIME_VERSION} does not match @openai/codex ${CODEX_DEPENDENCY_VERSION}. Run pnpm mirror:agent-runtimes -- --runtime codex to refresh it.`
+  );
+}
+const CLAUDE_DEPENDENCY_VERSION = resolveSingleDependencyVersion(
   '@anthropic-ai/claude-agent-sdk',
   claudePackageJson.dependencies['@anthropic-ai/claude-agent-sdk']
 );
-if (claudeSdkPackageJson.version !== CLAUDE_AGENT_SDK_VERSION) {
+export const CLAUDE_AGENT_SDK_VERSION = claudeRuntimeManifestJson.sdkVersion;
+export const CLAUDE_CODE_RUNTIME_VERSION = claudeRuntimeManifestJson.version;
+if (
+  claudeSdkPackageJson.version !== CLAUDE_DEPENDENCY_VERSION ||
+  CLAUDE_AGENT_SDK_VERSION !== CLAUDE_DEPENDENCY_VERSION ||
+  CLAUDE_CODE_RUNTIME_VERSION !== claudeSdkManifestJson.version
+) {
   throw new Error(
-    `Expected installed @anthropic-ai/claude-agent-sdk ${CLAUDE_AGENT_SDK_VERSION}, received ${claudeSdkPackageJson.version}.`
+    `Claude runtime manifest ${CLAUDE_AGENT_SDK_VERSION}/${CLAUDE_CODE_RUNTIME_VERSION} does not match @anthropic-ai/claude-agent-sdk ${CLAUDE_DEPENDENCY_VERSION}/${claudeSdkManifestJson.version}. Run pnpm mirror:agent-runtimes -- --runtime claude-code to refresh it.`
   );
 }
 export const CODEX_ACP_ADAPTER_VERSION = codexPackageJson.version;
 export const CLAUDE_ACP_ADAPTER_VERSION = claudePackageJson.version;
-export const CLAUDE_CODE_RUNTIME_VERSION = claudeSdkManifestJson.version;
 export const KIMI_CODE_VERSION = kimiRuntimeManifestJson.version;
 export const GROK_ACP_ADAPTER_VERSION = grokPackageJson.version;
 export const GROK_BUILD_RUNTIME_VERSION = grokRuntimeManifestJson.officialRuntime.version;
@@ -271,139 +284,61 @@ export const BUILTIN_CLAUDE_CAPABILITY_SOURCE_VERSION = `builtin-claude-acp:${CL
 export const BUILTIN_KIMI_CAPABILITY_SOURCE_VERSION = `builtin-kimi:${KIMI_CODE_VERSION}`;
 export const BUILTIN_GROK_CAPABILITY_SOURCE_VERSION = `builtin-grok-acp:${GROK_ACP_ADAPTER_VERSION}+official-grok:${GROK_BUILD_RUNTIME_VERSION}`;
 
+type CodexRuntimePlatform = keyof typeof codexRuntimeManifestJson.artifacts;
+
+function createCodexRuntimeArchive(platform: CodexRuntimePlatform): RuntimeArchive {
+  const artifact = codexRuntimeManifestJson.artifacts[platform];
+  return {
+    fileName: artifact.fileName,
+    sha256: artifact.sha256,
+    size: artifact.size,
+    compression: 'zstd',
+    cmd: platform.startsWith('win32-') ? 'bin/codex.exe' : 'bin/codex',
+  };
+}
+
+type ClaudeRuntimePlatform = keyof typeof claudeRuntimeManifestJson.artifacts;
+
+function createClaudeRuntimeArchive(platform: ClaudeRuntimePlatform): RuntimeArchive {
+  const artifact = claudeRuntimeManifestJson.artifacts[platform];
+  const executable = claudeSdkManifestJson.platforms[platform];
+  return {
+    fileName: artifact.fileName,
+    sha256: artifact.sha256,
+    size: artifact.size,
+    compression: 'zstd',
+    cmd: platform.startsWith('win32-') ? 'claude.exe' : 'claude',
+    stripComponents: 1,
+    executableSha256: executable.checksum,
+    executableSize: executable.size,
+  };
+}
+
 const RUNTIMES: Record<ManagedRuntimeName, RuntimeDefinition> = {
   codex: {
     name: 'codex',
     version: CODEX_RUNTIME_VERSION,
     platforms: {
-      'darwin-arm64': {
-        fileName: 'codex-package-aarch64-apple-darwin.tar.zst',
-        sha256: '4b0a3c2967f6db11b67dac0a6f0630327077888157b2020b5b1159e8d4a5a01c',
-        size: 77491677,
-        compression: 'zstd',
-        cmd: 'bin/codex',
-      },
-      'darwin-x64': {
-        fileName: 'codex-package-x86_64-apple-darwin.tar.zst',
-        sha256: '373c728c0912b7c65af742bb649f0ff056300f8e8a33a619be0bab62f2afc6ba',
-        size: 85008508,
-        compression: 'zstd',
-        cmd: 'bin/codex',
-      },
-      'linux-arm64': {
-        fileName: 'codex-package-aarch64-unknown-linux-musl.tar.zst',
-        sha256: '692ff5c5d9eb86774c0448d930895e46659eee6a2c12f46b97399da458c1e8b7',
-        size: 80608473,
-        compression: 'zstd',
-        cmd: 'bin/codex',
-      },
-      'linux-x64': {
-        fileName: 'codex-package-x86_64-unknown-linux-musl.tar.zst',
-        sha256: '494368127e27ab625b2a5e759f83447e1d7d00b6ae49a5e2c17df5fd7c4aac1d',
-        size: 86804357,
-        compression: 'zstd',
-        cmd: 'bin/codex',
-      },
-      'win32-arm64': {
-        fileName: 'codex-package-aarch64-pc-windows-msvc.tar.zst',
-        sha256: '0c9d43e1ce013900850c82ab558cbafae9e8b05363689ab68cc0b4c87ac2b267',
-        size: 88080469,
-        compression: 'zstd',
-        cmd: 'bin/codex.exe',
-      },
-      'win32-x64': {
-        fileName: 'codex-package-x86_64-pc-windows-msvc.tar.zst',
-        sha256: '5931e080440a0bff1413d55b62921e26238f5410d82d79e5327202bfef1833a4',
-        size: 95093149,
-        compression: 'zstd',
-        cmd: 'bin/codex.exe',
-      },
+      'darwin-arm64': createCodexRuntimeArchive('darwin-arm64'),
+      'darwin-x64': createCodexRuntimeArchive('darwin-x64'),
+      'linux-arm64': createCodexRuntimeArchive('linux-arm64'),
+      'linux-x64': createCodexRuntimeArchive('linux-x64'),
+      'win32-arm64': createCodexRuntimeArchive('win32-arm64'),
+      'win32-x64': createCodexRuntimeArchive('win32-x64'),
     },
   },
   'claude-code': {
     name: 'claude-code',
     version: CLAUDE_CODE_RUNTIME_VERSION,
     platforms: {
-      'darwin-arm64': {
-        fileName: `anthropic-ai-claude-agent-sdk-darwin-arm64-${CLAUDE_AGENT_SDK_VERSION}.tar.zst`,
-        sha256: '2c2f74e529066d85f9f8815e7ff1ef5a5e78107c43b1fa368acec86f07faf57d',
-        size: 60180862,
-        compression: 'zstd',
-        cmd: 'claude',
-        stripComponents: 1,
-        executableSha256: claudeSdkManifestJson.platforms['darwin-arm64'].checksum,
-        executableSize: claudeSdkManifestJson.platforms['darwin-arm64'].size,
-      },
-      'darwin-x64': {
-        fileName: `anthropic-ai-claude-agent-sdk-darwin-x64-${CLAUDE_AGENT_SDK_VERSION}.tar.zst`,
-        sha256: '5c74a294444e69f9b13f4e103247b6b51a7b10c555cfbce9f5434c37e662e9bb',
-        size: 64691464,
-        compression: 'zstd',
-        cmd: 'claude',
-        stripComponents: 1,
-        executableSha256: claudeSdkManifestJson.platforms['darwin-x64'].checksum,
-        executableSize: claudeSdkManifestJson.platforms['darwin-x64'].size,
-      },
-      'linux-arm64': {
-        fileName: `anthropic-ai-claude-agent-sdk-linux-arm64-${CLAUDE_AGENT_SDK_VERSION}.tar.zst`,
-        sha256: 'bc41781f1003c2856e3ce0044da3fa752ef279a1cc29a8e23e3ce13c8033650e',
-        size: 69763140,
-        compression: 'zstd',
-        cmd: 'claude',
-        stripComponents: 1,
-        executableSha256: claudeSdkManifestJson.platforms['linux-arm64'].checksum,
-        executableSize: claudeSdkManifestJson.platforms['linux-arm64'].size,
-      },
-      'linux-x64': {
-        fileName: `anthropic-ai-claude-agent-sdk-linux-x64-${CLAUDE_AGENT_SDK_VERSION}.tar.zst`,
-        sha256: '076972a61402e14afffb5d64a40e50ab5074a3a7f3740fed44d64b6cb7839c84',
-        size: 70585519,
-        compression: 'zstd',
-        cmd: 'claude',
-        stripComponents: 1,
-        executableSha256: claudeSdkManifestJson.platforms['linux-x64'].checksum,
-        executableSize: claudeSdkManifestJson.platforms['linux-x64'].size,
-      },
-      'linux-arm64-musl': {
-        fileName: `anthropic-ai-claude-agent-sdk-linux-arm64-musl-${CLAUDE_AGENT_SDK_VERSION}.tar.zst`,
-        sha256: 'e9282b3ab96cb89aeb1eecba2bf7ab354486dbd48546ca8c8b0ace0844d88f75',
-        size: 68233742,
-        compression: 'zstd',
-        cmd: 'claude',
-        stripComponents: 1,
-        executableSha256: claudeSdkManifestJson.platforms['linux-arm64-musl'].checksum,
-        executableSize: claudeSdkManifestJson.platforms['linux-arm64-musl'].size,
-      },
-      'linux-x64-musl': {
-        fileName: `anthropic-ai-claude-agent-sdk-linux-x64-musl-${CLAUDE_AGENT_SDK_VERSION}.tar.zst`,
-        sha256: '331f1470a4234ac1636971b7c586f41ae8c76ff987fe8d7e5736214186a93e86',
-        size: 69249229,
-        compression: 'zstd',
-        cmd: 'claude',
-        stripComponents: 1,
-        executableSha256: claudeSdkManifestJson.platforms['linux-x64-musl'].checksum,
-        executableSize: claudeSdkManifestJson.platforms['linux-x64-musl'].size,
-      },
-      'win32-arm64': {
-        fileName: `anthropic-ai-claude-agent-sdk-win32-arm64-${CLAUDE_AGENT_SDK_VERSION}.tar.zst`,
-        sha256: '483e1285703ba75050055cc305a5b47526ac449bc223c2e30acaa3a7ac87560e',
-        size: 69235703,
-        compression: 'zstd',
-        cmd: 'claude.exe',
-        stripComponents: 1,
-        executableSha256: claudeSdkManifestJson.platforms['win32-arm64'].checksum,
-        executableSize: claudeSdkManifestJson.platforms['win32-arm64'].size,
-      },
-      'win32-x64': {
-        fileName: `anthropic-ai-claude-agent-sdk-win32-x64-${CLAUDE_AGENT_SDK_VERSION}.tar.zst`,
-        sha256: '961eeabb2eaf9b3027fdc3caf10417ea738fb3ea64132307a7ae3a1d9f2309b8',
-        size: 71046598,
-        compression: 'zstd',
-        cmd: 'claude.exe',
-        stripComponents: 1,
-        executableSha256: claudeSdkManifestJson.platforms['win32-x64'].checksum,
-        executableSize: claudeSdkManifestJson.platforms['win32-x64'].size,
-      },
+      'darwin-arm64': createClaudeRuntimeArchive('darwin-arm64'),
+      'darwin-x64': createClaudeRuntimeArchive('darwin-x64'),
+      'linux-arm64': createClaudeRuntimeArchive('linux-arm64'),
+      'linux-x64': createClaudeRuntimeArchive('linux-x64'),
+      'linux-arm64-musl': createClaudeRuntimeArchive('linux-arm64-musl'),
+      'linux-x64-musl': createClaudeRuntimeArchive('linux-x64-musl'),
+      'win32-arm64': createClaudeRuntimeArchive('win32-arm64'),
+      'win32-x64': createClaudeRuntimeArchive('win32-x64'),
     },
   },
   'kimi-code': {

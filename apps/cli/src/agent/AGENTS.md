@@ -98,6 +98,16 @@ arrive: context/message-flow.md "Upstream".
 - `managed-agent-runtime.ts` — pinned Codex/Claude Code/Grok native and Kimi Node-package `.tar.zst`
   artifacts, checksums, resumable downloads, the active installation profile's
   `agent-binaries` layout, and best-effort `bin` symlinks for complete native CLIs.
+  Codex version/archive pins come only from `codex-runtime-manifest.json`, which the
+  outer `mirror:agent-runtimes` operator command atomically refreshes from the exact
+  official GitHub Release when the adapter's `@openai/codex` dependency changes.
+  The CLI must reject a dependency/manifest version mismatch; never restore copied
+  Codex checksum constants alongside the manager.
+  Claude SDK/runtime archive pins likewise come only from
+  `claude-runtime-manifest.json`. The mirror derives its sources and integrity from
+  the adapter lockfile, regenerates all eight zstd archives after an SDK/runtime
+  version change, verifies the canonical production objects, and then atomically
+  updates the manifest. Do not duplicate Claude archive pins in the manager.
   Grok launches the pinned `acp-extension-grok` compatibility adapter with an
   official, unmodified R2-managed runtime in `GROK_PATH`. The submodule owns the
   private-wire contract and minimum official version; it is never the source for
