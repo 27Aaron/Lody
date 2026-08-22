@@ -10,6 +10,10 @@ arrive: context/message-flow.md "Upstream".
 
 - `agent-client.ts` — the ACP connection: initialize/session lifecycle, client
   capabilities (fs, elicitation), permission/fs request handling, update callbacks.
+  Builtin Grok must default `clientCapabilities.terminal` to false so its adapter
+  uses Grok's local terminal runner. Its ACP terminal request encodes a full shell
+  command line in `command` with empty `args`, which is not the executable-plus-argv
+  contract that Lody's sandboxed terminal manager preserves for other agents.
   Config selected by the driving turn travels on every session establishment as
   `_meta.lody.sessionConfig`; provider-specific startup translation belongs in the
   ACP adapter. `session/set_config_option` remains the live-session switch, and a

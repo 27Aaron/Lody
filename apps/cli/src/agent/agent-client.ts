@@ -555,7 +555,10 @@ export interface AgentClientOptions {
   configOptionValues?: SessionTurnInputConfig['configOptionValues'];
   /** Launcher family (npx/uvx/local) for ACP startup analytics; non-PII. */
   launcher?: AcpLauncher;
-  /** Set to false to disable terminal capability advertisement. Defaults to true. */
+  /**
+   * Overrides terminal capability advertisement. Builtin Grok defaults to false so its
+   * adapter uses the native local runner; other agents default to true.
+   */
   terminalEnabled?: boolean;
   onStartupStage?: (event: AcpStartupStageEvent) => void;
   onUpdateMessage(message: AcpSessionNotification): void;
@@ -660,7 +663,9 @@ export class AgentClient implements acp.Client {
   constructor(private options: AgentClientOptions) {
     this.logger = options.logger;
     this.terminalManager = options.terminalManager;
-    this.terminalEnabled = options.terminalEnabled ?? true;
+    this.terminalEnabled =
+      options.terminalEnabled ??
+      !(options.agentConfig?.cliType === 'builtin' && options.agentConfig.agentType === 'grok');
     this.configOptionValues = { ...(options.configOptionValues ?? {}) };
   }
 

@@ -98,7 +98,10 @@ describe('AgentClient Kimi authentication and resume', () => {
     expect(client.isAuthenticationRequired()).toBe(true);
     expect(connectionMocks.initialize).toHaveBeenCalledWith(
       expect.objectContaining({
-        clientCapabilities: expect.objectContaining({ auth: { terminal: true } }),
+        clientCapabilities: expect.objectContaining({
+          terminal: true,
+          auth: { terminal: true },
+        }),
       })
     );
   });
@@ -124,6 +127,21 @@ describe('AgentClient Kimi authentication and resume', () => {
       expect.objectContaining({ sessionId: 'existing-session' })
     );
     expect(connectionMocks.resumeSession).not.toHaveBeenCalled();
+  });
+
+  it('lets builtin Grok use its local terminal runner', async () => {
+    const client = createClient('grok');
+
+    await client.startSession({} as never, '/tmp');
+
+    expect(connectionMocks.initialize).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clientCapabilities: expect.objectContaining({
+          terminal: false,
+          auth: { terminal: true },
+        }),
+      })
+    );
   });
 
   it('negotiates legacy model state into a session/set_model request', async () => {

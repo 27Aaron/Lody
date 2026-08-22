@@ -85,7 +85,10 @@ export type CreateAcpClientOptions = {
   forkSessionId?: ACPSessionId;
   /** Provider-native turn id selected as the source boundary for a turn-addressed fork. */
   forkSessionTurnId?: string;
-  /** Set to false to disable terminal capability advertisement. Defaults to true. */
+  /**
+   * Overrides terminal capability advertisement. Builtin Grok defaults to false so its
+   * adapter uses the native local runner; other agents default to true.
+   */
   terminalEnabled?: boolean;
   workspaceId?: WorkspaceId;
   machineId?: MachineId;
