@@ -8,6 +8,7 @@ import {
   forwardRef,
   useImperativeHandle,
   type ReactNode,
+  type MutableRefObject,
 } from 'react';
 import { useAtomValue } from 'jotai';
 import { ArrowUp, Loader2 } from 'lucide-react';
@@ -381,6 +382,8 @@ export interface SessionChatInputAreaProps {
   queueDisplay?: ReactNode;
   /** Per-turn MCP selection, rendered inside the composer's "+" menu. */
   mcp?: AttachmentAddMenuMcp;
+  /** One-shot guard for a viewport resize caused by the composer auto-growing. */
+  skipNextViewportResizeAutoScrollRef?: MutableRefObject<boolean>;
   onModeChange: (value: string) => void;
   onModelChange: (value: string) => void;
   onConfigOptionChange?: (configId: string, value: AcpConfigOptionValue) => void;
@@ -444,6 +447,7 @@ export const SessionChatInputArea = memo(
       freeTurnLimitNotice,
       queueDisplay,
       mcp,
+      skipNextViewportResizeAutoScrollRef,
       onModeChange,
       onModelChange,
       onConfigOptionChange,
@@ -2288,6 +2292,7 @@ export const SessionChatInputArea = memo(
         primaryAction={primaryActionNode}
         autoResize
         maxRows={11}
+        skipNextViewportResizeAutoScrollRef={skipNextViewportResizeAutoScrollRef}
         focusOnContainerClick
       />
     );

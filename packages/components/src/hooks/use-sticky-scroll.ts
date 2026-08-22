@@ -21,6 +21,12 @@ export interface UseStickyScrollOptions {
   itemCount: number;
   onAtBottomChange?: (atBottom: boolean) => void;
   /**
+   * Set by the session composer immediately before it changes its own height.
+   * The next viewport height change consumes this one-shot flag without
+   * pulling the reader back to the bottom.
+   */
+  skipNextViewportResizeAutoScrollRef?: MutableRefObject<boolean>;
+  /**
    * When true, releases follow-output before a programmatic jump or expansion
    * can resize the list underneath it.
    */
@@ -58,6 +64,7 @@ function useStickyViewportResizeObserver(options: {
   stickyBottomRef: MutableRefObject<boolean>;
   scrollElement: HTMLElement | null;
   scrollToRealBottom: () => void;
+  skipNextViewportResizeAutoScrollRef?: MutableRefObject<boolean>;
   suppressAutoScrollRef?: RefObject<boolean>;
 }): void {
   const {
@@ -65,6 +72,7 @@ function useStickyViewportResizeObserver(options: {
     stickyBottomRef,
     scrollElement,
     scrollToRealBottom,
+    skipNextViewportResizeAutoScrollRef,
     suppressAutoScrollRef,
   } = options;
 
@@ -79,8 +87,17 @@ function useStickyViewportResizeObserver(options: {
       for (const entry of entries) {
         const { width, height } = entry.contentRect;
         if (width === previousWidth && height === previousHeight) continue;
+        const heightChanged = height !== previousHeight;
         previousWidth = width;
         previousHeight = height;
+        if (heightChanged && skipNextViewportResizeAutoScrollRef?.current) {
+          skipNextViewportResizeAutoScrollRef.current = false;
+          if (rafId !== null) {
+            cancelAnimationFrame(rafId);
+            rafId = null;
+          }
+          continue;
+        }
         if (!stickyBottomRef.current || itemCountRef.current <= 0) continue;
         if (suppressAutoScrollRef?.current || rafId !== null) continue;
 
@@ -98,7 +115,14 @@ function useStickyViewportResizeObserver(options: {
       observer.disconnect();
       if (rafId !== null) cancelAnimationFrame(rafId);
     };
-  }, [itemCountRef, scrollElement, scrollToRealBottom, stickyBottomRef, suppressAutoScrollRef]);
+  }, [
+    itemCountRef,
+    scrollElement,
+    scrollToRealBottom,
+    skipNextViewportResizeAutoScrollRef,
+    stickyBottomRef,
+    suppressAutoScrollRef,
+  ]);
 }
 
 export function useStickyScroll({
@@ -106,6 +130,7 @@ export function useStickyScroll({
   vlistRef,
   itemCount,
   onAtBottomChange,
+  skipNextViewportResizeAutoScrollRef,
   suppressAutoScrollRef,
 }: UseStickyScrollOptions): UseStickyScrollResult {
   const cachedPositionAtMountRef = useRef(getScrollPosition(sessionId));
@@ -247,6 +272,7 @@ export function useStickyScroll({
     stickyBottomRef,
     scrollElement,
     scrollToRealBottom,
+    skipNextViewportResizeAutoScrollRef,
     suppressAutoScrollRef,
   });
 

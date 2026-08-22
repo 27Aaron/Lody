@@ -72,6 +72,7 @@ type HarnessProps = {
   scrollElement: HTMLDivElement | null;
   itemCount: number;
   onAtBottomChange?: (atBottom: boolean) => void;
+  skipNextViewportResizeAutoScrollRef?: React.MutableRefObject<boolean>;
 };
 
 async function advanceAnimationFrames(): Promise<void> {
@@ -216,6 +217,7 @@ function HookHarness({
   scrollElement,
   itemCount,
   onAtBottomChange,
+  skipNextViewportResizeAutoScrollRef,
 }: HarnessProps) {
   const vlistRef = useRef<VirtualizerHandle | null>(vlist);
   vlistRef.current = vlist;
@@ -225,6 +227,7 @@ function HookHarness({
     vlistRef,
     itemCount,
     onAtBottomChange,
+    skipNextViewportResizeAutoScrollRef,
   });
   const { scrollRef } = result;
 
@@ -417,6 +420,36 @@ describe('useStickyScroll Virtua adapter', () => {
 
     expect(vlist.scrollToIndex).toHaveBeenCalledWith(3, { align: 'end', offset: 24 });
     expect(fixture.getScrollTop()).toBe(320);
+    expect(latestResult?.isSticky).toBe(true);
+  });
+
+  it('skips one viewport resize caused by the composer changing height', async () => {
+    const sessionId = 'session-composer-viewport-resize' as SessionId;
+    const fixture = createScrollFixture();
+    const vlist = createMockVirtualizerHandle(fixture.scrollElement);
+    const skipNextViewportResizeAutoScrollRef = { current: true };
+
+    await renderHarness({
+      sessionId,
+      vlist,
+      scrollElement: fixture.scrollElement,
+      itemCount: 4,
+      skipNextViewportResizeAutoScrollRef,
+    });
+    await act(async () => {
+      await advanceAnimationFrames();
+    });
+
+    vlist.scrollToIndex.mockClear();
+    fixture.setClientHeight(320);
+    await act(async () => {
+      emitResize(fixture.scrollElement);
+      await advanceAnimationFrames();
+    });
+
+    expect(vlist.scrollToIndex).not.toHaveBeenCalled();
+    expect(fixture.getScrollTop()).toBe(240);
+    expect(skipNextViewportResizeAutoScrollRef.current).toBe(false);
     expect(latestResult?.isSticky).toBe(true);
   });
 

@@ -8,6 +8,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   memo,
   type MouseEvent as ReactMouseEvent,
+  type MutableRefObject,
   type ReactNode,
   useCallback,
   useContext,
@@ -397,6 +398,8 @@ export interface SessionChatStreamViewProps {
   agentActivityLabel?: string | null;
   agentActivityTone?: AgentActivityTone;
   conversationFontSize?: ConversationFontSize;
+  /** Skips one auto-follow caused by the session composer changing height. */
+  skipNextViewportResizeAutoScrollRef?: MutableRefObject<boolean>;
   /**
    * When true, prevents sticky auto-scroll from fighting programmatic scrolls
    * (e.g. during search result navigation).
@@ -1138,6 +1141,7 @@ export const SessionChatStreamView = forwardRef<
       agentActivityLabel = null,
       agentActivityTone = 'primary',
       conversationFontSize = 'default',
+      skipNextViewportResizeAutoScrollRef,
       suppressStickyAutoScrollRef,
     },
     ref
@@ -1306,6 +1310,7 @@ export const SessionChatStreamView = forwardRef<
       // scroll otherwise targets an index short of the true bottom.
       itemCount: virtualRows.length + leadingRowCount + (shouldShowAgentActivity ? 1 : 0),
       onAtBottomChange,
+      skipNextViewportResizeAutoScrollRef,
       suppressAutoScrollRef: autoScrollSuppressedRef,
     });
 

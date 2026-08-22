@@ -1,4 +1,13 @@
-import { forwardRef, memo, useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
+import {
+  forwardRef,
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  type MutableRefObject,
+  type ReactNode,
+} from 'react';
 import type {
   SessionDoc,
   SessionHistory,
@@ -86,6 +95,8 @@ export interface SessionChatStreamProps {
   onNavigateSession?: (target: SessionNavigationTarget) => void;
   onLastCompletedAssistantMessageIdChange?: (messageId: string | null) => void;
   conversationFontSize?: ConversationFontSize;
+  /** Skips one auto-follow caused by the session composer changing height. */
+  skipNextViewportResizeAutoScrollRef?: MutableRefObject<boolean>;
   suppressStickyAutoScrollRef?: React.RefObject<boolean>;
 }
 
@@ -149,6 +160,7 @@ const SessionChatStreamImpl = forwardRef<SessionChatStreamHandle, SessionChatStr
       onEditLastUser,
       onLastCompletedAssistantMessageIdChange,
       conversationFontSize = 'default',
+      skipNextViewportResizeAutoScrollRef,
       suppressStickyAutoScrollRef,
     },
     ref
@@ -249,6 +261,7 @@ const SessionChatStreamImpl = forwardRef<SessionChatStreamHandle, SessionChatStr
         agentActivityLabel={agentActivityLabel}
         agentActivityTone={agentActivityTone}
         conversationFontSize={conversationFontSize}
+        skipNextViewportResizeAutoScrollRef={skipNextViewportResizeAutoScrollRef}
         suppressStickyAutoScrollRef={suppressStickyAutoScrollRef}
       />
     );

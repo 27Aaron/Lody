@@ -21,6 +21,11 @@ this file; edit `AGENTS.md` only.
 - Follow viewport-size changes from the viewport's `ResizeObserver` records.
   Keyboard and terminal transitions resize that same element, so do not restore
   custom resize-event pumps, guessed transition durations, or stop timers.
+- A session composer height change sets a one-shot ref immediately before its
+  inline height write. Consume that ref only for the next viewport _height_
+  resize, without calling `scrollToRealBottom`; it preserves the reader's
+  position while typing without changing keyboard, terminal, or window-resize
+  follow behavior. Keep it separate from programmatic-jump suppression.
 - Group expansion scrolls after Virtua descendants finish their layout effects,
   and releases sticky suppression in the later parent layout effect of the same
   commit. Do not reintroduce frame retries or guessed settle timers.

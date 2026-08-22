@@ -2181,6 +2181,7 @@ export const SessionChatInterface = memo(
     const inputAreaRef = useRef<SessionChatInputAreaHandle>(null);
     const searchInputRef = useRef<HTMLInputElement>(null);
     const messageAreaRef = useRef<HTMLDivElement>(null);
+    const skipNextViewportResizeAutoScrollRef = useRef(false);
     const suppressStickyAutoScrollRef = useRef(false);
     const [isSearchOpen, setIsSearchOpen] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
@@ -5553,6 +5554,7 @@ export const SessionChatInterface = memo(
                             handleLastCompletedAssistantMessageIdChange
                           }
                           conversationFontSize={conversationFontSize}
+                          skipNextViewportResizeAutoScrollRef={skipNextViewportResizeAutoScrollRef}
                           suppressStickyAutoScrollRef={suppressStickyAutoScrollRef}
                         />
                       </MessageSendStatusContext.Provider>
@@ -5715,6 +5717,7 @@ export const SessionChatInterface = memo(
                         ) : null
                       }
                       mcp={mcpSelection.menu}
+                      skipNextViewportResizeAutoScrollRef={skipNextViewportResizeAutoScrollRef}
                       onModeChange={handleModeChange}
                       onModelChange={handleModelChange}
                       onConfigOptionChange={handleConfigOptionChange}
