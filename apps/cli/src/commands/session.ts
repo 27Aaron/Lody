@@ -1033,6 +1033,15 @@ export async function resolveLocalProjectBranchForCreate(
   requestedBranch?: string,
   options: { requireGit?: boolean } = {}
 ): Promise<string | undefined> {
+  // A direct local-project session runs in the project's current working
+  // directory. Capturing its current branch here would turn a harmless
+  // snapshot into a later `git switch` if the directory changes before the
+  // daemon starts the session. Branch selection is meaningful only when the
+  // caller explicitly requested one or when a worktree needs a base ref.
+  if (!requestedBranch?.trim() && options.requireGit !== true) {
+    return undefined;
+  }
+
   const gitState = await getLocalProjectGitStateAtRootPath(project.rootPath);
   if (!gitState.git) {
     if (options.requireGit === true) {
@@ -2289,6 +2298,13 @@ async function resolveLocalProjectBranchOnMachine(args: {
   requestedBranch?: string;
   useWorktree?: boolean;
 }): Promise<string | undefined> {
+  // Keep direct local sessions branchless. The target daemon must use the
+  // directory as it exists at dispatch time rather than switching back to a
+  // branch observed by this remote preflight.
+  if (!args.requestedBranch?.trim() && args.useWorktree !== true) {
+    return undefined;
+  }
+
   const response = await readLocalProjectGitStateOnMachine(args);
   if (!response.success) {
     if (args.requestedBranch || args.useWorktree === true) {
