@@ -6,6 +6,7 @@ import { Provider, createStore } from 'jotai';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MachineId, SessionId, SessionMeta } from '@lody/shared';
 import {
+  MANAGED_BROWSER_STATE_MESSAGE_TYPE,
   RESOLVE_VISUAL_ANNOTATION_ANCHORS_MESSAGE_TYPE,
   VISUAL_ANNOTATION_ANCHORS_RESOLVED_MESSAGE_TYPE,
   VISUAL_ANNOTATION_TARGET_MESSAGE_TYPE,
@@ -114,6 +115,11 @@ describe('ManagedPreviewSurface', () => {
   // move; jsdom has none, so give it an equivalent (jsdom's insertBefore does
   // not discard a browsing context) instead of exercising the uncached path.
   beforeAll(() => {
+    Object.defineProperty(HTMLIFrameElement.prototype, 'credentialless', {
+      configurable: true,
+      value: false,
+      writable: true,
+    });
     (HTMLElement.prototype as StatePreservingElement).moveBefore = function moveBefore(
       this: HTMLElement,
       node: Node,
@@ -124,6 +130,8 @@ describe('ManagedPreviewSurface', () => {
   });
 
   afterAll(() => {
+    delete (HTMLIFrameElement.prototype as HTMLIFrameElement & { credentialless?: boolean })
+      .credentialless;
     delete (HTMLElement.prototype as StatePreservingElement).moveBefore;
   });
 
@@ -153,6 +161,74 @@ describe('ManagedPreviewSurface', () => {
     container = undefined;
     vi.clearAllMocks();
     vi.restoreAllMocks();
+  });
+
+  it('runs static HTML as an uncached opaque-origin srcdoc', async () => {
+    const store = createStore();
+    store.set(userAtom, { id: 'user-1', name: 'Test User', email: 'test@example.com' });
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    const onBrowserStateChange = vi.fn();
+    const logicalUrl = 'https://html-file-preview.invalid/result.html';
+    const documentHtml = '<!doctype html><html><body>Preview</body></html>';
+
+    await act(async () => {
+      root?.render(
+        <Provider store={store}>
+          <ManagedPreviewSurface
+            session={session}
+            viewerUrl={logicalUrl}
+            logicalUrl={logicalUrl}
+            documentHtml={documentHtml}
+            annotationEnabled={false}
+            onAnnotationAvailabilityChange={vi.fn()}
+            onRuntimeError={vi.fn()}
+            onLoadingChange={vi.fn()}
+            onBrowserStateChange={onBrowserStateChange}
+            onNavigationRequest={vi.fn()}
+          />
+        </Provider>
+      );
+    });
+
+    const iframe = container.querySelector('iframe');
+    if (!iframe?.contentWindow) throw new Error('Expected static preview iframe');
+    expect(iframe.getAttribute('sandbox')).toBe('allow-scripts');
+    expect(iframe.getAttribute('srcdoc')).toBe(documentHtml);
+    expect(iframe.getAttribute('src')).toBeNull();
+    expect(iframe.hasAttribute('credentialless')).toBe(true);
+    expect(iframe.referrerPolicy).toBe('no-referrer');
+    expect(iframe.getAttribute('allow')).toContain("camera 'none'");
+
+    const postMessage = vi.spyOn(iframe.contentWindow, 'postMessage').mockImplementation(() => {});
+    await act(async () => iframe.dispatchEvent(new Event('load')));
+    expect(postMessage).toHaveBeenCalledWith(expect.any(Object), '*');
+
+    await act(async () => {
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          origin: 'null',
+          source: iframe.contentWindow,
+          data: {
+            type: MANAGED_BROWSER_STATE_MESSAGE_TYPE,
+            payload: {
+              url: 'about:srcdoc',
+              title: 'Preview',
+              loading: false,
+              canGoBack: false,
+              canGoForward: false,
+            },
+          },
+        })
+      );
+    });
+    expect(onBrowserStateChange).toHaveBeenCalledWith(expect.objectContaining({ url: logicalUrl }));
+
+    await act(async () => {
+      root?.render(<Provider store={store}>{null}</Provider>);
+    });
+    expect(iframe.isConnected).toBe(false);
   });
 
   it('stages a newly created annotation reference in the matching chat input', async () => {

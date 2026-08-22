@@ -186,6 +186,23 @@ Session conversation page chain:
   `useSessionDoc` never survive an in-place session switch.
   Electron public-browser restoration only reattaches the existing `WebContentsView`; it must not
   issue another navigation to the cached URL, which would silently reload and lose page state.
+- Complete `.html` / `.htm` viewer text may switch between Monaco source and Managed Preview without
+  a Machine RPC endpoint. Build a policy-owned `srcdoc` from the current complete viewer text,
+  inject the shared annotation runtime, and run it in uncached static-document mode
+  (`allow-scripts` only, opaque origin). Static frames must be destroyed as soon as the file
+  tab or rendered mode becomes inactive; never park their JavaScript in the Browser frame cache.
+  Keep CSP/referrer/base policy and the annotation runtime ahead of source scripts, map runtime
+  messages to a file-path logical URL whose namespace distinguishes relative, POSIX-absolute,
+  Windows-drive, and UNC paths. Same-document `#fragment` links stay inside the `srcdoc`; leave
+  rendered mode on every other navigation request because local subresources/pages are not part of
+  the single-document contract. HTML starts in code mode,
+  and truncated documents are never executable. The iframe is a permission boundary, not a promised
+  renderer-process/thread boundary; do not claim arbitrary user JS cannot consume the app renderer.
+  Likewise, CSP governs the initial `srcdoc`, not an arbitrary later self-navigation. Require
+  credentialless iframe support before offering the toggle, and do not describe the
+  self-contained/no-network rule as a hard browser guarantee. The rendered frame exists only while
+  its viewer tab and containing sidebar are visible. Key the file viewer by session + tab so switching
+  session targets always returns HTML to code mode before the new file can execute.
 - Session Browser has strict dual engines. Public HTTP(S) uses only a declared public-browser
   capability (Electron `WebContentsView` today); loopback/private targets use Managed Preview and
   are the only pages eligible for Visual Annotation. Never fall back from a missing public engine

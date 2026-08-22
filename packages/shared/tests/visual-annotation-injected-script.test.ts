@@ -11,7 +11,10 @@ import {
   VISUAL_ANNOTATION_ANCHORS_RESOLVED_MESSAGE_TYPE,
   VISUAL_ANNOTATION_TARGET_MESSAGE_TYPE,
 } from '../src/visual-annotation-types';
-import { VISUAL_ANNOTATION_INSPECTOR_BROWSER_SCRIPT } from '../src/visual-annotation-injected-script';
+import {
+  STATIC_HTML_PREVIEW_DOCUMENT_MARKER,
+  VISUAL_ANNOTATION_INSPECTOR_BROWSER_SCRIPT,
+} from '../src/visual-annotation-injected-script';
 
 type LodyVisualCommentInspector = {
   setEnabled(enabled: boolean): void;
@@ -72,6 +75,9 @@ describe('visual annotation injected script', () => {
     delete window.__lodyVisualCommentInspector;
     vi.restoreAllMocks();
     document.body.innerHTML = '';
+    document.querySelectorAll('base').forEach((element) => element.remove());
+    document.documentElement.removeAttribute(STATIC_HTML_PREVIEW_DOCUMENT_MARKER);
+    Reflect.deleteProperty(window, 'navigation');
   });
 
   it('uses the referrer origin and posts inspect payloads back to it', () => {
@@ -169,6 +175,108 @@ describe('visual annotation injected script', () => {
       {
         type: MANAGED_BROWSER_NAVIGATION_REQUEST_MESSAGE_TYPE,
         payload: { url: 'https://example.com/docs' },
+      },
+      'https://app.example.test'
+    );
+  });
+
+  it('keeps marked static-document fragment links inside the srcdoc page', () => {
+    document.documentElement.setAttribute(STATIC_HTML_PREVIEW_DOCUMENT_MARKER, 'true');
+    const base = document.createElement('base');
+    base.href = 'https://html-file-preview.invalid/';
+    document.head.append(base);
+    const target = document.createElement('h2');
+    target.id = 'details';
+    const anchor = document.createElement('a');
+    anchor.href = '#details';
+    anchor.textContent = 'Details';
+    document.body.append(anchor, target);
+    const appClick = vi.fn();
+    let runtimePreventedAtTarget = false;
+    anchor.addEventListener('click', (event) => {
+      appClick();
+      runtimePreventedAtTarget = event.defaultPrevented;
+    });
+    const postMessage = vi.spyOn(window.parent, 'postMessage').mockImplementation(() => {});
+
+    installInjectedScript();
+    const click = new MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+    });
+
+    expect(anchor.dispatchEvent(click)).toBe(false);
+    expect(appClick).toHaveBeenCalledOnce();
+    expect(runtimePreventedAtTarget).toBe(false);
+    expect(window.location.hash).toBe('#details');
+    expect(postMessage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: MANAGED_BROWSER_NAVIGATION_REQUEST_MESSAGE_TYPE }),
+      expect.anything()
+    );
+  });
+
+  it('preserves page cancellation of marked static-document fragment links', () => {
+    document.documentElement.setAttribute(STATIC_HTML_PREVIEW_DOCUMENT_MARKER, 'true');
+    const base = document.createElement('base');
+    base.href = 'https://html-file-preview.invalid/';
+    document.head.append(base);
+    const anchor = document.createElement('a');
+    anchor.href = '#details';
+    document.body.append(anchor);
+    anchor.addEventListener('click', (event) => event.preventDefault());
+    const initialHash = window.location.hash;
+
+    installInjectedScript();
+    const click = new MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+    });
+
+    expect(anchor.dispatchEvent(click)).toBe(false);
+    expect(window.location.hash).toBe(initialHash);
+  });
+
+  it('completes a fragment when the page stops propagation', () => {
+    document.documentElement.setAttribute(STATIC_HTML_PREVIEW_DOCUMENT_MARKER, 'true');
+    const anchor = document.createElement('a');
+    anchor.href = '#details';
+    document.body.append(anchor);
+    anchor.addEventListener('click', (event) => event.stopPropagation());
+    installInjectedScript();
+    const click = new MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+    });
+    expect(anchor.dispatchEvent(click)).toBe(false);
+    expect(window.location.hash).toBe('#details');
+  });
+
+  it('still hands marked static-document cross-page links to the parent', () => {
+    document.documentElement.setAttribute(STATIC_HTML_PREVIEW_DOCUMENT_MARKER, 'true');
+    const base = document.createElement('base');
+    base.href = 'https://html-file-preview.invalid/';
+    document.head.append(base);
+    const anchor = document.createElement('a');
+    anchor.href = `${window.location.origin}/same-origin-page`;
+    anchor.textContent = 'Another page';
+    document.body.append(anchor);
+    const postMessage = vi.spyOn(window.parent, 'postMessage').mockImplementation(() => {});
+
+    installInjectedScript();
+    const click = new MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+    });
+
+    expect(anchor.dispatchEvent(click)).toBe(false);
+    expect(postMessage).toHaveBeenCalledWith(
+      {
+        type: MANAGED_BROWSER_NAVIGATION_REQUEST_MESSAGE_TYPE,
+        payload: { url: `${window.location.origin}/same-origin-page` },
       },
       'https://app.example.test'
     );

@@ -4520,6 +4520,7 @@ const SessionDetail = ({
   const renderViewerTabContent = (tab: ViewerTab, className = 'h-full', active = true) =>
     tab.type === 'file' ? (
       <SessionFileContentView
+        key={`${activeSession.id}:${tab.id}`}
         sessionId={activeSession.id}
         session={activeSession}
         filePath={tab.filePath}
@@ -4536,6 +4537,16 @@ const SessionDetail = ({
           ? {}
           : { fileProviderRole: activeSessionCodeCollabFiles.role })}
         onSaveStateChange={(state) => handleViewerTabSaveStateChange(tab.id, state)}
+        visualAnnotationReferenceKeys={
+          visualAnnotationReferenceKeysBySession[activeSession.id] ??
+          EMPTY_VISUAL_ANNOTATION_REFERENCE_KEYS
+        }
+        onAddVisualAnnotationToChat={(reference) =>
+          handleAddPreviewAnnotationToChat(activeSession.id, reference)
+        }
+        onToggleVisualAnnotationInChat={(reference) =>
+          handleTogglePreviewAnnotationInChat(activeSession.id, reference)
+        }
         onOpenFile={(target) => {
           // The LSP locator travels as structured fields, never encoded into
           // the path. Round-tripping it through a `:L<line>` suffix meant the
@@ -5617,8 +5628,12 @@ const SessionDetail = ({
   const desktopViewerSurfaces = viewerTabs.map((tab) => {
     const isActive = tab.id === effectiveActiveViewerTabId;
     return (
-      <div key={tab.id} className={isActive ? 'h-full' : 'hidden h-full'} aria-hidden={!isActive}>
-        {renderViewerTabContent(tab)}
+      <div
+        key={tab.id}
+        className={isActive ? 'h-full' : 'hidden h-full'}
+        aria-hidden={!isActive || !isSidebarOpen}
+      >
+        {renderViewerTabContent(tab, 'h-full', isActive && isSidebarOpen)}
       </div>
     );
   });

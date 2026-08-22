@@ -1332,6 +1332,8 @@
   "sessions.fileViewer.closeTab": "Close {{fileName}}",
   "sessions.fileViewer.closeDirtyConfirm": "Close {{fileName}} without saving your changes?",
   "sessions.fileViewer.copyPath": "Copy file path",
+  "sessions.fileViewer.htmlPreview.navigationDisabled": "Navigation is disabled for self-contained HTML previews.",
+  "sessions.fileViewer.htmlPreview.show": "Preview HTML (runs scripts)",
   "sessions.fileViewer.loadFailed": "File viewer failed to load. The app may have updated; refresh the page and try again.",
   "sessions.fileViewer.loading": "Loading file…",
   "sessions.fileViewer.missing": "File not found.",

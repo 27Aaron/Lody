@@ -75,6 +75,7 @@ type ManagedPreviewSurfaceProps = {
   logicalUrl: string;
   command?: { id: number; action: ManagedBrowserCommand };
   className?: string;
+  documentHtml?: string;
   visualAnnotationReferenceKeys?: readonly string[];
   onAnnotationAvailabilityChange: (available: boolean) => void;
   onRuntimeError: (error: string | null) => void;
@@ -274,6 +275,7 @@ export function ManagedPreviewSurface({
   logicalUrl,
   command,
   className,
+  documentHtml,
   visualAnnotationReferenceKeys = EMPTY_VISUAL_ANNOTATION_REFERENCE_KEYS,
   onAnnotationAvailabilityChange,
   onRuntimeError,
@@ -306,7 +308,11 @@ export function ManagedPreviewSurface({
   // error page, CSP-blocked script, non-injected document) they land nowhere.
   const runtimeAliveRef = useRef(false);
   const handledCommandIdRef = useRef(0);
-  const previewOrigin = useMemo(() => new URL(viewerUrl).origin, [viewerUrl]);
+  const previewOrigin = useMemo(
+    () => (documentHtml === undefined ? new URL(viewerUrl).origin : 'null'),
+    [documentHtml, viewerUrl]
+  );
+  const previewPostMessageOrigin = documentHtml === undefined ? previewOrigin : '*';
   const managedFrameTitle = t('sessions.browser.managedFrameTitle', 'Managed preview');
   // Read at acquire time so a language switch retitles the live frame instead of
   // re-running the acquire effect, which would reparent the iframe.
@@ -363,9 +369,9 @@ export function ManagedPreviewSurface({
   const postToPreview = useCallback(
     (message: unknown) => {
       if (!iframeLoaded) return;
-      iframeRef.current?.contentWindow?.postMessage(message, previewOrigin);
+      iframeRef.current?.contentWindow?.postMessage(message, previewPostMessageOrigin);
     },
-    [iframeLoaded, previewOrigin]
+    [iframeLoaded, previewPostMessageOrigin]
   );
 
   const postTrackedAnchors = useCallback(
@@ -408,7 +414,7 @@ export function ManagedPreviewSurface({
     }, 3_000);
     iframeRef.current?.contentWindow?.postMessage(
       { type: SET_ANNOTATION_MODE_MESSAGE_TYPE, enabled: annotationEnabled },
-      previewOrigin
+      previewPostMessageOrigin
     );
   });
 
@@ -420,6 +426,12 @@ export function ManagedPreviewSurface({
   const hardReloadFrame = useStableCallback(() => {
     const iframe = iframeRef.current;
     if (!iframe) return;
+    if (documentHtml !== undefined) {
+      runtimeAliveRef.current = false;
+      syncFrameLoadState(false);
+      iframe.srcdoc = documentHtml;
+      return;
+    }
     let nextSrc = viewerUrl;
     try {
       nextSrc = buildManagedViewerUrlForLogicalUrl(viewerUrl, logicalUrl);
@@ -447,6 +459,7 @@ export function ManagedPreviewSurface({
       viewerUrl,
       title: managedFrameTitleRef.current,
       host,
+      documentHtml,
     });
     iframeRef.current = frame.iframe;
     frame.iframe.addEventListener('load', handleIframeLoad);
@@ -456,7 +469,7 @@ export function ManagedPreviewSurface({
       if (iframeRef.current === frame.iframe) iframeRef.current = null;
       releaseManagedPreviewFrame(session.id, frame.iframe);
     };
-  }, [handleIframeLoad, session.id, syncFrameLoadState, viewerUrl]);
+  }, [documentHtml, handleIframeLoad, session.id, syncFrameLoadState, viewerUrl]);
 
   useEffect(() => {
     managedFrameTitleRef.current = managedFrameTitle;
@@ -481,7 +494,7 @@ export function ManagedPreviewSurface({
         runtimeHandshakeTimerRef.current = null;
       }
     };
-  }, [onAnnotationAvailabilityChange, onRuntimeError, session.id, viewerUrl]);
+  }, [documentHtml, onAnnotationAvailabilityChange, onRuntimeError, session.id, viewerUrl]);
 
   useEffect(() => {
     if (iframeLoaded) {
@@ -491,7 +504,10 @@ export function ManagedPreviewSurface({
 
   useEffect(() => {
     if (!command || command.id === handledCommandIdRef.current) return;
-    if (command.action === 'reload' && (!iframeLoaded || !runtimeAliveRef.current)) {
+    if (
+      command.action === 'reload' &&
+      (documentHtml !== undefined || !iframeLoaded || !runtimeAliveRef.current)
+    ) {
       // The document has no live runtime to receive the message (stuck load,
       // proxy error page, CSP-blocked script): reload from the parent instead
       // by re-navigating the frame to the current page's viewer URL.
@@ -505,7 +521,7 @@ export function ManagedPreviewSurface({
       type: MANAGED_BROWSER_COMMAND_MESSAGE_TYPE,
       command: command.action,
     });
-  }, [command, hardReloadFrame, iframeLoaded, postToPreview]);
+  }, [command, documentHtml, hardReloadFrame, iframeLoaded, postToPreview]);
 
   useEffect(() => {
     resolveAnchors();
@@ -530,7 +546,10 @@ export function ManagedPreviewSurface({
         }
         let mappedUrl: string;
         try {
-          mappedUrl = toManagedLogicalUrl(event.data.payload.url, logicalUrl);
+          mappedUrl =
+            documentHtml === undefined
+              ? toManagedLogicalUrl(event.data.payload.url, logicalUrl)
+              : logicalUrl;
         } catch {
           onAnnotationAvailabilityChange(false);
           onRuntimeError(
@@ -566,7 +585,10 @@ export function ManagedPreviewSurface({
         const message = event.data;
         let pageUrl: string;
         try {
-          pageUrl = toManagedLogicalUrl(message.payload.page.url, logicalUrl);
+          pageUrl =
+            documentHtml === undefined
+              ? toManagedLogicalUrl(message.payload.page.url, logicalUrl)
+              : logicalUrl;
         } catch {
           onRuntimeError(
             t(
@@ -592,6 +614,7 @@ export function ManagedPreviewSurface({
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
   }, [
+    documentHtml,
     logicalUrl,
     onAnnotationAvailabilityChange,
     onBrowserStateChange,

@@ -1,3 +1,5 @@
+export const STATIC_HTML_PREVIEW_DOCUMENT_MARKER = 'data-lody-static-html-preview-document';
+
 export const VISUAL_ANNOTATION_INSPECTOR_BROWSER_SCRIPT = String.raw`
 (function () {
   "use strict";
@@ -9,6 +11,8 @@ export const VISUAL_ANNOTATION_INSPECTOR_BROWSER_SCRIPT = String.raw`
   var BROWSER_COMMAND = "LODY_MANAGED_BROWSER_COMMAND";
   var BROWSER_STATE = "LODY_MANAGED_BROWSER_STATE";
   var BROWSER_NAVIGATION_REQUEST = "LODY_MANAGED_BROWSER_NAVIGATION_REQUEST";
+  var STATIC_HTML_PREVIEW_DOCUMENT_MARKER = "${STATIC_HTML_PREVIEW_DOCUMENT_MARKER}";
+  var STATIC_HTML_PREVIEW_NAVIGATION_BASE = "https://html-file-preview.invalid/";
   var OVERLAY_ATTR = "data-lody-visual-annotation-overlay";
   var INTERACTION_LAYER_ATTR = "data-lody-visual-annotation-interaction-layer";
   var MAX_PARENT_DEPTH = 5;
@@ -58,6 +62,9 @@ export const VISUAL_ANNOTATION_INSPECTOR_BROWSER_SCRIPT = String.raw`
 
   var enabled = false;
   var destroyed = false;
+  var staticHtmlPreviewDocument = document.documentElement.hasAttribute(
+    STATIC_HTML_PREVIEW_DOCUMENT_MARKER
+  );
   var overlay = null;
   var interactionLayer = null;
   var currentHoverTarget = null;
@@ -71,6 +78,7 @@ export const VISUAL_ANNOTATION_INSPECTOR_BROWSER_SCRIPT = String.raw`
   var parentPostMessageTargetOrigin = parentOrigin;
   var suppressNextClick = false;
   var browserStateFrame = 0;
+  var pendingStaticDocumentFragmentClick = null;
 
   function warn(message) {
     if (window.console && typeof window.console.warn === "function") {
@@ -784,14 +792,21 @@ export const VISUAL_ANNOTATION_INSPECTOR_BROWSER_SCRIPT = String.raw`
     browserStateFrame = window.requestAnimationFrame(postBrowserState);
   }
 
-  function requestParentNavigation(rawUrl, event) {
+  function requestParentNavigation(rawUrl, event, forceParentNavigation) {
     var destination;
     try {
       destination = new URL(rawUrl, window.location.href);
     } catch (_error) {
-      return false;
+      if (!forceParentNavigation) {
+        return false;
+      }
+      try {
+        destination = new URL(rawUrl, STATIC_HTML_PREVIEW_NAVIGATION_BASE);
+      } catch (_fallbackError) {
+        return false;
+      }
     }
-    if (destination.origin === window.location.origin) {
+    if (!forceParentNavigation && destination.origin === window.location.origin) {
       return false;
     }
     if (event && typeof event.preventDefault === "function") {
@@ -809,16 +824,133 @@ export const VISUAL_ANNOTATION_INSPECTOR_BROWSER_SCRIPT = String.raw`
     return true;
   }
 
+  function getStaticDocumentFragmentHref(anchor) {
+    if (!staticHtmlPreviewDocument) {
+      return null;
+    }
+    var browsingContextTarget = anchor.getAttribute("target");
+    if (browsingContextTarget && browsingContextTarget.trim().toLowerCase() !== "_self") {
+      return null;
+    }
+    var rawHref = anchor.getAttribute("href");
+    rawHref = rawHref && rawHref.trim();
+    if (!rawHref || rawHref.charAt(0) !== "#") {
+      return null;
+    }
+    return rawHref;
+  }
+
+  function clearPendingStaticDocumentFragmentClick(pending) {
+    if (!pending) {
+      return;
+    }
+    if (pendingStaticDocumentFragmentClick === pending) {
+      pendingStaticDocumentFragmentClick = null;
+    }
+    for (var i = 0; i < pending.fallbackTargets.length; i += 1) {
+      pending.fallbackTargets[i].removeEventListener("click", pending.handleStoppedPropagation);
+    }
+    pending.fallbackTargets = [];
+  }
+
+  function rememberStaticDocumentFragmentClick(anchor, event, rawHref) {
+    clearPendingStaticDocumentFragmentClick(pendingStaticDocumentFragmentClick);
+    var pending = {
+      anchor: anchor,
+      destinationUrl: anchor.href,
+      event: event,
+      fallbackTargets: [],
+      handleStoppedPropagation: null,
+      rawHref: rawHref
+    };
+    pending.handleStoppedPropagation = function (fallbackEvent) {
+      if (
+        fallbackEvent !== event ||
+        !fallbackEvent.cancelBubble ||
+        pendingStaticDocumentFragmentClick !== pending
+      ) {
+        return;
+      }
+      clearPendingStaticDocumentFragmentClick(pending);
+      if (!fallbackEvent.defaultPrevented) {
+        completeStaticDocumentFragmentNavigation(rawHref, fallbackEvent);
+      }
+    };
+    var eventPath = typeof event.composedPath === "function" ? event.composedPath() : [];
+    for (var i = 0; i < eventPath.length; i += 1) {
+      var eventTarget = eventPath[i];
+      if (
+        eventTarget === window ||
+        !eventTarget ||
+        typeof eventTarget.addEventListener !== "function"
+      ) {
+        continue;
+      }
+      eventTarget.addEventListener("click", pending.handleStoppedPropagation, {
+        once: true,
+        passive: false
+      });
+      pending.fallbackTargets.push(eventTarget);
+    }
+    pendingStaticDocumentFragmentClick = pending;
+    window.setTimeout(function () {
+      clearPendingStaticDocumentFragmentClick(pending);
+    }, 0);
+  }
+
+  function completeStaticDocumentFragmentNavigation(rawHref, event) {
+    if (event && typeof event.preventDefault === "function") {
+      event.preventDefault();
+    }
+    window.location.hash = rawHref;
+    scheduleBrowserState();
+  }
+
+  function handleStaticDocumentFragmentNavigation(event) {
+    var pending = pendingStaticDocumentFragmentClick;
+    if (!pending || pending.event !== event) {
+      return;
+    }
+    clearPendingStaticDocumentFragmentClick(pending);
+    if (
+      enabled ||
+      event.defaultPrevented ||
+      !isPrimaryPointer(event) ||
+      getStaticDocumentFragmentHref(pending.anchor) !== pending.rawHref
+    ) {
+      return;
+    }
+    // Run after target, ancestor, and document handlers so the page can cancel
+    // activation and observes the old hash while handling the click. Assigning
+    // the fragment directly avoids resolving it through the owned HTTPS base.
+    completeStaticDocumentFragmentNavigation(pending.rawHref, event);
+  }
+
   function handleExternalLink(event) {
     if (enabled || event.defaultPrevented || !isPrimaryPointer(event)) {
       return;
+    }
+    if (
+      pendingStaticDocumentFragmentClick &&
+      pendingStaticDocumentFragmentClick.event !== event
+    ) {
+      clearPendingStaticDocumentFragmentClick(pendingStaticDocumentFragmentClick);
     }
     var target = event.target;
     var anchor = target && typeof target.closest === "function" ? target.closest("a[href]") : null;
     if (!anchor || anchor.hasAttribute("download")) {
       return;
     }
-    requestParentNavigation(anchor.href, event);
+    var fragmentHref = getStaticDocumentFragmentHref(anchor);
+    if (fragmentHref !== null) {
+      rememberStaticDocumentFragmentClick(anchor, event, fragmentHref);
+      return;
+    }
+    requestParentNavigation(
+      staticHtmlPreviewDocument ? anchor.getAttribute("href") : anchor.href,
+      event,
+      staticHtmlPreviewDocument
+    );
   }
 
   function handleExternalForm(event) {
@@ -829,14 +961,33 @@ export const VISUAL_ANNOTATION_INSPECTOR_BROWSER_SCRIPT = String.raw`
     if (!form || typeof form.action !== "string") {
       return;
     }
-    requestParentNavigation(form.action, event);
+    requestParentNavigation(
+      staticHtmlPreviewDocument ? form.getAttribute("action") || "" : form.action,
+      event,
+      staticHtmlPreviewDocument
+    );
   }
 
   function handleNavigationApiRequest(event) {
     if (enabled || !event || !event.destination || typeof event.destination.url !== "string") {
       return;
     }
-    requestParentNavigation(event.destination.url, event);
+    if (staticHtmlPreviewDocument && event.destination.sameDocument === true) {
+      scheduleBrowserState();
+      return;
+    }
+    var pending = pendingStaticDocumentFragmentClick;
+    if (
+      pending &&
+      !pending.event.defaultPrevented &&
+      event.destination.url === pending.destinationUrl
+    ) {
+      clearPendingStaticDocumentFragmentClick(pending);
+      completeStaticDocumentFragmentNavigation(pending.rawHref, event);
+      return;
+    }
+    clearPendingStaticDocumentFragmentClick(pending);
+    requestParentNavigation(event.destination.url, event, staticHtmlPreviewDocument);
   }
 
   function runBrowserCommand(command) {
@@ -899,11 +1050,13 @@ export const VISUAL_ANNOTATION_INSPECTOR_BROWSER_SCRIPT = String.raw`
       enabled = false;
     }
     destroyed = true;
+    clearPendingStaticDocumentFragmentClick(pendingStaticDocumentFragmentClick);
     window.removeEventListener("message", handleMessage);
     window.removeEventListener("popstate", scheduleBrowserState);
     window.removeEventListener("hashchange", scheduleBrowserState);
     window.removeEventListener("load", scheduleBrowserState);
     document.removeEventListener("click", handleExternalLink, { capture: true });
+    window.removeEventListener("click", handleStaticDocumentFragmentNavigation);
     document.removeEventListener("submit", handleExternalForm, { capture: true });
     if (navigationApi && typeof navigationApi.removeEventListener === "function") {
       navigationApi.removeEventListener("navigate", handleNavigationApiRequest);
@@ -941,6 +1094,7 @@ export const VISUAL_ANNOTATION_INSPECTOR_BROWSER_SCRIPT = String.raw`
   window.addEventListener("hashchange", scheduleBrowserState);
   window.addEventListener("load", scheduleBrowserState);
   document.addEventListener("click", handleExternalLink, { capture: true, passive: false });
+  window.addEventListener("click", handleStaticDocumentFragmentNavigation, { passive: false });
   document.addEventListener("submit", handleExternalForm, { capture: true, passive: false });
   var navigationApi = window.navigation;
   if (navigationApi && typeof navigationApi.addEventListener === "function") {

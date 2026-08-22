@@ -1,11 +1,23 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Eye, EyeClosed, Loader2, RefreshCw, Save, Search, WrapText } from 'lucide-react';
+import {
+  Eye,
+  EyeClosed,
+  Loader2,
+  MessageCircle,
+  RefreshCw,
+  Save,
+  Search,
+  ShieldAlert,
+  WrapText,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { toast } from 'sonner';
 import {
   getMachineFlockLocalProjects,
   type CodeCollabContentUnavailableReason,
   type SessionId,
   type SessionMeta,
+  type VisualAnnotationReferencePayload,
 } from '@lody/shared';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { cn } from '@/lib/utils';
@@ -75,6 +87,12 @@ import type { SessionMonacoSelectionRestore } from '@/lib/session-monaco-editor-
 import { useMachineOnlineStatus } from '@/hooks/use-machine-online-status';
 import { FamiconsCloudOfflineOutline } from '@/components/icons/famicons-cloud-offline-outline';
 import { SessionFileErrorState } from './session-file-error-state';
+import { ManagedPreviewSurface } from './managed-preview-surface';
+import { supportsCredentiallessManagedPreviewFrames } from './managed-preview-frame-cache';
+import {
+  buildStaticHtmlPreviewDocument,
+  getStaticHtmlPreviewLogicalUrl,
+} from './static-html-preview-document';
 
 type ViewData =
   | { status: 'loading' }
@@ -151,7 +169,12 @@ export type SessionFileContentViewProps = {
     readonly line?: number;
     readonly character?: number;
   }) => void;
+  visualAnnotationReferenceKeys?: readonly string[];
+  onAddVisualAnnotationToChat?: (reference: VisualAnnotationReferencePayload) => boolean | void;
+  onToggleVisualAnnotationInChat?: (reference: VisualAnnotationReferencePayload) => boolean | void;
 };
+
+const isHtmlPath = (filePath: string): boolean => /\.(?:html|htm)$/iu.test(filePath);
 
 function getCodeCollabTextChangeChecker(
   provider: SessionFileProvider
@@ -178,6 +201,9 @@ function SessionFileContentViewImpl({
   fileProviderRole,
   onSaveStateChange,
   onOpenFile,
+  visualAnnotationReferenceKeys,
+  onAddVisualAnnotationToChat,
+  onToggleVisualAnnotationInChat,
 }: SessionFileContentViewProps) {
   const { t } = useTranslation();
   const tRef = useLatestRef(t);
@@ -255,6 +281,15 @@ function SessionFileContentViewImpl({
   // Markdown opens as a rendered document by default, matching SVG previews.
   // The source remains one toggle away in the editable Monaco surface.
   const [markdownRenderMode, setMarkdownRenderMode] = useState<'rendered' | 'code'>('rendered');
+  // HTML starts as source because entering preview executes its inline scripts.
+  const [htmlRenderMode, setHtmlRenderMode] = useState<'rendered' | 'code'>('code');
+  const [htmlAnnotationEnabled, setHtmlAnnotationEnabled] = useState(false);
+  const [htmlAnnotationAvailable, setHtmlAnnotationAvailable] = useState(false);
+  const [htmlPreviewLoading, setHtmlPreviewLoading] = useState(false);
+  const [htmlRuntimeError, setHtmlRuntimeError] = useState<string | null>(null);
+  const [htmlPreviewCommand, setHtmlPreviewCommand] = useState<
+    { id: number; action: 'reload' } | undefined
+  >(undefined);
   // Incremented by the top-bar search button to open Monaco's find widget.
   const [findRequestSeq, setFindRequestSeq] = useState(0);
   // Soft refresh: keep the current body mounted; only the toolbar button spins.
@@ -528,21 +563,21 @@ function SessionFileContentViewImpl({
   // 2. file is text + not flagged readonly + has no unavailable reason,
   // 3. source is `live-collaborative` (serving machine reachable),
   // 4. caller role authorises writes (`host` or `write`).
-  const isProviderFileEditable =
-    isActiveSurface &&
+  const isProviderFileWritable =
     shouldUseProviderFileContent &&
     providerEntry?.kind === 'text' &&
     providerEntry.readonly !== true &&
     providerEntry.sourceState === 'live-collaborative' &&
     providerEntry.unavailableReason === undefined &&
     (fileProviderRole === 'host' || fileProviderRole === 'write');
+  const isProviderFileEditable = isActiveSurface && isProviderFileWritable;
 
-  const editableFileId = isProviderFileEditable ? (providerEntry?.fileId ?? fileId ?? null) : null;
+  const editableFileId = isProviderFileWritable ? (providerEntry?.fileId ?? fileId ?? null) : null;
 
   // Text feed for the provider surface. In v2 this is driven by the
   // path-keyed provider cache plus explicit refresh/save RPC responses.
   const liveFileId =
-    isActiveSurface && shouldUseProviderFileContent && providerEntry?.kind === 'text'
+    shouldUseProviderFileContent && providerEntry?.kind === 'text'
       ? (providerEntry.fileId ?? fileId ?? null)
       : null;
   const [externalTextUpdate, setExternalTextUpdate] = useState<
@@ -574,7 +609,7 @@ function SessionFileContentViewImpl({
   } = useCodeCollabSaveText({
     provider: shouldUseProviderFileContent ? fileProvider : null,
     fileId: liveFileId,
-    enabled: isProviderFileEditable,
+    enabled: isProviderFileWritable,
     onLiveTextSynced: handleLocalLiveTextSynced,
   });
 
@@ -714,6 +749,59 @@ function SessionFileContentViewImpl({
   );
 
   const isTextFileReady = data.status === 'ready' && data.snapshot.kind === 'text';
+  const supportsHtmlPreview = supportsCredentiallessManagedPreviewFrames();
+  const htmlPreviewSource =
+    supportsHtmlPreview &&
+    data.status === 'ready' &&
+    data.snapshot.kind === 'text' &&
+    data.snapshot.truncated !== true &&
+    isHtmlPath(normalizedPath)
+      ? (latestEditorTextRef.current ?? data.snapshot.text)
+      : null;
+  const isHtmlTextFile = htmlPreviewSource !== null;
+  const showHtmlRendered = isActiveSurface && isHtmlTextFile && htmlRenderMode === 'rendered';
+  const htmlPreviewDocument = useMemo(
+    () =>
+      showHtmlRendered && htmlPreviewSource !== null
+        ? buildStaticHtmlPreviewDocument(htmlPreviewSource)
+        : null,
+    [htmlPreviewSource, showHtmlRendered]
+  );
+  const htmlPreviewLogicalUrl = useMemo(
+    () => getStaticHtmlPreviewLogicalUrl(normalizedPath),
+    [normalizedPath]
+  );
+
+  useEffect(() => {
+    if (showHtmlRendered) return;
+    setHtmlAnnotationEnabled(false);
+    setHtmlAnnotationAvailable(false);
+    setHtmlPreviewLoading(false);
+    setHtmlRuntimeError(null);
+    setHtmlPreviewCommand(undefined);
+  }, [showHtmlRendered]);
+
+  const handleHtmlAnnotationAvailabilityChange = useCallback((available: boolean) => {
+    setHtmlAnnotationAvailable(available);
+    if (!available) setHtmlAnnotationEnabled(false);
+  }, []);
+  const handleHtmlRuntimeError = useCallback((error: string | null) => {
+    setHtmlRuntimeError(error);
+  }, []);
+  const handleHtmlPreviewLoadingChange = useCallback((loading: boolean) => {
+    setHtmlPreviewLoading(loading);
+  }, []);
+  const handleHtmlBrowserStateChange = useCallback(() => undefined, []);
+  const handleHtmlNavigationRequest = useCallback(() => {
+    setHtmlAnnotationEnabled(false);
+    setHtmlRenderMode('code');
+    toast.warning(
+      tRef.current(
+        'sessions.fileViewer.htmlPreview.navigationDisabled',
+        'Navigation is disabled for self-contained HTML previews.'
+      )
+    );
+  }, [tRef]);
   const isProviderEditorDirty =
     saveStatus.kind === 'pending' ||
     saveStatus.kind === 'saving' ||
@@ -965,6 +1053,42 @@ function SessionFileContentViewImpl({
         reason="deleted"
       />
     );
+  } else if (showHtmlRendered && htmlPreviewDocument !== null) {
+    body = (
+      <div className="relative h-full min-h-0 overflow-hidden bg-background">
+        <ManagedPreviewSurface
+          session={session}
+          viewerUrl={htmlPreviewLogicalUrl}
+          logicalUrl={htmlPreviewLogicalUrl}
+          documentHtml={htmlPreviewDocument}
+          annotationEnabled={htmlAnnotationEnabled}
+          command={htmlPreviewCommand}
+          className="h-full"
+          visualAnnotationReferenceKeys={visualAnnotationReferenceKeys}
+          onAnnotationAvailabilityChange={handleHtmlAnnotationAvailabilityChange}
+          onRuntimeError={handleHtmlRuntimeError}
+          onLoadingChange={handleHtmlPreviewLoadingChange}
+          onBrowserStateChange={handleHtmlBrowserStateChange}
+          onNavigationRequest={handleHtmlNavigationRequest}
+          onAddVisualAnnotationToChat={onAddVisualAnnotationToChat}
+          onToggleVisualAnnotationInChat={onToggleVisualAnnotationInChat}
+        />
+        {htmlPreviewLoading ? (
+          <div className="pointer-events-none absolute right-3 top-3 rounded bg-background/90 p-1.5 text-muted-foreground shadow-sm">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+          </div>
+        ) : null}
+        {htmlRuntimeError ? (
+          <div className="absolute bottom-3 left-3 right-3 flex items-start gap-2 rounded-md border border-status-warning/30 bg-background/95 px-3 py-2 text-xs text-foreground shadow-sm">
+            <ShieldAlert
+              className="mt-0.5 h-3.5 w-3.5 shrink-0 text-status-warning"
+              aria-hidden="true"
+            />
+            <span>{htmlRuntimeError}</span>
+          </div>
+        ) : null}
+      </div>
+    );
   } else if (showSvgRendered || showMarkdownRendered) {
     body = previewSurface;
   } else {
@@ -974,7 +1098,11 @@ function SessionFileContentViewImpl({
           <div className="min-h-0 flex-1">
             <LazyProviderTextMonacoViewer
               key={lspModelUri?.toString() ?? liveFileId ?? normalizedPath}
-              text={data.snapshot.text}
+              text={
+                hasAcceptedLocalContentChangeRef.current || isProviderEditorDirty
+                  ? (latestEditorTextRef.current ?? data.snapshot.text)
+                  : data.snapshot.text
+              }
               language={getSessionFileMonacoLanguageId(normalizedPath)}
               selectedLines={selectedLines}
               resolvedTheme={resolvedTheme}
@@ -1041,8 +1169,9 @@ function SessionFileContentViewImpl({
   // status bar (which now only carries save/live/offline state). The search
   // button only appears when a Monaco editor is mounted — a rendered SVG/Markdown
   // preview has no editor to search.
-  const showPreviewToggle = isSvgTextFile || isMarkdownTextFile;
-  const showSearchButton = isTextFileReady && !showSvgRendered && !showMarkdownRendered;
+  const showPreviewToggle = isSvgTextFile || isMarkdownTextFile || isHtmlTextFile;
+  const showSearchButton =
+    isTextFileReady && !showSvgRendered && !showMarkdownRendered && !showHtmlRendered;
   const showSaveButton = isProviderFileEditable && isTextFileReady;
   const showRefreshButton = shouldUseProviderFileContent && isTextFileReady;
   const showViewerTopBar =
@@ -1056,18 +1185,61 @@ function SessionFileContentViewImpl({
             {showPreviewToggle ? (
               <FilePreviewToggle
                 active={
-                  isSvgTextFile ? svgRenderMode === 'rendered' : markdownRenderMode === 'rendered'
+                  isSvgTextFile
+                    ? svgRenderMode === 'rendered'
+                    : isMarkdownTextFile
+                      ? markdownRenderMode === 'rendered'
+                      : htmlRenderMode === 'rendered'
                 }
                 onToggle={() => {
                   if (isSvgTextFile) {
                     setSvgRenderMode((mode) => (mode === 'rendered' ? 'code' : 'rendered'));
-                  } else {
+                  } else if (isMarkdownTextFile) {
                     setMarkdownRenderMode((mode) => (mode === 'rendered' ? 'code' : 'rendered'));
+                  } else {
+                    setHtmlAnnotationEnabled(false);
+                    setHtmlRenderMode((mode) => (mode === 'rendered' ? 'code' : 'rendered'));
                   }
                 }}
-                showLabel={t('sessions.fileViewer.preview.show', 'Preview')}
+                showLabel={
+                  isHtmlTextFile
+                    ? t('sessions.fileViewer.htmlPreview.show', 'Preview HTML (runs scripts)')
+                    : t('sessions.fileViewer.preview.show', 'Preview')
+                }
                 hideLabel={t('sessions.fileViewer.preview.hide', 'Hide preview')}
               />
+            ) : null}
+            {showHtmlRendered ? (
+              <button
+                type="button"
+                aria-pressed={htmlAnnotationEnabled}
+                onClick={() => setHtmlAnnotationEnabled((enabled) => !enabled)}
+                disabled={!htmlAnnotationAvailable}
+                title={t('sessions.preview.annotation.addComment', 'Add comment')}
+                aria-label={t('sessions.preview.annotation.addComment', 'Add comment')}
+                className={cn(
+                  'flex h-6 w-6 items-center justify-center rounded transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50',
+                  htmlAnnotationEnabled ? 'text-foreground' : 'text-muted-foreground'
+                )}
+              >
+                <MessageCircle className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            ) : null}
+            {showHtmlRendered ? (
+              <button
+                type="button"
+                onClick={() =>
+                  setHtmlPreviewCommand((current) => ({
+                    id: (current?.id ?? 0) + 1,
+                    action: 'reload',
+                  }))
+                }
+                title={t('sessions.browser.reload', 'Reload')}
+                aria-label={t('sessions.browser.reload', 'Reload')}
+                className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
             ) : null}
             {showSearchButton ? (
               <button
