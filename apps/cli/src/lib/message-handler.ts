@@ -6413,6 +6413,9 @@ export class MessageHandler {
     };
 
     switch (request.method) {
+      case 'code-collab/get-file-index':
+        await assertOwner(request.params.sessionId as SessionId);
+        return await this.codeCollabV2Service.getFileIndex(request.params);
       case 'code-collab/open-text':
         await assertOwner(request.params.sessionId as SessionId);
         return await this.codeCollabV2Service.openText(request.params);

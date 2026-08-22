@@ -934,11 +934,24 @@ describe('CodeCollabV2Service text RPC boundary', () => {
     });
   });
 
-  it('returns a current file-index snapshot through the machine RPC boundary', async () => {
+  it('returns a local snapshot before asynchronously reconciling Flock state', async () => {
     await withWorkspace(async (workspaceRoot) => {
       await mkdir(path.join(workspaceRoot, 'src'));
       await writeFile(path.join(workspaceRoot, 'src', 'index.ts'), 'export const value = 1;\n');
-      const { published, publishFileIndex } = collectPublishedSharedStates();
+      const { published, publishFileIndex: collectPublication } = collectPublishedSharedStates();
+      let startPublication: (() => void) | undefined;
+      const publicationStarted = new Promise<void>((resolve) => {
+        startPublication = resolve;
+      });
+      let releasePublication: (() => void) | undefined;
+      const publicationReleased = new Promise<void>((resolve) => {
+        releasePublication = resolve;
+      });
+      const publishFileIndex = vi.fn(async (state: CodeCollabV2FileIndexPublication) => {
+        startPublication?.();
+        await publicationReleased;
+        await collectPublication(state);
+      });
       const service = new CodeCollabV2Service({
         resolveWorkspace: makeResolver(workspaceRoot),
         publishFileIndex,
@@ -953,8 +966,15 @@ describe('CodeCollabV2Service text RPC boundary', () => {
       expect(snapshot.fileIndex).toMatchObject({
         'src/index.ts': true,
       });
-      expect(published.at(-1)?.fileIndex).toMatchObject(snapshot.fileIndex);
-      expect(published.at(-1)?.persistAllChangesDiffStats).toBe(false);
+      // The response resolves while Flock publication is still deliberately blocked.
+      expect(published).toEqual([]);
+      await publicationStarted;
+      expect(published).toEqual([]);
+
+      releasePublication?.();
+      await vi.waitFor(() => {
+        expect(published.at(-1)?.fileIndex).toEqual(snapshot.fileIndex);
+      });
     });
   });
 

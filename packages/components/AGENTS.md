@@ -116,9 +116,14 @@ mobile surfaces.
 
 ## Code Collab
 
-- The owner-session file-index Flock is the file-tree and All Changes source. Machine
-  RPC handles exact file content, save, LSP, and diff requests; it is not the file-index
-  source of truth.
+- Remote file surfaces read the owner-session file-index Flock. An Electron surface whose
+  target resolves to the local machine MUST load its initial file tree and All Changes from
+  the local `code-collab/get-file-index` Machine RPC snapshot without waiting for the
+  Flock; it then subscribes to local Flock events for later changes. A delayed or failed
+  subscription must not block that initial IPC read or fall back to cloud RPC. The CLI
+  asynchronously reconciles the initial snapshot back to Flock, so transient stale join
+  events must be allowed to converge rather than treated as initial authority. Machine RPC
+  also handles exact file content, save, LSP, and diff requests.
 - **Opening a file to preview it is NOT a Code Collab operation.** `openFile` goes
   through `file/preview` (File Preview v3), which the machine answers with a plain
   read — no workspace watch, no All Changes recompute, no Flock publish. It handles

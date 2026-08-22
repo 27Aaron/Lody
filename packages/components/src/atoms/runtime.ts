@@ -45,6 +45,8 @@ import type {
   previewVisualCommentDocSchema,
   sessionDocSchema,
   CodeCollabV2Error,
+  CodeCollabV2FileIndexRequest,
+  CodeCollabV2FileIndexSnapshot,
   CodeCollabV2InitDirectoryOk,
   CodeCollabV2InitDirectoryRequest,
   CodeCollabV2LspUnsupported,
@@ -360,6 +362,15 @@ export type WorkspaceRuntime = {
     request: Omit<FilePreviewV3Request, 'v'>,
     options?: { timeoutMs?: number; ownerSessionId?: SessionId | string }
   ) => Promise<FilePreviewV3Response>;
+  /**
+   * Electron-only initial Code Collab tree/current-All-Changes snapshot. This
+   * never falls back to the cloud Machine RPC transport.
+   */
+  requestLocalCodeCollabFileIndex: (
+    machineId: MachineId,
+    request: CodeCollabV2FileIndexRequest,
+    options?: { timeoutMs?: number; ownerSessionId?: SessionId | string }
+  ) => Promise<CodeCollabV2FileIndexSnapshot | CodeCollabV2Error | null>;
   requestCodeCollabOpenText: (
     machineId: MachineId,
     request: CodeCollabV2OpenTextRequest,

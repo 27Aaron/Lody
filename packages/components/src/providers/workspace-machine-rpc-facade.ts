@@ -5,6 +5,8 @@ import type {
 import {
   getServerNow,
   type CodeCollabV2Error,
+  type CodeCollabV2FileIndexRequest,
+  type CodeCollabV2FileIndexSnapshot,
   type CodeCollabV2InitDirectoryOk,
   type CodeCollabV2InitDirectoryRequest,
   type CodeCollabV2LspUnsupported,
@@ -242,6 +244,35 @@ export function createWorkspaceMachineRpcFacade(deps: WorkspaceMachineRpcFacadeD
           timeoutMs: options?.timeoutMs ?? 30_000,
         })
     );
+
+  /**
+   * Electron local file surfaces need an authoritative initial tree/current-diff
+   * snapshot before a Flock publication has had a chance to replicate. This is
+   * intentionally local-only: remote surfaces continue reading the shared Flock.
+   */
+  const requestLocalCodeCollabFileIndex = async (
+    machineId: MachineId,
+    request: CodeCollabV2FileIndexRequest,
+    options?: CodeCollabRequestOptions
+  ): Promise<CodeCollabV2FileIndexSnapshot | CodeCollabV2Error | null> => {
+    try {
+      if (!(await canUseLocalMachineRpc(machineId))) {
+        return toCodeCollabTransportError(
+          new Error('Local Code Collab file-index RPC is not available for this machine.')
+        );
+      }
+      return (await sendLocalMachineRpcRequest({
+        machineId,
+        workspaceId,
+        method: 'code-collab/get-file-index',
+        params: request,
+        ...ownerSessionFields(options),
+        timeoutMs: options?.timeoutMs ?? 30_000,
+      })) as CodeCollabV2FileIndexSnapshot | CodeCollabV2Error | null;
+    } catch (error) {
+      return toCodeCollabTransportError(error);
+    }
+  };
 
   const requestCodeCollabRefreshText = (
     machineId: MachineId,
@@ -1066,6 +1097,7 @@ export function createWorkspaceMachineRpcFacade(deps: WorkspaceMachineRpcFacadeD
     requestSessionPrepare,
     requestSessionPrepareCancel,
     requestFilePreview,
+    requestLocalCodeCollabFileIndex,
     requestCodeCollabOpenText,
     requestCodeCollabRefreshText,
     requestCodeCollabSaveText,

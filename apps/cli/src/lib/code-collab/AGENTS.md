@@ -82,7 +82,12 @@ directory.
   Badge and clickable content both derive from these exact events, never Git stats.
 - Machine RPC is the integration boundary. Local/Electron direct transport can be
   added below that RPC abstraction, but file operations still route to the single CLI
-  service.
+  service. In particular, local `code-collab/get-file-index` scans/builds the initial
+  tree and All Changes snapshot without awaiting Flock publication, then queues a
+  force-reconcile of that fresh in-memory state without delaying the response. This
+  repairs a durable file-index Flock that became stale while the CLI was stopped;
+  Flock remains the durable replication path for remote consumers and local renderer
+  invalidation after that initial snapshot.
 - Non-Git All Changes reconstruction is bounded before SQLite decompresses a snapshot:
   at most four paths run concurrently, one request retains at most 8 MiB of raw cached
   snapshots by default, and over-limit paths are returned as deferred for single-file

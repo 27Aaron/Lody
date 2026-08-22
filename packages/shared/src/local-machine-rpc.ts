@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import {
   CodeCollabV2ErrorSchema,
+  CodeCollabV2FileIndexRequestSchema,
+  CodeCollabV2FileIndexSnapshotSchema,
   CodeCollabV2InitDirectoryOkSchema,
   CodeCollabV2InitDirectoryRequestSchema,
   CodeCollabV2LspUnsupportedSchema,
@@ -49,6 +51,10 @@ const BaseLocalMachineRpcRequestSchema = z
   .strict();
 
 export const LocalMachineRpcRequestSchema = z.discriminatedUnion('method', [
+  BaseLocalMachineRpcRequestSchema.extend({
+    method: z.literal('code-collab/get-file-index'),
+    params: CodeCollabV2FileIndexRequestSchema,
+  }).strict(),
   BaseLocalMachineRpcRequestSchema.extend({
     method: z.literal('code-collab/open-text'),
     params: CodeCollabV2OpenTextRequestSchema,
@@ -191,6 +197,7 @@ export type LocalMachineRpcRequest = z.infer<typeof LocalMachineRpcRequestSchema
 export type LocalMachineRpcRequestValidated = LocalMachineRpcRequest;
 
 export const LocalMachineRpcResultSchema = z.union([
+  CodeCollabV2FileIndexSnapshotSchema,
   CodeCollabV2OpenTextOkSchema,
   CodeCollabV2RefreshTextResponseSchema,
   CodeCollabV2SaveTextResponseSchema,

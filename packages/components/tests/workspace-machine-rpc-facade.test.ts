@@ -12,6 +12,52 @@ afterEach(() => {
 });
 
 describe('createWorkspaceMachineRpcFacade', () => {
+  it('uses the local bridge for a file-index snapshot without creating a cloud client', async () => {
+    const sendLocalMachineRpc = vi.fn(async () => ({
+      ok: true as const,
+      result: {
+        status: 'ok' as const,
+        ownerSessionId: sessionId,
+        fileIndex: { 'src/local.ts': { kind: 'file' as const, change: { diff: [2, 1] as const } } },
+        updatedAtMs: 123,
+      },
+    }));
+    vi.stubGlobal('window', {
+      __LODY_ELECTRON__: true,
+      api: { sendLocalMachineRpc },
+    });
+    const getMachineRpcClient = vi.fn();
+    const facade = createWorkspaceMachineRpcFacade({
+      workspaceId,
+      targetRouter: {
+        getPlaneForMachine: () => 'local',
+        resolvePlaneForMachine: vi.fn(async () => 'local'),
+      },
+      getMachineRpcClient,
+    });
+
+    await expect(
+      facade.requestLocalCodeCollabFileIndex(
+        localMachineId,
+        { sessionId },
+        { ownerSessionId: sessionId }
+      )
+    ).resolves.toMatchObject({
+      status: 'ok',
+      fileIndex: { 'src/local.ts': { kind: 'file' } },
+    });
+    expect(sendLocalMachineRpc).toHaveBeenCalledWith(
+      expect.objectContaining({
+        machineId: localMachineId,
+        workspaceId,
+        method: 'code-collab/get-file-index',
+        params: { sessionId },
+        ownerSessionId: sessionId,
+      })
+    );
+    expect(getMachineRpcClient).not.toHaveBeenCalled();
+  });
+
   it('uses the local bridge without creating a cloud client for the local machine', async () => {
     const sendLocalMachineRpc = vi.fn(async () => ({
       ok: true as const,
