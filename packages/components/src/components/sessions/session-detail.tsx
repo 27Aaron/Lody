@@ -150,6 +150,7 @@ import {
   resolveSessionFileOpenTarget,
   type SessionFileOpenPathKind,
 } from '@/lib/session-file-open-target';
+import { isSessionMarkdownPath } from '@/lib/session-file-language';
 import { SessionNotFound } from './session-not-found';
 import { SessionSyncingIndicator } from './session-syncing-indicator';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/ui/sheet';
@@ -386,6 +387,7 @@ function writePendingWorktreeForks(sessionId: SessionId, pendingForks: PendingFo
 
 type ViewerTabSaveState = SessionFileSaveViewState & {
   readonly saveRequestSeq: number;
+  readonly copyMarkdownRequestSeq: number;
 };
 
 const EMPTY_VIEWER_TAB_SAVE_STATE: ViewerTabSaveState = {
@@ -395,6 +397,7 @@ const EMPTY_VIEWER_TAB_SAVE_STATE: ViewerTabSaveState = {
   conflict: false,
   error: false,
   saveRequestSeq: 0,
+  copyMarkdownRequestSeq: 0,
 };
 
 /* Top inset for mobile full-screen drawer edge-swipe strips (PR / Browser /
@@ -4529,6 +4532,8 @@ const SessionDetail = ({
         endLine={tab.endLine}
         focusRequestSeq={tab.focusRequestSeq}
         saveRequestSeq={viewerTabSaveStates[tab.id]?.saveRequestSeq ?? 0}
+        copyMarkdownRequestSeq={viewerTabSaveStates[tab.id]?.copyMarkdownRequestSeq ?? 0}
+        preferNativeMarkdownSelection={isMobile}
         fileProvider={activeSessionFileProvider}
         fileProviderPending={activeSessionFileProviderPending}
         fileProviderMessage={activeSessionFileProviderMessage}
@@ -5092,6 +5097,22 @@ const SessionDetail = ({
                     tab.filePath,
                     t('sessions.fileViewer.pathCopied', 'File path copied')
                   )
+                }
+                onCopyMarkdown={
+                  isSessionMarkdownPath(tab.filePath)
+                    ? () => {
+                        setViewerTabSaveStates((prev) => {
+                          const previous = prev[tab.id] ?? EMPTY_VIEWER_TAB_SAVE_STATE;
+                          return {
+                            ...prev,
+                            [tab.id]: {
+                              ...previous,
+                              copyMarkdownRequestSeq: previous.copyMarkdownRequestSeq + 1,
+                            },
+                          };
+                        });
+                      }
+                    : undefined
                 }
               >
                 {renderViewerTabContent(tab, 'h-full', open)}

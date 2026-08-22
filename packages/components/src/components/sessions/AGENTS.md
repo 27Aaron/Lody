@@ -590,6 +590,11 @@ Code Collab file surfaces (data chain: [packages/components/AGENTS.md](../../../
   href parser).
 - Editor window (Monaco): `session-monaco-text-viewer.tsx` inside
   `session-file-content-view.tsx`.
+- Markdown file viewers copy the latest complete source text (including unsaved
+  editor changes) from the top toolbar. On mobile, source mode uses the native
+  text surface instead of Monaco so long-press keeps the OS selection menu;
+  rendered Markdown must opt into native selection through
+  `data-native-selection-allow`.
 - v2 semantics for file tree, All Changes, refresh/save conflicts, and CLI-local
   turn diff RPC: `specs/code-collab-v2.md`.
 - **File tree: ONE row renderer** (`VirtualFileTree` in `components/file-tree-view.tsx`)

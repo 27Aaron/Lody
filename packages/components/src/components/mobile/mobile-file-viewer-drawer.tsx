@@ -22,6 +22,7 @@ export type MobileFileViewerDrawerProps = {
   readonly onOpenChange: (open: boolean) => void;
   readonly filePath: string;
   readonly onCopyPath: () => void;
+  readonly onCopyMarkdown?: () => void;
   readonly children: ReactNode;
 };
 
@@ -30,6 +31,7 @@ export function MobileFileViewerDrawer({
   onOpenChange,
   filePath,
   onCopyPath,
+  onCopyMarkdown,
   children,
 }: MobileFileViewerDrawerProps) {
   const { t } = useTranslation();
@@ -46,6 +48,16 @@ export function MobileFileViewerDrawer({
     },
   ];
   const menuActions: MobileSessionMenuAction[] = [
+    ...(onCopyMarkdown
+      ? [
+          {
+            id: 'copy-file-content',
+            icon: <Copy className="h-3.5 w-3.5" />,
+            label: t('sessions.fileViewer.copyMarkdown', 'Copy full Markdown'),
+            onClick: onCopyMarkdown,
+          },
+        ]
+      : []),
     {
       id: 'copy-file-path',
       icon: <Copy className="h-3.5 w-3.5" />,

@@ -7,7 +7,7 @@ import { SessionFileErrorState } from '@/components/sessions/session-file-error-
 
 function MobileFileViewerDrawerStory({ error }: { readonly error?: string }) {
   const [open, setOpen] = useState(true);
-  const filePath = 'src/features/messages/information-query.tsx';
+  const filePath = 'docs/README.md';
 
   return (
     <main className="h-dvh bg-background">
@@ -16,12 +16,13 @@ function MobileFileViewerDrawerStory({ error }: { readonly error?: string }) {
         onOpenChange={setOpen}
         filePath={filePath}
         onCopyPath={fn()}
+        onCopyMarkdown={fn()}
       >
         {error ? (
           <SessionFileErrorState message={error} />
         ) : (
           <pre className="h-full overflow-auto p-4 font-mono text-xs leading-5 text-foreground">
-            {'export function InformationQuery() {\n  return <section>Ready</section>;\n}\n'}
+            {'# Project documentation\n\nLong-press to select this Markdown source.\n'}
           </pre>
         )}
       </MobileFileViewerDrawer>

@@ -130,8 +130,11 @@ embedded` lazy-imported from `../tasks/tasks-workspace.tsx` (`embedded`
 - Opened files: `mobile-file-viewer-drawer.tsx` is a full-screen right drawer
   layered over the still-mounted conversation. Its header always shows the
   file-type icon and basename; the `…` sheet exposes the complete, wrapping
-  path plus tap-to-copy and an explicit copy action. Keep file viewer contents
-  mounted across drawer closes so editor/scroll state survives reopening.
+  path plus tap-to-copy and explicit path/content copy actions (the content
+  action is Markdown-only). Keep file viewer contents mounted across drawer
+  closes so editor/scroll state survives reopening. Markdown rendered and
+  source modes keep native long-press selection; source mode must not expose
+  Monaco's desktop context menu.
 - Floating frosted session header: session-detail's mobile `BaseHeader` is an
   absolute overlay (`bg-background/55 backdrop-blur-xl`, 3rem + safe-area) —
   content scrolls UNDER it and frosts. Contract: session-detail sets

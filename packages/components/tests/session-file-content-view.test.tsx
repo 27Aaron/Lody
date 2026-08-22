@@ -34,6 +34,7 @@ import { lodyPresenceStatesAtom, lodyPresenceSyncStateAtom } from '../src/atoms/
 import { localProbeResultAtom } from '../src/atoms/local-probe';
 import { SaveTextConflictError } from '../src/hooks/use-code-collab-save-text';
 import { TooltipProvider } from '../src/ui/tooltip';
+import { writeTextToClipboard } from '../src/lib/clipboard';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -44,6 +45,10 @@ vi.mock('react-i18next', () => ({
       changeLanguage: () => Promise.resolve(),
     },
   }),
+}));
+
+vi.mock('../src/lib/clipboard', () => ({
+  writeTextToClipboard: vi.fn(async () => true),
 }));
 
 const monacoMockState = vi.hoisted(() => ({
@@ -146,6 +151,7 @@ afterEach(() => {
   monacoMockState.emitInitialContentChange = false;
   monacoMockState.onContentChange = undefined;
   monacoMockState.readOnly = undefined;
+  vi.mocked(writeTextToClipboard).mockClear();
   sharedCodeCollabTextState = createCodeCollabSessionFileProviderTextState();
   delete window.__LODY_ELECTRON__;
   delete window.api;
@@ -1007,6 +1013,123 @@ describe('SessionFileContentView', () => {
       markdown
     );
     expect(view.querySelector('button[aria-label="Preview"]')).not.toBeNull();
+  });
+
+  it('copies the full Markdown source from the toolbar and external mobile request', async () => {
+    const markdown = '# Copy me\n\n- whole document';
+    const provider = createFakeSessionFileProvider({
+      files: [{ path: 'README.md', kind: 'text', sourceState: 'live-readonly' }],
+      snapshots: { 'README.md': { kind: 'text', text: markdown } },
+    });
+    const renderView = (copyMarkdownRequestSeq: number) =>
+      createElement(SessionFileContentView, {
+        sessionId: session.id,
+        session,
+        filePath: 'README.md',
+        fileProvider: provider,
+        fileProviderPending: false,
+        copyMarkdownRequestSeq,
+      });
+
+    const view = await render(renderView(0));
+    await flushMicrotasks();
+
+    expect(view.querySelector('[data-native-selection-allow]')).not.toBeNull();
+    await act(async () => {
+      view.querySelector<HTMLButtonElement>('button[aria-label="Copy full Markdown"]')?.click();
+    });
+    await flushMicrotasks();
+    expect(writeTextToClipboard).toHaveBeenLastCalledWith(markdown);
+
+    await rerender(renderView(1));
+    await flushMicrotasks();
+    expect(writeTextToClipboard).toHaveBeenCalledTimes(2);
+    expect(writeTextToClipboard).toHaveBeenLastCalledWith(markdown);
+  });
+
+  it('uses the native selectable text surface for Markdown source on mobile', async () => {
+    const markdown = '# Native selection\n\nLong press me.';
+    const provider = createFakeSessionFileProvider({
+      files: [{ path: 'README.md', kind: 'text', sourceState: 'live-readonly' }],
+      snapshots: { 'README.md': { kind: 'text', text: markdown } },
+    });
+
+    const view = await render(
+      createElement(SessionFileContentView, {
+        sessionId: session.id,
+        session,
+        filePath: 'README.md',
+        fileProvider: provider,
+        fileProviderPending: false,
+        preferNativeMarkdownSelection: true,
+      })
+    );
+    await flushMicrotasks();
+
+    await act(async () => {
+      view.querySelector<HTMLButtonElement>('button[aria-label="Hide preview"]')?.click();
+    });
+    await flushMicrotasks();
+
+    const source = view.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Markdown source"]'
+    );
+    expect(source?.value).toBe(markdown);
+    expect(source?.readOnly).toBe(true);
+    expect(source?.hasAttribute('data-native-selection-allow')).toBe(true);
+    expect(view.querySelector('[data-testid="monaco-viewer"]')).toBeNull();
+  });
+
+  it('copies unsaved Markdown edits from the mobile native source', async () => {
+    const provider = createFakeSessionFileProvider({
+      files: [
+        {
+          path: 'README.md',
+          fileId: 't:readme',
+          kind: 'text',
+          sourceState: 'live-collaborative',
+        },
+      ],
+      snapshots: { 'README.md': { kind: 'text', text: '# Original' } },
+    });
+    const view = await render(
+      createElement(SessionFileContentView, {
+        sessionId: session.id,
+        session,
+        filePath: 'README.md',
+        fileId: 't:readme',
+        fileProvider: provider,
+        fileProviderPending: false,
+        fileProviderRole: 'write',
+        preferNativeMarkdownSelection: true,
+      })
+    );
+    await flushMicrotasks();
+
+    await act(async () => {
+      view.querySelector<HTMLButtonElement>('button[aria-label="Hide preview"]')?.click();
+    });
+    const source = view.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Markdown source"]'
+    );
+    expect(source?.readOnly).toBe(false);
+
+    const editedMarkdown = '# Edited locally\n\nNot saved yet.';
+    await act(async () => {
+      const valueSetter = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value'
+      )?.set;
+      valueSetter?.call(source, editedMarkdown);
+      source?.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await flushMicrotasks();
+
+    await act(async () => {
+      view.querySelector<HTMLButtonElement>('button[aria-label="Copy full Markdown"]')?.click();
+    });
+    await flushMicrotasks();
+    expect(writeTextToClipboard).toHaveBeenLastCalledWith(editedMarkdown);
   });
 
   it('renders SVG text files as an image by default with a preview eye toggle', async () => {
