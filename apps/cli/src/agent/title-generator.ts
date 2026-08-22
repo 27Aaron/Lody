@@ -31,6 +31,7 @@ import { extractTextFromAgentResponse } from './response-utils';
 import { formatErrorMessage } from '@/utils/format-error';
 import { normalizeConfigOptions } from './acp-capabilities';
 import { readLegacySessionModelState } from './acp-capability-normalization';
+import { parseLodyMessagePhase } from './lody-acp-extension';
 
 const execFileAsync = promisify(execFile);
 const TITLE_GIT_TIMEOUT_MS = 5_000;
@@ -148,24 +149,14 @@ export const extractTitleChunkFromNotification = (
     return null;
   }
 
-  const codexMeta = update._meta?.['codex'];
+  const phase = parseLodyMessagePhase(update._meta);
   if (agentType === 'codex') {
-    if (
-      !codexMeta ||
-      typeof codexMeta !== 'object' ||
-      !('phase' in codexMeta) ||
-      codexMeta.phase !== 'final_answer'
-    ) {
+    if (phase !== 'final_answer') {
       return null;
     }
     return content.text;
   }
-  if (
-    codexMeta &&
-    typeof codexMeta === 'object' &&
-    'phase' in codexMeta &&
-    codexMeta.phase !== 'final_answer'
-  ) {
+  if (phase !== undefined && phase !== 'final_answer') {
     return null;
   }
 

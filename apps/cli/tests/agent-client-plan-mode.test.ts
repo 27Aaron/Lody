@@ -42,9 +42,8 @@ function createTestClient(options?: {
   const onRateLimitUpdate = vi.fn();
   const onThreadGoalUpdated = vi.fn();
   const onThreadGoalCleared = vi.fn();
-  const onCodexProposedPlan = vi.fn();
-  const onCodexImageGenerationBegin = vi.fn();
-  const onCodexImageGenerationEnd = vi.fn();
+  const onImageGenerationBegin = vi.fn();
+  const onImageGenerationEnd = vi.fn();
   const onRequestPermission = vi.fn(async () => ({
     outcome: { outcome: 'selected' as const, optionId: 'opt-1' },
   }));
@@ -65,9 +64,8 @@ function createTestClient(options?: {
     onRateLimitUpdate,
     onThreadGoalUpdated,
     onThreadGoalCleared,
-    onCodexProposedPlan,
-    onCodexImageGenerationBegin,
-    onCodexImageGenerationEnd,
+    onImageGenerationBegin,
+    onImageGenerationEnd,
     onRequestPermission,
   });
 
@@ -83,9 +81,8 @@ function createTestClient(options?: {
     onRateLimitUpdate,
     onThreadGoalUpdated,
     onThreadGoalCleared,
-    onCodexProposedPlan,
-    onCodexImageGenerationBegin,
-    onCodexImageGenerationEnd,
+    onImageGenerationBegin,
+    onImageGenerationEnd,
     onRequestPermission,
   };
 }
@@ -369,7 +366,8 @@ describe('AgentClient plan mode permission restoration', () => {
       client.connection = { prompt };
       // @ts-expect-error - focused capability-negotiation setup
       client.acknowledgedSteerCapability = {
-        provider: 'claudeCode',
+        transport: 'prompt',
+        promptMetaNamespace: 'claudeCode',
         appliedNotificationMethod: 'claude/steerApplied',
         upstreamTurn: 'handoff',
         configPolicy: 'apply',
@@ -423,7 +421,7 @@ describe('AgentClient plan mode permission restoration', () => {
       client.acpSessionId = 'acp-test' as ACPSessionId;
       // @ts-expect-error - focused capability-negotiation setup
       client.acknowledgedSteerCapability = {
-        provider: 'codex',
+        transport: 'request',
         requestMethod: '_session/steering',
         appliedNotificationMethod: 'codex/steerApplied',
         upstreamTurn: 'same',
@@ -531,7 +529,19 @@ describe('AgentClient plan mode permission restoration', () => {
         undefined
       );
 
-      expect(onRateLimitUpdate).toHaveBeenCalledWith(limits);
+      expect(onRateLimitUpdate).toHaveBeenCalledWith({
+        limitId: 'codex',
+        limitName: null,
+        planName: '"pro"',
+        scope: { providerId: 'codex' },
+        windows: [
+          {
+            usedPercent: 18,
+            windowDurationSeconds: 604800,
+            resetsAtEpochSeconds: 1777400602,
+          },
+        ],
+      });
     });
 
     it('keeps handling rate limit extension method requests', async () => {
@@ -546,11 +556,27 @@ describe('AgentClient plan mode permission restoration', () => {
 
       await expect(client.extMethod('_acp_ext:session_rate_limits', limits)).resolves.toEqual({});
 
-      expect(onRateLimitUpdate).toHaveBeenCalledWith(limits);
+      expect(onRateLimitUpdate).toHaveBeenCalledWith({
+        limitId: 'codex',
+        planName: null,
+        scope: { providerId: 'codex' },
+        windows: [
+          {
+            usedPercent: 3,
+            windowDurationSeconds: 18000,
+            resetsAtEpochSeconds: 1777288209,
+          },
+          {
+            usedPercent: 82,
+            windowDurationSeconds: 604800,
+            resetsAtEpochSeconds: 1777400602,
+          },
+        ],
+      });
     });
 
     it('routes completed Codex proposed plan extension notifications through proposed plan updates', async () => {
-      const { client, onCodexProposedPlan, onUpdateMessage } = createTestClient();
+      const { client, onUpdateMessage } = createTestClient();
 
       await client.extNotification?.('_acp_ext:codex_proposed_plan', {
         schemaVersion: 1,
@@ -561,18 +587,23 @@ describe('AgentClient plan mode permission restoration', () => {
         isLatest: true,
       });
 
-      expect(onCodexProposedPlan).toHaveBeenCalledWith({
-        type: 'proposed_plan',
-        turnId: 'codex-turn-1',
-        markdown: '- Inspect event routing',
-        status: 'completed',
-        isLatest: true,
-      });
-      expect(onUpdateMessage).not.toHaveBeenCalled();
+      expect(onUpdateMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: 'acp-test',
+          update: expect.objectContaining({
+            sessionUpdate: 'plan_update',
+            plan: {
+              type: 'markdown',
+              planId: 'codex-turn-1',
+              content: '- Inspect event routing',
+            },
+          }),
+        })
+      );
     });
 
     it('ignores non-standard Codex proposed plan extension method names', async () => {
-      const { client, onCodexProposedPlan, onUpdateMessage } = createTestClient();
+      const { client, onUpdateMessage } = createTestClient();
 
       await client.extNotification?.('codex_proposed_plan', {
         schemaVersion: 1,
@@ -583,12 +614,11 @@ describe('AgentClient plan mode permission restoration', () => {
         isLatest: true,
       });
 
-      expect(onCodexProposedPlan).not.toHaveBeenCalled();
       expect(onUpdateMessage).not.toHaveBeenCalled();
     });
 
     it('routes in-progress Codex proposed plan deltas through proposed plan updates', async () => {
-      const { client, onCodexProposedPlan, onUpdateMessage } = createTestClient();
+      const { client, onUpdateMessage } = createTestClient();
 
       await client.extNotification?.('_acp_ext:codex_proposed_plan', {
         schemaVersion: 1,
@@ -599,18 +629,18 @@ describe('AgentClient plan mode permission restoration', () => {
         isLatest: true,
       });
 
-      expect(onCodexProposedPlan).toHaveBeenCalledWith({
-        type: 'proposed_plan',
-        turnId: 'codex-turn-1',
-        markdown: '- Inspect event routing',
-        status: 'delta',
-        isLatest: true,
-      });
-      expect(onUpdateMessage).not.toHaveBeenCalled();
+      expect(onUpdateMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          update: expect.objectContaining({
+            sessionUpdate: 'plan_update',
+            plan: expect.objectContaining({ planId: 'codex-turn-1' }),
+          }),
+        })
+      );
     });
 
-    it('routes Codex image generation tool calls to begin/end callbacks and suppresses them', async () => {
-      const { client, onUpdateMessage, onCodexImageGenerationBegin, onCodexImageGenerationEnd } =
+    it('routes image generation tool calls to begin/end callbacks and suppresses them', async () => {
+      const { client, onUpdateMessage, onImageGenerationBegin, onImageGenerationEnd } =
         createTestClient();
 
       await client.sessionUpdate({
@@ -619,6 +649,7 @@ describe('AgentClient plan mode permission restoration', () => {
           sessionUpdate: 'tool_call',
           toolCallId: 'ig-1',
           title: 'Image generation',
+          _meta: { lody: { toolName: 'ImageGeneration' } },
           kind: 'other',
           status: 'in_progress',
         },
@@ -645,11 +676,11 @@ describe('AgentClient plan mode permission restoration', () => {
         },
       } as SessionNotification);
 
-      expect(onCodexImageGenerationBegin).toHaveBeenCalledWith({
+      expect(onImageGenerationBegin).toHaveBeenCalledWith({
         acpSessionId: 'acp-test',
         callId: 'ig-1',
       });
-      expect(onCodexImageGenerationEnd).toHaveBeenCalledWith({
+      expect(onImageGenerationEnd).toHaveBeenCalledWith({
         acpSessionId: 'acp-test',
         callId: 'ig-1',
         status: 'completed',
@@ -666,8 +697,8 @@ describe('AgentClient plan mode permission restoration', () => {
       expect(onUpdateMessage).not.toHaveBeenCalled();
     });
 
-    it('extracts Codex image generation output fields from rawOutput fallback', async () => {
-      const { client, onUpdateMessage, onCodexImageGenerationEnd } = createTestClient();
+    it('extracts image generation output fields from rawOutput fallback', async () => {
+      const { client, onUpdateMessage, onImageGenerationEnd } = createTestClient();
 
       await client.sessionUpdate({
         sessionId: 'acp-test',
@@ -675,6 +706,7 @@ describe('AgentClient plan mode permission restoration', () => {
           sessionUpdate: 'tool_call',
           toolCallId: 'ig-raw-output',
           title: 'Image generation',
+          _meta: { lody: { toolName: 'ImageGeneration' } },
           kind: 'other',
           status: 'in_progress',
         },
@@ -696,7 +728,7 @@ describe('AgentClient plan mode permission restoration', () => {
         },
       } as SessionNotification);
 
-      expect(onCodexImageGenerationEnd).toHaveBeenCalledWith({
+      expect(onImageGenerationEnd).toHaveBeenCalledWith({
         acpSessionId: 'acp-test',
         callId: 'ig-raw-output',
         status: 'completed',
@@ -711,8 +743,8 @@ describe('AgentClient plan mode permission restoration', () => {
       expect(onUpdateMessage).not.toHaveBeenCalled();
     });
 
-    it('emits in-progress end events for streaming Codex image generation updates', async () => {
-      const { client, onCodexImageGenerationEnd } = createTestClient();
+    it('emits in-progress end events for streaming image generation updates', async () => {
+      const { client, onImageGenerationEnd } = createTestClient();
 
       await client.sessionUpdate({
         sessionId: 'acp-test',
@@ -720,6 +752,7 @@ describe('AgentClient plan mode permission restoration', () => {
           sessionUpdate: 'tool_call',
           toolCallId: 'ig-1',
           title: 'Image generation',
+          _meta: { lody: { toolName: 'ImageGeneration' } },
           kind: 'other',
           status: 'in_progress',
         },
@@ -734,7 +767,7 @@ describe('AgentClient plan mode permission restoration', () => {
         },
       } as SessionNotification);
 
-      expect(onCodexImageGenerationEnd).toHaveBeenCalledWith({
+      expect(onImageGenerationEnd).toHaveBeenCalledWith({
         acpSessionId: 'acp-test',
         callId: 'ig-1',
         status: 'in_progress',
@@ -744,7 +777,7 @@ describe('AgentClient plan mode permission restoration', () => {
     });
 
     it('handles a fresh terminal tool_call when the begin notification was lost on resume', async () => {
-      const { client, onCodexImageGenerationBegin, onCodexImageGenerationEnd } = createTestClient();
+      const { client, onImageGenerationBegin, onImageGenerationEnd } = createTestClient();
 
       await client.sessionUpdate({
         sessionId: 'acp-test',
@@ -752,6 +785,7 @@ describe('AgentClient plan mode permission restoration', () => {
           sessionUpdate: 'tool_call',
           toolCallId: 'ig-2',
           title: 'Image generation',
+          _meta: { lody: { toolName: 'ImageGeneration' } },
           kind: 'other',
           status: 'completed',
           content: [
@@ -768,11 +802,11 @@ describe('AgentClient plan mode permission restoration', () => {
         },
       } as SessionNotification);
 
-      expect(onCodexImageGenerationBegin).toHaveBeenCalledWith({
+      expect(onImageGenerationBegin).toHaveBeenCalledWith({
         acpSessionId: 'acp-test',
         callId: 'ig-2',
       });
-      expect(onCodexImageGenerationEnd).toHaveBeenCalledWith({
+      expect(onImageGenerationEnd).toHaveBeenCalledWith({
         acpSessionId: 'acp-test',
         callId: 'ig-2',
         status: 'completed',
@@ -787,7 +821,7 @@ describe('AgentClient plan mode permission restoration', () => {
     });
 
     it('preserves completed-only inline image data when no saved path is available', async () => {
-      const { client, onCodexImageGenerationEnd, onUpdateMessage } = createTestClient();
+      const { client, onImageGenerationEnd, onUpdateMessage } = createTestClient();
 
       await client.sessionUpdate({
         sessionId: 'acp-test',
@@ -795,6 +829,7 @@ describe('AgentClient plan mode permission restoration', () => {
           sessionUpdate: 'tool_call',
           toolCallId: 'ig-inline-only',
           title: 'Image generation',
+          _meta: { lody: { toolName: 'ImageGeneration' } },
           kind: 'other',
           status: 'completed',
           content: [
@@ -806,7 +841,7 @@ describe('AgentClient plan mode permission restoration', () => {
         },
       } as SessionNotification);
 
-      expect(onCodexImageGenerationEnd).toHaveBeenCalledWith({
+      expect(onImageGenerationEnd).toHaveBeenCalledWith({
         acpSessionId: 'acp-test',
         callId: 'ig-inline-only',
         status: 'completed',
@@ -817,8 +852,8 @@ describe('AgentClient plan mode permission restoration', () => {
       expect(onUpdateMessage).not.toHaveBeenCalled();
     });
 
-    it('ignores image generation tool calls for non-Codex agents', async () => {
-      const { client, onUpdateMessage, onCodexImageGenerationBegin, onCodexImageGenerationEnd } =
+    it('routes canonical image generation tool calls without provider branching', async () => {
+      const { client, onUpdateMessage, onImageGenerationBegin, onImageGenerationEnd } =
         createTestClient({
           agentType: 'claude',
         });
@@ -829,15 +864,24 @@ describe('AgentClient plan mode permission restoration', () => {
           sessionUpdate: 'tool_call',
           toolCallId: 'ig-1',
           title: 'Image generation',
+          _meta: { lody: { toolName: 'ImageGeneration' } },
           kind: 'other',
           status: 'in_progress',
         },
       } as SessionNotification);
 
-      expect(onCodexImageGenerationBegin).not.toHaveBeenCalled();
-      expect(onCodexImageGenerationEnd).not.toHaveBeenCalled();
-      // Non-codex agents still see the tool call in their history pipeline.
-      expect(onUpdateMessage).toHaveBeenCalledTimes(1);
+      expect(onImageGenerationBegin).toHaveBeenCalledWith({
+        acpSessionId: 'acp-test',
+        callId: 'ig-1',
+      });
+      expect(onImageGenerationEnd).toHaveBeenCalledWith({
+        acpSessionId: 'acp-test',
+        callId: 'ig-1',
+        status: 'in_progress',
+        revisedPrompt: undefined,
+        savedPath: undefined,
+      });
+      expect(onUpdateMessage).not.toHaveBeenCalled();
     });
   });
 
@@ -1129,7 +1173,14 @@ describe('unstable_createElicitation (AskUserQuestion bridge)', () => {
             { const: 'SQLite', title: 'SQLite' },
           ],
         },
-        customAnswer: { type: 'string', title: 'Other', description: 'optional' },
+        question_0_custom: {
+          type: 'string',
+          title: 'Other',
+          description: 'optional',
+          _meta: {
+            lody: { elicitation: { version: 1, customAnswerFor: 'question_0' } },
+          },
+        },
       },
     },
   } as unknown as CreateElicitationRequest;
@@ -1141,8 +1192,11 @@ describe('unstable_createElicitation (AskUserQuestion bridge)', () => {
         outcome: 'selected',
         optionId: 'answer',
         _meta: {
-          claudeCode: {
-            askUserQuestion: { answers: { 'Which database should we use?': 'Postgres' } },
+          lody: {
+            elicitation: {
+              version: 1,
+              answers: { question_0: 'Postgres' },
+            },
           },
         },
       },
@@ -1195,8 +1249,8 @@ describe('unstable_createElicitation (AskUserQuestion bridge)', () => {
         outcome: 'selected',
         optionId: 'answer',
         _meta: {
-          codex: {
-            requestUserInput: { answers: { next_step: { answers: ['Custom path'] } } },
+          lody: {
+            elicitation: { version: 1, answers: { next_step: 'Custom path' } },
           },
         },
       },
@@ -1215,25 +1269,27 @@ describe('unstable_createElicitation (AskUserQuestion bridge)', () => {
             title: 'Next step',
             description: 'What next?',
             oneOf: [{ const: 'Ship', title: 'Ship' }],
-            _meta: { codex: { isOther: true, isSecret: false } },
+            _meta: { lody: { elicitation: { version: 1, secret: false } } },
           },
           next_step__other: {
             type: 'string',
             title: 'Other',
             _meta: {
-              codex: { questionId: 'next_step', isOtherAnswer: true, isSecret: false },
+              lody: {
+                elicitation: { version: 1, customAnswerFor: 'next_step', secret: false },
+              },
             },
           },
         },
       },
-      _meta: { codex: { autoResolutionMs: 60_000 } },
+      _meta: { lody: { elicitation: { version: 1, autoResolveAfterSeconds: 60 } } },
     } as unknown as CreateElicitationRequest);
 
     const request = (
       onRequestPermission.mock.calls as unknown as [string, RequestPermissionRequest][]
     ).at(0)?.[1];
     const parsed = parseAskUserQuestionPermissionMeta(request?._meta);
-    expect(parsed?.source).toBe('codex');
+    expect(parsed?.source).toBe('lody');
     expect(parsed?.autoResolveAt).toEqual(expect.any(Number));
     expect(parsed?.questions[0]?.allowCustomAnswer).toBe(true);
     expect(result).toEqual({ action: 'accept', content: { next_step__other: 'Custom path' } });
@@ -1278,7 +1334,7 @@ describe('AgentClient goal session info', () => {
     ]);
   });
 
-  it('normalizes provider-neutral goal metadata for non-Codex agents', async () => {
+  it('normalizes provider-neutral goal metadata for non-canonical agents', async () => {
     const { client, onThreadGoalUpdated, onUpdateMessage } = createTestClient({
       agentType: 'claude',
     });

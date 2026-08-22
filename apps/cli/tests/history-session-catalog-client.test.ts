@@ -138,7 +138,7 @@ describe('requestHistorySessionReplay', () => {
         agentCapabilities: {
           _meta: {
             lody: {
-              readSessionHistory: {
+              sessionHistory: {
                 version: 1,
                 method: '_lody/session/history/read',
               },
@@ -168,7 +168,7 @@ describe('requestHistorySessionReplay', () => {
           agentCapabilities: { loadSession: true },
         }),
       })
-    ).rejects.toThrow('agentCapabilities._meta.lody.readSessionHistory version 1');
+    ).rejects.toThrow('agentCapabilities._meta.lody.sessionHistory version 1');
     expect(request).not.toHaveBeenCalled();
     expect(loadSession).not.toHaveBeenCalled();
   });

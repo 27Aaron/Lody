@@ -258,7 +258,7 @@ import {
   type SessionActivePresencePhase,
 } from './loro/session-active-presence';
 import {
-  resolveCodexImageGenerationStatusWrite,
+  resolveImageGenerationStatusWrite,
   shouldRestoreRunningAfterPermission,
 } from './session-activity-status';
 import type { RepoWatchHandle } from 'loro-repo';
@@ -266,10 +266,10 @@ import { resolveGitBranchName } from './git/resolve-git-branch-name';
 import {
   AgentClient,
   type AcpWriteTextFileEvidence,
-  type CodexImageGenerationBeginEvent,
-  type CodexImageGenerationEndEvent,
+  type ImageGenerationBeginEvent,
+  type ImageGenerationEndEvent,
 } from 'src/agent/agent-client';
-import { UsageData, SessionUsageUpdate } from 'acp-extension-core';
+import type { RateLimit, SessionUsageUpdate } from 'acp-extension-core';
 import { getWorktreeManager } from '@/session/worktree/worktree-manager';
 import { createWorktreeScriptHistoryRecorder } from '@/session/worktree/worktree-script-history';
 import { runWorktreeCleanup } from '@/session/worktree/worktree-setup-runner';
@@ -755,10 +755,10 @@ const SESSION_IMAGE_MIME_TYPE_BY_EXTENSION: Record<
 // ACP ToolCallStatus values that represent a finished image generation.
 // `pending`/`in_progress` keep the captured turnId alive for retries; everything
 // else is terminal and clears the per-call tracking state.
-const CODEX_IMAGE_GENERATION_TERMINAL_STATUSES = new Set(['completed', 'failed']);
+const IMAGE_GENERATION_TERMINAL_STATUSES = new Set(['completed', 'failed']);
 
-function isCodexImageGenerationTerminalStatus(status: string): boolean {
-  return CODEX_IMAGE_GENERATION_TERMINAL_STATUSES.has(status.trim().toLowerCase());
+function isImageGenerationTerminalStatus(status: string): boolean {
+  return IMAGE_GENERATION_TERMINAL_STATUSES.has(status.trim().toLowerCase());
 }
 
 /**
@@ -848,7 +848,6 @@ export class MessageHandler {
   private static readonly CODE_COLLAB_EVIDENCE_MAX_AUTOMATIC_RETRIES = 5;
   private static readonly CODE_COLLAB_EVIDENCE_RETRY_BASE_DELAY_MS = 100;
   private static readonly CODE_COLLAB_EVIDENCE_RETRY_MAX_DELAY_MS = 1_600;
-  private static readonly CODEX_PROPOSED_PLAN_UPDATE_BATCH_WINDOW_MS = 100;
   private static readonly CONTEXT_WINDOW_USAGE_THROTTLE_MS = 400;
   // Track permission wait time: requestId -> timestamp when permission was requested
   private readonly permissionRequestStartTimes = new Map<string, number>();
@@ -1236,39 +1235,36 @@ export class MessageHandler {
   private async flushCodexGeneratedImageUploads(sessionId: SessionId): Promise<void> {
     for (;;) {
       const state = this.store.get(sessionId);
-      if (state.codexImageGenerationUploads.size === 0) break;
-      await Promise.all([...state.codexImageGenerationUploads.values()]);
+      if (state.imageGenerationUploads.size === 0) break;
+      await Promise.all([...state.imageGenerationUploads.values()]);
     }
   }
 
-  private handleCodexImageGenerationBegin(
-    sessionId: SessionId,
-    event: CodexImageGenerationBeginEvent
-  ): void {
+  private handleImageGenerationBegin(sessionId: SessionId, event: ImageGenerationBeginEvent): void {
     const turnId = this.store.getTurnId(sessionId) ?? null;
     const state = this.store.get(sessionId);
-    state.codexImageGenerationTurnIds.set(event.callId, turnId);
-    state.codexImageGenerationActiveCallIds.add(event.callId);
-    this.enqueueCodexImageGenerationActivityStatusSync(sessionId);
+    state.imageGenerationTurnIds.set(event.callId, turnId);
+    state.imageGenerationActiveCallIds.add(event.callId);
+    this.enqueueImageGenerationActivityStatusSync(sessionId);
     this.logger.debug(
       `[${sessionId}] Codex image generation started (callId=${event.callId} turnId=${turnId ?? 'none'})`
     );
   }
 
-  private enqueueCodexImageGenerationActivityStatusSync(sessionId: SessionId): void {
+  private enqueueImageGenerationActivityStatusSync(sessionId: SessionId): void {
     const state = this.store.get(sessionId);
-    const task = state.codexImageGenerationActivityStatusChain
+    const task = state.imageGenerationActivityStatusChain
       .catch(() => undefined)
       .then(async () => {
         const currentState = this.store.get(sessionId);
-        const hasActiveImageGeneration = currentState.codexImageGenerationActiveCallIds.size > 0;
+        const hasActiveImageGeneration = currentState.imageGenerationActiveCallIds.size > 0;
         const sessionDoc = await this.workspaceDocument.getOrCreateSessionDoc(sessionId);
         const status = (await sessionDoc.getMetaState())?.status;
 
         // This chain rides on ACP events and can drain after the visible active
         // scope ended; a working-status write is only sustainable while this
         // session still has active presence.
-        const nextStatus = resolveCodexImageGenerationStatusWrite({
+        const nextStatus = resolveImageGenerationStatusWrite({
           hasActiveImageGeneration,
           hasActivePresence: this.hasSessionActivePresence(sessionId),
           status,
@@ -1284,7 +1280,7 @@ export class MessageHandler {
         }
       });
 
-    state.codexImageGenerationActivityStatusChain = task;
+    state.imageGenerationActivityStatusChain = task;
     void task.catch((error) => {
       try {
         this.logger.debug(
@@ -1298,38 +1294,35 @@ export class MessageHandler {
     });
   }
 
-  private handleCodexImageGenerationEnd(
-    sessionId: SessionId,
-    event: CodexImageGenerationEndEvent
-  ): void {
+  private handleImageGenerationEnd(sessionId: SessionId, event: ImageGenerationEndEvent): void {
     const state = this.store.get(sessionId);
-    const isTerminal = isCodexImageGenerationTerminalStatus(event.status);
+    const isTerminal = isImageGenerationTerminalStatus(event.status);
     if (isTerminal) {
-      state.codexImageGenerationActiveCallIds.delete(event.callId);
-      this.enqueueCodexImageGenerationActivityStatusSync(sessionId);
+      state.imageGenerationActiveCallIds.delete(event.callId);
+      this.enqueueImageGenerationActivityStatusSync(sessionId);
     }
 
-    if (state.codexImageGenerationUploadedCallIds.has(event.callId)) {
+    if (state.imageGenerationUploadedCallIds.has(event.callId)) {
       this.logger.debug(
         `[${sessionId}] Ignoring duplicate Codex image generation upload (callId=${event.callId} status=${event.status})`
       );
       return;
     }
-    if (state.codexImageGenerationUploads.has(event.callId)) {
+    if (state.imageGenerationUploads.has(event.callId)) {
       this.logger.debug(
         `[${sessionId}] Codex image generation upload already in flight (callId=${event.callId} status=${event.status})`
       );
       return;
     }
 
-    const cachedTurnId = state.codexImageGenerationTurnIds.get(event.callId);
+    const cachedTurnId = state.imageGenerationTurnIds.get(event.callId);
     const capturedTurnId =
       cachedTurnId !== undefined ? cachedTurnId : (this.store.getTurnId(sessionId) ?? null);
 
     const savedPath = this.resolveCodexGeneratedImagePath(sessionId, event.savedPath);
     if (!savedPath && !event.image) {
       if (isTerminal) {
-        state.codexImageGenerationTurnIds.delete(event.callId);
+        state.imageGenerationTurnIds.delete(event.callId);
       }
       this.logger.debug(
         `[${sessionId}] Codex image generation has neither a usable savedPath nor inline image data (callId=${event.callId} status=${event.status} terminal=${isTerminal})`
@@ -1374,28 +1367,28 @@ export class MessageHandler {
       throw pathError ?? new Error('Codex generated image has no uploadable payload');
     })()
       .then(() => {
-        state.codexImageGenerationUploadedCallIds.add(callId);
-        state.codexImageGenerationTurnIds.delete(callId);
+        state.imageGenerationUploadedCallIds.add(callId);
+        state.imageGenerationTurnIds.delete(callId);
       })
       .catch((error) => {
         this.logger.debug(
           `[${sessionId}] Failed to upload Codex generated image (callId=${callId} path=${savedPath ?? 'none'}): ${formatErrorMessage(error)}`
         );
         if (isTerminal) {
-          state.codexImageGenerationTurnIds.delete(callId);
+          state.imageGenerationTurnIds.delete(callId);
         }
       })
       .finally(() => {
-        state.codexImageGenerationUploads.delete(callId);
+        state.imageGenerationUploads.delete(callId);
       });
 
-    state.codexImageGenerationUploads.set(callId, uploadPromise);
+    state.imageGenerationUploads.set(callId, uploadPromise);
   }
 
   private async uploadCodexGeneratedInlineImage(args: {
     sessionId: SessionId;
     callId: string;
-    image: NonNullable<CodexImageGenerationEndEvent['image']>;
+    image: NonNullable<ImageGenerationEndEvent['image']>;
     attachTarget?: SessionImageUploadAttachTarget;
   }): Promise<void> {
     const notification: AcpSessionNotification = {
@@ -1594,151 +1587,6 @@ export class MessageHandler {
       this.logger.debug(
         `[${sessionId}] Failed to persist thread goal clear: ${formatErrorMessage(error)}`
       );
-    }
-  }
-
-  private enqueueCodexProposedPlanUpdate(
-    sessionId: SessionId,
-    plan: Extract<MessageContent, { type: 'proposed_plan' }>
-  ): void {
-    const state = this.store.get(sessionId);
-    const targetEntryId = this.store.getTurnId(sessionId);
-    const existing = state.codexProposedPlanBuffer.get(plan.turnId);
-    if (
-      existing &&
-      existing.targetEntryId === targetEntryId &&
-      existing.plan.markdown === plan.markdown &&
-      existing.plan.status === plan.status &&
-      existing.plan.isLatest === plan.isLatest
-    ) {
-      return;
-    }
-    state.codexProposedPlanBuffer.set(plan.turnId, {
-      plan,
-      ...(targetEntryId ? { targetEntryId } : {}),
-    });
-    this.scheduleCodexProposedPlanFlush(sessionId);
-  }
-
-  private clearScheduledCodexProposedPlanFlush(sessionId: SessionId): void {
-    const state = this.store.get(sessionId);
-    if (!state.codexProposedPlanFlushTimer) {
-      return;
-    }
-    clearTimeout(state.codexProposedPlanFlushTimer);
-    state.codexProposedPlanFlushTimer = null;
-  }
-
-  private scheduleCodexProposedPlanFlush(sessionId: SessionId): void {
-    const state = this.store.get(sessionId);
-    if (state.codexProposedPlanFlushInFlight || state.codexProposedPlanFlushTimer) {
-      return;
-    }
-    const timer = setTimeout(() => {
-      state.codexProposedPlanFlushTimer = null;
-      void this.startCodexProposedPlanFlush(sessionId);
-    }, MessageHandler.CODEX_PROPOSED_PLAN_UPDATE_BATCH_WINDOW_MS);
-    timer.unref?.();
-    state.codexProposedPlanFlushTimer = timer;
-  }
-
-  private startCodexProposedPlanFlush(sessionId: SessionId): Promise<void> | null {
-    const state = this.store.get(sessionId);
-    if (state.codexProposedPlanFlushInFlight) {
-      return state.codexProposedPlanFlushInFlight;
-    }
-
-    const flushPromise = this.flushCodexProposedPlanUpdates(sessionId)
-      .catch((error: unknown) => {
-        this.logger.error(
-          `[${sessionId}] Failed to flush Codex proposed plan updates: ${formatErrorMessage(error, {
-            includeStack: true,
-          })}`
-        );
-      })
-      .finally(() => {
-        state.codexProposedPlanFlushInFlight = null;
-        if (state.codexProposedPlanBuffer.size > 0) {
-          this.scheduleCodexProposedPlanFlush(sessionId);
-        }
-      });
-
-    state.codexProposedPlanFlushInFlight = flushPromise;
-    return flushPromise;
-  }
-
-  private async flushCodexProposedPlanUpdatesNow(sessionId: SessionId): Promise<void> {
-    const state = this.store.get(sessionId);
-    this.clearScheduledCodexProposedPlanFlush(sessionId);
-
-    while (true) {
-      if (!state.codexProposedPlanFlushInFlight) {
-        if (state.codexProposedPlanBuffer.size === 0) {
-          return;
-        }
-        void this.startCodexProposedPlanFlush(sessionId);
-      }
-
-      const inFlight = state.codexProposedPlanFlushInFlight;
-      if (!inFlight) {
-        return;
-      }
-
-      await inFlight;
-      this.clearScheduledCodexProposedPlanFlush(sessionId);
-
-      if (state.codexProposedPlanBuffer.size === 0 && !state.codexProposedPlanFlushInFlight) {
-        return;
-      }
-    }
-  }
-
-  private async flushCodexProposedPlanUpdates(sessionId: SessionId): Promise<void> {
-    // Same ordering barrier as flushACPUpdates — this path can also create the
-    // assistant entry (applyMessageContentsBatch with a target entry id).
-    await this.awaitTurnHistoryGate(sessionId);
-    const state = this.store.get(sessionId);
-    this.clearScheduledCodexProposedPlanFlush(sessionId);
-    if (state.codexProposedPlanBuffer.size === 0) {
-      return;
-    }
-
-    const snapshots = [...state.codexProposedPlanBuffer.values()];
-    state.codexProposedPlanBuffer.clear();
-
-    // Group snapshots by their target entry so applyMessageContentsBatch runs
-    // once per entry instead of N times (each invocation rebuilds entryStates).
-    const groups = new Map<
-      string,
-      { targetEntryId: string | undefined; plans: (typeof snapshots)[number]['plan'][] }
-    >();
-    for (const snapshot of snapshots) {
-      const key = snapshot.targetEntryId ?? '';
-      const group = groups.get(key);
-      if (group) {
-        group.plans.push(snapshot.plan);
-      } else {
-        groups.set(key, { targetEntryId: snapshot.targetEntryId, plans: [snapshot.plan] });
-      }
-    }
-
-    const sessionDoc = await this.workspaceDocument.getOrCreateSessionDoc(sessionId);
-    await sessionDoc.updateHistory((history) => {
-      let next = history;
-      for (const group of groups.values()) {
-        next = applyMessageContentsBatch(next, group.plans, {
-          ...(group.targetEntryId ? { targetAssistantEntryId: group.targetEntryId } : {}),
-          createId: () => group.targetEntryId ?? uuidV4(),
-          now: () => new Date(getServerNow()).toISOString(),
-        });
-      }
-      return next;
-    });
-
-    if (state.turn.phase === 'idle') {
-      await sessionDoc.setLastMessageAt();
-    } else {
-      state.pendingUnread = true;
     }
   }
 
@@ -3790,7 +3638,7 @@ export class MessageHandler {
 
     this.sessionManager.on(
       'onRateLimitUpdate',
-      (machineId: MachineId, cliType: CliType, limits: UsageData) => {
+      (machineId: MachineId, cliType: CliType, limits: RateLimit) => {
         void this.workspaceDocument.updateRateLimits(machineId, cliType, limits);
       }
     );
@@ -3817,16 +3665,12 @@ export class MessageHandler {
       );
     });
 
-    this.sessionManager.on('onCodexProposedPlan', (sessionId, plan) => {
-      this.enqueueCodexProposedPlanUpdate(sessionId, plan);
+    this.sessionManager.on('onImageGenerationBegin', (sessionId, event) => {
+      this.handleImageGenerationBegin(sessionId, event);
     });
 
-    this.sessionManager.on('onCodexImageGenerationBegin', (sessionId, event) => {
-      this.handleCodexImageGenerationBegin(sessionId, event);
-    });
-
-    this.sessionManager.on('onCodexImageGenerationEnd', (sessionId, event) => {
-      this.handleCodexImageGenerationEnd(sessionId, event);
+    this.sessionManager.on('onImageGenerationEnd', (sessionId, event) => {
+      this.handleImageGenerationEnd(sessionId, event);
     });
 
     // Session error: flush ACP updates first, then set to idle (error is turn-level, recorded in history).
@@ -5869,7 +5713,6 @@ export class MessageHandler {
       await this.flushSessionContextWindowUsage(sessionId);
       await this.flushACPUpdatesNow(sessionId);
       await this.flushThreadGoalHistoryPersists(sessionId);
-      await this.flushCodexProposedPlanUpdatesNow(sessionId);
       await this.flushCodexGeneratedImageUploads(sessionId);
       if (state.pendingUnread) {
         state.pendingUnread = false;

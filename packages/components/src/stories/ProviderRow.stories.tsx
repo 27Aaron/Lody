@@ -11,6 +11,7 @@ import {
 import { ProviderRow } from '@/components/settings/provider-row';
 
 const machineId = 'machine-1' as MachineId;
+const resetIn = (seconds: number) => Math.floor(getServerNow() / 1000) + seconds;
 
 const makeMachine = (overrides: Partial<MachineViewMeta> = {}): MachineViewMeta => ({
   id: machineId,
@@ -68,11 +69,21 @@ export const ClaudeWithRateLimit: Story = {
     machine: makeMachine({
       raceLimits: {
         [getRateLimitEntryKey('claude', 'claude')]: {
+          limitId: 'claude',
+          scope: { providerId: 'claude' },
           planName: 'Claude Pro',
-          fiveHour: 55,
-          sevenDay: 32,
-          fiveHourResetAt: getServerNow() + 1_800_000,
-          sevenDayResetAt: getServerNow() + 24 * 3_600_000,
+          windows: [
+            {
+              usedPercent: 55,
+              windowDurationSeconds: 18_000,
+              resetsAtEpochSeconds: resetIn(1_800),
+            },
+            {
+              usedPercent: 32,
+              windowDurationSeconds: 604_800,
+              resetsAtEpochSeconds: resetIn(86_400),
+            },
+          ],
         },
       },
     }),
@@ -94,11 +105,21 @@ export const ClaudeEnvOverrideHidesRateLimit: Story = {
     machine: makeMachine({
       raceLimits: {
         [getRateLimitEntryKey('claude', 'claude')]: {
+          limitId: 'claude',
+          scope: { providerId: 'claude' },
           planName: 'Claude Pro',
-          fiveHour: 55,
-          sevenDay: 32,
-          fiveHourResetAt: getServerNow() + 1_800_000,
-          sevenDayResetAt: getServerNow() + 24 * 3_600_000,
+          windows: [
+            {
+              usedPercent: 55,
+              windowDurationSeconds: 18_000,
+              resetsAtEpochSeconds: resetIn(1_800),
+            },
+            {
+              usedPercent: 32,
+              windowDurationSeconds: 604_800,
+              resetsAtEpochSeconds: resetIn(86_400),
+            },
+          ],
         },
       },
     }),
@@ -111,11 +132,17 @@ export const CodexSpark: Story = {
     machine: makeMachine({
       raceLimits: {
         [getRateLimitEntryKey('codex', CODEX_SPARK_LIMIT_ID)]: {
+          limitId: CODEX_SPARK_LIMIT_ID,
+          scope: { providerId: 'codex' },
           planName: 'Codex Spark',
-          fiveHour: 12,
-          sevenDay: 88,
-          fiveHourResetAt: getServerNow() + 300_000,
-          sevenDayResetAt: getServerNow() + 48 * 3_600_000,
+          windows: [
+            { usedPercent: 12, windowDurationSeconds: 18_000, resetsAtEpochSeconds: resetIn(300) },
+            {
+              usedPercent: 88,
+              windowDurationSeconds: 604_800,
+              resetsAtEpochSeconds: resetIn(172_800),
+            },
+          ],
         },
       },
     }),
@@ -128,20 +155,16 @@ export const CodexWeeklyOnly: Story = {
     machine: makeMachine({
       raceLimits: {
         [getRateLimitEntryKey('codex', 'codex')]: {
-          schemaVersion: 2,
           planName: 'ChatGPT Plus',
           limitId: 'codex',
+          scope: { providerId: 'codex' },
           windows: [
             {
               usedPercent: 29,
-              windowDurationMins: 7 * 24 * 60,
-              resetsAt: getServerNow() + 5 * 24 * 3_600_000,
+              windowDurationSeconds: 7 * 24 * 60 * 60,
+              resetsAtEpochSeconds: resetIn(5 * 24 * 60 * 60),
             },
           ],
-          fiveHour: null,
-          sevenDay: 29,
-          fiveHourResetAt: null,
-          sevenDayResetAt: getServerNow() + 5 * 24 * 3_600_000,
         },
       },
     }),

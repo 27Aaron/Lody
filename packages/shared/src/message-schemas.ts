@@ -2808,7 +2808,7 @@ export const ResumeFromExternalChatHistoryMetaSchema = z.object({
 // carried structured via ACP session_info_update `_meta` instead of agent text.
 export const AgentWarningMetaSchema = z.object({
   message: z.string(),
-  source: z.enum(['warning', 'configWarning']).optional(),
+  source: z.string().optional(),
 });
 
 // Who authored a history item; agent-authored content cannot use turn-level userId.

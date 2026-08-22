@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  convertClaudeTaskLifecycleNotification,
-  LODY_CLAUDE_TASK_LIFECYCLE_RAW_INPUT_KEY,
-} from './claude-task-lifecycle';
-import { LODY_SUBAGENT_TASK_LIFECYCLE_RAW_INPUT_KEY } from '@lody/shared';
+import { convertClaudeTaskLifecycleNotification } from './claude-task-lifecycle';
 import { convertKimiTaskLifecycleNotification } from './kimi-task-lifecycle';
 
 describe('convertClaudeTaskLifecycleNotification', () => {
@@ -34,7 +30,7 @@ describe('convertClaudeTaskLifecycleNotification', () => {
       sessionId: 'acp-session-1',
       update: {
         sessionUpdate: 'tool_call',
-        toolCallId: 'claude-task:task-1',
+        toolCallId: 'task:task-1',
         title: 'Explore: Find CLI startup behavior',
         kind: 'think',
         status: 'in_progress',
@@ -47,23 +43,18 @@ describe('convertClaudeTaskLifecycleNotification', () => {
       },
     });
 
-    const rawInput = result.notification.update.rawInput as Record<string, unknown>;
-    const lifecycle = rawInput[LODY_CLAUDE_TASK_LIFECYCLE_RAW_INPUT_KEY] as Record<string, unknown>;
-    expect(lifecycle).toMatchObject({
+    expect(result.notification.update._meta?.lody?.task).toMatchObject({
       version: 1,
-      event: 'task_started',
       taskId: 'task-1',
-      toolUseId: 'tool-1',
-      sourceSessionId: 'sdk-session-1',
-      sdkSessionId: 'sdk-message-session',
-      subagentType: 'Explore',
-      taskType: 'local_agent',
+      kind: 'subagent',
       description: 'Find CLI startup behavior',
       status: 'in_progress',
+      actor: 'Explore',
+      parentToolCallId: 'tool-1',
       skipTranscript: true,
     });
-    expect(JSON.stringify(rawInput)).not.toContain('full prompt');
-    expect(JSON.stringify(rawInput)).not.toContain('/tmp/ignored');
+    expect(JSON.stringify(result.notification.update._meta)).not.toContain('full prompt');
+    expect(JSON.stringify(result.notification.update._meta)).not.toContain('/tmp/ignored');
   });
 
   it('converts task_notification into a terminal update with filtered metadata', () => {
@@ -90,25 +81,23 @@ describe('convertClaudeTaskLifecycleNotification', () => {
       sessionId: 'acp-session-1',
       update: {
         sessionUpdate: 'tool_call_update',
-        toolCallId: 'claude-task:task-1',
+        toolCallId: 'task:task-1',
         title: 'Claude task: Agent finished',
         kind: 'think',
         status: 'completed',
       },
     });
 
-    const rawInput = result.notification.update.rawInput as Record<string, unknown>;
-    const lifecycle = rawInput[LODY_CLAUDE_TASK_LIFECYCLE_RAW_INPUT_KEY] as Record<string, unknown>;
-    expect(lifecycle).toMatchObject({
-      event: 'task_notification',
+    expect(result.notification.update._meta?.lody?.task).toMatchObject({
+      version: 1,
       taskId: 'task-1',
+      kind: 'subagent',
       status: 'completed',
-      rawStatus: 'completed',
       summary: 'Agent finished',
       usage: { totalTokens: 123, toolUses: 3, durationMs: 700 },
-      hasOutputFile: true,
+      parentToolCallId: 'tool-1',
     });
-    expect(JSON.stringify(rawInput)).not.toContain('/tmp/task-1.output');
+    expect(JSON.stringify(result.notification.update._meta)).not.toContain('/tmp/task-1.output');
   });
 
   it('keeps workflow_name, is_backgrounded and patch.error in the metadata', () => {
@@ -125,10 +114,9 @@ describe('convertClaudeTaskLifecycleNotification', () => {
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
-    const startedRaw = started.notification.update.rawInput as Record<string, unknown>;
-    expect(startedRaw[LODY_CLAUDE_TASK_LIFECYCLE_RAW_INPUT_KEY]).toMatchObject({
-      workflowName: 'spec',
-      taskType: 'local_workflow',
+    expect(started.notification.update._meta?.lody?.task).toMatchObject({
+      actor: 'spec',
+      kind: 'subagent',
     });
 
     const updated = convertClaudeTaskLifecycleNotification({
@@ -142,12 +130,10 @@ describe('convertClaudeTaskLifecycleNotification', () => {
     });
     expect(updated.ok).toBe(true);
     if (!updated.ok) return;
-    const updatedRaw = updated.notification.update.rawInput as Record<string, unknown>;
-    expect(updatedRaw[LODY_CLAUDE_TASK_LIFECYCLE_RAW_INPUT_KEY]).toMatchObject({
+    expect(updated.notification.update._meta?.lody?.task).toMatchObject({
       status: 'failed',
-      rawStatus: 'failed',
       error: 'boom',
-      isBackgrounded: true,
+      kind: 'background',
     });
   });
 
@@ -177,8 +163,11 @@ describe('convertKimiTaskLifecycleNotification', () => {
       sessionId: 'kimi-session-1',
       update: { title: 'Kimi task: Explore the repository', status: 'in_progress' },
     });
-    expect(result.notification.update.rawInput).toHaveProperty(
-      LODY_SUBAGENT_TASK_LIFECYCLE_RAW_INPUT_KEY
-    );
+    expect(result.notification.update._meta?.lody?.task).toMatchObject({
+      version: 1,
+      taskId: 'agent-1',
+      kind: 'subagent',
+      actor: 'Kimi task',
+    });
   });
 });

@@ -25,10 +25,10 @@ import {
   getLocalProjectHistoryProviderKey,
   type LocalProjectHistoryProvider,
 } from '@lody/shared';
+import { LODY_EXTENSION_METHODS } from 'acp-extension-core';
 
 const ACP_OPERATION_TIMEOUT_MS = 120_000;
 const ACP_PROCESS_EXIT_TIMEOUT_MS = 3_000;
-const LODY_READ_SESSION_HISTORY_METHOD = '_lody/session/history/read';
 export const MAX_LOCAL_PROJECT_HISTORY_CATALOG_SESSIONS = 100;
 
 function waitForChildProcessExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
@@ -243,12 +243,10 @@ function getLodyReadSessionHistoryMethod(initResponse: acp.InitializeResponse): 
   if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return null;
   const lody = (meta as Record<string, unknown>).lody;
   if (!lody || typeof lody !== 'object' || Array.isArray(lody)) return null;
-  const capability = (lody as Record<string, unknown>).readSessionHistory;
+  const capability = (lody as Record<string, unknown>).sessionHistory;
   if (!capability || typeof capability !== 'object' || Array.isArray(capability)) return null;
   const record = capability as Record<string, unknown>;
-  return record.version === 1 && record.method === LODY_READ_SESSION_HISTORY_METHOD
-    ? LODY_READ_SESSION_HISTORY_METHOD
-    : null;
+  return record.version === 1 ? LODY_EXTENSION_METHODS.sessionHistoryRead : null;
 }
 
 export async function requestHistorySessionReplay(args: {
@@ -263,14 +261,14 @@ export async function requestHistorySessionReplay(args: {
     if (!method) {
       throw new Error(
         `${getProviderLabel(args.provider)} ACP agent does not advertise ` +
-          'agentCapabilities._meta.lody.readSessionHistory version 1'
+          'agentCapabilities._meta.lody.sessionHistory version 1'
       );
     }
     await withTimeout(
       args.connection.request(method, {
         sessionId: args.acpSessionId as unknown as acp.SessionId,
       }),
-      `${getProviderLabel(args.provider)} ACP readSessionHistory (${args.acpSessionId})`
+      `${getProviderLabel(args.provider)} ACP session history read (${args.acpSessionId})`
     );
     return;
   }

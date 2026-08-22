@@ -16,7 +16,11 @@ import {
   deriveLocationsFromToolCallContent,
   stripToolCallContentForHistory,
 } from './tool-call-history';
-import { parseSubagentTaskWire, mergeSubagentTaskPayload } from './claude-subagent-task';
+import {
+  parseLodyTaskMeta,
+  parseSubagentTaskWire,
+  mergeSubagentTaskPayload,
+} from './claude-subagent-task';
 import { parseCodexCollabAgentTasks } from './codex-collab-agent-task';
 
 type StoredToolCallContent = NonNullable<Extract<MessageContent, { type: 'tool_call' }>['content']>;
@@ -47,13 +51,18 @@ const SCHEDULING_TOOL_NAMES = new Set<string>([
  * The canonical tool name behind a `tool_call` update. ACP `title` is
  * human-facing — an agent that describes its calls puts the rendered schedule
  * there ("Scheduling cron ..."), not the tool name — so identity rides in
- * `_meta` instead. The provider-neutral `_meta.toolName` wins;
+ * `_meta` instead. The provider-neutral `_meta.lody.toolName` wins;
  * `_meta.claudeCode.toolName` stays the fallback for adapters that only
  * publish the Claude shape.
  */
 const resolveAcpToolName = (meta: unknown): string | undefined => {
-  const neutral = (meta as { toolName?: unknown } | null | undefined)?.toolName;
+  const record = asRecordOrUndefined(meta);
+  const lody = asRecordOrUndefined(record?.lody);
+  const neutral = lody?.toolName;
   if (typeof neutral === 'string' && neutral.length > 0) return neutral;
+  // One-release compatibility for the earlier provider-neutral draft.
+  const legacyNeutral = record?.toolName;
+  if (typeof legacyNeutral === 'string' && legacyNeutral.length > 0) return legacyNeutral;
   return getClaudeCodeToolName(meta);
 };
 
@@ -89,6 +98,10 @@ const getToolCallActivityKind = (
 ): ToolCallMessage['activityKind'] => {
   if (meta?.contextCompaction === true) return 'context_compaction';
   const lody = asRecordOrUndefined(meta?.lody);
+  const activity = asRecordOrUndefined(lody?.activity);
+  if (activity?.kind === 'context_compaction') return 'context_compaction';
+  if (activity?.kind === 'retry') return 'codex_retry';
+  // One-release compatibility for the earlier activity marker.
   if (lody?.activityKind === 'context_compaction' || lody?.activityKind === 'codex_retry') {
     return lody.activityKind;
   }
@@ -1087,7 +1100,9 @@ export const buildMessageContentFromNotification = (
       // Subagent/background task lifecycle rides the tool_call transport (see
       // claude-subagent-task.ts). Materialize it as a first-class `subagent_task`
       // item instead of persisting a tool_call; the applier merges by taskId.
-      const subagentTask = parseSubagentTaskWire(update.rawInput);
+      const subagentTask =
+        parseLodyTaskMeta((update as ToolCallUpdateWithMeta)._meta) ??
+        parseSubagentTaskWire(update.rawInput);
       if (subagentTask) {
         return [{ type: 'subagent_task', ...subagentTask }];
       }

@@ -8,8 +8,8 @@ import type { PendingScheduledTask } from './schema';
  * calls this on the history it already renders.
  *
  * The persisted `tool_call` keeps `title` (the tool name), `rawInput`, `rawOutput`, `content`,
- * `status`, and `schedulingTimeZone` (the creating machine's zone), but NOT the structured
- * `_meta.claudeCode.toolResponse` (job id, scheduledFor, jobs[]). So we reconstruct from
+ * `status`, and `schedulingTimeZone` (the creating machine's zone), but not provider metadata.
+ * So we reconstruct from
  * `rawInput` + the owning turn's timestamp:
  *  - ScheduleWakeup: only the latest matters; scheduledFor ≈ turn end + delaySeconds (no TZ).
  *  - CronCreate: schedule/recurring/prompt come from rawInput.cron/recurring/prompt, and the

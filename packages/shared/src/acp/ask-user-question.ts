@@ -4,26 +4,20 @@ import type {
   RequestPermissionRequest,
   RequestPermissionResponse,
 } from '@agentclientprotocol/sdk';
+import type {
+  LodyElicitationAnswer,
+  LodyElicitationMeta,
+  LodyElicitationOption,
+  LodyElicitationQuestion,
+} from 'acp-extension-core';
 
 import type { PermissionOutcome } from '../message';
 
-export type AskUserQuestionOption = {
-  label: string;
-  description?: string;
-  preview?: string;
-};
+export type AskUserQuestionOption = LodyElicitationOption;
 
-export type AskUserQuestionSource = 'claude' | 'codex';
+export type AskUserQuestionSource = 'lody' | 'claude' | 'codex';
 
-export type AskUserQuestion = {
-  id?: string;
-  question: string;
-  header: string;
-  options: AskUserQuestionOption[];
-  multiSelect: boolean;
-  allowCustomAnswer?: boolean;
-  isSecret?: boolean;
-};
+export type AskUserQuestion = LodyElicitationQuestion;
 
 export type AskUserQuestionPermissionMeta = {
   source: AskUserQuestionSource;
@@ -34,7 +28,7 @@ export type AskUserQuestionPermissionMeta = {
   autoResolveAt?: number;
 };
 
-export type AskUserQuestionAnswerValue = string | string[];
+export type AskUserQuestionAnswerValue = LodyElicitationAnswer;
 export type AskUserQuestionAnswers = Record<string, AskUserQuestionAnswerValue>;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -58,9 +52,27 @@ const getCodexMeta = (meta: unknown): Record<string, unknown> | null => {
   return isRecord(codex) ? codex : null;
 };
 
+const getLodyMeta = (meta: unknown): Record<string, unknown> | null => {
+  if (!isRecord(meta)) return null;
+  const lody = meta.lody;
+  return isRecord(lody) ? lody : null;
+};
+
+const getLodyElicitationMeta = (meta: unknown): Record<string, unknown> | null => {
+  const lody = getLodyMeta(meta);
+  const elicitation = lody?.elicitation;
+  return isRecord(elicitation) && elicitation.version === 1 ? elicitation : null;
+};
+
 export function parseAskUserQuestionPermissionMeta(
   meta: unknown
 ): AskUserQuestionPermissionMeta | null {
+  const lody = getLodyMeta(meta);
+  if (lody) {
+    const parsed = parseLodyElicitationPermissionMeta(lody);
+    if (parsed) return parsed;
+  }
+
   const claudeCode = getClaudeCodeMeta(meta);
   if (claudeCode) {
     return parseClaudeAskUserQuestionPermissionMeta(claudeCode);
@@ -72,6 +84,61 @@ export function parseAskUserQuestionPermissionMeta(
   }
 
   return null;
+}
+
+function parseLodyElicitationPermissionMeta(
+  lody: Record<string, unknown>
+): AskUserQuestionPermissionMeta | null {
+  const raw = lody.elicitation;
+  if (!isRecord(raw) || raw.version !== 1 || !Array.isArray(raw.questions)) return null;
+  const questions = parsePermissionQuestions(raw.questions);
+  if (!questions) return null;
+  return {
+    source: 'lody',
+    version: 1,
+    allowCustomAnswer: questions.some((question) => question.allowCustomAnswer === true),
+    questions,
+    ...(typeof raw.autoResolveAtEpochSeconds === 'number' &&
+    Number.isFinite(raw.autoResolveAtEpochSeconds)
+      ? { autoResolveAt: raw.autoResolveAtEpochSeconds * 1000 }
+      : // One-release compatibility for the pre-Core millisecond field.
+        typeof raw.autoResolveAt === 'number' && Number.isFinite(raw.autoResolveAt)
+        ? { autoResolveAt: raw.autoResolveAt }
+        : {}),
+  };
+}
+
+function parsePermissionQuestions(rawQuestions: unknown[]): AskUserQuestion[] | null {
+  if (rawQuestions.length === 0) return null;
+  const questions: AskUserQuestion[] = [];
+  for (const rawQuestion of rawQuestions) {
+    if (!isRecord(rawQuestion)) return null;
+    if (typeof rawQuestion.question !== 'string' || typeof rawQuestion.header !== 'string') {
+      return null;
+    }
+    if (!Array.isArray(rawQuestion.options)) return null;
+    const options: AskUserQuestionOption[] = [];
+    for (const rawOption of rawQuestion.options) {
+      if (!isRecord(rawOption) || typeof rawOption.label !== 'string') return null;
+      options.push({
+        label: rawOption.label,
+        ...(typeof rawOption.description === 'string'
+          ? { description: rawOption.description }
+          : {}),
+        ...(typeof rawOption.preview === 'string' ? { preview: rawOption.preview } : {}),
+      });
+    }
+    questions.push({
+      ...(typeof rawQuestion.id === 'string' ? { id: rawQuestion.id } : {}),
+      question: rawQuestion.question,
+      header: rawQuestion.header,
+      options,
+      multiSelect: rawQuestion.multiSelect === true,
+      ...(rawQuestion.allowCustomAnswer === true ? { allowCustomAnswer: true } : {}),
+      ...(rawQuestion.isSecret === true ? { isSecret: true } : {}),
+    });
+  }
+  return questions;
 }
 
 function parseClaudeAskUserQuestionPermissionMeta(
@@ -247,6 +314,12 @@ const getClaudeOutcomeAnswers = (outcomeMeta: unknown): Record<string, unknown> 
   return askUserQuestion && isRecord(askUserQuestion.answers) ? askUserQuestion.answers : null;
 };
 
+const getLodyOutcomeAnswers = (outcomeMeta: unknown): Record<string, unknown> | null => {
+  const lody = getLodyMeta(outcomeMeta);
+  const elicitation = lody && isRecord(lody.elicitation) ? lody.elicitation : null;
+  return elicitation && isRecord(elicitation.answers) ? elicitation.answers : null;
+};
+
 export function extractAskUserQuestionAnswersFromOutcome(
   meta: AskUserQuestionPermissionMeta,
   outcome: { _meta?: Record<string, unknown> | null } | null | undefined
@@ -254,9 +327,11 @@ export function extractAskUserQuestionAnswersFromOutcome(
   if (!outcome || !isRecord(outcome._meta)) return null;
 
   const rawAnswers =
-    meta.source === 'codex'
-      ? getCodexOutcomeAnswers(outcome._meta)
-      : getClaudeOutcomeAnswers(outcome._meta);
+    meta.source === 'lody'
+      ? getLodyOutcomeAnswers(outcome._meta)
+      : meta.source === 'codex'
+        ? getCodexOutcomeAnswers(outcome._meta)
+        : getClaudeOutcomeAnswers(outcome._meta);
 
   if (!rawAnswers) return null;
 
@@ -290,6 +365,14 @@ export function createAskUserQuestionPermissionOutcome(
   metaOrSource: AskUserQuestionPermissionMeta | AskUserQuestionSource = 'claude'
 ): PermissionOutcome {
   const source = typeof metaOrSource === 'string' ? metaOrSource : metaOrSource.source;
+  if (source === 'lody') {
+    const elicitation = { version: 1, answers } satisfies LodyElicitationMeta;
+    return {
+      outcome: 'selected',
+      optionId,
+      _meta: { lody: { elicitation } },
+    };
+  }
   if (source === 'codex') {
     const codexAnswers: Record<string, { answers: string[] }> = {};
     for (const [key, value] of Object.entries(answers)) {
@@ -352,7 +435,12 @@ export type AskUserQuestionElicitation = {
   autoResolutionMs?: number | null;
 };
 
-type EnumOptionLike = { const: string; title?: string; description?: string };
+type EnumOptionLike = {
+  const: string;
+  title?: string;
+  description?: string;
+  _meta?: unknown;
+};
 
 const isEnumOption = (value: unknown): value is EnumOptionLike =>
   isRecord(value) && typeof value.const === 'string';
@@ -407,7 +495,12 @@ const parseElicitationOptions = (source: unknown[]): AskUserQuestionOption[] => 
             ? title.slice(separator.length)
             : title
           : undefined;
-    options.push({ label, ...(description ? { description } : {}) });
+    const preview = getLodyElicitationMeta(entry._meta)?.preview;
+    options.push({
+      label,
+      ...(description ? { description } : {}),
+      ...(typeof preview === 'string' ? { preview } : {}),
+    });
   }
   return options;
 };
@@ -427,43 +520,30 @@ export function parseAskUserQuestionElicitationRequest(
   if (!isRecord(schema) || !isRecord(schema.properties)) return null;
 
   const entries = Object.entries(schema.properties);
-  const requestCodexMeta = getCodexMeta(request._meta);
-  const isCodexForm =
-    (requestCodexMeta !== null && 'autoResolutionMs' in requestCodexMeta) ||
-    entries.some(([, prop]) => isRecord(prop) && getCodexMeta(prop._meta) !== null);
+  const requestMeta = getLodyElicitationMeta(request._meta);
   const customFieldKeyByQuestionId = new Map<string, string>();
-  if (isCodexForm) {
-    for (const [key, prop] of entries) {
-      if (!isRecord(prop)) continue;
-      const codexMeta = getCodexMeta(prop._meta);
-      if (
-        codexMeta?.isOtherAnswer === true &&
-        typeof codexMeta.questionId === 'string' &&
-        codexMeta.questionId.length > 0
-      ) {
-        customFieldKeyByQuestionId.set(codexMeta.questionId, key);
-      }
+  for (const [key, prop] of entries) {
+    if (!isRecord(prop)) continue;
+    const meta = getLodyElicitationMeta(prop._meta);
+    if (typeof meta?.customAnswerFor === 'string' && meta.customAnswerFor.length > 0) {
+      customFieldKeyByQuestionId.set(meta.customAnswerFor, key);
     }
   }
+  const isLodyForm = requestMeta !== null || customFieldKeyByQuestionId.size > 0;
   const questionEntries = entries.filter(([, prop]) => {
     if (!isRecord(prop)) return false;
-    if (!isCodexForm) return isQuestionProperty(prop);
-    const codexMeta = getCodexMeta(prop._meta);
-    return codexMeta?.isOtherAnswer !== true && prop.type === 'string';
+    if (getLodyElicitationMeta(prop._meta)?.customAnswerFor) return false;
+    return isQuestionProperty(prop) || (isLodyForm && isFreeTextProperty(prop));
   });
   if (questionEntries.length === 0) return null;
 
   const singleQuestion = questionEntries.length === 1;
-  const allowCustomAnswer = isCodexForm
-    ? questionEntries.some(([key, prop]) => {
-        if (!isRecord(prop)) return false;
-        const codexMeta = getCodexMeta(prop._meta);
-        return (
-          getEnumOptionSource(prop) === null ||
-          codexMeta?.isOther === true ||
-          customFieldKeyByQuestionId.has(key)
-        );
-      })
+  const allowCustomAnswer = isLodyForm
+    ? questionEntries.some(
+        ([key, prop]) =>
+          isRecord(prop) &&
+          (getEnumOptionSource(prop) === null || customFieldKeyByQuestionId.has(key))
+      )
     : entries.some(([, prop]) => isFreeTextProperty(prop));
   const message = typeof request.message === 'string' ? request.message : '';
 
@@ -473,7 +553,6 @@ export function parseAskUserQuestionElicitationRequest(
   for (const [key, prop] of questionEntries) {
     if (!isRecord(prop)) continue;
     const source = getEnumOptionSource(prop);
-    if (!source && !isCodexForm) continue;
     const header = typeof prop.title === 'string' ? prop.title : '';
     const description = typeof prop.description === 'string' ? prop.description : '';
     // For a single-question form the prompt rides on the request `message`;
@@ -483,19 +562,16 @@ export function parseAskUserQuestionElicitationRequest(
       : description || message || header;
 
     questions.push({
-      ...(isCodexForm ? { id: key } : {}),
+      ...(isLodyForm ? { id: key } : {}),
       question,
       header,
       options: source ? parseElicitationOptions(source) : [],
-      multiSelect: !isCodexForm && isMultiSelectProperty(prop),
-      ...(isCodexForm
-        ? {
-            allowCustomAnswer:
-              source === null ||
-              getCodexMeta(prop._meta)?.isOther === true ||
-              customFieldKeyByQuestionId.has(key),
-            isSecret: getCodexMeta(prop._meta)?.isSecret === true,
-          }
+      multiSelect: isMultiSelectProperty(prop),
+      ...(isLodyForm && (source === null || customFieldKeyByQuestionId.has(key))
+        ? { allowCustomAnswer: true }
+        : {}),
+      ...(isLodyForm && getLodyElicitationMeta(prop._meta)?.secret === true
+        ? { isSecret: true }
         : {}),
     });
     fieldKeys.push(key);
@@ -506,17 +582,22 @@ export function parseAskUserQuestionElicitationRequest(
 
   return {
     meta: {
-      source: isCodexForm ? 'codex' : 'claude',
+      source: isLodyForm ? 'lody' : 'claude',
       version: 1,
       allowCustomAnswer,
       questions,
     },
     fieldKeys,
-    ...(isCodexForm ? { customFieldKeys } : {}),
-    ...(isCodexForm &&
-    (typeof requestCodexMeta?.autoResolutionMs === 'number' ||
-      requestCodexMeta?.autoResolutionMs === null)
-      ? { autoResolutionMs: requestCodexMeta.autoResolutionMs as number | null }
+    ...(isLodyForm ? { customFieldKeys } : {}),
+    ...(isLodyForm &&
+    (typeof requestMeta?.autoResolveAfterSeconds === 'number' ||
+      requestMeta?.autoResolveAfterSeconds === null)
+      ? {
+          autoResolutionMs:
+            requestMeta.autoResolveAfterSeconds === null
+              ? null
+              : requestMeta.autoResolveAfterSeconds * 1000,
+        }
       : {}),
   };
 }

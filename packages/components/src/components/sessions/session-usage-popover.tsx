@@ -12,10 +12,9 @@ import { Separator } from '@/ui/separator';
 import { formatCompactNumber } from '@/lib/format-compact-number';
 import { toIntlLocaleOrEn } from '@/lib/intl-locale';
 import { cn } from '@/lib/utils';
-import { normalizeEpochMs } from '@/lib/normalize-epoch';
 import {
-  FIVE_HOUR_WINDOW_MINS,
-  SEVEN_DAY_WINDOW_MINS,
+  FIVE_HOUR_WINDOW_SECONDS,
+  SEVEN_DAY_WINDOW_SECONDS,
   formatRateLimitWindowShortLabel,
   getAgentRateLimitWindows,
   getContextWindowUsageData,
@@ -50,14 +49,13 @@ export const SessionUsagePopover = memo(function SessionUsagePopover({
   const context = getContextWindowUsageData(contextWindowUsage);
   const rateLimit = resolveAgentRateLimitForModel({ rateLimits, agentType, modelId });
   const rateLimitWindows = rateLimit
-    ? getAgentRateLimitWindows(rateLimit.limits, rateLimit.cliType).sort(
-        (left, right) => (right.windowDurationMins ?? 0) - (left.windowDurationMins ?? 0)
+    ? getAgentRateLimitWindows(rateLimit.limits).sort(
+        (left, right) => (right.windowDurationSeconds ?? 0) - (left.windowDurationSeconds ?? 0)
       )
     : [];
   const hasRateLimit = rateLimitWindows.length > 0;
-  const isRateLimitUnavailable = rateLimit?.limits.apiUnavailable === true;
-  const wallet = rateLimit?.limits.extraUsage ?? null;
-  const hasRateLimitDetails = hasRateLimit || isRateLimitUnavailable || wallet !== null;
+  const wallet = rateLimit?.limits.wallet ?? null;
+  const hasRateLimitDetails = rateLimit !== null;
   const triggerValue =
     context?.usedPercentage ??
     (showRateLimitWithoutContext ? rateLimitWindows[0]?.usedPercent : undefined);
@@ -68,9 +66,9 @@ export const SessionUsagePopover = memo(function SessionUsagePopover({
     t('sessions.usage.modelFallback', 'Model usage');
 
   const formatReset = useCallback(
-    (resetAt: number | null | undefined): string | null => {
-      const epochMs = normalizeEpochMs(resetAt);
-      if (!epochMs) return null;
+    (resetAtEpochSeconds: number | null | undefined): string | null => {
+      if (!resetAtEpochSeconds) return null;
+      const epochMs = resetAtEpochSeconds * 1_000;
       const distance = formatDistance(new Date(epochMs), new Date(getServerNow()), {
         addSuffix: true,
         locale,
@@ -81,17 +79,17 @@ export const SessionUsagePopover = memo(function SessionUsagePopover({
   );
 
   const formatWindowLabel = useCallback(
-    (windowDurationMins: number | null): string => {
-      if (windowDurationMins === SEVEN_DAY_WINDOW_MINS) {
+    (windowDurationSeconds: number | null): string => {
+      if (windowDurationSeconds === SEVEN_DAY_WINDOW_SECONDS) {
         return t('sessions.usage.weekly', 'Weekly');
       }
-      if (windowDurationMins === FIVE_HOUR_WINDOW_MINS) {
+      if (windowDurationSeconds === FIVE_HOUR_WINDOW_SECONDS) {
         return t('sessions.usage.fiveHour', '5 hours');
       }
-      if (windowDurationMins === null) {
+      if (windowDurationSeconds === null) {
         return t('sessions.usage.limit', 'Usage');
       }
-      return formatRateLimitWindowShortLabel(windowDurationMins);
+      return formatRateLimitWindowShortLabel(windowDurationSeconds);
     },
     [t]
   );
@@ -172,10 +170,10 @@ export const SessionUsagePopover = memo(function SessionUsagePopover({
             {hasRateLimit ? (
               rateLimitWindows.map((window, index) => (
                 <UsageMeter
-                  key={`${window.windowDurationMins ?? 'unknown'}-${index}`}
-                  label={formatWindowLabel(window.windowDurationMins)}
+                  key={`${window.windowDurationSeconds ?? 'unknown'}-${index}`}
+                  label={formatWindowLabel(window.windowDurationSeconds)}
                   value={window.usedPercent}
-                  detail={formatReset(window.resetsAt)}
+                  detail={formatReset(window.resetsAtEpochSeconds)}
                 />
               ))
             ) : (

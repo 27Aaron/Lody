@@ -1,12 +1,6 @@
 import { z } from 'zod';
-import {
-  LODY_CLAUDE_TASK_LIFECYCLE_RAW_INPUT_KEY,
-  parseSessionNotification,
-  type AcpSessionNotification,
-} from '@lody/shared';
-
-export const CLAUDE_TASK_LIFECYCLE_EXTENSION_METHOD = 'claude/taskLifecycle';
-export { LODY_CLAUDE_TASK_LIFECYCLE_RAW_INPUT_KEY };
+import { parseSessionNotification, type AcpSessionNotification } from '@lody/shared';
+import type { LodyTaskMeta } from 'acp-extension-core';
 
 const MAX_TITLE_LENGTH = 160;
 const MAX_TEXT_LENGTH = 1_200;
@@ -93,7 +87,6 @@ export type ClaudeTaskLifecycleConversionResult =
   | { ok: false; reason: string };
 
 export type TaskLifecycleConversionOptions = {
-  rawInputKey: string;
   defaultActor: string;
 };
 
@@ -110,12 +103,7 @@ export const convertTaskLifecycleNotification = (
     return {
       ok: true,
       notification: parseSessionNotification(
-        buildTaskLifecycleAcpNotification(
-          parsed.data.sessionId,
-          parsed.data.acpSessionId,
-          parsed.data.message,
-          options
-        )
+        buildTaskLifecycleAcpNotification(parsed.data.sessionId, parsed.data.message, options)
       ),
     };
   } catch (error) {
@@ -130,13 +118,11 @@ export const convertClaudeTaskLifecycleNotification = (
   params: unknown
 ): ClaudeTaskLifecycleConversionResult =>
   convertTaskLifecycleNotification(params, {
-    rawInputKey: LODY_CLAUDE_TASK_LIFECYCLE_RAW_INPUT_KEY,
     defaultActor: 'Claude task',
   });
 
 const buildTaskLifecycleAcpNotification = (
   sessionId: string,
-  sourceSessionId: string | undefined,
   message: ClaudeTaskLifecycleMessage,
   options: TaskLifecycleConversionOptions
 ) => {
@@ -155,25 +141,22 @@ const buildTaskLifecycleAcpNotification = (
     event === 'task_progress' ? sanitizeText(message.last_tool_name, MAX_TITLE_LENGTH) : undefined;
   const title = buildTitle(message, rawStatus, options.defaultActor);
   const contentText = buildContentText({ description, summary, rawStatus, usage, lastToolName });
-  const lifecycle = buildLifecycleMeta({
+  const task = buildTaskMeta({
     message,
-    sourceSessionId,
     status,
-    rawStatus,
     description,
     summary,
     usage,
     lastToolName,
+    defaultActor: options.defaultActor,
   });
 
   const updateBase = {
-    toolCallId: `claude-task:${taskId}`,
+    toolCallId: `task:${taskId}`,
     title,
     kind: 'think' as const,
     status,
-    rawInput: {
-      [options.rawInputKey]: lifecycle,
-    },
+    _meta: { lody: { task } },
     ...(contentText
       ? {
           content: [
@@ -310,50 +293,50 @@ const formatUsage = (usage: ReturnType<typeof sanitizeUsage>): string | undefine
   return `Usage: ${parts.join(', ')}`;
 };
 
-const buildLifecycleMeta = (args: {
+const buildTaskMeta = (args: {
   message: ClaudeTaskLifecycleMessage;
-  sourceSessionId: string | undefined;
   status: TaskLifecycleAcpStatus;
-  rawStatus: string | undefined;
   description: string | undefined;
   summary: string | undefined;
   usage: ReturnType<typeof sanitizeUsage>;
   lastToolName: string | undefined;
-}): Record<string, unknown> => {
+  defaultActor: string;
+}): LodyTaskMeta => {
   const { message } = args;
   const meta: Record<string, unknown> = {
     version: 1,
-    event: message.subtype,
     taskId: message.task_id,
+    kind:
+      message.subtype === 'task_updated' && message.patch.is_backgrounded
+        ? 'background'
+        : 'subagent',
     status: args.status,
   };
-  setIfDefined(meta, 'toolUseId', sanitizeText(message.tool_use_id, MAX_META_TEXT_LENGTH));
-  setIfDefined(meta, 'sourceSessionId', sanitizeText(args.sourceSessionId, MAX_META_TEXT_LENGTH));
-  setIfDefined(meta, 'sdkSessionId', sanitizeText(message.session_id, MAX_META_TEXT_LENGTH));
-  setIfDefined(meta, 'subagentType', sanitizeText(message.subagent_type, MAX_META_TEXT_LENGTH));
-  setIfDefined(meta, 'taskType', sanitizeText(message.task_type, MAX_META_TEXT_LENGTH));
+  setIfDefined(
+    meta,
+    'actor',
+    sanitizeText(
+      message.subagent_type ??
+        (message.subtype === 'task_started' ? message.workflow_name : undefined) ??
+        message.task_type ??
+        args.defaultActor,
+      MAX_META_TEXT_LENGTH
+    )
+  );
   setIfDefined(meta, 'description', args.description);
+  setIfDefined(meta, 'parentToolCallId', message.tool_use_id);
   setIfDefined(meta, 'summary', args.summary);
-  setIfDefined(meta, 'rawStatus', args.rawStatus);
   setIfDefined(meta, 'usage', args.usage);
   setIfDefined(meta, 'lastToolName', args.lastToolName);
-  setIfDefined(meta, 'uuid', sanitizeText(message.uuid, MAX_META_TEXT_LENGTH));
   if (message.subtype === 'task_started') {
     if (message.skip_transcript !== undefined) {
       meta.skipTranscript = message.skip_transcript;
     }
-    setIfDefined(meta, 'workflowName', sanitizeText(message.workflow_name, MAX_TITLE_LENGTH));
   }
   if (message.subtype === 'task_updated') {
-    if (message.patch.is_backgrounded !== undefined) {
-      meta.isBackgrounded = message.patch.is_backgrounded;
-    }
     setIfDefined(meta, 'error', sanitizeText(message.patch.error, MAX_META_TEXT_LENGTH));
   }
-  if (message.subtype === 'task_notification') {
-    meta.hasOutputFile = typeof message.output_file === 'string' && message.output_file.length > 0;
-  }
-  return meta;
+  return meta as LodyTaskMeta;
 };
 
 const setIfDefined = (target: Record<string, unknown>, key: string, value: unknown): void => {

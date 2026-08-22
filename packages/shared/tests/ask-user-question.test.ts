@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type {
-  CreateElicitationRequest,
-  RequestPermissionRequest,
-} from '@agentclientprotocol/sdk';
+import type { CreateElicitationRequest, RequestPermissionRequest } from '@agentclientprotocol/sdk';
 
 import {
   buildAskUserQuestionElicitationResponse,
@@ -486,7 +483,7 @@ describe('AskUserQuestion form elicitation bridge (Claude >= 0.44.0)', () => {
   });
 });
 
-describe('AskUserQuestion form elicitation bridge (Codex)', () => {
+describe('AskUserQuestion form elicitation bridge (Lody extension)', () => {
   const request = {
     mode: 'form',
     sessionId: 's1',
@@ -507,32 +504,34 @@ describe('AskUserQuestion form elicitation bridge (Codex)', () => {
             },
             { const: 'Start implementation', title: 'Start implementation' },
           ],
-          _meta: { codex: { isOther: true, isSecret: false } },
+          _meta: { lody: { elicitation: { version: 1, secret: false } } },
         },
         next_step__other: {
           type: 'string',
           title: 'Other',
           description: 'Type your own answer instead of choosing an option above.',
           _meta: {
-            codex: { questionId: 'next_step', isOtherAnswer: true, isSecret: false },
+            lody: {
+              elicitation: { version: 1, customAnswerFor: 'next_step', secret: false },
+            },
           },
         },
         api_key: {
           type: 'string',
           title: 'API key',
           description: 'Which API key should I use?',
-          _meta: { codex: { isOther: false, isSecret: true } },
+          _meta: { lody: { elicitation: { version: 1, secret: true } } },
         },
       },
       required: ['api_key'],
     },
-    _meta: { codex: { autoResolutionMs: 60_000 } },
+    _meta: { lody: { elicitation: { version: 1, autoResolveAfterSeconds: 60 } } },
   } as unknown as CreateElicitationRequest;
 
   it('parses options, free text, secrets, Other fields, and automatic resolution', () => {
     expect(parseAskUserQuestionElicitationRequest(request)).toEqual({
       meta: {
-        source: 'codex',
+        source: 'lody',
         version: 1,
         allowCustomAnswer: true,
         questions: [
@@ -546,7 +545,6 @@ describe('AskUserQuestion form elicitation bridge (Codex)', () => {
             ],
             multiSelect: false,
             allowCustomAnswer: true,
-            isSecret: false,
           },
           {
             id: 'api_key',
@@ -565,7 +563,7 @@ describe('AskUserQuestion form elicitation bridge (Codex)', () => {
     });
   });
 
-  it('writes custom choices to the Codex Other field', () => {
+  it('writes custom choices to the linked Other field', () => {
     const elicitation = parseAskUserQuestionElicitationRequest(request)!;
     const outcome = createAskUserQuestionPermissionOutcome(
       'answer',
@@ -581,7 +579,7 @@ describe('AskUserQuestion form elicitation bridge (Codex)', () => {
     });
   });
 
-  it('writes selected options to the primary Codex field', () => {
+  it('writes selected options to the primary field', () => {
     const elicitation = parseAskUserQuestionElicitationRequest(request)!;
     const outcome = createAskUserQuestionPermissionOutcome(
       'answer',

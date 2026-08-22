@@ -30,6 +30,7 @@ import { AgentIcon } from '@/components/icons/agent-icon';
 import {
   canShowSubscriptionRateLimits,
   formatRateLimitWindowShortLabel,
+  getAgentRateLimitEntries,
   getAgentRateLimitWindows,
 } from '@/lib/session-usage';
 
@@ -57,9 +58,8 @@ export function ProviderRow({ config, machine, onEdit, onDelete, onRefresh }: Pr
   // Compact usage meters shown inline after the provider name.
   const rateLimitWindows = useMemo(() => {
     if (!showRateLimits || !machine?.raceLimits) return [];
-    for (const [key, limits] of Object.entries(machine.raceLimits)) {
-      if (parseRateLimitEntryKey(key).cliType !== agentType) continue;
-      const windows = getAgentRateLimitWindows(limits, agentType);
+    for (const entry of getAgentRateLimitEntries(machine.raceLimits, agentType)) {
+      const windows = getAgentRateLimitWindows(entry.limits);
       if (windows.length > 0) return windows;
     }
     return [];
@@ -147,8 +147,8 @@ export function ProviderRow({ config, machine, onEdit, onDelete, onRefresh }: Pr
             <div className="hidden items-center gap-2.5 sm:flex">
               {rateLimitWindows.map((window, index) => (
                 <RateLimitMeter
-                  key={`${window.windowDurationMins ?? 'unknown'}-${index}`}
-                  label={formatRateLimitWindowShortLabel(window.windowDurationMins)}
+                  key={`${window.windowDurationSeconds ?? 'unknown'}-${index}`}
+                  label={formatRateLimitWindowShortLabel(window.windowDurationSeconds)}
                   remainingPercent={window.remainingPercent}
                 />
               ))}
@@ -204,8 +204,8 @@ export function ProviderRow({ config, machine, onEdit, onDelete, onRefresh }: Pr
         <div className="flex flex-wrap items-center gap-x-5 gap-y-1 px-3 pb-2.5 pt-0.5 sm:hidden">
           {rateLimitWindows.map((window, index) => (
             <RateLimitMeter
-              key={`${window.windowDurationMins ?? 'unknown'}-${index}`}
-              label={formatRateLimitWindowShortLabel(window.windowDurationMins)}
+              key={`${window.windowDurationSeconds ?? 'unknown'}-${index}`}
+              label={formatRateLimitWindowShortLabel(window.windowDurationSeconds)}
               remainingPercent={window.remainingPercent}
             />
           ))}

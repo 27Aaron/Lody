@@ -689,7 +689,7 @@ describe('acp history apply', () => {
     expect(toolCall?.schedulingTimeZone?.length).toBeGreaterThan(0);
   });
 
-  it('recognizes a scheduling tool from the provider-neutral _meta.toolName', () => {
+  it('recognizes a scheduling tool from _meta.lody.toolName', () => {
     // Agents that describe their calls (Kimi titles a cron call "Scheduling
     // cron …") publish the canonical name neutrally rather than under the
     // Claude Code namespace; the panel must derive from that just the same.
@@ -700,7 +700,7 @@ describe('acp history apply', () => {
         title: 'Scheduling cron */5 * * * *',
         status: 'in_progress',
         rawInput: { cron: '*/5 * * * *', recurring: true, prompt: 'check CI' },
-        _meta: { toolName: 'CronCreate' },
+        _meta: { lody: { toolName: 'CronCreate' } },
       }),
       makeNotification({
         sessionUpdate: 'tool_call_update',

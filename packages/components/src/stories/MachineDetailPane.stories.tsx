@@ -16,6 +16,7 @@ import { MachineDetailPane } from '@/components/settings/machine-detail-pane';
 import { lodyPresenceStatesAtom, lodyPresenceSyncStateAtom } from '@/atoms/presence';
 
 const machineId = 'machine-story' as MachineId;
+const resetIn = (seconds: number) => Math.floor(getServerNow() / 1000) + seconds;
 
 const baseMachine: MachineViewMeta = {
   id: machineId,
@@ -124,7 +125,9 @@ function StoryWrapper({
           onRestartDaemon={showRestart ? async () => {} : undefined}
           canRevokeCredentials={canRevokeCredentials}
           onRevokeCredentials={canRevokeCredentials ? async () => {} : undefined}
-          daemonUpdate={showUpdate ? { currentVersion: '0.44.0', latestVersion: '0.45.2' } : undefined}
+          daemonUpdate={
+            showUpdate ? { currentVersion: '0.44.0', latestVersion: '0.45.2' } : undefined
+          }
           onUpgradeDaemon={showUpdate ? async () => {} : undefined}
         />
       </div>
@@ -148,18 +151,34 @@ export const OwnWithProviders: Story = {
       ...baseMachine,
       raceLimits: {
         [getRateLimitEntryKey('claude', 'claude')]: {
+          limitId: 'claude',
+          scope: { providerId: 'claude' },
           planName: 'Claude Pro',
-          fiveHour: 40,
-          sevenDay: 60,
-          fiveHourResetAt: getServerNow() + 2 * 3_600_000,
-          sevenDayResetAt: getServerNow() + 4 * 24 * 3_600_000,
+          windows: [
+            {
+              usedPercent: 40,
+              windowDurationSeconds: 18_000,
+              resetsAtEpochSeconds: resetIn(7_200),
+            },
+            {
+              usedPercent: 60,
+              windowDurationSeconds: 604_800,
+              resetsAtEpochSeconds: resetIn(345_600),
+            },
+          ],
         },
         [getRateLimitEntryKey('codex', CODEX_SPARK_LIMIT_ID)]: {
+          limitId: CODEX_SPARK_LIMIT_ID,
+          scope: { providerId: 'codex' },
           planName: 'Codex Spark',
-          fiveHour: 12,
-          sevenDay: 88,
-          fiveHourResetAt: getServerNow() + 300_000,
-          sevenDayResetAt: getServerNow() + 48 * 3_600_000,
+          windows: [
+            { usedPercent: 12, windowDurationSeconds: 18_000, resetsAtEpochSeconds: resetIn(300) },
+            {
+              usedPercent: 88,
+              windowDurationSeconds: 604_800,
+              resetsAtEpochSeconds: resetIn(172_800),
+            },
+          ],
         },
       },
     },

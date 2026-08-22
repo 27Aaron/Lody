@@ -1,4 +1,4 @@
-import type { UsageData } from 'acp-extension-core';
+import type { RateLimit } from 'acp-extension-core';
 import {
   getAcpCapabilityCacheKey,
   hasBuiltinRuntimeOverrideValues,
@@ -213,10 +213,7 @@ export type MachineFlockDeleteLocalProjectCommandKey = [
 export type MachineFlockLocalProjectKey = ['localProject', LocalProjectId];
 export type MachineFlockAgentConfigKey = ['agentConfig', AgentConfigId];
 export type MachineFlockProviderSetupKey = ['providerSetup', AgentConfigId];
-export type MachineFlockProviderSetupCancellationKey = [
-  'providerSetupCancellation',
-  AgentConfigId,
-];
+export type MachineFlockProviderSetupCancellationKey = ['providerSetupCancellation', AgentConfigId];
 export type MachineFlockAgentConfigIndexKey = ['agentConfigIndex', AgentConfigId];
 export type MachineFlockAcpCapabilityKey = ['acpCapability', AgentConfigId];
 export type MachineFlockRateLimitKey = ['rateLimit', CliType, string];
@@ -414,11 +411,7 @@ export const parseMachineFlockKey = (
     };
   }
 
-  if (
-    key.length === 2 &&
-    key[0] === 'providerSetupCancellation' &&
-    isNonEmptyString(key[1])
-  ) {
+  if (key.length === 2 && key[0] === 'providerSetupCancellation' && isNonEmptyString(key[1])) {
     const providerSetupId = key[1] as AgentConfigId;
     return {
       kind: 'providerSetupCancellation',
@@ -483,7 +476,7 @@ export type MachineFlockRow =
     }
   | { key: MachineFlockAgentConfigIndexKey; value: AgentConfigListSummary }
   | { key: MachineFlockAcpCapabilityKey; value: AcpCapabilityCacheEntry }
-  | { key: MachineFlockRateLimitKey; value: UsageData }
+  | { key: MachineFlockRateLimitKey; value: RateLimit }
   | { key: MachineFlockSessionLaunchConfigKey; value: SessionLaunchConfig };
 
 export type MachineFlockRowId = string & { __brand: 'MachineFlockRowId' };
@@ -750,8 +743,8 @@ export function applyProviderSetupCancellationToFlock(
   return true;
 }
 
-export function getMachineFlockRateLimits(rows: MachineFlockRowMap): Record<string, UsageData> {
-  const rateLimits: Record<string, UsageData> = {};
+export function getMachineFlockRateLimits(rows: MachineFlockRowMap): Record<string, RateLimit> {
+  const rateLimits: Record<string, RateLimit> = {};
   for (const row of Object.values(rows)) {
     if (!isMachineFlockRateLimitRow(row)) {
       continue;
@@ -947,7 +940,7 @@ export function parseMachineFlockRow(
     case 'acpCapability':
       return isAcpCapabilityCacheEntry(value) ? { key: parsedKey.key, value } : undefined;
     case 'rateLimit':
-      return isRecord(value) ? { key: parsedKey.key, value: value as UsageData } : undefined;
+      return isRecord(value) ? { key: parsedKey.key, value: value as RateLimit } : undefined;
     case 'sessionLaunchConfig': {
       const config = normalizeSessionLaunchConfig(value);
       return config ? { key: parsedKey.key, value: config } : undefined;

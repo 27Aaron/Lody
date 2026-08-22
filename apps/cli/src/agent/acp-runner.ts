@@ -19,8 +19,8 @@ import {
   type AgentClientOptions,
   type AcpWriteTextFileEvidence,
   type AgentSessionWarning,
-  type CodexImageGenerationBeginEvent,
-  type CodexImageGenerationEndEvent,
+  type ImageGenerationBeginEvent,
+  type ImageGenerationEndEvent,
   type AcpStartupStageEvent,
   type AcpStartupTimeoutOptions,
   type AcpSessionStartTarget,
@@ -48,7 +48,7 @@ import type {
 } from '@lody/shared';
 
 import { createStdinWritableStream, createStdoutReadableStream } from '@/utils/stream';
-import type { SessionUsageUpdate, UsageData } from 'acp-extension-core';
+import type { RateLimit, SessionUsageUpdate } from 'acp-extension-core';
 import {
   appendStderrTail,
   AcpStartupProcessError,
@@ -100,15 +100,14 @@ export type CreateAcpClientOptions = {
   ): Promise<RequestPermissionResponse>;
   onUsageUpdate?(usage: SessionUsageUpdate): void;
   onContextWindowUsageUpdate?(usage: SessionContextWindowUsage): void;
-  onRateLimitUpdate?(limits: UsageData): void;
+  onRateLimitUpdate?(limits: RateLimit): void;
   onThreadGoalUpdated?(goal: Extract<MessageContent, { type: 'goal' }>): void;
   onThreadGoalCleared?(threadId: string): void;
   onSessionTitleUpdate?(title: string): void;
   onAgentWarning?(warning: AgentSessionWarning): void;
   loadExternalMcpServers?: AgentClientOptions['loadExternalMcpServers'];
-  onCodexProposedPlan?(plan: Extract<MessageContent, { type: 'proposed_plan' }>): void;
-  onCodexImageGenerationBegin?(event: CodexImageGenerationBeginEvent): void;
-  onCodexImageGenerationEnd?(event: CodexImageGenerationEndEvent): void;
+  onImageGenerationBegin?(event: ImageGenerationBeginEvent): void;
+  onImageGenerationEnd?(event: ImageGenerationEndEvent): void;
   onWriteTextFile?(event: AcpWriteTextFileEvidence): void | Promise<void>;
   sessionId?: SessionId;
   startupTimeouts?: AcpStartupTimeoutOptions;
@@ -140,9 +139,8 @@ export const createAcpClient = async (options: CreateAcpClientOptions) => {
     onSessionTitleUpdate: options.onSessionTitleUpdate,
     onAgentWarning: options.onAgentWarning,
     loadExternalMcpServers: options.loadExternalMcpServers,
-    onCodexProposedPlan: options.onCodexProposedPlan,
-    onCodexImageGenerationBegin: options.onCodexImageGenerationBegin,
-    onCodexImageGenerationEnd: options.onCodexImageGenerationEnd,
+    onImageGenerationBegin: options.onImageGenerationBegin,
+    onImageGenerationEnd: options.onImageGenerationEnd,
     onWriteTextFile: options.onWriteTextFile,
   });
   options.logger.debug(`[${sessionId}] createAcpClient: AgentClient created, calling startSession`);

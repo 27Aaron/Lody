@@ -6,37 +6,43 @@ import {
 } from '../src/agent/acknowledged-steer';
 
 describe('acknowledged steer protocol', () => {
-  it('normalizes Codex same-turn and Claude handoff capabilities', () => {
-    const codex = parseAcknowledgedSteerCapability({
-      codex: {
-        steer: {
+  it('normalizes Core request and prompt steering capabilities', () => {
+    const request = parseAcknowledgedSteerCapability({
+      lody: {
+        steering: {
           version: 1,
-          method: '_session/steering',
-          appliedNotification: '_codex/steerApplied',
+          transport: 'request',
           upstreamTurn: 'same',
           configPolicy: 'active',
         },
       },
     });
-    const claude = parseAcknowledgedSteerCapability({
-      claudeCode: {
-        steer: { version: 1, appliedNotification: '_claude/steerApplied' },
+    const prompt = parseAcknowledgedSteerCapability({
+      lody: {
+        steering: {
+          version: 1,
+          transport: 'prompt',
+          upstreamTurn: 'handoff',
+          configPolicy: 'apply',
+        },
       },
     });
 
-    expect(codex).toMatchObject({
-      provider: 'codex',
-      requestMethod: '_session/steering',
-      appliedNotificationMethod: 'codex/steerApplied',
+    expect(request).toMatchObject({
+      requestMethod: '_lody/session/steer',
+      appliedNotificationMethod: 'lody/session/steer_applied',
       upstreamTurn: 'same',
       configPolicy: 'active',
     });
-    expect(claude).toMatchObject({
-      provider: 'claudeCode',
+    expect(prompt).toMatchObject({
+      promptMetaNamespace: 'lody',
       upstreamTurn: 'handoff',
       configPolicy: 'apply',
     });
-    expect(buildSteerRequestMeta(codex!, 'steer-1')).toBeUndefined();
+    expect(buildSteerRequestMeta(request!, 'steer-1')).toBeUndefined();
+    expect(buildSteerRequestMeta(prompt!, 'steer-2')).toEqual({
+      lody: { steer: { id: 'steer-2' } },
+    });
   });
 
   it('fails closed when requested configuration differs from the active Codex turn', () => {

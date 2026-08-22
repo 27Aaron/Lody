@@ -2,14 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { SessionStatusFactory } from '@lody/shared';
 
 import {
-  resolveCodexImageGenerationStatusWrite,
+  resolveImageGenerationStatusWrite,
   shouldRestoreRunningAfterPermission,
 } from './session-activity-status';
 
-describe('resolveCodexImageGenerationStatusWrite', () => {
+describe('resolveImageGenerationStatusWrite', () => {
   it('marks image generation while active presence is live', () => {
     expect(
-      resolveCodexImageGenerationStatusWrite({
+      resolveImageGenerationStatusWrite({
         hasActiveImageGeneration: true,
         hasActivePresence: true,
         status: SessionStatusFactory.running(),
@@ -21,14 +21,14 @@ describe('resolveCodexImageGenerationStatusWrite', () => {
     // The status chain rides on ACP events and can drain after the turn scope
     // released active presence; meta must not stay stuck non-idle.
     expect(
-      resolveCodexImageGenerationStatusWrite({
+      resolveImageGenerationStatusWrite({
         hasActiveImageGeneration: true,
         hasActivePresence: false,
         status: SessionStatusFactory.running(),
       })
     ).toBeNull();
     expect(
-      resolveCodexImageGenerationStatusWrite({
+      resolveImageGenerationStatusWrite({
         hasActiveImageGeneration: false,
         hasActivePresence: false,
         status: SessionStatusFactory.running('image_generation'),
@@ -38,7 +38,7 @@ describe('resolveCodexImageGenerationStatusWrite', () => {
 
   it('does not override a permission request', () => {
     expect(
-      resolveCodexImageGenerationStatusWrite({
+      resolveImageGenerationStatusWrite({
         hasActiveImageGeneration: true,
         hasActivePresence: true,
         status: SessionStatusFactory.requestPermission(),
@@ -48,7 +48,7 @@ describe('resolveCodexImageGenerationStatusWrite', () => {
 
   it('does not resurrect an idle session while finalization still owns presence', () => {
     expect(
-      resolveCodexImageGenerationStatusWrite({
+      resolveImageGenerationStatusWrite({
         hasActiveImageGeneration: true,
         hasActivePresence: true,
         status: SessionStatusFactory.idle(),
@@ -58,21 +58,21 @@ describe('resolveCodexImageGenerationStatusWrite', () => {
 
   it('restores plain running only from the image-generation activity', () => {
     expect(
-      resolveCodexImageGenerationStatusWrite({
+      resolveImageGenerationStatusWrite({
         hasActiveImageGeneration: false,
         hasActivePresence: true,
         status: SessionStatusFactory.running('image_generation'),
       })
     ).toEqual(SessionStatusFactory.running());
     expect(
-      resolveCodexImageGenerationStatusWrite({
+      resolveImageGenerationStatusWrite({
         hasActiveImageGeneration: false,
         hasActivePresence: true,
         status: SessionStatusFactory.running(),
       })
     ).toBeNull();
     expect(
-      resolveCodexImageGenerationStatusWrite({
+      resolveImageGenerationStatusWrite({
         hasActiveImageGeneration: false,
         hasActivePresence: true,
         status: SessionStatusFactory.idle(),

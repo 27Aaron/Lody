@@ -66,6 +66,7 @@ const SubagentTaskRow = ({ task }: { task: SubagentTask }) => {
   const { t } = useTranslation();
 
   const actor =
+    task.actor ||
     task.subagentType ||
     task.workflowName ||
     (task.taskType === 'local_bash'

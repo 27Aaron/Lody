@@ -10,6 +10,11 @@ arrive: context/message-flow.md "Upstream".
 
 - `agent-client.ts` — the ACP connection: initialize/session lifecycle, client
   capabilities (fs, elicitation), permission/fs request handling, update callbacks.
+  Lody ACP extensions are consumed through `acp-extension-core`: capability discovery
+  lives at `agentCapabilities._meta.lody`, session metadata at `_meta.lody`, and custom
+  methods use the Core `_lody/...` names. Provider-specific and pre-Core readers belong
+  only in the central compatibility adapter and must not leak into session consumers;
+  normalized Core capabilities remain provider-neutral.
   Builtin Grok must default `clientCapabilities.terminal` to false so its adapter
   uses Grok's local terminal runner. Its ACP terminal request encodes a full shell
   command line in `command` with empty `args`, which is not the executable-plus-argv
@@ -18,13 +23,9 @@ arrive: context/message-flow.md "Upstream".
   `_meta.lody.sessionConfig`; provider-specific startup translation belongs in the
   ACP adapter. `session/set_config_option` remains the live-session switch, and a
   successful selection becomes the startup state of a later replacement.
-  Goal session-info updates use provider-neutral `_meta.goal`; keep the
-  `_meta.codex.goal` reader only as a compatibility fallback for older Codex adapters.
-  A present neutral field wins, including `null`, so malformed new metadata is not
-  silently hidden by a legacy duplicate. Validate neutral snapshots against
-  `controlMethod: _session/goal`; normalize neutral `limited` to the legacy durable
-  `blocked` status so older readers can consume mixed-version history without
-  inventing a provider-specific limit reason.
+  Goal snapshots use the Core `_meta.lody.goal` contract and epoch-second field names;
+  convert them to the durable millisecond fields at this boundary. Normalize `limited`
+  to the legacy durable `blocked` status.
   The built-in `lody` MCP server has TWO transports. Agents whose initialize
   response advertises `mcpCapabilities.http` get a shared HTTP endpoint served
   by ONE host subprocess per daemon (`src/mcp/lody-mcp-http-host.ts`, supervised
@@ -121,11 +122,11 @@ arrive: context/message-flow.md "Upstream".
   private-wire contract and minimum official version; it is never the source for
   production runtime binaries.
   Kimi is different: `packages/acp-extension-kimi` owns the Lody-maintained runtime
-  source and its versioned `lody.ai/kimi` ACP extension. Release automation must build
+  source and implements the shared `acp-extension-core` contract. Release automation must build
   that isolated workspace into the minimal checksummed Node-package artifact; the
   desktop still downloads the artifact and must not depend on the submodule workspace.
-  Extension methods stay capability-gated, begin with `_`, and never carry provider
-  credentials or raw authentication output.
+  Custom methods stay capability-gated, use the `_lody/` namespace, and never carry
+  provider credentials or raw authentication output.
   Its artifact base URL is injected from `CloudPort.runtimeArtifacts`; do not read
   deployment environment or derive the channel inside the runtime manager. Local
   and cloud process assembly share the public R2-backed default owned by
@@ -197,9 +198,9 @@ arrive: context/message-flow.md "Upstream".
   stores them only after `sanitizeLodyInternalInstructions`. It must not start
   `title-generator.ts`'s isolated ACP session. Builtin Codex still uses the
   isolated generator, but its adapter tags every pushed title with
-  `_meta.codex.titleSource`: accept only `explicit` thread names and ignore its
+  `_meta.lody.titleSource`: accept only `explicit` thread names and ignore its
   first-prompt `fallback`. Codex title-agent chunks require
-  `_meta.codex.phase === 'final_answer'`; untyped chunks, provider error/warning
+  `_meta.lody.messagePhase === 'final_answer'`; untyped chunks, provider error/warning
   payloads, and internal-instruction tails are not title candidates. Each isolated
   run owns and removes a unique temp directory, and concurrent session-title /
   branch-name work reuses one in-flight result. The shared

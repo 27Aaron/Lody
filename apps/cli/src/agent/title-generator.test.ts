@@ -12,7 +12,7 @@ const agentMessage = (text: string, phase?: string): AcpSessionNotification => (
   update: {
     sessionUpdate: 'agent_message_chunk',
     content: { type: 'text', text },
-    ...(phase ? { _meta: { codex: { phase } } } : {}),
+    ...(phase ? { _meta: { lody: { messagePhase: phase } } } : {}),
   },
 });
 
@@ -31,6 +31,12 @@ describe('extractTitleChunkFromNotification', () => {
 
   it('rejects untyped chunks from Codex title agents', () => {
     expect(extractTitleChunkFromNotification(agentMessage('HTTP 400'), 'codex')).toBe(null);
+  });
+
+  it('keeps one-release compatibility with Codex phase metadata', () => {
+    const notification = agentMessage('Fix session title');
+    notification.update._meta = { codex: { phase: 'final_answer' } };
+    expect(extractTitleChunkFromNotification(notification, 'codex')).toBe('Fix session title');
   });
 
   it('keeps compatibility with ACP agents that do not provide phase metadata', () => {

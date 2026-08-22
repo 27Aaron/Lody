@@ -3,24 +3,18 @@ import { isRecord } from '../json-guards';
 import type { SubagentTaskPayload } from '../ai';
 
 /**
- * Subagent/background task persistence helpers.
+ * Subagent/background/scheduled task persistence helpers.
  *
- * The Claude ACP adapter forwards the SDK's `task_started / task_progress /
- * task_updated / task_notification` system messages over the
- * `_claude/taskLifecycle` extension notification. The CLI
- * (`apps/cli/src/agent/claude-task-lifecycle.ts`) sanitizes each into a bounded,
- * whitelisted payload and carries it into the history pipeline on a synthetic
- * tool_call under {@link LODY_CLAUDE_TASK_LIFECYCLE_RAW_INPUT_KEY}. The history
- * applier then converts it into a first-class `subagent_task` history item
- * (merged by `taskId`) — the persisted store never contains a tool_call or this
- * carrier key.
+ * New ACP adapters publish task snapshots through `_meta.lody.task`. The legacy
+ * raw-input carriers below remain only so the centralized one-release migration
+ * path can replay history produced by earlier Claude and Kimi runtimes. The
+ * history applier converts either shape into a first-class `subagent_task` item
+ * merged by `taskId`; the persisted store never contains the carrier key.
  */
 
 /**
- * Internal wire key only. This is how the sanitized payload rides the ACP
- * tool_call transport from the CLI converter to the history applier; it is
- * stripped when the applier materializes the `subagent_task` item, so it never
- * appears in persisted history.
+ * Legacy internal wire key, stripped when the history applier materializes the
+ * `subagent_task` item.
  */
 export const LODY_CLAUDE_TASK_LIFECYCLE_RAW_INPUT_KEY = 'lodyClaudeTaskLifecycle';
 /** Provider-neutral carrier used by newer builtin ACP adapters. */
@@ -45,6 +39,12 @@ const SubagentTaskUsageSchema = z.object({
 export const SubagentTaskPayloadSchema = z.object({
   taskId: z.string().min(1),
   status: z.enum(SUBAGENT_TASK_STATUSES),
+  taskKind: z.enum(['subagent', 'background', 'scheduled']).optional(),
+  actor: z.string().optional(),
+  parentTaskId: z.string().optional(),
+  modelId: z.string().optional(),
+  startedAtEpochSeconds: z.number().nonnegative().optional(),
+  endedAtEpochSeconds: z.number().nonnegative().optional(),
   event: z.enum(SUBAGENT_TASK_EVENTS).optional(),
   toolUseId: z.string().optional(),
   subagentType: z.string().optional(),
@@ -60,6 +60,55 @@ export const SubagentTaskPayloadSchema = z.object({
   skipTranscript: z.boolean().optional(),
   hasOutputFile: z.boolean().optional(),
 });
+
+const LodyTaskMetaSchema = z.object({
+  version: z.literal(1),
+  taskId: z.string().min(1),
+  kind: z.enum(['subagent', 'background', 'scheduled']),
+  status: z.enum(SUBAGENT_TASK_STATUSES),
+  description: z.string().optional(),
+  actor: z.string().optional(),
+  parentTaskId: z.string().optional(),
+  parentToolCallId: z.string().optional(),
+  modelId: z.string().optional(),
+  startedAtEpochSeconds: z.number().nonnegative().optional(),
+  endedAtEpochSeconds: z.number().nonnegative().optional(),
+  summary: z.string().optional(),
+  error: z.string().optional(),
+  lastToolName: z.string().optional(),
+  usage: SubagentTaskUsageSchema.optional(),
+  skipTranscript: z.boolean().optional(),
+});
+
+/** Read a provider-neutral task lifecycle snapshot from `_meta.lody.task`. */
+export const parseLodyTaskMeta = (meta: unknown): SubagentTaskPayload | null => {
+  if (!isRecord(meta) || !isRecord(meta.lody)) return null;
+  const parsed = LodyTaskMetaSchema.safeParse(meta.lody.task);
+  if (!parsed.success) return null;
+  const task = parsed.data;
+  return {
+    taskId: task.taskId,
+    status: task.status,
+    taskKind: task.kind,
+    ...(task.actor !== undefined ? { actor: task.actor } : {}),
+    ...(task.parentTaskId !== undefined ? { parentTaskId: task.parentTaskId } : {}),
+    ...(task.parentToolCallId !== undefined ? { toolUseId: task.parentToolCallId } : {}),
+    ...(task.modelId !== undefined ? { modelId: task.modelId } : {}),
+    ...(task.startedAtEpochSeconds !== undefined
+      ? { startedAtEpochSeconds: task.startedAtEpochSeconds }
+      : {}),
+    ...(task.endedAtEpochSeconds !== undefined
+      ? { endedAtEpochSeconds: task.endedAtEpochSeconds }
+      : {}),
+    ...(task.description !== undefined ? { description: task.description } : {}),
+    ...(task.summary !== undefined ? { summary: task.summary } : {}),
+    ...(task.error !== undefined ? { error: task.error } : {}),
+    ...(task.lastToolName !== undefined ? { lastToolName: task.lastToolName } : {}),
+    ...(task.usage !== undefined ? { usage: task.usage } : {}),
+    isBackgrounded: task.kind === 'background',
+    ...(task.skipTranscript !== undefined ? { skipTranscript: task.skipTranscript } : {}),
+  };
+};
 
 /**
  * Read the subagent-task payload off the internal wire tool_call `rawInput`.

@@ -155,7 +155,7 @@ control-plane path is DEPRECATED; do not add functionality to it.
   exponential retry; request-scoped `syncOnce()` failures must not make local project
   add/update flows fail after the local write is durable.
 - Builtin Codex local-project history import is read-only: require
-  `_meta.lody.readSessionHistory` v1 and call its advertised method; never fall back to
+  `_meta.lody.sessionHistory` v1 and call the Core-defined history method; never fall back to
   `loadSession`, which resumes the thread and can contend with its active writer. Publish a new
   imported Session only after history and its cursor are durable; legacy `metadata_only` shells
   remain selectable so the next import can finish hydration.
@@ -280,13 +280,15 @@ control-plane path is DEPRECATED; do not add functionality to it.
   `collectPendingScheduledTasksFromHistory` + `nextCronFireMs`.
   INVARIANT: `history-apply.ts` strips `rawInput`/`rawOutput` from ALL generic tool calls
   (unstructured by spec) EXCEPT the four scheduling tools in `SCHEDULING_TOOL_NAMES`
-  (`CronCreate/CronDelete/CronList/ScheduleWakeup`, matched via `_meta.claudeCode.toolName`),
+  (`CronCreate/CronDelete/CronList/ScheduleWakeup`, matched via `_meta.lody.toolName`),
   whose small `rawInput`/`rawOutput` are kept, whose persisted `title` is pinned to the
   canonical tool name, and which also record `schedulingTimeZone` (this machine's IANA zone,
   captured at persist time — cron is local-time to it, so the panel resolves fire times in
   that zone via `nextCronFireMs`, not the viewer's browser zone). The deriver reads exactly
   those fields — do not "clean up" this exception or the panel goes silently empty (unit tests
   fabricate history and won't catch it).
+  The former `_meta.claudeCode.toolName` carrier is read only by the centralized
+  one-release compatibility path; new provider output must use the Core contract.
   RPC fast-path ordering: turn-scoped history LIST writes in `message-handler.ts`
   (assistant entry creation, ACP/proposed-plan flushes, finalization, chat_failed
   notices, image-group entries) first `await awaitTurnHistoryGate(sessionId)` —

@@ -12,11 +12,21 @@ import {
 } from '../src/lib/session-usage';
 
 const usage = (overrides: Partial<MachineRateLimits[string]> = {}): MachineRateLimits[string] => ({
+  limitId: 'codex',
+  scope: { providerId: 'codex' },
   planName: null,
-  fiveHour: 25,
-  sevenDay: 40,
-  fiveHourResetAt: null,
-  sevenDayResetAt: null,
+  windows: [
+    {
+      usedPercent: 25,
+      windowDurationSeconds: 5 * 60 * 60,
+      resetsAtEpochSeconds: null,
+    },
+    {
+      usedPercent: 40,
+      windowDurationSeconds: 7 * 24 * 60 * 60,
+      resetsAtEpochSeconds: null,
+    },
+  ],
   ...overrides,
 });
 
@@ -35,83 +45,88 @@ describe('session usage', () => {
     expect(getContextWindowUsageData({ size: 0, used: 0 })).toBeNull();
   });
 
-  it('normalizes provider-specific usage scales before showing remaining quota', () => {
-    expect(getRateLimitRemainingPercent(25, 'codex')).toBe(75);
-    expect(getRateLimitRemainingPercent(0.55, 'claude')).toBeCloseTo(45);
-    expect(getRateLimitRemainingPercent(1, 'claude')).toBe(0);
-    expect(getRateLimitRemainingPercent(1, 'codex')).toBe(99);
-    expect(getRateLimitRemainingPercent(0.5, 'grok')).toBe(99.5);
+  it('derives remaining quota from the normalized percentage scale', () => {
+    expect(getRateLimitRemainingPercent(25)).toBe(75);
+    expect(getRateLimitRemainingPercent(55)).toBe(45);
+    expect(getRateLimitRemainingPercent(100)).toBe(0);
+    expect(getRateLimitRemainingPercent(1)).toBe(99);
+    expect(getRateLimitRemainingPercent(0.5)).toBe(99.5);
   });
 
   it('uses provider-reported window durations instead of positional 5h/7d labels', () => {
     const windows = getAgentRateLimitWindows(
       usage({
-        schemaVersion: 2,
         windows: [
           {
             usedPercent: 29,
-            windowDurationMins: 7 * 24 * 60,
-            resetsAt: 1784505071,
+            windowDurationSeconds: 7 * 24 * 60 * 60,
+            resetsAtEpochSeconds: 1784505071,
           },
         ],
-        // Dynamic windows are authoritative even if stale legacy fields exist.
-        fiveHour: 29,
-        sevenDay: null,
-      }),
-      'codex'
+      })
     );
 
     expect(windows).toEqual([
       {
         usedPercent: 29,
         remainingPercent: 71,
-        windowDurationMins: 10_080,
-        resetsAt: 1784505071,
+        windowDurationSeconds: 604_800,
+        resetsAtEpochSeconds: 1784505071,
       },
     ]);
-    expect(formatRateLimitWindowShortLabel(windows[0]!.windowDurationMins)).toBe('7d');
+    expect(formatRateLimitWindowShortLabel(windows[0]!.windowDurationSeconds)).toBe('7d');
   });
 
-  it('keeps legacy fixed windows readable for persisted Claude and Codex data', () => {
-    expect(getAgentRateLimitWindows(usage(), 'codex')).toMatchObject([
-      { usedPercent: 25, windowDurationMins: 300 },
-      { usedPercent: 40, windowDurationMins: 10_080 },
+  it('reads canonical fixed windows without provider-specific interpretation', () => {
+    expect(getAgentRateLimitWindows(usage())).toMatchObject([
+      { usedPercent: 25, windowDurationSeconds: 18_000 },
+      { usedPercent: 40, windowDurationSeconds: 604_800 },
     ]);
   });
 
   it('keeps sub-one-percent Grok usage on the percentage scale', () => {
     expect(
       getAgentRateLimitWindows(
-        usage({ fiveHour: null, sevenDay: 0.5, sevenDayResetAt: 1784505071 }),
-        'grok'
+        usage({
+          scope: { providerId: 'grok' },
+          windows: [
+            {
+              usedPercent: 0.5,
+              windowDurationSeconds: 604_800,
+              resetsAtEpochSeconds: 1784505071,
+            },
+          ],
+        })
       )
     ).toEqual([
       {
         usedPercent: 0.5,
         remainingPercent: 99.5,
-        windowDurationMins: 10_080,
-        resetsAt: 1784505071,
+        windowDurationSeconds: 604_800,
+        resetsAtEpochSeconds: 1784505071,
       },
     ]);
   });
 
-  it('treats a persisted single Codex primary window as weekly', () => {
+  it('preserves an explicitly reported single weekly Codex window', () => {
     expect(
       getAgentRateLimitWindows(
         usage({
-          fiveHour: 29,
-          sevenDay: null,
-          fiveHourResetAt: 1784505071,
-          sevenDayResetAt: null,
-        }),
-        'codex'
+          windows: [
+            {
+              usedPercent: 29,
+              windowDurationSeconds: 604_800,
+              resetsAtEpochSeconds: 1784505071,
+            },
+          ],
+        })
       )
     ).toEqual([
       {
         usedPercent: 29,
         remainingPercent: 71,
-        windowDurationMins: 10_080,
-        resetsAt: 1784505071,
+        windowDurationSeconds: 604_800,
+        resetsAtEpochSeconds: 1784505071,
       },
     ]);
   });

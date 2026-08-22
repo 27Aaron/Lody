@@ -1133,7 +1133,7 @@ export type ChatFailedMeta = {
  */
 export type AgentWarningMeta = {
   message: string;
-  source?: 'warning' | 'configWarning';
+  source?: string;
 };
 
 export type SessionForkOriginMeta = {
@@ -1365,6 +1365,14 @@ export type SubagentTaskUsage = {
 export type SubagentTaskPayload = {
   taskId: string;
   status: SubagentTaskStatus;
+  /** Provider-neutral task category published through `_meta.lody.task`. */
+  taskKind?: 'subagent' | 'background' | 'scheduled';
+  /** Human-readable worker or workflow identity. */
+  actor?: string;
+  parentTaskId?: string;
+  modelId?: string;
+  startedAtEpochSeconds?: number;
+  endedAtEpochSeconds?: number;
   /** The most recent lifecycle event applied to this task. */
   event?: SubagentTaskEvent;
   /** Parent tool_use id — links the task back to the spawning turn. */

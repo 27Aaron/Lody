@@ -50,8 +50,8 @@ import {
   type AcpSessionStartTarget,
   type AgentClientOptions,
   type AgentSessionWarning,
-  type CodexImageGenerationBeginEvent,
-  type CodexImageGenerationEndEvent,
+  type ImageGenerationBeginEvent,
+  type ImageGenerationEndEvent,
 } from '@/agent/agent-client';
 import { RequestPermissionRequest, RequestPermissionResponse } from '@agentclientprotocol/sdk';
 import { TerminalManager } from './terminal-manager';
@@ -85,7 +85,7 @@ import {
 import { ensureGhShimScript, prependGhShimBinDirToPath } from '@/lib/gh-shim-script';
 import { ensureLodyBashEnvForGhShim, shouldInjectBashEnvForGhShim } from '@/lib/lody-bashenv';
 import { ensureLodyZdotdirForGhShim, shouldInjectZdotdirForGhShim } from '@/lib/lody-zdotdir';
-import { UsageData, SessionUsageUpdate } from 'acp-extension-core';
+import type { RateLimit, SessionUsageUpdate } from 'acp-extension-core';
 import { getWorktreeManager } from './worktree/worktree-manager';
 import type {
   GitCredentialBrokerAuth,
@@ -381,15 +381,14 @@ export interface CreateAgentConfig {
   ) => Promise<RequestPermissionResponse>;
   onUsageUpdate: (usage: SessionUsageUpdate) => void;
   onContextWindowUsageUpdate: (usage: SessionContextWindowUsage) => void;
-  onRateLimitUpdate: (limits: UsageData) => void;
+  onRateLimitUpdate: (limits: RateLimit) => void;
   onThreadGoalUpdated: (goal: Extract<MessageContent, { type: 'goal' }>) => void;
   onThreadGoalCleared: (threadId: string) => void;
   onSessionTitleUpdate: (title: string) => void;
   onAgentWarning: (warning: AgentSessionWarning) => void;
   loadExternalMcpServers: NonNullable<AgentClientOptions['loadExternalMcpServers']>;
-  onCodexProposedPlan: (plan: Extract<MessageContent, { type: 'proposed_plan' }>) => void;
-  onCodexImageGenerationBegin: (event: CodexImageGenerationBeginEvent) => void;
-  onCodexImageGenerationEnd: (event: CodexImageGenerationEndEvent) => void;
+  onImageGenerationBegin: (event: ImageGenerationBeginEvent) => void;
+  onImageGenerationEnd: (event: ImageGenerationEndEvent) => void;
   onWriteTextFile: (event: AcpWriteTextFileEvidence) => void | Promise<void>;
 }
 
@@ -426,7 +425,7 @@ interface SessionManagerEvents {
     usage: SessionUsageUpdate;
   }) => void;
   onContextWindowUsageUpdate: (sessionId: SessionId, usage: SessionContextWindowUsage) => void;
-  onRateLimitUpdate: (machineId: MachineId, cliType: CliType, limits: UsageData) => void;
+  onRateLimitUpdate: (machineId: MachineId, cliType: CliType, limits: RateLimit) => void;
   onThreadGoalUpdated: (
     sessionId: SessionId,
     goal: Extract<MessageContent, { type: 'goal' }>
@@ -434,15 +433,8 @@ interface SessionManagerEvents {
   onThreadGoalCleared: (sessionId: SessionId, threadId: string) => void;
   onSessionTitleUpdate: (sessionId: SessionId, title: string) => void;
   onAgentWarning: (sessionId: SessionId, warning: AgentSessionWarning) => void;
-  onCodexProposedPlan: (
-    sessionId: SessionId,
-    plan: Extract<MessageContent, { type: 'proposed_plan' }>
-  ) => void;
-  onCodexImageGenerationBegin: (
-    sessionId: SessionId,
-    event: CodexImageGenerationBeginEvent
-  ) => void;
-  onCodexImageGenerationEnd: (sessionId: SessionId, event: CodexImageGenerationEndEvent) => void;
+  onImageGenerationBegin: (sessionId: SessionId, event: ImageGenerationBeginEvent) => void;
+  onImageGenerationEnd: (sessionId: SessionId, event: ImageGenerationEndEvent) => void;
   onWriteTextFile: (sessionId: SessionId, event: AcpWriteTextFileEvidence) => void;
   ping: () => void;
 }
@@ -1266,7 +1258,7 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
       onContextWindowUsageUpdate: (usage: SessionContextWindowUsage) => {
         dispatchEvent(() => this.emit('onContextWindowUsageUpdate', sessionId, usage));
       },
-      onRateLimitUpdate: (limits: UsageData) => {
+      onRateLimitUpdate: (limits: RateLimit) => {
         dispatchEvent(() => {
           if (config.agentCliType === 'builtin' && isManagedBuiltinAgentType(config.agentType)) {
             this.emit('onRateLimitUpdate', this.machineId, config.agentType, limits);
@@ -1294,12 +1286,10 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
           selectedIds: config.mcpServerIds,
           logger: this.logger,
         }),
-      onCodexProposedPlan: (plan) =>
-        dispatchEvent(() => this.emit('onCodexProposedPlan', sessionId, plan)),
-      onCodexImageGenerationBegin: (event) =>
-        dispatchEvent(() => this.emit('onCodexImageGenerationBegin', sessionId, event)),
-      onCodexImageGenerationEnd: (event) =>
-        dispatchEvent(() => this.emit('onCodexImageGenerationEnd', sessionId, event)),
+      onImageGenerationBegin: (event) =>
+        dispatchEvent(() => this.emit('onImageGenerationBegin', sessionId, event)),
+      onImageGenerationEnd: (event) =>
+        dispatchEvent(() => this.emit('onImageGenerationEnd', sessionId, event)),
       onWriteTextFile: (event) => {
         dispatchEvent(() => this.emit('onWriteTextFile', sessionId, event));
       },

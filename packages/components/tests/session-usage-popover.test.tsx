@@ -26,20 +26,16 @@ vi.mock('react-i18next', () => ({
 
 const rateLimits: MachineRateLimits = {
   [getRateLimitEntryKey('codex', 'codex')]: {
-    schemaVersion: 2,
-    planName: 'ChatGPT Plus',
     limitId: 'codex',
+    scope: { providerId: 'codex' },
+    planName: 'ChatGPT Plus',
     windows: [
       {
         usedPercent: 29,
-        windowDurationMins: 7 * 24 * 60,
-        resetsAt: null,
+        windowDurationSeconds: 7 * 24 * 60 * 60,
+        resetsAtEpochSeconds: null,
       },
     ],
-    fiveHour: null,
-    sevenDay: 29,
-    fiveHourResetAt: null,
-    sevenDayResetAt: null,
   },
 };
 
@@ -106,16 +102,11 @@ describe('SessionUsagePopover', () => {
   it('shows a truthful unavailable state when the provider omits utilization', async () => {
     const unavailableLimits: MachineRateLimits = {
       [getRateLimitEntryKey('grok', 'grok')]: {
-        schemaVersion: 2,
+        limitId: 'grok',
+        scope: { providerId: 'grok' },
         planName: 'X Premium+',
         limitName: 'Grok Build',
-        limitId: 'grok',
         windows: [],
-        fiveHour: null,
-        sevenDay: null,
-        fiveHourResetAt: null,
-        sevenDayResetAt: null,
-        apiUnavailable: true,
       },
     };
     await renderUsage({

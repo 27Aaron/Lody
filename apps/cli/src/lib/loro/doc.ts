@@ -88,7 +88,7 @@ import type { ModelInfo } from '@lody/shared';
 import { redactProxyUrl, sanitizeUrlForLogging } from '@/utils/log-sanitize';
 import { getProxyForUrl } from 'proxy-from-env';
 import { HttpsProxyAgent } from 'https-proxy-agent';
-import { UsageData } from 'acp-extension-core';
+import type { RateLimit } from 'acp-extension-core';
 import { createCliSqliteRepoStore } from './sqlite-repo-store';
 import { streamsRoomBinding, type StreamsRoomBinding } from './streams-room-binding';
 import { formatErrorMessage } from '@/utils/format-error';
@@ -1419,7 +1419,7 @@ export class LoroDocumentManager {
     return this.presenceRuntime?.subscribe(listener) ?? null;
   }
 
-  async updateRateLimits(machineId: MachineId, cliType: CliType, limits: UsageData): Promise<void> {
+  async updateRateLimits(machineId: MachineId, cliType: CliType, limits: RateLimit): Promise<void> {
     if (!this.machine) {
       this.machine = this.createMachineDocument(machineId);
       await this.machine.init();
@@ -2963,7 +2963,7 @@ export class MachineDocument implements LoroDocument<{}, MachineMeta> {
     return current;
   }
 
-  async updateRateLimits(cliType: CliType, limits: UsageData): Promise<void> {
+  async updateRateLimits(cliType: CliType, limits: RateLimit): Promise<void> {
     return this.enqueueRateLimitsUpdate(async () => {
       const limitId = ((limits as { limitId?: string }).limitId ?? cliType).trim() || cliType;
       const handle = await this.openMachineFlockDoc();

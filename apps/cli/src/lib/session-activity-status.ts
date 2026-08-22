@@ -17,7 +17,7 @@ import { SessionStatusFactory, type SessionStatus } from '@lody/shared';
  * What (if anything) the Codex image-generation activity sync should write.
  * Returns the status to write, or null to leave the status untouched.
  */
-export const resolveCodexImageGenerationStatusWrite = (input: {
+export const resolveImageGenerationStatusWrite = (input: {
   hasActiveImageGeneration: boolean;
   hasActivePresence: boolean;
   status: SessionStatus | undefined;
