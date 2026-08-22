@@ -25,7 +25,14 @@ describe('builtin Grok shared contract', () => {
     const capabilities = getStaticBuiltinAcpCapabilities('builtin', 'grok');
 
     expect(capabilities?.modes.map((mode) => mode.id)).toEqual(['default', 'plan']);
-    expect(capabilities?.models.map((model) => model.modelId)).toEqual(['grok-build']);
+    expect(capabilities?.models).toEqual([
+      {
+        modelId: 'grok-4.6',
+        name: 'Grok 4.6',
+        description: "SpaceXAI's latest frontier model",
+      },
+      { modelId: 'grok-4.5', name: 'Grok 4.5' },
+    ]);
     expect(capabilities?.configOptions.map((option) => option.id)).toEqual([
       'interaction_mode',
       'permission_mode',
@@ -41,6 +48,18 @@ describe('builtin Grok shared contract', () => {
       'ask',
       'auto',
       'always-approve',
+    ]);
+    expect(capabilities?.configOptions[2]?.currentValue).toBe('grok-4.6');
+    expect(capabilities?.configOptions[2]?.options.map((option) => option.value)).toEqual([
+      'grok-4.6',
+      'grok-4.5',
+    ]);
+    expect(capabilities?.configOptions[3]?.currentValue).toBe('high');
+    expect(capabilities?.configOptions[3]?.options.map((option) => option.value)).toEqual([
+      'xhigh',
+      'high',
+      'medium',
+      'low',
     ]);
     expect(getBuiltinDefaultModeId('builtin', 'grok')).toBe('agent');
     expect(classifyPermissionModeFace('always-approve')).toEqual({

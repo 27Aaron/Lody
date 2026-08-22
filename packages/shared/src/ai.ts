@@ -809,8 +809,13 @@ const GROK_STATIC_MODES: StaticBuiltinAcpCapabilities['modes'] = [
 
 const GROK_STATIC_MODELS: StaticBuiltinAcpCapabilities['models'] = [
   {
-    modelId: 'grok-build',
-    name: 'Grok Build',
+    modelId: 'grok-4.6',
+    name: 'Grok 4.6',
+    description: "SpaceXAI's latest frontier model",
+  },
+  {
+    modelId: 'grok-4.5',
+    name: 'Grok 4.5',
   },
 ];
 
@@ -862,8 +867,12 @@ const GROK_STATIC_CONFIG_OPTIONS: AcpConfigOptionSummary[] = [
     description: 'Select the model used for this session',
     category: 'model',
     type: 'select',
-    currentValue: 'grok-build',
-    options: [{ value: 'grok-build', name: 'Grok Build' }],
+    currentValue: 'grok-4.6',
+    options: GROK_STATIC_MODELS.map((model) => ({
+      value: model.modelId,
+      name: model.name ?? model.modelId,
+      description: model.description,
+    })),
   },
   {
     id: 'reasoning_effort',
@@ -871,13 +880,12 @@ const GROK_STATIC_CONFIG_OPTIONS: AcpConfigOptionSummary[] = [
     description: 'Controls how much reasoning the model performs',
     category: 'thought_level',
     type: 'select',
-    currentValue: 'medium',
+    currentValue: 'high',
     options: [
-      { value: 'minimal', name: 'Minimal' },
-      { value: 'low', name: 'Low' },
-      { value: 'medium', name: 'Medium' },
-      { value: 'high', name: 'High' },
       { value: 'xhigh', name: 'X-High' },
+      { value: 'high', name: 'High' },
+      { value: 'medium', name: 'Medium' },
+      { value: 'low', name: 'Low' },
     ],
   },
 ];
