@@ -41,3 +41,9 @@ this file; edit `AGENTS.md` only.
   one list — the same problem `use-machine-flock-rows.ts` ref-counts away. The
   shared snapshot is also identity-stable across mounts, which is what lets the
   selection and composer-menu memos built on it actually hit.
+- `use-app-store-review-prompt.ts` establishes its historical baseline only from
+  the first ready-and-synced session snapshot. Hydrated turns seed eligibility but
+  never trigger a prompt; later finalized turns are processed once, and streaming
+  updates with no new outcome must not synchronously rewrite local storage. Its
+  idle timer depends on the stable candidate turn id, not the derived outcomes
+  array, so an identity-only history update cannot consume and cancel the prompt.

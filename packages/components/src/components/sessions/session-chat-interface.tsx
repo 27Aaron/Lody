@@ -241,6 +241,7 @@ import {
 import { ErrorBoundary } from '@/components/error-boundary';
 import { FamiconsCloudOfflineOutline } from '@/components/icons/famicons-cloud-offline-outline';
 import { NotificationPermissionPrompt } from './notification-permission-prompt';
+import { useAppStoreReviewPrompt } from '@/hooks/use-app-store-review-prompt';
 import {
   FloatingPermissionRequest,
   hasPendingPermissionRequest,
@@ -2653,6 +2654,16 @@ export const SessionChatInterface = memo(
       pendingDispatchAtMs != null &&
       dispatchNowMs - pendingDispatchAtMs < UNSTARTED_TRAILING_USER_TURN_TIMEOUT_MS;
     const isSessionWorking = isSessionActive || hasPendingDispatch;
+
+    useAppStoreReviewPrompt({
+      sessionId: session.id,
+      sessionOwnerId: session.userId,
+      currentUserId: currentUser?.id,
+      history: sessionHistory,
+      historyHydrated: sessionDocReady && sessionDocSynced,
+      sessionCompleted: session.status?.type === 'idle' && !isSessionWorking,
+      lastCompletedAssistantMessageId,
+    });
 
     const runningActivity = useMemo<AgentActivity | null>(() => {
       if (liveSessionStatus == null) {
