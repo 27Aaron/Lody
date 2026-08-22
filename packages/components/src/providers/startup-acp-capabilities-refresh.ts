@@ -13,7 +13,13 @@ export type StartupAcpCapabilitiesRefreshPorts = {
   onError?: (error: unknown, context: { machineId: MachineId; configId?: string }) => void;
 };
 
-/** Refresh every configured ACP on online machines once, serializing configs per machine. */
+/**
+ * Refresh every configured ACP on online machines once, serializing configs per machine.
+ *
+ * Connection invariant: callers must reuse the workspace runtime's existing Machine
+ * Flock and RPC transports. This pass may add bounded RPC work, but it must never
+ * create or retain one Streams subscription per agent config or refresh request.
+ */
 export async function runStartupAcpCapabilitiesRefresh(
   ports: StartupAcpCapabilitiesRefreshPorts,
   options: { machineConcurrency?: number; signal?: AbortSignal } = {}

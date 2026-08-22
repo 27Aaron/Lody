@@ -697,6 +697,11 @@ const CLAUDE_STATIC_MODELS: StaticBuiltinAcpCapabilities['models'] = [
     description: 'Claude Opus',
   },
   {
+    modelId: 'claude-fable-5[1m]',
+    name: 'Fable',
+    description: 'Claude Fable 5 with 1M context',
+  },
+  {
     modelId: 'sonnet',
     name: 'Sonnet',
     description: 'Claude Sonnet',
