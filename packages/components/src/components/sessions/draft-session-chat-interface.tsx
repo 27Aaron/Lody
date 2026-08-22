@@ -42,6 +42,7 @@ import {
   useAcpSessionConfigSelectionState,
   useReconcileAcpSessionConfigSelection,
 } from '@/hooks/use-acp-session-config-selection';
+import { filterAcpSessionConfigOptionValues } from '@/lib/acp-session-config-selection';
 import { useComposerCycleCommands } from '@/hooks/use-composer-cycle-commands';
 import { ChildTabEmptyState } from './child-tab-empty-state';
 import { useSessionDoc } from '@/hooks/use-session-doc';
@@ -140,6 +141,10 @@ export const DraftSessionChatInterface = memo(
         selectedModelId,
         configOptionValues,
       });
+      const dispatchConfigOptionValues = useMemo(
+        () => filterAcpSessionConfigOptionValues(configOptionValues, configOptionSelectors),
+        [configOptionSelectors, configOptionValues]
+      );
       const agentConfigs = useAtomValue(getAllAgentConfigAtom);
       const docMetaCacheReady = useAtomValue(docMetaCacheReadyAtom);
       const { doc: parentSessionDoc, ready: parentSessionDocReady } = useSessionDoc(
@@ -333,7 +338,7 @@ export const DraftSessionChatInterface = memo(
           runtimeOverrides: sessionAgentConfig?.runtimeOverrides,
           modeId: selectedModeId,
           modelId: selectedModelId,
-          configOptionValues,
+          configOptionValues: dispatchConfigOptionValues,
           configOptionSelectors,
         }),
         [
@@ -345,7 +350,7 @@ export const DraftSessionChatInterface = memo(
           sessionAgentConfig?.runtimeOverrides,
           draft.id,
           draft.sessionId,
-          configOptionValues,
+          dispatchConfigOptionValues,
           selectedModeId,
           selectedModelId,
         ]

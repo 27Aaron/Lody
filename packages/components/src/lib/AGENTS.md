@@ -25,6 +25,12 @@ Known gap: `ai-gui/view.tsx`'s tool-call card sends an ACP `locations[].path` â€
 a filesystem path, not an href â€” through `onFilePathClick`, so it still rides
 the href parser. It needs a third kind that strips roots without decoding.
 
+## ACP dispatch
+
+Before creating a top-level or child session, call
+`filterAcpSessionConfigOptionValues()` so cached values outside the current
+selector schema are not dispatched or persisted again.
+
 ## A resolved open is cached under BOTH spellings
 
 The machine may answer with a different on-disk spelling than the one requested

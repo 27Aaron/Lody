@@ -106,6 +106,7 @@ import {
   githubBranchesCache,
   persistAgentSessionDefaults,
 } from '@/lib/local-storage-cache';
+import { filterAcpSessionConfigOptionValues } from '@/lib/acp-session-config-selection';
 import {
   buildRecentRunConfigItems,
   describeRunConfigSelection,
@@ -1499,6 +1500,10 @@ function WorkspaceChatLanding({
     machine: selectedMachine,
   });
   const { modeOptions, modelOptions, configOptionSelectors } = selectorOptions;
+  const dispatchConfigOptionValues = useMemo(
+    () => filterAcpSessionConfigOptionValues(configOptionValues, configOptionSelectors),
+    [configOptionSelectors, configOptionValues]
+  );
   const selectedRateLimits =
     selectedConfig &&
     canShowSubscriptionRateLimits({
@@ -1546,10 +1551,10 @@ function WorkspaceChatLanding({
             agentId: selectedAgent.agentId,
             machineId: selectedAgent.machineId,
             modelId: currentRunConfigFace.modelId,
-            configOptionValues: sanitizeConfigOptionValues(configOptionValues),
+            configOptionValues: sanitizeConfigOptionValues(dispatchConfigOptionValues),
           })
         : null,
-    [configOptionValues, currentRunConfigFace.modelId, selectedAgent]
+    [currentRunConfigFace.modelId, dispatchConfigOptionValues, selectedAgent]
   );
   /* Picking an entry switches the agent first; its model and options can only
      be applied after that agent's own reconcile pass has seeded the selection
@@ -2841,7 +2846,7 @@ function WorkspaceChatLanding({
         agentType: selectedConfig.agentType,
         modeId: modeOptions.length > 0 ? (selectedModeId ?? undefined) : undefined,
         modelId: modelOptions.length > 0 ? (selectedModelId ?? undefined) : undefined,
-        configOptionValues,
+        configOptionValues: dispatchConfigOptionValues,
         issuePRMentions,
         mcpServerIds: mcpSelection.selectedIds,
       });
@@ -2888,7 +2893,7 @@ function WorkspaceChatLanding({
       persistAgentSessionDefaults(selectedAgent.agentId, {
         modeId: modeOptions.length > 0 ? selectedModeId : null,
         modelId: modelOptions.length > 0 ? selectedModelId : null,
-        configOptionValues,
+        configOptionValues: dispatchConfigOptionValues,
       });
       // A recent entry is a configuration the user actually RAN, so it is
       // recorded here — after the session was accepted — not when a knob moves.
@@ -2903,7 +2908,7 @@ function WorkspaceChatLanding({
             reasoningLabel: currentRunConfigFace.reasoningLabel,
             planOn: currentRunConfigFace.planOn,
             fastOn: currentRunConfigFace.fastOn,
-            configOptionValues: sanitizeConfigOptionValues(configOptionValues),
+            configOptionValues: sanitizeConfigOptionValues(dispatchConfigOptionValues),
           },
           Date.now()
         )
@@ -3826,11 +3831,11 @@ function WorkspaceChatLanding({
       buildSessionPreparationRunConfig({
         modeId: modeOptions.length > 0 ? selectedModeId : null,
         modelId: modelOptions.length > 0 ? selectedModelId : null,
-        configOptionValues,
+        configOptionValues: dispatchConfigOptionValues,
         mcpServerIds: mcpSelection.selectedIds,
       }),
     [
-      configOptionValues,
+      dispatchConfigOptionValues,
       mcpSelection.selectedIds,
       modeOptions.length,
       modelOptions.length,

@@ -309,3 +309,17 @@ export const getAcpSessionConfigOptionValues = (
   Object.fromEntries(
     Object.entries(state.configOptions).map(([configId, field]) => [configId, field.value])
   );
+
+export const filterAcpSessionConfigOptionValues = (
+  values: Record<string, AcpConfigOptionValue> | undefined,
+  selectors: readonly AcpConfigOptionSelector[]
+): Record<string, AcpConfigOptionValue> => {
+  const filtered: Record<string, AcpConfigOptionValue> = {};
+  for (const selector of selectors) {
+    const value = values?.[selector.configId];
+    if (isConfigOptionValueValid(selector, value)) {
+      filtered[selector.configId] = value;
+    }
+  }
+  return filtered;
+};
