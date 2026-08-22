@@ -365,6 +365,16 @@ export interface SessionChatInputAreaProps {
   modelOptions: AcpSessionSelectOption[];
   /** Subscription limits already resolved from this session's machine Flock data. */
   rateLimits?: MachineRateLimits;
+  /**
+   * Whether to offer the third-party Codex reset forecast, resolved by the
+   * container from `canShowCodexResetForecast` with the session's full
+   * `AgentConfigMeta`. It must be decided there, not here: this component only
+   * sees `cliType`/`agentType`, which cannot tell a first-party Codex provider
+   * from a Codex-compatible one pointed at another vendor via env or brand.
+   * Defaults to hidden, so a container that has not resolved its config yet
+   * never shows an OpenAI forecast beside someone else's quota.
+   */
+  showCodexResetForecast?: boolean;
   isContextCompacting?: boolean;
   /** Dynamic config option selectors from the agent's configOptions. */
   configOptionSelectors?: AcpConfigOptionSelector[];
@@ -439,6 +449,7 @@ export const SessionChatInputArea = memo(
       modeOptions,
       modelOptions,
       rateLimits,
+      showCodexResetForecast = false,
       isContextCompacting = false,
       configOptionSelectors,
       configOptionValues,
@@ -2137,6 +2148,7 @@ export const SessionChatInputArea = memo(
           modelId={selectedModelId}
           modelLabel={selectedModelLabel}
           isContextCompacting={isContextCompacting}
+          showCodexResetForecast={showCodexResetForecast}
           className={isMobile ? 'h-8 shrink-0' : 'shrink-0'}
         />
       </div>

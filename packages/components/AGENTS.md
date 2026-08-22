@@ -218,6 +218,33 @@ mobile surfaces.
   and `openExternalUrl`, never a hardcoded link.
 - Agent configuration: `settings/agent-config-dialog.tsx` and
   `settings/env-vars-textarea.tsx`.
+- Codex reset forecast: `components/codex-reset/` + `lib/codex-reset-forecast*.ts`.
+  A public unauthenticated GET to the third-party `codex-resets.com`, cached in ONE
+  module-level store (`lib/codex-reset-forecast-store.ts`) that every surface shares.
+  **Nothing loads on mount.** A request happens only when a user OPENS a surface
+  that shows the forecast — the settings provider row's chip (the click that opens
+  the dialog) and the composer's usage popover (Radix mounts its content on open,
+  so `CodexResetForecastUsageRow` loads from its own mount). `useCodexResetForecast`
+  therefore has no load effect; call `revalidate()` from the interaction. Never
+  attach credentials, and never fetch per component: `SessionUsagePopover` is mounted
+  per open tab AND side chat (hidden ones included) and `ProviderRow` per provider,
+  so a mount-time fetch was a request storm. Concurrent callers coalesce onto one
+  in-flight request; freshness is the served `Cache-Control: max-age` clamped to
+  1m–5m — the endpoint's CDN-shaped 4h is wrong for someone who just opened the
+  panel — and a lapsed TTL revalidates with `If-None-Match`, so the usual outcome is
+  a 304. `data` survives a revalidation, which is what gives stale-while-revalidate
+  for free — never blank it on refresh. Gate every entry point on
+  `canShowCodexResetForecast` (built-in Codex with no custom key/brand, matching
+  `canShowSubscriptionRateLimits`); a disabled entry makes no request at all. The
+  provider row always shows the entry; the usage-popover row appears only while a
+  watch is live. There is deliberately NO always-visible composer band: it would
+  have to load in the background to know whether to render. That popover row must
+  NOT own the dialog — opening a Radix Dialog from inside a Popover dismisses the
+  popover and unmounts a dialog rendered in its content, so `SessionUsagePopover`
+  renders `CodexResetForecastDialogHost` as a sibling of the popover instead.
+  `forecast_window` is FREE TEXT, not a timestamp ("the next 6 hours", "later today"):
+  render it verbatim as a labelled window beside the probability, never spliced into
+  a sentence that would claim a reset happens at a particular time.
 - Responsive mobile UI: `src/components/mobile/AGENTS.md`.
 - Session UI: `src/components/sessions/AGENTS.md`.
 - Tasks: `src/components/tasks/AGENTS.md`.

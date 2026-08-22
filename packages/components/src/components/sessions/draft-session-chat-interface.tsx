@@ -26,6 +26,7 @@ import {
 import { getAllAgentConfigAtom } from '@/atoms';
 import { docMetaCacheReadyAtom } from '@/atoms/doc-meta';
 import { canShowSubscriptionRateLimits } from '@/lib/session-usage';
+import { canShowCodexResetForecast } from '@/lib/codex-reset-forecast';
 import { useResolvedTheme } from '../../theme-provider';
 import { SessionChatInputArea, type SessionChatInputAreaHandle } from './session-chat-input-area';
 import { useSessionAcpSelectorContext } from '@/hooks/use-session-acp-selector-context';
@@ -436,6 +437,17 @@ export const DraftSessionChatInterface = memo(
               })
                 ? sessionMachine?.raceLimits
                 : undefined
+            }
+            /* Judged here, with the resolved config: a side chat can run a
+               Codex-compatible provider whose identity `cliType`/`agentType`
+               alone would not reveal. */
+            showCodexResetForecast={
+              (!draft.agentConfigId || !!sessionAgentConfig) &&
+              canShowCodexResetForecast({
+                cliType: draft.cliType,
+                agentType: draft.agentType,
+                config: sessionAgentConfig,
+              })
             }
             configOptionSelectors={configOptionSelectors}
             configOptionValues={configOptionValues}

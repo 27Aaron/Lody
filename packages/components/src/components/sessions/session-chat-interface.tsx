@@ -380,6 +380,7 @@ import {
 import { resolveModeIdAfterPlanExit } from '@/lib/plan-mode-exit';
 import { planModeExitApprovalCountAtomFamily } from '@/atoms/plan-mode-exit';
 import { canShowSubscriptionRateLimits } from '@/lib/session-usage';
+import { canShowCodexResetForecast } from '@/lib/codex-reset-forecast';
 
 // ── Path launcher options for "Open in" split button ──
 
@@ -2090,6 +2091,16 @@ export const SessionChatInterface = memo(
       () => agentConfigs.find((config) => config.id === session.agentConfigId),
       [agentConfigs, session.agentConfigId]
     );
+    // Same guard as the rate limits below: wait for the config to resolve, then
+    // judge on the full provider identity. `cliType`/`agentType` alone would let
+    // a Codex-compatible provider behind a custom key show OpenAI's forecast.
+    const showCodexResetForecast =
+      (!session.agentConfigId || !!sessionAgentConfig) &&
+      canShowCodexResetForecast({
+        cliType: session.cliType,
+        agentType: session.agentType,
+        config: sessionAgentConfig,
+      });
     const sessionRateLimits =
       (!session.agentConfigId || sessionAgentConfig) &&
       canShowSubscriptionRateLimits({
@@ -5691,6 +5702,7 @@ export const SessionChatInterface = memo(
                       modeOptions={modeOptions}
                       modelOptions={modelOptions}
                       rateLimits={sessionRateLimits}
+                      showCodexResetForecast={showCodexResetForecast}
                       isContextCompacting={isContextCompacting}
                       configOptionSelectors={configOptionSelectors}
                       configOptionValues={configOptionValues}

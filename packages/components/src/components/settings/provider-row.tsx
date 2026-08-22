@@ -27,6 +27,8 @@ import { cn } from '@/lib/utils';
 import { activeWorkspaceRuntimeAtom } from '@/atoms/runtime';
 import { useMachineAcpBinaryProgress } from '@/hooks/use-machine-acp-binary-progress';
 import { AgentIcon } from '@/components/icons/agent-icon';
+import { CodexResetForecastChip } from '@/components/codex-reset/codex-reset-forecast-entry';
+import { canShowCodexResetForecast } from '@/lib/codex-reset-forecast';
 import {
   canShowSubscriptionRateLimits,
   formatRateLimitWindowShortLabel,
@@ -64,6 +66,9 @@ export function ProviderRow({ config, machine, onEdit, onDelete, onRefresh }: Pr
     }
     return [];
   }, [showRateLimits, machine?.raceLimits, agentType]);
+
+  // Codex-only: the third-party reset forecast for OpenAI's own usage limits.
+  const showResetForecast = canShowCodexResetForecast({ cliType, agentType, config });
 
   const typeBadge = cliType === 'builtin' ? null : cliType === 'custom' ? 'Custom' : 'Registry';
 
@@ -143,6 +148,9 @@ export function ProviderRow({ config, machine, onEdit, onDelete, onRefresh }: Pr
           </div>
         </button>
         <div className="flex shrink-0 items-center gap-2 py-1.5 pr-3 text-xs text-muted-foreground">
+          {/* Not mounted at all when ineligible, so a non-Codex row costs no
+              store subscription and no clock tick. */}
+          {showResetForecast ? <CodexResetForecastChip enabled /> : null}
           {rateLimitWindows.length > 0 && (
             <div className="hidden items-center gap-2.5 sm:flex">
               {rateLimitWindows.map((window, index) => (

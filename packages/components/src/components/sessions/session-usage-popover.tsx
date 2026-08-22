@@ -1,4 +1,4 @@
-import { memo, useCallback } from 'react';
+import { memo, useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { formatDistance, type Locale } from 'date-fns';
 import { enUS, zhCN } from 'date-fns/locale';
@@ -6,6 +6,10 @@ import { getServerNow, type SessionContextWindowUsage } from '@lody/shared';
 import { Loader2 } from 'lucide-react';
 
 import { Button } from '@/ui/button';
+import {
+  CodexResetForecastDialogHost,
+  CodexResetForecastUsageRow,
+} from '@/components/codex-reset/codex-reset-forecast-entry';
 import { Popover, PopoverContent, PopoverTrigger } from '@/ui/popover';
 import { Progress } from '@/ui/progress';
 import { Separator } from '@/ui/separator';
@@ -30,6 +34,13 @@ export type SessionUsagePopoverProps = {
   modelLabel?: string | null;
   isContextCompacting?: boolean;
   showRateLimitWithoutContext?: boolean;
+  /**
+   * Eligibility for the third-party Codex reset forecast, decided by the caller
+   * from `canShowCodexResetForecast` with the provider's full config. False
+   * keeps the row unmounted, so a non-Codex composer makes no request and pays
+   * for no clock tick.
+   */
+  showCodexResetForecast?: boolean;
   className?: string;
 };
 
@@ -41,9 +52,11 @@ export const SessionUsagePopover = memo(function SessionUsagePopover({
   modelLabel,
   isContextCompacting = false,
   showRateLimitWithoutContext = false,
+  showCodexResetForecast = false,
   className,
 }: SessionUsagePopoverProps) {
   const { t, i18n } = useTranslation();
+  const [isForecastOpen, setIsForecastOpen] = useState(false);
   const locale: Locale = i18n.language?.startsWith('zh') ? zhCN : enUS;
   const intlLocale = toIntlLocaleOrEn(i18n.resolvedLanguage ?? i18n.language);
   const context = getContextWindowUsageData(contextWindowUsage);
@@ -104,114 +117,133 @@ export const SessionUsagePopover = memo(function SessionUsagePopover({
       });
 
   return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className={cn(
-            'h-7 select-none gap-1 rounded-md px-1.5 font-normal text-muted-foreground hover:bg-muted/60 hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring',
-            className
-          )}
-          aria-label={triggerLabel}
-          title={triggerLabel}
+    <>
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className={cn(
+              'h-7 select-none gap-1 rounded-md px-1.5 font-normal text-muted-foreground hover:bg-muted/60 hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring',
+              className
+            )}
+            aria-label={triggerLabel}
+            title={triggerLabel}
+          >
+            {isContextCompacting ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden="true" />
+                <span className="text-[11px]">{t('sessions.usage.compacting', 'Compacting')}</span>
+              </>
+            ) : (
+              <>
+                <UsageRing value={triggerValue ?? 0} />
+                <span className="font-mono text-[11px] tabular-nums">{roundedTriggerValue}%</span>
+              </>
+            )}
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent
+          side="top"
+          align="start"
+          sideOffset={8}
+          aria-label={t('sessions.usage.title', 'Usage')}
+          className="w-[min(17rem,calc(100vw-1rem))] rounded-xl p-3 shadow-lg"
         >
           {isContextCompacting ? (
-            <>
-              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden="true" />
-              <span className="text-[11px]">{t('sessions.usage.compacting', 'Compacting')}</span>
-            </>
-          ) : (
-            <>
-              <UsageRing value={triggerValue ?? 0} />
-              <span className="font-mono text-[11px] tabular-nums">{roundedTriggerValue}%</span>
-            </>
-          )}
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent
-        side="top"
-        align="start"
-        sideOffset={8}
-        aria-label={t('sessions.usage.title', 'Usage')}
-        className="w-[min(17rem,calc(100vw-1rem))] rounded-xl p-3 shadow-lg"
-      >
-        {isContextCompacting ? (
-          <div className="space-y-2">
-            <div className="text-[11px] font-medium text-muted-foreground">
-              {t('sessions.usage.context', 'Context')}
+            <div className="space-y-2">
+              <div className="text-[11px] font-medium text-muted-foreground">
+                {t('sessions.usage.context', 'Context')}
+              </div>
+              <div className="flex items-center gap-2 text-xs text-foreground">
+                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
+                <span>{t('sessions.usage.compactingContext', 'Compacting context')}</span>
+              </div>
             </div>
-            <div className="flex items-center gap-2 text-xs text-foreground">
-              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
-              <span>{t('sessions.usage.compactingContext', 'Compacting context')}</span>
+          ) : context ? (
+            <UsageMeter
+              label={t('sessions.usage.context', 'Context')}
+              value={context.usedPercentage}
+              detail={`${formatCompactNumber(context.usedTokens, intlLocale)} / ${formatCompactNumber(
+                context.contextWindow,
+                intlLocale
+              )}`}
+            />
+          ) : null}
+
+          {(context || isContextCompacting) && hasRateLimitDetails ? (
+            <Separator className="my-2.5 bg-border/60" />
+          ) : null}
+
+          {hasRateLimitDetails ? (
+            <div className="space-y-2.5">
+              <div className="truncate text-[11px] font-medium text-muted-foreground">
+                {resolvedModelLabel}
+              </div>
+              {hasRateLimit ? (
+                rateLimitWindows.map((window, index) => (
+                  <UsageMeter
+                    key={`${window.windowDurationSeconds ?? 'unknown'}-${index}`}
+                    label={formatWindowLabel(window.windowDurationSeconds)}
+                    value={window.usedPercent}
+                    detail={formatReset(window.resetsAtEpochSeconds)}
+                  />
+                ))
+              ) : (
+                <div className="text-xs text-muted-foreground">
+                  {t(
+                    'sessions.usage.unavailable',
+                    'The provider did not report usage for this plan'
+                  )}
+                </div>
+              )}
+              {wallet ? (
+                <div className="space-y-1 border-t border-border/60 pt-2 text-[11px]">
+                  <div className="flex justify-between gap-3">
+                    <span className="text-muted-foreground">
+                      {t('sessions.usage.extraBalance', 'Extra usage balance')}
+                    </span>
+                    <span className="font-mono tabular-nums">
+                      {formatMoney(wallet.balanceCents, wallet.currency, i18n.language)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <span className="text-muted-foreground">
+                      {t('sessions.usage.monthlySpend', 'Monthly spend')}
+                    </span>
+                    <span className="font-mono tabular-nums">
+                      {formatMoney(wallet.monthlyUsedCents, wallet.currency, i18n.language)}
+                      {wallet.monthlyChargeLimitEnabled
+                        ? ` / ${formatMoney(
+                            wallet.monthlyChargeLimitCents,
+                            wallet.currency,
+                            i18n.language
+                          )}`
+                        : ''}
+                    </span>
+                  </div>
+                </div>
+              ) : null}
             </div>
-          </div>
-        ) : context ? (
-          <UsageMeter
-            label={t('sessions.usage.context', 'Context')}
-            value={context.usedPercentage}
-            detail={`${formatCompactNumber(context.usedTokens, intlLocale)} / ${formatCompactNumber(
-              context.contextWindow,
-              intlLocale
-            )}`}
+          ) : null}
+
+          {/* Codex only, and only while a forecast is in force: why the limits
+            above may reset sooner than their own countdown suggests. */}
+          <CodexResetForecastUsageRow
+            enabled={showCodexResetForecast}
+            onOpen={() => setIsForecastOpen(true)}
           />
-        ) : null}
-
-        {(context || isContextCompacting) && hasRateLimitDetails ? (
-          <Separator className="my-2.5 bg-border/60" />
-        ) : null}
-
-        {hasRateLimitDetails ? (
-          <div className="space-y-2.5">
-            <div className="truncate text-[11px] font-medium text-muted-foreground">
-              {resolvedModelLabel}
-            </div>
-            {hasRateLimit ? (
-              rateLimitWindows.map((window, index) => (
-                <UsageMeter
-                  key={`${window.windowDurationSeconds ?? 'unknown'}-${index}`}
-                  label={formatWindowLabel(window.windowDurationSeconds)}
-                  value={window.usedPercent}
-                  detail={formatReset(window.resetsAtEpochSeconds)}
-                />
-              ))
-            ) : (
-              <div className="text-xs text-muted-foreground">
-                {t('sessions.usage.unavailable', 'The provider did not report usage for this plan')}
-              </div>
-            )}
-            {wallet ? (
-              <div className="space-y-1 border-t border-border/60 pt-2 text-[11px]">
-                <div className="flex justify-between gap-3">
-                  <span className="text-muted-foreground">
-                    {t('sessions.usage.extraBalance', 'Extra usage balance')}
-                  </span>
-                  <span className="font-mono tabular-nums">
-                    {formatMoney(wallet.balanceCents, wallet.currency, i18n.language)}
-                  </span>
-                </div>
-                <div className="flex justify-between gap-3">
-                  <span className="text-muted-foreground">
-                    {t('sessions.usage.monthlySpend', 'Monthly spend')}
-                  </span>
-                  <span className="font-mono tabular-nums">
-                    {formatMoney(wallet.monthlyUsedCents, wallet.currency, i18n.language)}
-                    {wallet.monthlyChargeLimitEnabled
-                      ? ` / ${formatMoney(
-                          wallet.monthlyChargeLimitCents,
-                          wallet.currency,
-                          i18n.language
-                        )}`
-                      : ''}
-                  </span>
-                </div>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-      </PopoverContent>
-    </Popover>
+        </PopoverContent>
+      </Popover>
+      {/* Hosted outside the popover on purpose: opening the dialog dismisses the
+          popover, which would unmount a dialog rendered inside its content. */}
+      <CodexResetForecastDialogHost
+        enabled={showCodexResetForecast}
+        open={isForecastOpen}
+        onOpenChange={setIsForecastOpen}
+      />
+    </>
   );
 });
 

@@ -208,6 +208,7 @@ import {
 import { getChatComposerPromptPlaceholderKey } from '@/lib/chat-composer-placeholder';
 import { splitImageAndFileAttachments } from '@/lib/file-drop';
 import { canShowSubscriptionRateLimits } from '@/lib/session-usage';
+import { canShowCodexResetForecast } from '@/lib/codex-reset-forecast';
 import { createMachinePairing } from '@/lib/cli-api-key';
 import { ContextSwitch, type SessionContextType } from './context-switch';
 import {
@@ -1513,6 +1514,15 @@ function WorkspaceChatLanding({
     })
       ? selectedMachine?.raceLimits
       : undefined;
+  // The landing knows the picked provider's full config, so eligibility is
+  // decided here rather than from `cliType`/`agentType` further down.
+  const showCodexResetForecast =
+    !!selectedConfig &&
+    canShowCodexResetForecast({
+      cliType: selectedConfig.cliType,
+      agentType: selectedConfig.agentType,
+      config: selectedConfig,
+    });
   const selectedModelLabel = modelOptions.find((option) => option.value === selectedModelId)?.label;
   const selectedAgentDefaults = useMemo(
     () => (selectedAgent ? (agentDefaultsCache.get(selectedAgent.agentId) ?? {}) : {}),
@@ -3417,6 +3427,7 @@ function WorkspaceChatLanding({
           agentType={selectedConfig?.agentType ?? ''}
           modelId={selectedModelId}
           modelLabel={selectedModelLabel}
+          showCodexResetForecast={showCodexResetForecast}
           showRateLimitWithoutContext
         />
       </div>
@@ -3700,6 +3711,7 @@ function WorkspaceChatLanding({
           agentType={selectedConfig?.agentType ?? ''}
           modelId={selectedModelId}
           modelLabel={selectedModelLabel}
+          showCodexResetForecast={showCodexResetForecast}
           showRateLimitWithoutContext
           className="h-8 shrink-0"
         />
