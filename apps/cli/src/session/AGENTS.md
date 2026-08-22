@@ -254,9 +254,11 @@ delegation proofs or a shared-machine gate without a new product and security de
   `session/create` payload is transient, resume/dispatch resolve from agent config/project,
   and the legacy row is fallback/cleanup only.
 - Resuming a Session on a local project must use the workspace's current branch as-is, including
-  worktree mode. Branch selection may resolve and check out a branch during the initial
-  `session/create`, but an ACP restore must never prepare or switch back to the Session's recorded
-  branch.
+  worktree mode. A legacy direct local Session can re-enter `session/create` when no ACP session is
+  resumable; if its meta already identifies a non-worktree local project, its stored `project.branch`
+  is historical state, not a checkout request. Branch selection may resolve and check out a branch
+  only during an initial `session/create`, while ACP restore or legacy direct-session reinitialization
+  must never switch back to the Session's recorded branch.
 - `turn-post-processing-service.ts` — post-turn work (titles, notifications).
 - `session-access-policy.ts` — local-first dispatch access precheck (optimistic-allow
   cache, D11). It may allow owner-cached turns from the catalog snapshot, deny

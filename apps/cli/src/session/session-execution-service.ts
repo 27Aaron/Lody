@@ -4157,12 +4157,7 @@ export class SessionExecutionService {
       typeof message.userTurnId === 'string' && message.userTurnId.trim()
         ? message.userTurnId.trim()
         : undefined;
-    const project = message.project;
-    const githubRepoFullName = resolveProjectGitHubRepo(project);
-    const shouldPrepareWorktree =
-      (project?.kind === 'github' && !!githubRepoFullName) ||
-      (project?.kind === 'local' && project.useWorktree === true);
-    let branch = project?.branch?.trim() || undefined;
+    let project = message.project;
     const workdir =
       project?.kind === 'local'
         ? ((await this.resolveLocalProjectWorkdirForTurn(project.localProjectId)) ?? undefined)
@@ -4178,6 +4173,24 @@ export class SessionExecutionService {
       (await this.deps.workspaceDocument.getOrCreateSessionDoc(sessionId));
 
     const existingMeta = await sessionDoc.getMetaState();
+    // A legacy direct local Session can be re-initialized after its ACP session
+    // is no longer resumable. Its stored branch was only a snapshot from the
+    // original creation, so checking it out here would rewrite the user's
+    // current workspace (and fails when it has local changes). Worktree
+    // sessions still keep their explicit base branch semantics.
+    if (
+      project?.kind === 'local' &&
+      project.useWorktree !== true &&
+      existingMeta?.project?.kind === 'local'
+    ) {
+      const { branch: _legacyBranch, ...directProject } = project;
+      project = directProject;
+    }
+    const githubRepoFullName = resolveProjectGitHubRepo(project);
+    const shouldPrepareWorktree =
+      (project?.kind === 'github' && !!githubRepoFullName) ||
+      (project?.kind === 'local' && project.useWorktree === true);
+    let branch = project?.branch?.trim() || undefined;
     const fromFeedbackPostId =
       message.meta?.fromFeedbackPostId?.trim() ||
       existingMeta?.fromFeedbackPostId?.trim() ||
