@@ -5,7 +5,11 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CodexResetForecastDialog } from '../src/components/codex-reset/codex-reset-forecast-dialog';
-import type { CodexResetStatus, CodexResetWatch } from '../src/lib/codex-reset-forecast';
+import {
+  formatCodexResetExpiry,
+  type CodexResetStatus,
+  type CodexResetWatch,
+} from '../src/lib/codex-reset-forecast';
 import type { CodexResetForecastState } from '../src/lib/codex-reset-forecast-store';
 import { initI18n } from '../src/i18n';
 
@@ -93,10 +97,10 @@ describe('CodexResetForecastDialog', () => {
 
     expect(text()).toContain('65% chance of a reset');
     expect(text()).toContain('Strong signal');
-    // The free-text window is a labelled field, never spliced into a sentence
-    // that would read as a promised reset time.
-    expect(text()).toContain('Forecast window');
-    expect(text()).toContain('the next 6 hours');
+    // The API expiry is shown semantically in the user's local time zone.
+    expect(text()).toContain('Forecast valid until');
+    expect(text()).toContain(formatCodexResetExpiry(active.expiresAtMs, NOW_MS, 'en'));
+    expect(text()).not.toContain('the next 6 hours');
     expect(text()).not.toContain('chance of a reset within');
 
     const times = Array.from(document.querySelectorAll('time')).map((node) => ({
@@ -104,9 +108,23 @@ describe('CodexResetForecastDialog', () => {
       text: node.textContent,
     }));
     expect(times).toEqual([
+      {
+        dateTime: '2026-08-20T11:00:00.000Z',
+        text: formatCodexResetExpiry(active.expiresAtMs, NOW_MS, 'en'),
+      },
       { dateTime: '2026-08-20T05:00:00.000Z', text: 'about 1 hour ago' },
       { dateTime: '2026-08-20T11:00:00.000Z', text: 'in about 5 hours' },
     ]);
+  });
+
+  it('renders the semantic expiry in Chinese instead of the API free text', async () => {
+    await initI18n('zh_CN');
+    const active = watch();
+    await render({ state: readyState({ watch: active, latestReset: null }), watch: active });
+
+    expect(text()).toContain('预测有效至');
+    expect(text()).toContain(formatCodexResetExpiry(active.expiresAtMs, NOW_MS, 'zh_CN'));
+    expect(text()).not.toContain('the next 6 hours');
   });
 
   it('drops the probability sentence when the forecast has no percentage', async () => {
@@ -115,7 +133,7 @@ describe('CodexResetForecastDialog', () => {
 
     expect(text()).toContain('Reset watch in effect');
     expect(text()).not.toContain('% chance');
-    expect(text()).toContain('Forecast window');
+    expect(text()).toContain('Forecast valid until');
     expect(text()).toContain('Elevated signal');
   });
 

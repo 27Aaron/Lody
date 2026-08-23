@@ -13,6 +13,7 @@ import {
   type CodexResetSource,
   type CodexResetStatus,
   type CodexResetWatch,
+  formatCodexResetExpiry,
 } from '@/lib/codex-reset-forecast';
 import type { CodexResetForecastState } from '@/lib/codex-reset-forecast-store';
 
@@ -86,7 +87,7 @@ export function CodexResetForecastDialog({
               {t('codexReset.loading', 'Loading the latest forecast…')}
             </p>
           ) : watch ? (
-            <ActiveForecast watch={watch} relative={relative} />
+            <ActiveForecast watch={watch} relative={relative} nowMs={nowMs} />
           ) : hasNothingToShow ? (
             <div className="flex flex-col items-start gap-2.5 py-1">
               <p className="text-sm text-muted-foreground">
@@ -132,13 +133,20 @@ function RetryButton({ onRetry }: { onRetry: () => void }) {
 function ActiveForecast({
   watch,
   relative,
+  nowMs,
 }: {
   watch: CodexResetWatch;
   relative: (epochMs: number) => string;
+  nowMs: number;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const percent = watch.chancePercent;
   const meterPercent = percent === null ? null : Math.max(0, Math.min(100, percent));
+  const localExpiry = formatCodexResetExpiry(
+    watch.expiresAtMs,
+    nowMs,
+    i18n.resolvedLanguage ?? i18n.language
+  );
 
   return (
     <div className="flex flex-col gap-4">
@@ -187,15 +195,17 @@ function ActiveForecast({
         )}
       </div>
 
-      {/* `windowText` is free text ("later today"), so it stays a labelled field
-          instead of being spliced into a sentence that would promise a time. */}
+      {/* `expires_at` is an absolute UTC instant. Intl converts it to a semantic
+          time such as "Tomorrow 2:00 PM" in the browser/OS time zone. */}
       <div
         className={cn(SUBTLE_FIELD, 'flex flex-wrap items-baseline gap-x-2 gap-y-0.5 px-3 py-2')}
       >
         <span className="text-xs text-muted-foreground">
-          {t('codexReset.window', 'Forecast window')}
+          {t('codexReset.window', 'Forecast valid until')}
         </span>
-        <span className="text-sm font-medium">{watch.windowText}</span>
+        <time className="text-sm font-medium" dateTime={watch.expiresAtIso}>
+          {localExpiry}
+        </time>
       </div>
 
       <SourceBlock text={watch.text} source={watch.source} />

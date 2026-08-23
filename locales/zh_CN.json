@@ -491,7 +491,7 @@
   "codexReset.title": "Codex 重置预测",
   "codexReset.unavailable": "无法加载重置预测。",
   "codexReset.viewSource": "查看 @{{author}} 的来源帖子",
-  "codexReset.window": "预测时间窗口",
+  "codexReset.window": "预测有效至",
   "comments.anonymous": "匿名用户",
   "comments.cancel": "取消",
   "comments.collapse": "折叠",

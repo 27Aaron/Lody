@@ -4,6 +4,7 @@ import {
   CODEX_RESETS_STATUS_URL,
   canShowCodexResetForecast,
   fetchCodexResetStatus,
+  formatCodexResetExpiry,
   isCodexResetWatchExpired,
   normalizeForecastWindowText,
   parseCacheControlMaxAgeMs,
@@ -52,6 +53,26 @@ describe('normalizeForecastWindowText', () => {
     ['sometime after the weekend', 'sometime after the weekend'],
   ])('normalizes %j to %j', (raw, expected) => {
     expect(normalizeForecastWindowText(raw)).toBe(expected);
+  });
+});
+
+describe('formatCodexResetExpiry', () => {
+  it('uses semantic day labels in the selected local time zone', () => {
+    const shanghaiNow = Date.parse('2026-08-19T10:00:00.000Z');
+    const newYorkNow = Date.parse('2026-08-20T06:00:00.000Z');
+
+    expect(formatCodexResetExpiry(EXPIRES_MS, shanghaiNow, 'zh_CN', 'Asia/Shanghai')).toBe(
+      '明天 19:00'
+    );
+    expect(formatCodexResetExpiry(EXPIRES_MS, newYorkNow, 'en-US', 'America/New_York')).toBe(
+      'Today 7:00 AM'
+    );
+  });
+
+  it('falls back to a localized date when the expiry is not today or tomorrow', () => {
+    const now = Date.parse('2026-08-17T11:00:00.000Z');
+
+    expect(formatCodexResetExpiry(EXPIRES_MS, now, 'en-US', 'UTC')).toBe('Aug 20, 2026, 11:00 AM');
   });
 });
 

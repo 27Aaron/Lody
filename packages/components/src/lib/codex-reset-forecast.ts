@@ -133,6 +133,58 @@ export function normalizeForecastWindowText(raw: string): string {
 }
 
 /**
+ * Formats the API's UTC expiry instant as a semantic local time (for example,
+ * "Tomorrow 2:00 PM" / "明天 14:00"). An explicit `timeZone` is accepted for
+ * deterministic tests; production callers omit it so Intl uses the browser/OS
+ * time zone.
+ */
+export function formatCodexResetExpiry(
+  epochMs: number,
+  nowMs: number,
+  locale?: string,
+  timeZone?: string
+): string {
+  // i18next uses `zh_CN` in some compositions, while Intl requires `zh-CN`.
+  const intlLocale = locale?.replace(/_/g, '-') || undefined;
+
+  const calendarDay = (value: number): number => {
+    const parts = new Intl.DateTimeFormat('en-US-u-ca-gregory-nu-latn', {
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      ...(timeZone ? { timeZone } : {}),
+    }).formatToParts(new Date(value));
+    const part = (type: 'year' | 'month' | 'day') =>
+      Number(parts.find((item) => item.type === type)?.value);
+    return Date.UTC(part('year'), part('month') - 1, part('day'));
+  };
+
+  const dayDelta = Math.round((calendarDay(epochMs) - calendarDay(nowMs)) / 86_400_000);
+  const time = new Intl.DateTimeFormat(intlLocale, {
+    hour: 'numeric',
+    minute: '2-digit',
+    ...(timeZone ? { timeZone } : {}),
+  }).format(new Date(epochMs));
+
+  if (dayDelta >= -1 && dayDelta <= 1) {
+    const day = new Intl.RelativeTimeFormat(intlLocale, { numeric: 'auto' }).format(
+      dayDelta,
+      'day'
+    );
+    return `${day.charAt(0).toLocaleUpperCase(intlLocale)}${day.slice(1)} ${time}`;
+  }
+
+  return new Intl.DateTimeFormat(intlLocale, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    ...(timeZone ? { timeZone } : {}),
+  }).format(new Date(epochMs));
+}
+
+/**
  * Returns `null` for any response shape this build does not understand, so a
  * caller can present "unavailable" instead of rendering half a forecast.
  */

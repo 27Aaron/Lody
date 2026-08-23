@@ -242,9 +242,11 @@ mobile surfaces.
   NOT own the dialog — opening a Radix Dialog from inside a Popover dismisses the
   popover and unmounts a dialog rendered in its content, so `SessionUsagePopover`
   renders `CodexResetForecastDialogHost` as a sibling of the popover instead.
-  `forecast_window` is FREE TEXT, not a timestamp ("the next 6 hours", "later today"):
-  render it verbatim as a labelled window beside the probability, never spliced into
-  a sentence that would claim a reset happens at a particular time.
+  `forecast_window` is FREE TEXT, not a timestamp ("the next 6 hours", "later today").
+  Do not show that untranslated phrase as the forecast time: render the absolute UTC
+  `expires_at` instant semantically ("Today 2:00 PM", "明天 14:00") in the user's
+  browser/OS time zone, and describe it as the time through which the forecast is valid
+  rather than promising a reset.
 - Responsive mobile UI: `src/components/mobile/AGENTS.md`.
 - Session UI: `src/components/sessions/AGENTS.md`.
 - Tasks: `src/components/tasks/AGENTS.md`.

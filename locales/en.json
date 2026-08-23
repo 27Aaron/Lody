@@ -491,7 +491,7 @@
   "codexReset.title": "Codex reset forecast",
   "codexReset.unavailable": "The reset forecast could not be loaded.",
   "codexReset.viewSource": "View the source post by @{{author}}",
-  "codexReset.window": "Forecast window",
+  "codexReset.window": "Forecast valid until",
   "comments.anonymous": "Anonymous",
   "comments.cancel": "Cancel",
   "comments.collapse": "Collapse",

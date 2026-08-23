@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { TimerReset } from 'lucide-react';
 
 import { useCodexResetForecast } from '@/hooks/use-codex-reset-forecast';
+import { formatCodexResetExpiry } from '@/lib/codex-reset-forecast';
 import { CodexResetForecastDialog } from './codex-reset-forecast-dialog';
 
 /**
@@ -75,7 +76,7 @@ export type CodexResetForecastUsageRowProps = {
 
 /**
  * Usage-popover row, shaped like the rate-limit meters it sits under: label and
- * probability on one baseline, the forecast window underneath. It renders
+ * probability on one baseline, the locally formatted forecast expiry underneath. It renders
  * nothing unless a forecast is in force.
  *
  * This component is mounted by the popover's CONTENT, which Radix only renders
@@ -87,7 +88,7 @@ export type CodexResetForecastUsageRowProps = {
  * caller hosts `CodexResetForecastDialogHost` outside the popover instead.
  */
 export function CodexResetForecastUsageRow({ enabled, onOpen }: CodexResetForecastUsageRowProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const forecast = useCodexResetForecast(enabled);
   const watch = forecast.watch;
   const { revalidate } = forecast;
@@ -123,9 +124,13 @@ export function CodexResetForecastUsageRow({ enabled, onOpen }: CodexResetForeca
             </span>
           )}
         </span>
-        {/* Free text off the wire, kept verbatim as its own clause. */}
+        {/* The API instant is formatted semantically in the browser/OS time zone. */}
         <span className="mt-0.5 block truncate text-[10px] leading-3.5 text-muted-foreground/75">
-          {watch.windowText}
+          {formatCodexResetExpiry(
+            watch.expiresAtMs,
+            forecast.nowMs,
+            i18n.resolvedLanguage ?? i18n.language
+          )}
         </span>
       </button>
     </div>

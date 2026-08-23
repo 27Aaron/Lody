@@ -7,10 +7,11 @@ import type { AgentConfigId, AgentConfigMeta, MachineId, MachineViewMeta } from 
 
 import { CodexResetForecastUsageRow } from '../src/components/codex-reset/codex-reset-forecast-entry';
 import { ProviderRow } from '../src/components/settings/provider-row';
-import type {
-  CodexResetStatus,
-  CodexResetStatusFetchResult,
-  CodexResetWatch,
+import {
+  formatCodexResetExpiry,
+  type CodexResetStatus,
+  type CodexResetStatusFetchResult,
+  type CodexResetWatch,
 } from '../src/lib/codex-reset-forecast';
 import {
   createCodexResetForecastStore,
@@ -238,18 +239,24 @@ describe('Codex reset forecast entry points', () => {
         button.textContent?.includes('Reset forecast')
       )?.textContent;
 
-    it('reports the probability and the forecast window', async () => {
-      stubStore(readyWith(watchExpiringIn(5 * HOUR_MS)));
+    it('reports the probability and the local forecast expiry', async () => {
+      const active = watchExpiringIn(5 * HOUR_MS);
+      stubStore(readyWith(active));
       await render(<CodexResetForecastUsageRow enabled onOpen={vi.fn()} />);
 
-      expect(rowText()).toBe('Reset forecast65% chancethe next 6 hours');
+      expect(rowText()).toBe(
+        `Reset forecast65% chance${formatCodexResetExpiry(active.expiresAtMs, Date.now(), 'en')}`
+      );
     });
 
     it('drops the percentage when the forecast has none', async () => {
-      stubStore(readyWith({ ...watchExpiringIn(5 * HOUR_MS), chancePercent: null }));
+      const active = { ...watchExpiringIn(5 * HOUR_MS), chancePercent: null };
+      stubStore(readyWith(active));
       await render(<CodexResetForecastUsageRow enabled onOpen={vi.fn()} />);
 
-      expect(rowText()).toBe('Reset forecastthe next 6 hours');
+      expect(rowText()).toBe(
+        `Reset forecast${formatCodexResetExpiry(active.expiresAtMs, Date.now(), 'en')}`
+      );
     });
 
     // The popover reports a forecast, never its absence.
