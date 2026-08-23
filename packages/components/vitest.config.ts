@@ -21,10 +21,11 @@ export default defineConfig({
     // Keep diagnostics from failing tests while avoiding the substantial I/O
     // produced by expected logs from hundreds of passing files.
     silent: 'passed-only',
-    // This suite has hundreds of small files. Reusing worker threads avoids a
-    // child-process startup per file; two workers also outperformed four on CI-sized hosts.
+    // This suite has hundreds of small files whose transform/collection cost dominates
+    // their assertions. Eight local workers cut a representative full run from 94s to
+    // 37s. The root test:ci command still passes --maxWorkers=2 for CI-sized hosts.
     pool: 'threads',
-    maxWorkers: 2,
+    maxWorkers: 8,
     server: {
       deps: {
         inline: VITEST_INLINE_WASM_DEPS,
