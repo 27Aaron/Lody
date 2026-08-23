@@ -22,7 +22,8 @@ const memoryStates = new Map<string, AppStoreReviewPromptState>();
 
 function getAppStoreReviewBridge(): LodyAppStoreReviewBridge | null {
   if (typeof window === 'undefined') return null;
-  const bridge = window.__LODY_APP_STORE_REVIEW__;
+  const bridge = (window as Window & { __LODY_APP_STORE_REVIEW__?: LodyAppStoreReviewBridge })
+    .__LODY_APP_STORE_REVIEW__;
   if (!bridge || typeof bridge !== 'object') return null;
   if (typeof bridge.requestReview !== 'function') return null;
   return bridge;
