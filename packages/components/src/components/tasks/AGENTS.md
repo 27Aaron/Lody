@@ -77,6 +77,9 @@ starts now and a Task for work recorded for later.
 - Loro text is authoritative. Apply remote changes through `setState(markdown)` without
   passing a selection, reject self-echoes while editing, flush before unmount, and key
   the editor by `taskId`.
+- A body commit is not synced merely because its write started. Await the commit result,
+  keep guarding the local draft until the exact Loro echo arrives, and leave a rejected
+  commit dirty so a stale snapshot cannot erase it and a later flush can retry it.
 - Keep both meowdown stylesheets, explicit `mode="hide"`, the app theme variable mapping,
   and the React 18 manual `handle.editor.unmount()` cleanup.
 - Selection-toolbar pointer-down handlers must preserve editor focus. Keep the popover

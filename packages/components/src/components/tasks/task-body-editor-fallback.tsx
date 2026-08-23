@@ -9,6 +9,12 @@ import type { TaskBodyEditorProps } from './task-body-editor';
 
 const IDLE_COMMIT_MS = 1200;
 
+type PendingBodyCommit = {
+  body: string;
+  base: string;
+  failed: boolean;
+};
+
 /**
  * Markdown source editor with a rendered preview — the body editor for browsers
  * that cannot run meowdown.
@@ -37,10 +43,12 @@ export default function TaskBodyEditorFallback({
   const draftRef = useRef(value);
   const latestValueRef = useRef(value);
   const latestOnCommitRef = useRef(onCommit);
+  const latestTRef = useRef(t);
   const lastSyncedRef = useRef(value);
-  const pendingCommitRef = useRef<{ body: string; base: string } | null>(null);
+  const pendingCommitRef = useRef<PendingBodyCommit | null>(null);
   latestValueRef.current = value;
   latestOnCommitRef.current = onCommit;
+  latestTRef.current = t;
 
   // Adopt remote changes only while the user is not typing.
   useEffect(() => {
@@ -56,6 +64,9 @@ export default function TaskBodyEditorFallback({
       if (value === pending.base) {
         return;
       }
+      if (pending.failed) {
+        return;
+      }
       pendingCommitRef.current = null;
     }
 
@@ -65,20 +76,65 @@ export default function TaskBodyEditorFallback({
     setDraft(value);
   }, [editing, value]);
 
-  const commitNow = useCallback((next: string) => {
+  const commitNow = useCallback((next: string, retryPending = false) => {
     if (idleTimerRef.current) {
       clearTimeout(idleTimerRef.current);
       idleTimerRef.current = null;
     }
-    if (next === lastSyncedRef.current) return;
-    pendingCommitRef.current = { body: next, base: latestValueRef.current };
-    lastSyncedRef.current = next;
-    latestOnCommitRef.current(next);
+    const pending = pendingCommitRef.current;
+    if (!pending && next === lastSyncedRef.current) return;
+    if (pending?.body === next && !pending.failed && !retryPending) return;
+
+    const attempt: PendingBodyCommit = {
+      body: next,
+      base: latestValueRef.current,
+      failed: false,
+    };
+    pendingCommitRef.current = attempt;
+
+    let result: void | Promise<void>;
+    try {
+      result = latestOnCommitRef.current(next);
+    } catch (error) {
+      attempt.failed = true;
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : latestTRef.current(
+              'tasks.body.saveFailed',
+              'Could not save the description. Please try again.'
+            )
+      );
+      return;
+    }
+
+    void Promise.resolve(result).then(
+      () => {
+        if (pendingCommitRef.current !== attempt) return;
+        // Keep guarding the previous prop until the document layer echoes the
+        // exact body that was written.
+        lastSyncedRef.current = next;
+      },
+      (error: unknown) => {
+        if (pendingCommitRef.current !== attempt) return;
+        attempt.failed = true;
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : latestTRef.current(
+                'tasks.body.saveFailed',
+                'Could not save the description. Please try again.'
+              )
+        );
+      }
+    );
   }, []);
 
   useEffect(
     () => () => {
-      commitNow(draftRef.current);
+      // The component is about to lose its local draft guard, so re-issue an
+      // in-flight body write as a final idempotent persistence attempt.
+      commitNow(draftRef.current, true);
     },
     [commitNow]
   );
