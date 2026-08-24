@@ -7,6 +7,7 @@ import type { StreamsCrdtShardUrlsOptions } from '@loro-dev/streams-crdt';
 export type {
   AbsolutePath,
   AgentConfigId,
+  AgentRoleId,
   BindingId,
   ClientId,
   MachineId,
@@ -102,6 +103,7 @@ export * from './code-collab';
 export * from './file-preview';
 export * from './machine-flock';
 export * from './workspace-mcp';
+export * from './agent-role';
 export * from './workspace-flock';
 export * from './local-machine-rpc';
 export * from './local-loro-data-plane';

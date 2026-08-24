@@ -54,9 +54,27 @@ private service secrets, and the Web and mobile app sources.
   document and selected ids in each user turn input config. Do not add machine bindings.
   Preserve `mcpServerIds: []` as an explicit empty selection; dispatch must carry the
   driving turn's selection into ACP startup rather than rereading session history.
-- Workspace MCP catalog mutations are not shared until the committed Flock document is
-  explicitly synced. UI and CLI writers must surface upload failures as locally durable,
-  not report them as fully synced or roll them back.
+- Workspace catalog mutations (MCP servers and Agent Roles) are durable on the local
+  Flock write and shared by an explicit upload that follows it. Settings surfaces resolve
+  on durability and do not wait on or report that upload: the row already exists, the
+  joined room carries the document when a one-shot upload cannot, and a banner about it is
+  something the user can neither act on nor dismiss. What is forbidden is the opposite —
+  reporting a durable write as failed, or rolling one back, because the upload did not go
+  through. The CLI still reports its own sync result to the terminal.
+- Agent Roles are one `agentRole` row family in the same workspace Flock document, not a
+  private and a shared catalog: sharing is an ordinary update of `visibility` on the row.
+  A Role stores no secret — no API key, MCP selection, memory, or permission default —
+  and `isSensitiveAgentRoleConfigOptionKey` is applied on read as well as on write,
+  because a workspace row reaches every member's client. Access is
+  `canReadAgentRole`/`canManageAgentRole` everywhere; hiding a private Role in the UI is
+  not an access check.
+- A Role never falls back. `machineId + agentConfigId` bind the execution site exactly;
+  when the machine, config, or a stored model/mode is unavailable the Role stays listed
+  with the precise reason and stops being mentionable. What a user Turn authorized is
+  frozen into its input config as `agentRoleInvocations`, so a later Role edit or delete
+  cannot change an accepted operation or a retry. `SessionMeta.agentRoleId` /
+  `agentRoleRevision` record where a Session came from and are display-only; execution,
+  recovery, and retry read the already-frozen dispatch config, never the Role catalog.
 
 `pnpm check:public-boundary` is the executable repository boundary and must pass
 after changing package scope or cloud/local composition.

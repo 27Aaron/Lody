@@ -2,6 +2,7 @@ import * as React from 'react';
 import {
   applyTextRewrites,
   MESSAGE_TEXT_SPAN_KINDS,
+  type AgentRoleInvocationSnapshot,
   type MessageTextSpan,
   type MessageTextSpanKind,
   type TextRewrite,
@@ -12,6 +13,12 @@ import {
   type SkillMentionAgent,
 } from '@/components/mentions/mention-skill-source';
 import { buildSessionMentionRewrites } from '@/components/mentions/mention-session-source';
+import {
+  buildAgentRoleInvocationSnapshots,
+  buildAgentRoleMentionContext,
+  buildAgentRoleMentionRewrites,
+  useAgentRoleMentionItems,
+} from '@/components/mentions/mention-agent-role-source';
 import { buildPastedTextRewrites, type PastedTextDraft } from '@/lib/pasted-text-draft';
 import type { Mention as MentionRange } from '@/ui/mention/index';
 
@@ -53,6 +60,14 @@ export type MentionPromptExpansionArgs = {
 export type ExpandedMentionPrompt = {
   text: string;
   spans?: MessageTextSpan[];
+  /**
+   * The Roles this Turn authorized, frozen here rather than resolved later.
+   *
+   * Produced on the send path with the text so both come from the SAME committed
+   * ranges: the instruction the agent reads and the authorization the CLI will
+   * check can never describe different Roles.
+   */
+  agentRoleInvocations?: AgentRoleInvocationSnapshot[];
 };
 
 /**
@@ -67,7 +82,12 @@ export type ExpandedMentionPrompt = {
  * other half: adding a member to `MESSAGE_TEXT_SPAN_KINDS` without classifying
  * it is a type error here rather than a missing chip in production.
  */
-const REWRITTEN_SPAN_KINDS = ['skill', 'session', 'pasted_text'] satisfies MessageTextSpanKind[];
+const REWRITTEN_SPAN_KINDS = [
+  'skill',
+  'session',
+  'agent_role',
+  'pasted_text',
+] satisfies MessageTextSpanKind[];
 
 /** Kinds whose composer text is already what the agent should read. */
 const VERBATIM_SPAN_KINDS: ReadonlySet<string> = new Set(
@@ -106,15 +126,29 @@ export function useMentionPromptExpansion({
   promptValue,
 }: MentionPromptExpansionInput): (args: MentionPromptExpansionArgs) => ExpandedMentionPrompt {
   const skillRewrites = useSkillMentionRewrites(source, skillAgent, promptValue);
+  const agentRoleContext = React.useMemo(
+    () =>
+      buildAgentRoleMentionContext({
+        mentionSource: source,
+        currentMachineId: skillAgent?.machineId,
+      }),
+    [skillAgent?.machineId, source]
+  );
+  // Same owner as the composer menu, by module: both read the shared catalog
+  // room, so the list the user picked from is the list this authorizes against.
+  const agentRoleItems = useAgentRoleMentionItems(agentRoleContext);
 
   return React.useCallback(
-    ({ text, mentions = [], pastedTextDrafts = [] }: MentionPromptExpansionArgs) =>
-      applyTextRewrites(text, [
+    ({ text, mentions = [], pastedTextDrafts = [] }: MentionPromptExpansionArgs) => ({
+      ...applyTextRewrites(text, [
         ...buildPastedTextRewrites(pastedTextDrafts),
         ...skillRewrites(text),
         ...buildSessionMentionRewrites(text, mentions),
+        ...buildAgentRoleMentionRewrites(text, mentions, agentRoleItems),
         ...buildVerbatimMentionRewrites(text, mentions),
       ]),
-    [skillRewrites]
+      agentRoleInvocations: buildAgentRoleInvocationSnapshots(mentions, agentRoleItems),
+    }),
+    [agentRoleItems, skillRewrites]
   );
 }

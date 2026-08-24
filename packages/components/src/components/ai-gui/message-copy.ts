@@ -1,7 +1,9 @@
 import {
+  applyTextRewrites,
   sanitizeMessageTextSpans,
   type MessageContent,
   type MessageTextSpan,
+  type MessageTextSpanKind,
 } from '@lody/shared';
 
 export const USER_TEXT_RENDER_LINE_LIMIT = 10;
@@ -69,6 +71,60 @@ const getCopyableItemText = (content: MessageContent): string =>
 export const getTextContentFromMessageItems = (items: MessageContent[]): string =>
   items
     .map(getCopyableItemText)
+    .filter((text) => text.trim().length > 0)
+    .join('\n\n');
+
+/**
+ * Span kinds that are copied as what the user wrote, not as what the agent read.
+ *
+ * Only `agent_role`. Its rewritten region is an instruction addressed to the
+ * agent ("use lody mcp to create a session with agent role[...]") that means
+ * nothing outside this conversation, while the chip on screen says `@Reviewer` —
+ * so copying the bubble has to produce the latter.
+ *
+ * The other kinds stay expanded on purpose: a pasted-text span IS the content
+ * the user wants when they copy, and a skill or session mention expands to a
+ * path or an id that remains meaningful pasted elsewhere.
+ */
+const COPY_AS_LABEL_SPAN_KINDS: ReadonlySet<MessageTextSpanKind> = new Set(['agent_role']);
+
+/**
+ * Replace those regions with their label, so the copied text reads like the
+ * bubble. The label omits the `@` (the chip's glyph carries the type), so it is
+ * put back here — the composer form is what the reader recognises.
+ */
+export const collapseMentionSpansForCopy = (
+  text: string,
+  spans: readonly MessageTextSpan[] | undefined
+): string => {
+  const resolved = sanitizeMessageTextSpans(text, spans)?.filter((span) =>
+    COPY_AS_LABEL_SPAN_KINDS.has(span.kind)
+  );
+  if (!resolved || resolved.length === 0) return text;
+
+  // Offsets are described against the original text and spliced in one pass, so
+  // this path never chains its own offset math.
+  return applyTextRewrites(
+    text,
+    resolved.map(({ start, end, label }) => ({ start, end, replacement: `@${label}` }))
+  ).text;
+};
+
+/**
+ * The text a copy action should produce.
+ *
+ * Deliberately not `getTextContentFromMessageItems`: that one also seeds
+ * edit-and-resend, where the composer must get the text the agent actually
+ * received — a `@Reviewer` token with no committed mention range would be sent
+ * verbatim as a word.
+ */
+export const getCopyTextFromMessageItems = (items: MessageContent[]): string =>
+  items
+    .map((content) =>
+      content.type === 'text'
+        ? collapseMentionSpansForCopy(content.text, content.spans)
+        : getCopyableItemText(content)
+    )
     .filter((text) => text.trim().length > 0)
     .join('\n\n');
 

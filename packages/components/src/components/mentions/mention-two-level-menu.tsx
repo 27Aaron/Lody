@@ -11,6 +11,7 @@ import {
   GitPullRequest,
   MessageSquare,
   Terminal,
+  UserRoundCog,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useFireOnKeyChange, useFireOncePerCycle } from '@/hooks/use-fire-once';
@@ -72,13 +73,26 @@ export function useMentionCategoryActivation(
 
 function CandidateIcon({
   icon,
+  emoji,
   path,
   className,
 }: {
   icon: MentionIcon;
+  /** A candidate's own mark, shown INSTEAD of the category glyph. */
+  emoji?: string;
   path?: string;
   className?: string;
 }) {
+  if (emoji) {
+    return (
+      <span
+        aria-hidden="true"
+        className={cn(className, 'inline-flex items-center justify-center text-sm leading-none')}
+      >
+        {emoji}
+      </span>
+    );
+  }
   switch (icon) {
     case 'file':
       return <FileIcon filePath={path ?? ''} className={className} />;
@@ -94,6 +108,8 @@ function CandidateIcon({
       return <Terminal className={className} />;
     case 'session':
       return <MessageSquare className={className} />;
+    case 'agent_role':
+      return <UserRoundCog className={className} />;
     default:
       return null;
   }
@@ -141,7 +157,12 @@ function CandidateRow({
       navigateText={candidate.navigateText}
       onMentionSelect={onSelect}
     >
-      <CandidateIcon icon={candidate.icon} path={candidate.iconPath} className={ICON_CLASS} />
+      <CandidateIcon
+        icon={candidate.icon}
+        emoji={candidate.iconEmoji}
+        path={candidate.iconPath}
+        className={ICON_CLASS}
+      />
       <div className="flex min-w-0 flex-1 flex-col">
         <span
           className={cn(
@@ -188,6 +209,25 @@ function CandidateDetailPane({ detail }: { detail: MentionCandidateDetail }) {
         <p className="mt-2 whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground">
           {detail.description}
         </p>
+      ) : null}
+      {detail.body ? (
+        <div className="mt-2.5">
+          {detail.body.label ? (
+            <p className="text-[10px] uppercase tracking-[0.06em] text-muted-foreground/70">
+              {detail.body.label}
+            </p>
+          ) : null}
+          {/* Capped and scrolled on its own so a long instruction cannot push
+              the machine/model rows out of the pane. */}
+          <div
+            className={cn(
+              'scrollbar-pro mt-0.5 max-h-[104px] overflow-y-auto whitespace-pre-wrap break-words text-[11px] leading-relaxed text-muted-foreground',
+              detail.body.mono && 'font-mono text-[10.5px]'
+            )}
+          >
+            {detail.body.text}
+          </div>
+        </div>
       ) : null}
       {detail.rows?.length ? (
         <dl className="mt-2.5 flex flex-col gap-1 text-[11px]">

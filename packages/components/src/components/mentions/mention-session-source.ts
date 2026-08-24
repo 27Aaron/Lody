@@ -1,8 +1,9 @@
 import * as React from 'react';
 import {
-  forEachAtTokenSpan,
+  hydrateSlugMentionsFromText,
   type HydratedMentions,
 } from '@/components/mentions/mention-hydration';
+import { rankMentionCandidates } from '@/components/mentions/mention-rank';
 import type { MentionInsertRequest } from '@/ui/mention/index';
 import type { TextRewrite } from '@lody/shared';
 import type { SessionId, SessionMeta } from '@lody/shared';
@@ -128,21 +129,11 @@ export function selectSessionMentionCandidates(
   term: string,
   limit = MAX_SESSION_SUGGESTIONS
 ): SessionMentionItem[] {
-  const query = term.trim().toLowerCase();
-  if (!query) return items.slice(0, limit);
-  return items
-    .map((item) => {
-      const slug = item.slug.toLowerCase();
-      const title = item.title.toLowerCase();
-      let score = -1;
-      if (slug.startsWith(query) || title.startsWith(query)) score = 0;
-      else if (slug.includes(query) || title.includes(query)) score = 1;
-      return { item, score };
-    })
-    .filter((entry) => entry.score >= 0)
-    .sort((a, b) => a.score - b.score || b.item.activityAt - a.item.activityAt)
-    .slice(0, limit)
-    .map((entry) => entry.item);
+  return rankMentionCandidates(items, term, {
+    limit,
+    fields: (item) => [item.slug, item.title],
+    tieBreak: (left, right) => right.activityAt - left.activityAt,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -345,17 +336,5 @@ export function hydrateSessionMentionsFromText(
   slugToId: ReadonlyMap<string, string>,
   knownFileTokens?: ReadonlySet<string>
 ): HydratedMentions {
-  const mentions: HydratedMentions['mentions'] = [];
-  const values = new Set<string>();
-  if (slugToId.size === 0) return { mentions, values: [] };
-
-  forEachAtTokenSpan(text, ({ token, start, end }) => {
-    if (!token || knownFileTokens?.has(token)) return false;
-    const sessionId = slugToId.get(token);
-    if (!sessionId) return false;
-    mentions.push({ value: sessionId, start, end, kind: 'session' });
-    values.add(sessionId);
-    return true;
-  });
-  return { mentions, values: Array.from(values) };
+  return hydrateSlugMentionsFromText({ text, slugToValue: slugToId, kind: 'session', knownFileTokens });
 }

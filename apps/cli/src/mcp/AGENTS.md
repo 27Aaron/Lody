@@ -24,3 +24,7 @@ Root and `apps/cli/AGENTS.md` instructions apply.
   Serialize per-workspace Agent configuration writes before checking local name/count bounds;
   the shared CRDT is not a global CAS. Keep catalog writes locally durable while surfacing sync
   failures as unsynced.
+- `session_create` and `session_create_many` authorize an Agent Role id only through the
+  `agentRoleInvocations` snapshot on the driving turn. Resolve its target, Prompt prefix, and
+  concrete run config before Operation acceptance. Recovery uses the frozen canonical Prompt
+  and target dispatch config and must never reread the mutable Role catalog.

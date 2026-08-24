@@ -66,7 +66,15 @@ function MessageTextChip({
   );
   const content = (
     <>
-      {getMentionKindIcon(span.kind, { path: span.target })}
+      {/* A frozen mark (an Agent Role's emoji) stands in for the kind's icon, so
+          the bubble shows the same thing the composer did. */}
+      {span.mark ? (
+        <span aria-hidden="true" className="text-[1.05em] leading-none">
+          {span.mark}
+        </span>
+      ) : (
+        getMentionKindIcon(span.kind, { path: span.target })
+      )}
       <span className="truncate">{label}</span>
     </>
   );

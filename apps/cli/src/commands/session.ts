@@ -56,6 +56,7 @@ import {
   type AcpCapabilityCacheEntry,
   type AcpConfigOptionSummary,
   type AgentConfigMeta,
+  type AgentRoleId,
   type LocalProjectId,
   type MachineLegacyMetaFields,
   type MachineId,
@@ -165,6 +166,9 @@ export type CreateOptions = CommonOptions &
     userTurnId?: string;
     /** Lody-originated execution-chain depth for the initial input. */
     chainDepth?: number;
+    /** Agent Role invocation provenance frozen by the driving user turn. */
+    agentRoleId?: string;
+    agentRoleRevision?: number;
     /**
      * Task this session belongs to. Inherited from the invoking session when it
      * is itself working on a task, so an agent spawning helpers keeps the whole
@@ -2853,7 +2857,13 @@ export async function createSessionResult(
     ...(parentSessionId ? { parentSessionId } : {}),
     ...(openedBySessionId ? { openedBySessionId } : {}),
     ...(openedByRootSessionId ? { openedByRootSessionId } : {}),
+    ...(options.agentRoleId ? { agentRoleId: options.agentRoleId as AgentRoleId } : {}),
+    ...(options.agentRoleRevision !== undefined
+      ? { agentRoleRevision: options.agentRoleRevision }
+      : {}),
     ...(taskId ? { taskId } : {}),
+    // `agentRoleId`/`agentRoleRevision` are declared on `SessionMeta` now, so
+    // the provenance fields no longer need a local intersection here.
   } satisfies SessionMeta);
 
   let completionAbortController: AbortController | undefined;

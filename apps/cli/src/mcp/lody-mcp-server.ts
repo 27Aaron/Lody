@@ -39,6 +39,7 @@ import {
   type LodySessionPresenceState,
   type LocalSessionControlRequest,
   type AgentConfigMeta,
+  type AgentRoleInvocationSnapshot,
   type LocalProjectId,
   type LocalProjectMeta,
   type MachineId,
@@ -404,6 +405,14 @@ const SessionCreateCommandInputShape = {
     .max(LODY_OPERATION_MAX_DEADLINE_SECONDS)
     .optional(),
   prompt: z.string().trim().min(1).describe('Initial user prompt for the new session.'),
+  agentRoleId: z
+    .string()
+    .trim()
+    .min(1)
+    .optional()
+    .describe(
+      'Agent Role id authorized by an agent_role mention in the driving user turn. When set, machine, agent config, and run config come from that frozen mention.'
+    ),
   machineId: z.string().trim().min(1).optional().describe('Target machine id.'),
   agentConfigId: z.string().trim().min(1).optional().describe('Target agent config id.'),
   ...SessionRunConfigInputShape,
@@ -466,17 +475,46 @@ const sessionCreateCommandSchemas = [
     .strict(),
 ] as const;
 
-const SessionCreateRuntimeInputSchema = z.xor([
-  z
-    .object({
-      operationId: LodyOperationIdSchema.describe(
-        'Operation id to resume without resending input.'
-      ),
-      resume: z.literal(true),
-    })
-    .strict(),
-  ...sessionCreateCommandSchemas,
-]);
+/**
+ * A Role owns the whole execution site, so nothing that would restate it may
+ * ride along. Derived from the run-config shape itself: a field added there is
+ * a field the guard rejects, rather than one silently accepted and dropped.
+ */
+const AGENT_ROLE_MANUAL_OVERRIDE_FIELDS = [
+  'machineId',
+  'agentConfigId',
+  ...Object.keys(SessionRunConfigInputShape),
+] as const;
+
+const addAgentRoleOverrideIssues = (
+  value: Record<string, unknown>,
+  ctx: z.RefinementCtx,
+  pathPrefix: Array<string | number> = []
+): void => {
+  if (value.agentRoleId === undefined) return;
+  for (const field of AGENT_ROLE_MANUAL_OVERRIDE_FIELDS) {
+    if (value[field] === undefined) continue;
+    ctx.addIssue({
+      code: 'custom',
+      path: [...pathPrefix, field],
+      message: `${field} cannot be combined with agentRoleId.`,
+    });
+  }
+};
+
+const SessionCreateRuntimeInputSchema = z
+  .xor([
+    z
+      .object({
+        operationId: LodyOperationIdSchema.describe(
+          'Operation id to resume without resending input.'
+        ),
+        resume: z.literal(true),
+      })
+      .strict(),
+    ...sessionCreateCommandSchemas,
+  ])
+  .superRefine((value, ctx) => addAgentRoleOverrideIssues(value, ctx));
 
 // The MCP SDK only publishes schemas whose outermost Zod type is an object.
 // Keep the complete object shape visible to clients, then delegate the
@@ -562,6 +600,12 @@ const SessionChatToolInputSchema = z
 
 const SessionCreateBatchItemShape = {
   prompt: z.string().trim().min(1).optional(),
+  agentRoleId: z
+    .string()
+    .trim()
+    .min(1)
+    .optional()
+    .describe('Agent Role id authorized by the driving user turn.'),
   machineId: z.string().trim().min(1).optional(),
   agentConfigId: z.string().trim().min(1).optional(),
   ...SessionRunConfigInputShape,
@@ -628,54 +672,61 @@ const BatchCommandEnvelopeSchema = {
     .optional(),
 };
 
-const SessionCreateManyRuntimeInputSchema = z.xor([
-  z
-    .object({
-      ...BatchCommandEnvelopeSchema,
-      defaults: z.never().optional(),
-      items: z.array(SessionCreateBatchItemSchema).max(1_000),
-    })
-    .strict(),
-  z
-    .object({
-      ...BatchCommandEnvelopeSchema,
-      defaults: z
-        .object({
-          ...SessionCreateBatchItemShape,
-          useCurrentSessionAsParent: z.literal(true),
-          workContext: z.never().optional(),
-        })
-        .strict(),
-      items: z.array(SessionCreateBatchItemWithInheritedParentSchema).max(1_000),
-    })
-    .strict(),
-  z
-    .object({
-      ...BatchCommandEnvelopeSchema,
-      defaults: z
-        .object({
-          ...SessionCreateBatchItemShape,
-          useCurrentSessionAsParent: z.literal(false).optional(),
-          workContext: z.never().optional(),
-        })
-        .strict(),
-      items: z.array(SessionCreateBatchItemSchema).max(1_000),
-    })
-    .strict(),
-  z
-    .object({
-      ...BatchCommandEnvelopeSchema,
-      defaults: z
-        .object({
-          ...SessionCreateBatchItemShape,
-          useCurrentSessionAsParent: z.literal(false).optional(),
-          workContext: SessionWorkContextInputSchema,
-        })
-        .strict(),
-      items: z.array(SessionCreateBatchItemWithInheritedWorkContextSchema).max(1_000),
-    })
-    .strict(),
-]);
+const SessionCreateManyRuntimeInputSchema = z
+  .xor([
+    z
+      .object({
+        ...BatchCommandEnvelopeSchema,
+        defaults: z.never().optional(),
+        items: z.array(SessionCreateBatchItemSchema).max(1_000),
+      })
+      .strict(),
+    z
+      .object({
+        ...BatchCommandEnvelopeSchema,
+        defaults: z
+          .object({
+            ...SessionCreateBatchItemShape,
+            useCurrentSessionAsParent: z.literal(true),
+            workContext: z.never().optional(),
+          })
+          .strict(),
+        items: z.array(SessionCreateBatchItemWithInheritedParentSchema).max(1_000),
+      })
+      .strict(),
+    z
+      .object({
+        ...BatchCommandEnvelopeSchema,
+        defaults: z
+          .object({
+            ...SessionCreateBatchItemShape,
+            useCurrentSessionAsParent: z.literal(false).optional(),
+            workContext: z.never().optional(),
+          })
+          .strict(),
+        items: z.array(SessionCreateBatchItemSchema).max(1_000),
+      })
+      .strict(),
+    z
+      .object({
+        ...BatchCommandEnvelopeSchema,
+        defaults: z
+          .object({
+            ...SessionCreateBatchItemShape,
+            useCurrentSessionAsParent: z.literal(false).optional(),
+            workContext: SessionWorkContextInputSchema,
+          })
+          .strict(),
+        items: z.array(SessionCreateBatchItemWithInheritedWorkContextSchema).max(1_000),
+      })
+      .strict(),
+  ])
+  .superRefine((value, ctx) => {
+    value.items.forEach((item, index) => {
+      const expanded = { ...(value.defaults ?? {}), ...item };
+      addAgentRoleOverrideIssues(expanded, ctx, ['items', index]);
+    });
+  });
 
 const SessionCreateBatchPublishedItemSchema = z
   .object({
@@ -1122,6 +1173,136 @@ const buildMcpRunConfigCanonicalCommand = (input: {
   ...(input.fastMode !== undefined ? { fastMode: input.fastMode } : {}),
   ...(input.planMode !== undefined ? { planMode: input.planMode } : {}),
 });
+
+type ResolvedMcpSessionCreate = {
+  input: SessionCreateCommandInput;
+  prompt: string;
+  dispatchConfig: ResolvedTurnDispatchConfig;
+  role?: AgentRoleInvocationSnapshot;
+};
+
+const composeAgentRolePrompt = (promptPrefix: string | undefined, prompt: string): string => {
+  const prefix = promptPrefix?.trim();
+  return prefix ? `${prefix}\n\n${prompt}` : prompt;
+};
+
+/**
+ * The snapshot the driving Turn froze for this Role.
+ *
+ * The Turn's input config reached us through `normalizeSessionTurnInputConfig`,
+ * so `agentRoleInvocations` is already validated, deduped on `roleId`, and
+ * stripped of secret-shaped option keys. Re-declaring that schema here would be
+ * a second definition of what a snapshot is, on the side that enforces it.
+ */
+const readAgentRoleInvocationSnapshot = (
+  inputConfig: SessionTurnInputConfig | undefined,
+  agentRoleId: string
+): AgentRoleInvocationSnapshot => {
+  const snapshot = inputConfig?.agentRoleInvocations?.find(
+    (candidate) => candidate.roleId === agentRoleId
+  );
+  if (!snapshot) {
+    throw new LodyOperationStoreError(
+      'AGENT_ROLE_NOT_AUTHORIZED',
+      `Agent Role ${agentRoleId} was not mentioned in the driving user turn.`,
+      false
+    );
+  }
+  return snapshot;
+};
+
+const resolveMcpSessionCreate = (
+  input: SessionCreateCommandInput,
+  invoking: InvokingTurnContext | undefined,
+  requester: Pick<SessionMeta, 'machineId' | 'project'>
+): ResolvedMcpSessionCreate => {
+  if (!input.agentRoleId) {
+    return {
+      input,
+      prompt: input.prompt,
+      dispatchConfig: buildMcpTurnDispatchConfig(input),
+    };
+  }
+
+  const role = readAgentRoleInvocationSnapshot(invoking?.frozenInputConfig, input.agentRoleId);
+  const project = requester.project;
+  if (project?.kind !== 'github' && role.machineId !== requester.machineId) {
+    throw new LodyOperationStoreError(
+      'AGENT_ROLE_MACHINE_MISMATCH',
+      project?.kind === 'local'
+        ? `Agent Role ${role.roleName} must run on the Local Project's Machine.`
+        : `Agent Role ${role.roleName} must run on the current Machine in a chat Session.`,
+      false
+    );
+  }
+
+  let useCurrentSessionAsParent = input.useCurrentSessionAsParent;
+  let workContext = input.workContext;
+  if (
+    project?.kind === 'github' &&
+    useCurrentSessionAsParent !== true &&
+    workContext === undefined
+  ) {
+    workContext = {
+      kind: 'github',
+      repo: project.repoFullName,
+      ...(project.branch ? { branch: project.branch } : {}),
+    };
+  } else if (
+    project?.kind === 'local' &&
+    useCurrentSessionAsParent === undefined &&
+    workContext === undefined
+  ) {
+    useCurrentSessionAsParent = true;
+  }
+
+  const resolvedInput = {
+    ...input,
+    machineId: role.machineId,
+    agentConfigId: role.agentConfigId,
+    ...(useCurrentSessionAsParent !== undefined ? { useCurrentSessionAsParent } : {}),
+    ...(workContext !== undefined ? { workContext } : {}),
+  } as SessionCreateCommandInput;
+  return {
+    input: resolvedInput,
+    prompt: composeAgentRolePrompt(role.promptPrefix, input.prompt),
+    dispatchConfig: {
+      ...role.runConfig,
+      inheritSessionDefaults: false,
+    },
+    role,
+  };
+};
+
+const buildResolvedMcpCreateCanonicalCommand = (
+  resolved: ResolvedMcpSessionCreate,
+  deadlineSeconds?: number
+): Record<string, unknown> => ({
+  prompt: resolved.prompt,
+  ...(resolved.input.machineId ? { machineId: resolved.input.machineId } : {}),
+  ...(resolved.input.agentConfigId ? { agentConfigId: resolved.input.agentConfigId } : {}),
+  ...(resolved.role
+    ? {
+        agentRoleId: resolved.role.roleId,
+        agentRoleRevision: resolved.role.roleRevision,
+        agentRoleRunConfig: resolved.role.runConfig,
+      }
+    : buildMcpRunConfigCanonicalCommand(resolved.input)),
+  ...(resolved.input.useCurrentSessionAsParent !== undefined
+    ? { useCurrentSessionAsParent: resolved.input.useCurrentSessionAsParent }
+    : {}),
+  ...(resolved.input.workContext ? { workContext: resolved.input.workContext } : {}),
+  ...(deadlineSeconds !== undefined ? { deadlineSeconds } : {}),
+});
+
+const bindAgentRoleCreateOptions = (
+  options: CreateOptions,
+  role: AgentRoleInvocationSnapshot | undefined
+): void => {
+  if (!role) return;
+  options.agentRoleId = role.roleId;
+  options.agentRoleRevision = role.roleRevision;
+};
 
 const buildMcpCreateOptions = (
   input: SessionCreateCommandInput,
@@ -2351,17 +2532,9 @@ const startSessionCreateOperation = async (args: SessionCreateCommandInput): Pro
         false
       );
     }
-    const canonicalCommand = {
-      prompt: args.prompt,
-      ...(args.machineId ? { machineId: args.machineId } : {}),
-      ...(args.agentConfigId ? { agentConfigId: args.agentConfigId } : {}),
-      ...buildMcpRunConfigCanonicalCommand(args),
-      ...(args.useCurrentSessionAsParent !== undefined
-        ? { useCurrentSessionAsParent: args.useCurrentSessionAsParent }
-        : {}),
-      ...(args.workContext ? { workContext: args.workContext } : {}),
-      ...(args.deadlineSeconds !== undefined ? { deadlineSeconds: args.deadlineSeconds } : {}),
-    };
+    const invoking = await resolveInvokingTurnContext(manager, currentSession);
+    const resolved = resolveMcpSessionCreate(args, invoking, currentSession);
+    const canonicalCommand = buildResolvedMcpCreateCanonicalCommand(resolved, args.deadlineSeconds);
     const retry = await withOperationStore((store) =>
       store.findMatchingRetry(
         ctx.sessionId as SessionId,
@@ -2371,12 +2544,12 @@ const startSessionCreateOperation = async (args: SessionCreateCommandInput): Pro
       )
     );
     if (retry) return await withOperationStore((store) => store.snapshot(retry));
-    const targetMachineId = (args.machineId ?? currentSession.machineId) as MachineId;
+    const targetMachineId = (resolved.input.machineId ?? currentSession.machineId) as MachineId;
     await assertMachineOnlineForSingleCommand(manager, targetMachineId, ctx);
-    const createOptions = buildMcpCreateOptions(args, ctx);
+    const createOptions = buildMcpCreateOptions(resolved.input, ctx);
     bindMcpCreateContext(createOptions, auth, currentSession);
+    bindAgentRoleCreateOptions(createOptions, resolved.role);
     createOptions.workspaceMetaPrewriteSatisfied = true;
-    const dispatchConfig = buildMcpTurnDispatchConfig(args);
     let effectiveDispatchConfig: ResolvedTurnDispatchConfig;
     try {
       effectiveDispatchConfig = await validateSessionCreateOptions({
@@ -2384,7 +2557,7 @@ const startSessionCreateOperation = async (args: SessionCreateCommandInput): Pro
         workspace,
         manager,
         options: createOptions,
-        dispatchConfig,
+        dispatchConfig: resolved.dispatchConfig,
         skipMachineAvailabilityCheck: true,
       });
     } catch (error) {
@@ -2393,7 +2566,6 @@ const startSessionCreateOperation = async (args: SessionCreateCommandInput): Pro
       }
       throw new LodyOperationStoreError('COMMAND_REJECTED', formatMcpErrorMessage(error), false);
     }
-    const invoking = await resolveInvokingTurnContext(manager, currentSession);
     const preallocatedSessionId = randomUUID() as SessionId;
     const preallocatedUserTurnId = randomUUID();
     const materializationClaimToken = randomUUID();
@@ -2439,7 +2611,7 @@ const startSessionCreateOperation = async (args: SessionCreateCommandInput): Pro
           auth,
           workspace,
           manager,
-          args.prompt,
+          resolved.prompt,
           createOptions,
           effectiveDispatchConfig
         );
@@ -2667,8 +2839,40 @@ const startSessionCreateManyOperation = async (
       );
     }
     const expanded = args.items.map((item) => ({ ...(args.defaults ?? {}), ...item }));
+    const invoking = await resolveInvokingTurnContext(manager, requester);
+    const resolvedItems = expanded.map((item) => {
+      if (!item.prompt) return { resolved: undefined, error: undefined };
+      try {
+        const single = {
+          operationId: args.operationId,
+          prompt: item.prompt,
+          ...(item.agentRoleId ? { agentRoleId: item.agentRoleId } : {}),
+          ...(item.machineId ? { machineId: item.machineId } : {}),
+          ...(item.agentConfigId ? { agentConfigId: item.agentConfigId } : {}),
+          ...buildMcpRunConfigCanonicalCommand(item),
+          ...(item.useCurrentSessionAsParent !== undefined
+            ? { useCurrentSessionAsParent: item.useCurrentSessionAsParent }
+            : {}),
+          ...(item.workContext ? { workContext: item.workContext } : {}),
+        } as SessionCreateCommandInput;
+        return {
+          resolved: resolveMcpSessionCreate(single, invoking, requester),
+          error: undefined,
+        };
+      } catch (error) {
+        return { resolved: undefined, error };
+      }
+    });
     const canonicalCommand = {
-      items: expanded,
+      items: expanded.map((item, index) => {
+        const resolved = resolvedItems[index]?.resolved;
+        return resolved
+          ? {
+              ...buildResolvedMcpCreateCanonicalCommand(resolved),
+              ...(item.label ? { label: item.label } : {}),
+            }
+          : item;
+      }),
       ...(args.deadlineSeconds !== undefined ? { deadlineSeconds: args.deadlineSeconds } : {}),
     };
     const retry = await withOperationStore((store) =>
@@ -2680,13 +2884,13 @@ const startSessionCreateManyOperation = async (
       )
     );
     if (retry) return await withOperationStore((store) => store.snapshot(retry));
-    const invoking = await resolveInvokingTurnContext(manager, requester);
     const isMachineOnline = makeMachineOnlineLookupForMcp(manager, ctx);
     const validatedItems = await mapWithConcurrency(
       expanded,
       5,
       async (
-        item
+        item,
+        index
       ): Promise<{
         operationItem: LodyOperationItemResult;
         dispatchConfig: ResolvedTurnDispatchConfig | null;
@@ -2697,6 +2901,29 @@ const startSessionCreateManyOperation = async (
             operationItem: batchFailure(
               'INVALID_ITEM',
               'Create item is missing prompt.',
+              false,
+              label
+            ),
+            dispatchConfig: null,
+          };
+        }
+        const resolution = resolvedItems[index];
+        if (resolution?.error) {
+          const error = resolution.error;
+          return {
+            operationItem:
+              error instanceof LodyOperationStoreError
+                ? batchFailure(error.code, error.message, error.retryable, label)
+                : batchFailure('INVALID_ITEM', formatMcpErrorMessage(error), false, label),
+            dispatchConfig: null,
+          };
+        }
+        const resolved = resolution?.resolved;
+        if (!resolved) {
+          return {
+            operationItem: batchFailure(
+              'INVALID_ITEM',
+              'Create item could not be resolved.',
               false,
               label
             ),
@@ -2714,7 +2941,7 @@ const startSessionCreateManyOperation = async (
             dispatchConfig: null,
           };
         }
-        const targetMachineId = (item.machineId ?? requester.machineId) as MachineId;
+        const targetMachineId = (resolved.input.machineId ?? requester.machineId) as MachineId;
         if (!(await isMachineOnline(targetMachineId))) {
           return {
             operationItem: batchFailure(
@@ -2726,26 +2953,16 @@ const startSessionCreateManyOperation = async (
             dispatchConfig: null,
           };
         }
-        const single = {
-          operationId: args.operationId,
-          prompt: item.prompt,
-          ...(item.machineId ? { machineId: item.machineId } : {}),
-          ...(item.agentConfigId ? { agentConfigId: item.agentConfigId } : {}),
-          ...buildMcpRunConfigCanonicalCommand(item),
-          ...(item.useCurrentSessionAsParent !== undefined
-            ? { useCurrentSessionAsParent: item.useCurrentSessionAsParent }
-            : {}),
-          ...(item.workContext ? { workContext: item.workContext } : {}),
-        } as SessionCreateCommandInput;
-        const options = buildMcpCreateOptions(single, ctx);
+        const options = buildMcpCreateOptions(resolved.input, ctx);
         bindMcpCreateContext(options, auth, requester);
+        bindAgentRoleCreateOptions(options, resolved.role);
         try {
           const effectiveDispatchConfig = await validateSessionCreateOptions({
             auth,
             workspace,
             manager,
             options,
-            dispatchConfig: buildMcpTurnDispatchConfig(item),
+            dispatchConfig: resolved.dispatchConfig,
             skipMachineAvailabilityCheck: true,
           });
           return {
@@ -2807,7 +3024,8 @@ const startSessionCreateManyOperation = async (
           return storedItem;
         }
         const expandedItem = expanded[index];
-        if (!expandedItem?.prompt) {
+        const resolved = resolvedItems[index]?.resolved;
+        if (!expandedItem?.prompt || !resolved) {
           return batchFailure(
             'INVALID_ITEM',
             'Create item is missing prompt.',
@@ -2817,19 +3035,9 @@ const startSessionCreateManyOperation = async (
           );
         }
         try {
-          const single = {
-            operationId: args.operationId,
-            prompt: expandedItem.prompt,
-            ...(expandedItem.machineId ? { machineId: expandedItem.machineId } : {}),
-            ...(expandedItem.agentConfigId ? { agentConfigId: expandedItem.agentConfigId } : {}),
-            ...buildMcpRunConfigCanonicalCommand(expandedItem),
-            ...(expandedItem.useCurrentSessionAsParent !== undefined
-              ? { useCurrentSessionAsParent: expandedItem.useCurrentSessionAsParent }
-              : {}),
-            ...(expandedItem.workContext ? { workContext: expandedItem.workContext } : {}),
-          } as SessionCreateCommandInput;
-          const options = buildMcpCreateOptions(single, ctx);
+          const options = buildMcpCreateOptions(resolved.input, ctx);
           bindMcpCreateContext(options, auth, requester);
+          bindAgentRoleCreateOptions(options, resolved.role);
           options.sessionId = storedItem.target.sessionId;
           options.userTurnId = storedItem.target.userTurnId;
           options.chainDepth = invoking.chainDepth + 1;
@@ -2839,9 +3047,9 @@ const startSessionCreateManyOperation = async (
             auth,
             workspace,
             manager,
-            expandedItem.prompt,
+            resolved.prompt,
             options,
-            targetDispatchConfigs[index] ?? buildMcpTurnDispatchConfig(expandedItem)
+            targetDispatchConfigs[index] ?? resolved.dispatchConfig
           );
           await withOperationStore((store) =>
             store.markItemInputDurable(
@@ -3498,6 +3706,10 @@ export const __lodyMcpServerInternals = {
   buildMcpCreateOptions,
   bindMcpCreateContext,
   buildMcpTurnDispatchConfig,
+  composeAgentRolePrompt,
+  readAgentRoleInvocationSnapshot,
+  resolveMcpSessionCreate,
+  buildResolvedMcpCreateCanonicalCommand,
   summarizeAgentConfig,
   assertDifferentMcpSession,
   assertBatchSize,
@@ -3786,7 +3998,7 @@ export function buildLodyMcpServer(): McpServer {
     {
       title: 'Create a Lody session',
       description:
-        'Start durable asynchronous work that creates a Lody session. Supply operationId; the result arrives automatically as a continuation, so do not poll operation_get. To recover an already accepted create without resending its prompt, send only operationId with resume=true. useCurrentSessionAsParent=true and workContext are mutually exclusive schema branches. Machine/config ids and runConfig values come from lody_session_create_options. The wait field is temporary legacy compatibility only.',
+        'Start durable asynchronous work that creates a Lody session. Supply operationId; the result arrives automatically as a continuation, so do not poll operation_get. To recover an already accepted create without resending its prompt, send only operationId with resume=true. When the driving user turn contains an Agent Role mention, pass its agentRoleId and do not pass machineId, agentConfigId, modelId, reasoningEffort, fastMode, or planMode; the frozen mention supplies them. useCurrentSessionAsParent=true and workContext are mutually exclusive schema branches. Machine/config ids and runConfig values for non-Role creates come from lody_session_create_options. The wait field is temporary legacy compatibility only.',
       inputSchema: SessionCreateToolInputSchema,
     },
     async (input) => {
@@ -3804,22 +4016,29 @@ export function buildLodyMcpServer(): McpServer {
         const ctx = getSessionContext();
         const auth = getCliAuthContextOrThrow('mcp');
         const workspace = await resolveWorkspaceOrThrow(auth, getMcpWorkspaceId(ctx));
-        const options = buildMcpCreateOptions(args, ctx);
         return await withWorkspaceManager(auth, workspace, 'mcp', async (manager) => {
           await syncWorkspaceMetaForRead(manager, `mcp.session_create:${ctx.sessionId}:current`);
           const currentSession = await readCurrentSessionMeta(manager, ctx.sessionId as SessionId);
           if (!currentSession) {
             throw new Error(`Session not found: ${ctx.sessionId}`);
           }
+          // Only a Role needs the driving Turn: reading it walks the whole
+          // transcript, and this path never persists the frozen config.
+          const invoking = args.agentRoleId
+            ? await resolveInvokingTurnContext(manager, currentSession)
+            : undefined;
+          const resolved = resolveMcpSessionCreate(args, invoking, currentSession);
+          const options = buildMcpCreateOptions(resolved.input, ctx);
           bindMcpCreateContext(options, auth, currentSession);
+          bindAgentRoleCreateOptions(options, resolved.role);
           options.workspaceMetaPrewriteSatisfied = true;
           const result = await createSessionResult(
             auth,
             workspace,
             manager,
-            args.prompt,
+            resolved.prompt,
             options,
-            buildMcpTurnDispatchConfig(args),
+            resolved.dispatchConfig,
             buildStructuredOutputOptions(args)
           );
           const response = {
@@ -3920,7 +4139,7 @@ export function buildLodyMcpServer(): McpServer {
     {
       title: 'Create multiple Lody sessions',
       description:
-        'Start one durable batch Operation for 1-20 Session creates. defaults and items shallow-merge; nested objects replace wholesale. Items accept the same run config fields as lody_session_create (modelId, reasoningEffort, fastMode, planMode). Ordered item failures are isolated. Completion arrives automatically as one continuation, so do not poll operation_get in a loop.',
+        'Start one durable batch Operation for 1-20 Session creates. defaults and items shallow-merge; nested objects replace wholesale. Each item may use an agentRoleId authorized by the driving user turn; Role items cannot also override machine, agent config, or run config. Non-Role items accept modelId, reasoningEffort, fastMode, and planMode. Ordered item failures are isolated. Completion arrives automatically as one continuation, so do not poll operation_get in a loop.',
       inputSchema: SessionCreateManyToolInputSchema,
     },
     async (input) => {

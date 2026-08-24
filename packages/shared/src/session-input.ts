@@ -10,6 +10,10 @@ import type {
   SessionTurnInputConfig,
   VisualAnnotationReferencePayload,
 } from './ai';
+import {
+  normalizeAgentRoleInvocationSnapshots,
+  type AgentRoleInvocationSnapshot,
+} from './agent-role';
 import type { SessionHistoryInput } from './schema';
 import type { McpServerId } from './ids';
 import {
@@ -476,6 +480,8 @@ export const buildSessionTurnInputConfig = (args: {
   modelId?: string | null;
   configOptionValues?: Record<string, AcpConfigOptionValue> | null;
   mcpServerIds?: readonly McpServerId[] | null;
+  /** Roles this Turn authorized, already frozen by the composer. */
+  agentRoleInvocations?: readonly AgentRoleInvocationSnapshot[] | null;
   issuePRMentions?: IssuePRMention[];
   resume?: ACPSessionConfig['resume'];
   prompt?: string;
@@ -494,6 +500,9 @@ export const buildSessionTurnInputConfig = (args: {
         ? args.configOptionValues
         : undefined,
     mcpServerIds: args.mcpServerIds ? [...args.mcpServerIds] : undefined,
+    // Re-normalized rather than copied: the snapshot is persisted evidence of
+    // an authorization, so it passes the same reader as a stored one.
+    agentRoleInvocations: normalizeAgentRoleInvocationSnapshots(args.agentRoleInvocations),
     issuePRMentions: args.issuePRMentions,
     resume: args.resume,
   };

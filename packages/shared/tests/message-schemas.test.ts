@@ -655,6 +655,69 @@ describe('normalizeSessionTurnInputConfig', () => {
       inputBlocks: [{ type: 'text', text: 'hello' }],
     });
   });
+
+  it('keeps the agent role invocations a turn authorized', () => {
+    const snapshot = {
+      roleId: 'role-1',
+      roleRevision: 3,
+      roleName: 'Code Reviewer',
+      machineId: 'machine-1',
+      agentConfigId: 'config-1',
+      runConfig: { modelId: 'gpt-5.6', configOptionValues: { thought_level: 'high' } },
+      promptPrefix: 'Be strict.',
+    };
+    const normalized = normalizeSessionTurnInputConfig({
+      prompt: 'hello',
+      cliType: 'builtin',
+      agentType: 'codex',
+      agentRoleInvocations: [snapshot],
+    });
+
+    // The CLI authorizes an `agentRoleId` only against this field of the
+    // driving turn, so it has to survive the same normalization the turn does.
+    expect(normalized?.agentRoleInvocations).toEqual([snapshot]);
+  });
+
+  it('drops a malformed or secret-bearing invocation rather than passing it through', () => {
+    const normalized = normalizeSessionTurnInputConfig({
+      prompt: 'hello',
+      cliType: 'builtin',
+      agentType: 'codex',
+      agentRoleInvocations: [
+        { roleId: '' },
+        {
+          roleId: 'role-1',
+          roleRevision: 1,
+          roleName: 'Reviewer',
+          machineId: 'machine-1',
+          agentConfigId: 'config-1',
+          runConfig: { configOptionValues: { api_key: 'sk-live', thought_level: 'high' } },
+        },
+      ],
+    });
+
+    expect(normalized?.agentRoleInvocations).toEqual([
+      {
+        roleId: 'role-1',
+        roleRevision: 1,
+        roleName: 'Reviewer',
+        machineId: 'machine-1',
+        agentConfigId: 'config-1',
+        runConfig: { configOptionValues: { thought_level: 'high' } },
+      },
+    ]);
+  });
+
+  it('omits the field entirely when a turn authorized no role', () => {
+    expect(
+      normalizeSessionTurnInputConfig({
+        prompt: 'hello',
+        cliType: 'builtin',
+        agentType: 'codex',
+        agentRoleInvocations: [],
+      })?.agentRoleInvocations
+    ).toBeUndefined();
+  });
 });
 
 describe('message-schemas branch', () => {

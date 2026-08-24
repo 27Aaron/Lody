@@ -1,45 +1,32 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback } from 'react';
 import { useAtomValue } from 'jotai';
 import type { McpServerId, WorkspaceMcpServerMeta } from '@lody/shared';
 import { activeWorkspaceRuntimeAtom } from '@/atoms/runtime';
-import {
-  acquireWorkspaceMcpCatalog,
-  EMPTY_WORKSPACE_MCP_CATALOG,
-  type WorkspaceMcpCatalogSnapshot,
-} from '@/lib/workspace-mcp-catalog-room';
-import {
-  deleteWorkspaceMcpServer,
-  putWorkspaceMcpServer,
-  type WorkspaceMcpWriteResult,
-} from '@/lib/workspace-mcp-write';
+import { useWorkspaceCatalog } from '@/hooks/use-workspace-catalog';
+import { deleteWorkspaceMcpServer, putWorkspaceMcpServer } from '@/lib/workspace-catalog-write';
+
+export type WorkspaceMcpCatalogSnapshot = {
+  servers: WorkspaceMcpServerMeta[];
+  synced: boolean;
+};
 
 /**
- * Every consumer in a workspace reads one shared room, so the snapshot object
- * is identity-stable across mounts as well as renders — which is what lets the
- * selection and composer-menu memos downstream actually hit.
+ * The MCP half of the shared workspace catalog room.
+ *
+ * Derived rather than separately subscribed: MCP servers and Agent Roles are
+ * two families of one document, so both read the same room. The room's snapshot
+ * is returned as-is — re-wrapping it would trade its cross-mount identity for a
+ * per-hook one, which is exactly what the selection and composer-menu memos
+ * downstream rely on.
  */
 export function useWorkspaceMcpCatalog(): WorkspaceMcpCatalogSnapshot {
-  const runtime = useAtomValue(activeWorkspaceRuntimeAtom);
-  const [snapshot, setSnapshot] = useState<WorkspaceMcpCatalogSnapshot>(
-    EMPTY_WORKSPACE_MCP_CATALOG
-  );
-
-  useEffect(() => {
-    if (!runtime) {
-      setSnapshot(EMPTY_WORKSPACE_MCP_CATALOG);
-      return undefined;
-    }
-    const lease = acquireWorkspaceMcpCatalog(runtime, setSnapshot);
-    setSnapshot(lease.snapshot);
-    return lease.release;
-  }, [runtime]);
-
-  return snapshot;
+  return useWorkspaceCatalog();
 }
 
 export function useWorkspaceMcpCatalogActions(): {
-  upsert: (entry: WorkspaceMcpServerMeta) => Promise<WorkspaceMcpWriteResult>;
-  remove: (id: McpServerId) => Promise<WorkspaceMcpWriteResult>;
+  /** Resolves on durability; the upload runs on its own and is not reported. */
+  upsert: (entry: WorkspaceMcpServerMeta) => Promise<void>;
+  remove: (id: McpServerId) => Promise<void>;
 } {
   const runtime = useAtomValue(activeWorkspaceRuntimeAtom);
   const upsert = useCallback(

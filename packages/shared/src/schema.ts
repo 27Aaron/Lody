@@ -8,6 +8,7 @@ import {
   AgentBrandId,
   AgentConfigId,
   AgentConfigCliType,
+  AgentRoleId,
   AgentType,
   AcpCapabilityCacheEntry,
   BuiltinRuntimeOverrides,
@@ -456,6 +457,12 @@ const acpSessionConfigSchema = schema
       configOptionValues: schema.Any({ required: false }),
       /** Workspace MCP catalog ids selected for this session (string[]). */
       mcpServerIds: schema.Any({ required: false }),
+      /**
+       * Agent Role snapshots this user Turn authorized. Declared so the field is
+       * a real column rather than catchall data, and read only through
+       * `normalizeAgentRoleInvocationSnapshots`.
+       */
+      agentRoleInvocations: schema.Any({ required: false }),
       chainDepth: schema.Number({ required: false }),
     },
     { required: false }
@@ -773,6 +780,17 @@ export type SessionMeta = {
   cliType: AgentConfigCliType;
   agentType: AgentType;
   agentConfigId?: AgentConfigId;
+  /**
+   * Agent Role this session was created from, and the Role revision that was
+   * frozen into the driving Turn's invocation snapshot.
+   *
+   * Provenance only. Execution is governed by the already-frozen agent config
+   * and Turn input config, so nothing may re-read the mutable Role catalog from
+   * these: a Role edited or deleted afterwards must not change how this session
+   * runs, recovers, or retries.
+   */
+  agentRoleId?: AgentRoleId;
+  agentRoleRevision?: number;
   acpSessionId?: ACPSessionId;
   /** Exact Session or child Tab that created/opened this session, when known. */
   openedBySessionId?: SessionId;

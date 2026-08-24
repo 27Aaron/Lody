@@ -117,6 +117,43 @@ export function forEachAtTokenSpan(
   }
 }
 
+/**
+ * Claim every `@<slug>` token a source knows, as ranges of one kind.
+ *
+ * Sessions and Agent Roles hydrate identically — a bare token, a slug -> id map,
+ * and the same deference to file paths — so the rule lives here once. That
+ * deference is the point: a token that is also a real path is left for the file
+ * hydrator, because paths are the overwhelmingly common case and mistaking one
+ * for a session or a Role silently turns a file reference into a history query
+ * or a Session-creation instruction, whereas the reverse only leaves a token
+ * unexpanded, which the user can see.
+ */
+export function hydrateSlugMentionsFromText({
+  text,
+  slugToValue,
+  kind,
+  knownFileTokens,
+}: {
+  text: string;
+  slugToValue: ReadonlyMap<string, string>;
+  kind: MentionKind;
+  knownFileTokens?: ReadonlySet<string>;
+}): HydratedMentions {
+  const mentions: HydratedMentions['mentions'] = [];
+  const values = new Set<string>();
+  if (slugToValue.size === 0) return { mentions, values: [] };
+
+  forEachAtTokenSpan(text, ({ token, start, end }) => {
+    if (!token || knownFileTokens?.has(token)) return false;
+    const value = slugToValue.get(token);
+    if (!value) return false;
+    mentions.push({ value, start, end, kind });
+    values.add(value);
+    return true;
+  });
+  return { mentions, values: [...values] };
+}
+
 export function useMentionHydration(
   consumerName: string,
   {

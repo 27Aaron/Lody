@@ -50,6 +50,7 @@ import { Route as WorkspaceNameAuthSettingsBillingRouteImport } from './routes/$
 import { Route as WorkspaceNameAuthSettingsAppearanceRouteImport } from './routes/$workspaceName/_auth/settings/appearance'
 import { Route as WorkspaceNameAuthSettingsAiUsageRouteImport } from './routes/$workspaceName/_auth/settings/ai-usage'
 import { Route as WorkspaceNameAuthSettingsAgentsRouteImport } from './routes/$workspaceName/_auth/settings/agents'
+import { Route as WorkspaceNameAuthSettingsAgentRolesRouteImport } from './routes/$workspaceName/_auth/settings/agent-roles'
 import { Route as WorkspaceNameAuthSettingsAgentConfigRouteImport } from './routes/$workspaceName/_auth/settings/agent-config'
 import { Route as WorkspaceNameAuthSettingsAccountRouteImport } from './routes/$workspaceName/_auth/settings/account'
 import { Route as WorkspaceNameAuthSettingsAboutRouteImport } from './routes/$workspaceName/_auth/settings/about'
@@ -282,6 +283,12 @@ const WorkspaceNameAuthSettingsAgentsRoute =
     path: '/agents',
     getParentRoute: () => WorkspaceNameAuthSettingsRoute,
   } as any)
+const WorkspaceNameAuthSettingsAgentRolesRoute =
+  WorkspaceNameAuthSettingsAgentRolesRouteImport.update({
+    id: '/agent-roles',
+    path: '/agent-roles',
+    getParentRoute: () => WorkspaceNameAuthSettingsRoute,
+  } as any)
 const WorkspaceNameAuthSettingsAgentConfigRoute =
   WorkspaceNameAuthSettingsAgentConfigRouteImport.update({
     id: '/agent-config',
@@ -339,6 +346,7 @@ export interface FileRoutesByFullPath {
   '/$workspaceName/settings/about': typeof WorkspaceNameAuthSettingsAboutRoute
   '/$workspaceName/settings/account': typeof WorkspaceNameAuthSettingsAccountRoute
   '/$workspaceName/settings/agent-config': typeof WorkspaceNameAuthSettingsAgentConfigRoute
+  '/$workspaceName/settings/agent-roles': typeof WorkspaceNameAuthSettingsAgentRolesRoute
   '/$workspaceName/settings/agents': typeof WorkspaceNameAuthSettingsAgentsRoute
   '/$workspaceName/settings/ai-usage': typeof WorkspaceNameAuthSettingsAiUsageRoute
   '/$workspaceName/settings/appearance': typeof WorkspaceNameAuthSettingsAppearanceRoute
@@ -384,6 +392,7 @@ export interface FileRoutesByTo {
   '/$workspaceName/settings/about': typeof WorkspaceNameAuthSettingsAboutRoute
   '/$workspaceName/settings/account': typeof WorkspaceNameAuthSettingsAccountRoute
   '/$workspaceName/settings/agent-config': typeof WorkspaceNameAuthSettingsAgentConfigRoute
+  '/$workspaceName/settings/agent-roles': typeof WorkspaceNameAuthSettingsAgentRolesRoute
   '/$workspaceName/settings/agents': typeof WorkspaceNameAuthSettingsAgentsRoute
   '/$workspaceName/settings/ai-usage': typeof WorkspaceNameAuthSettingsAiUsageRoute
   '/$workspaceName/settings/appearance': typeof WorkspaceNameAuthSettingsAppearanceRoute
@@ -433,6 +442,7 @@ export interface FileRoutesById {
   '/$workspaceName/_auth/settings/about': typeof WorkspaceNameAuthSettingsAboutRoute
   '/$workspaceName/_auth/settings/account': typeof WorkspaceNameAuthSettingsAccountRoute
   '/$workspaceName/_auth/settings/agent-config': typeof WorkspaceNameAuthSettingsAgentConfigRoute
+  '/$workspaceName/_auth/settings/agent-roles': typeof WorkspaceNameAuthSettingsAgentRolesRoute
   '/$workspaceName/_auth/settings/agents': typeof WorkspaceNameAuthSettingsAgentsRoute
   '/$workspaceName/_auth/settings/ai-usage': typeof WorkspaceNameAuthSettingsAiUsageRoute
   '/$workspaceName/_auth/settings/appearance': typeof WorkspaceNameAuthSettingsAppearanceRoute
@@ -482,6 +492,7 @@ export interface FileRouteTypes {
     | '/$workspaceName/settings/about'
     | '/$workspaceName/settings/account'
     | '/$workspaceName/settings/agent-config'
+    | '/$workspaceName/settings/agent-roles'
     | '/$workspaceName/settings/agents'
     | '/$workspaceName/settings/ai-usage'
     | '/$workspaceName/settings/appearance'
@@ -527,6 +538,7 @@ export interface FileRouteTypes {
     | '/$workspaceName/settings/about'
     | '/$workspaceName/settings/account'
     | '/$workspaceName/settings/agent-config'
+    | '/$workspaceName/settings/agent-roles'
     | '/$workspaceName/settings/agents'
     | '/$workspaceName/settings/ai-usage'
     | '/$workspaceName/settings/appearance'
@@ -575,6 +587,7 @@ export interface FileRouteTypes {
     | '/$workspaceName/_auth/settings/about'
     | '/$workspaceName/_auth/settings/account'
     | '/$workspaceName/_auth/settings/agent-config'
+    | '/$workspaceName/_auth/settings/agent-roles'
     | '/$workspaceName/_auth/settings/agents'
     | '/$workspaceName/_auth/settings/ai-usage'
     | '/$workspaceName/_auth/settings/appearance'
@@ -905,6 +918,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof WorkspaceNameAuthSettingsAgentsRouteImport
       parentRoute: typeof WorkspaceNameAuthSettingsRoute
     }
+    '/$workspaceName/_auth/settings/agent-roles': {
+      id: '/$workspaceName/_auth/settings/agent-roles'
+      path: '/agent-roles'
+      fullPath: '/$workspaceName/settings/agent-roles'
+      preLoaderRoute: typeof WorkspaceNameAuthSettingsAgentRolesRouteImport
+      parentRoute: typeof WorkspaceNameAuthSettingsRoute
+    }
     '/$workspaceName/_auth/settings/agent-config': {
       id: '/$workspaceName/_auth/settings/agent-config'
       path: '/agent-config'
@@ -962,6 +982,7 @@ interface WorkspaceNameAuthSettingsRouteChildren {
   WorkspaceNameAuthSettingsAboutRoute: typeof WorkspaceNameAuthSettingsAboutRoute
   WorkspaceNameAuthSettingsAccountRoute: typeof WorkspaceNameAuthSettingsAccountRoute
   WorkspaceNameAuthSettingsAgentConfigRoute: typeof WorkspaceNameAuthSettingsAgentConfigRoute
+  WorkspaceNameAuthSettingsAgentRolesRoute: typeof WorkspaceNameAuthSettingsAgentRolesRoute
   WorkspaceNameAuthSettingsAgentsRoute: typeof WorkspaceNameAuthSettingsAgentsRoute
   WorkspaceNameAuthSettingsAiUsageRoute: typeof WorkspaceNameAuthSettingsAiUsageRoute
   WorkspaceNameAuthSettingsAppearanceRoute: typeof WorkspaceNameAuthSettingsAppearanceRoute
@@ -988,6 +1009,8 @@ const WorkspaceNameAuthSettingsRouteChildren: WorkspaceNameAuthSettingsRouteChil
       WorkspaceNameAuthSettingsAccountRoute,
     WorkspaceNameAuthSettingsAgentConfigRoute:
       WorkspaceNameAuthSettingsAgentConfigRoute,
+    WorkspaceNameAuthSettingsAgentRolesRoute:
+      WorkspaceNameAuthSettingsAgentRolesRoute,
     WorkspaceNameAuthSettingsAgentsRoute: WorkspaceNameAuthSettingsAgentsRoute,
     WorkspaceNameAuthSettingsAiUsageRoute:
       WorkspaceNameAuthSettingsAiUsageRoute,

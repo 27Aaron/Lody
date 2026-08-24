@@ -1,26 +1,38 @@
 import {
   applyWorkspaceFlockRowEvents,
   getWorkspaceFlockDocId,
+  listWorkspaceAgentRoles,
   listWorkspaceMcpServers,
   readWorkspaceFlockRowsFromFlock,
+  type AgentRole,
   type WorkspaceFlockEvent,
   type WorkspaceFlockRowMap,
   type WorkspaceMcpServerMeta,
 } from '@lody/shared';
 import type { WorkspaceRuntime } from '@/atoms/runtime';
 
-export type WorkspaceMcpCatalogSnapshot = {
+/**
+ * The workspace document's catalogs, as one snapshot.
+ *
+ * MCP servers and Agent Roles are separate row families of the SAME Flock
+ * document, so they are read through one room rather than one room each: a
+ * second room would open the same document, join the same Loro room, and keep a
+ * second copy of the same row map for a list of a few dozen entries.
+ */
+export type WorkspaceCatalogSnapshot = {
   servers: WorkspaceMcpServerMeta[];
+  roles: AgentRole[];
   /** True once the first remote sync landed, which makes an empty catalog authoritative. */
   synced: boolean;
 };
 
-type WorkspaceMcpCatalogListener = (snapshot: WorkspaceMcpCatalogSnapshot) => void;
+type WorkspaceCatalogListener = (snapshot: WorkspaceCatalogSnapshot) => void;
 
 const EMPTY_ROWS = Object.freeze({}) as WorkspaceFlockRowMap;
 
-export const EMPTY_WORKSPACE_MCP_CATALOG: WorkspaceMcpCatalogSnapshot = Object.freeze({
+export const EMPTY_WORKSPACE_CATALOG: WorkspaceCatalogSnapshot = Object.freeze({
   servers: Object.freeze([]) as unknown as WorkspaceMcpServerMeta[],
+  roles: Object.freeze([]) as unknown as AgentRole[],
   synced: false,
 });
 
@@ -28,8 +40,8 @@ type SharedCatalogRoom = {
   refCount: number;
   cancelled: boolean;
   rows: WorkspaceFlockRowMap;
-  snapshot: WorkspaceMcpCatalogSnapshot;
-  listeners: Set<WorkspaceMcpCatalogListener>;
+  snapshot: WorkspaceCatalogSnapshot;
+  listeners: Set<WorkspaceCatalogListener>;
   teardown: Set<() => void>;
 };
 
@@ -41,10 +53,33 @@ type SharedCatalogRoom = {
 // `use-machine-flock-rows.ts` ref-counts its rooms.
 const ROOMS = new WeakMap<WorkspaceRuntime, SharedCatalogRoom>();
 
+/**
+ * Keep the previous array when a family's contents did not move.
+ *
+ * The two families share a document, so every Role write re-lists the MCP
+ * servers as well. Handing out a fresh `servers` identity for that would
+ * invalidate the MCP selection memos on an edit they have nothing to do with
+ * (and vice versa). Rows are identity-stable across
+ * `applyWorkspaceFlockRowEvents`, so element identity is the whole comparison.
+ */
+const reuseUnchanged = <T,>(previous: T[], next: T[]): T[] =>
+  previous.length === next.length && previous.every((item, index) => item === next[index])
+    ? previous
+    : next;
+
 function publish(room: SharedCatalogRoom, rows: WorkspaceFlockRowMap, synced: boolean): void {
   if (room.rows === rows && room.snapshot.synced === synced) return;
   room.rows = rows;
-  room.snapshot = { servers: listWorkspaceMcpServers(rows), synced };
+  const servers = reuseUnchanged(room.snapshot.servers, listWorkspaceMcpServers(rows));
+  const roles = reuseUnchanged(room.snapshot.roles, listWorkspaceAgentRoles(rows));
+  if (
+    servers === room.snapshot.servers &&
+    roles === room.snapshot.roles &&
+    room.snapshot.synced === synced
+  ) {
+    return;
+  }
+  room.snapshot = { servers, roles, synced };
   for (const listener of room.listeners) {
     listener(room.snapshot);
   }
@@ -79,26 +114,26 @@ function startRoom(runtime: WorkspaceRuntime, room: SharedCatalogRoom): void {
       // wholesale so remotely deleted rows cannot survive in the UI cache.
       publish(room, readWorkspaceFlockRowsFromFlock(handle.flock), true);
     } catch (error) {
-      if (!room.cancelled) console.error('Failed to sync workspace MCP catalog', error);
+      if (!room.cancelled) console.error('Failed to sync workspace catalog', error);
     }
   })();
 }
 
 /**
- * Join the workspace's shared MCP catalog room. The returned snapshot is the
+ * Join the workspace's shared catalog room. The returned snapshot is the
  * current shared state; `listener` receives every later one until `release`.
  */
-export function acquireWorkspaceMcpCatalog(
+export function acquireWorkspaceCatalog(
   runtime: WorkspaceRuntime,
-  listener: WorkspaceMcpCatalogListener
-): { snapshot: WorkspaceMcpCatalogSnapshot; release: () => void } {
+  listener: WorkspaceCatalogListener
+): { snapshot: WorkspaceCatalogSnapshot; release: () => void } {
   let room = ROOMS.get(runtime);
   if (!room) {
     room = {
       refCount: 0,
       cancelled: false,
       rows: EMPTY_ROWS,
-      snapshot: EMPTY_WORKSPACE_MCP_CATALOG,
+      snapshot: EMPTY_WORKSPACE_CATALOG,
       listeners: new Set(),
       teardown: new Set(),
     };

@@ -4,6 +4,7 @@ import { MentionTwoLevelMenuBody } from '@/components/mentions/mention-two-level
 import {
   getMentionViewCandidates,
   selectMentionMenuView,
+  toAgentRoleCandidate,
   toCommandCandidate,
   toFileCandidate,
   toIssuePrCandidate,
@@ -11,6 +12,13 @@ import {
   type MentionCandidate,
   type MentionCategory,
 } from '@/components/mentions/mention-registry';
+import {
+  AGENT_ROLE_VERSION,
+  type AgentConfigId,
+  type AgentRole,
+  type AgentRoleId,
+  type MachineId,
+} from '@lody/shared';
 
 /* The menu body only renders inside a <Mention> root (its rows read the mention
    context). The harness mounts a forced-open root over a small textarea and
@@ -107,6 +115,67 @@ const SKILLS: MentionCandidate[] = [
   ),
 ];
 
+const AGENT_ROLE_LABELS = {
+  machine: 'Machine',
+  agentConfig: 'Agent',
+  model: 'Model',
+  reasoning: 'Reasoning',
+  prompt: 'Prompt',
+  visibility: { private: 'Private', workspace: 'Workspace' } as const,
+};
+
+const agentRole = (overrides: Partial<AgentRole>): AgentRole => ({
+  v: AGENT_ROLE_VERSION,
+  id: 'role-1' as AgentRoleId,
+  ownerUserId: 'user-1',
+  visibility: 'workspace',
+  name: 'Code Reviewer',
+  emoji: '🔍',
+  machineId: 'machine-1' as MachineId,
+  agentConfigId: 'config-1' as AgentConfigId,
+  runConfig: { modelId: 'gpt-5.6-sol', configOptionValues: { reasoning_effort: 'high' } },
+  revision: 2,
+  createdAt: 1,
+  updatedAt: 2,
+  ...overrides,
+});
+
+const AGENT_ROLES: MentionCandidate[] = [
+  toAgentRoleCandidate(
+    {
+      slug: 'Code-Reviewer',
+      role: agentRole({
+        // Long on purpose: the instruction scrolls inside its own block so the
+        // machine/agent/model rows stay on screen.
+        promptPrefix: [
+          'Review the diff for correctness before style.',
+          'Name the failure a reader could hit, with the input that triggers it.',
+          'Prefer one concrete repro over three hedged observations.',
+          'If the change is fine, say so in one line and stop.',
+        ].join('\n'),
+      }),
+      machineLabel: 'Studio',
+      agentConfigLabel: 'Codex',
+    },
+    AGENT_ROLE_LABELS
+  ),
+  toAgentRoleCandidate(
+    {
+      slug: 'Release-Notes',
+      role: agentRole({
+        id: 'role-2' as AgentRoleId,
+        name: 'Release Notes',
+        emoji: '📝',
+        visibility: 'private',
+        runConfig: { modelId: 'gpt-5.6-luna' },
+      }),
+      machineLabel: 'Studio',
+      agentConfigLabel: 'Codex',
+    },
+    AGENT_ROLE_LABELS
+  ),
+];
+
 const COMMANDS: MentionCandidate[] = [
   toCommandCandidate({ name: 'review', description: 'Review the changes on this branch' }),
   toCommandCandidate({ name: 'compact', description: 'Compact the conversation context' }),
@@ -139,6 +208,7 @@ const CATEGORIES: MentionCategory[] = [
   category('issue', 'issue', 'Issues', 'issue', ISSUES),
   category('pr', 'pr', 'Pull Requests', 'pr', []),
   category('skill', 'skill', 'Skills', 'skill', SKILLS),
+  category('agent_role', 'role', 'Agent Roles', 'agent_role', AGENT_ROLES),
   category('command', 'cmd', 'Commands', 'command', COMMANDS),
 ];
 
@@ -220,6 +290,16 @@ export const SkillCategoryMobile: Story = {
 };
 
 /** `@cmd:` — commands, which replace the whole prompt when committed. */
+/** `@role:` — the instruction is shown, capped and scrollable, above the rows. */
+export const AgentRoleCategoryWithDetail: Story = {
+  args: { search: 'role:', withDetail: true },
+};
+
+/** A Role with no instruction: the pane is rows only, no empty block. */
+export const AgentRoleWithoutPrompt: Story = {
+  args: { search: 'role:Release', withDetail: true },
+};
+
 export const CommandCategory: Story = {
   args: { search: 'cmd:' },
 };

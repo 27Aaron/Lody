@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { ClipboardList, MessagesSquare } from 'lucide-react';
+import { ClipboardList, MessagesSquare, UserRoundCog } from 'lucide-react';
 
 import { MonochromeFileIcon, MonochromeFolderIcon } from '@/components/icons/file-icons';
 import type { Mention, MentionChip, MentionChipResolver } from '@/ui/mention/index';
@@ -29,13 +29,15 @@ import type { Mention, MentionChip, MentionChipResolver } from '@/ui/mention/ind
  * which makes it a poor trade against a `#`, `$`, or `/` that already names the
  * type perfectly well. Those keep their sigil and take the colour instead.
  *
- * Three exceptions earn the space:
+ * Four exceptions earn the space:
  *
  * - `@file` / `@dir`, where the glyph carries information the text does not:
  *   which kind of file it is. `@` is also the widest trigger, so it is the one
  *   with room worth spending.
  * - `@session`, whose committed text is a bare `@<title-slug>` — nothing in it
  *   says "session", so without a glyph it is indistinguishable from a path.
+ * - `@agent_role`, a bare `@<mentionSlug>` for the same reason, and one whose
+ *   consequence — creating a Session — is worth being able to see at a glance.
  * - Pasted text, which has no trigger at all and buys a gutter with real
  *   characters — a figure space (U+2007, digit-width and non-breaking) at each
  *   end of the `[Pasted N chars]` label. Widths match exactly because the
@@ -78,6 +80,7 @@ const CHIP_KINDS: ReadonlySet<string> = new Set([
   'skill',
   'session',
   'command',
+  'agent_role',
   'issue',
   'pr',
   'mention',
@@ -101,6 +104,9 @@ export function getMentionKindIcon(
   if (kind === 'dir') return <MonochromeFolderIcon folderPath={path ?? ''} className={className} />;
   if (kind === 'file') return <MonochromeFileIcon filePath={path ?? ''} className={className} />;
   if (kind === 'session') return <MessagesSquare className={className} />;
+  // Same reason as a session: the committed text is a bare `@<slug>`, so
+  // nothing in it says the token is a Role rather than a path.
+  if (kind === 'agent_role') return <UserRoundCog className={className} />;
   if (kind === 'pasted_text') return <ClipboardList className={className} aria-hidden="true" />;
   return null;
 }
@@ -148,3 +154,28 @@ export const getComposerMentionChip: MentionChipResolver = (mention: Mention, te
   // nothing more — so it surrenders no character to an icon slot.
   return { icon: icon ?? undefined, className: MENTION_CHIP_CLASS_NAME, iconSlots: icon ? 1 : 0 };
 };
+
+/**
+ * Swap a chip's glyph for an Agent Role's own emoji.
+ *
+ * Applied by the composer, not by the table above: a committed range carries
+ * only the Role id, and resolving that to an emoji needs the live catalog the
+ * composer already holds. The emoji is what the user picked the Role by, so the
+ * committed `@Reviewer` should show it rather than the generic category glyph.
+ *
+ * The span is boxed to the icon slot and clipped, because the slot covers ONE
+ * character of real text and an emoji glyph is wider than a latin one — an
+ * unconstrained span would drag every following glyph out from under the caret.
+ */
+export const applyAgentRoleEmojiChip = (chip: MentionChip, emoji: string): MentionChip => ({
+  ...chip,
+  icon: (
+    <span
+      aria-hidden="true"
+      className={`${MENTION_ICON_CLASS_NAME} inline-flex items-center justify-center overflow-hidden text-[0.95em] leading-none`}
+    >
+      {emoji}
+    </span>
+  ),
+  iconSlots: 1,
+});

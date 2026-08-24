@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useAtomValue } from 'jotai';
-import { CloudOff, Loader2, Plug, Plus, Trash2 } from 'lucide-react';
+import { Loader2, Plug, Plus, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
   describeMcpConnection,
@@ -45,7 +45,6 @@ export function McpSetting() {
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string>();
-  const [syncWarning, setSyncWarning] = useState<string>();
   const [pendingRemoval, setPendingRemoval] = useState<WorkspaceMcpServerMeta | null>(null);
   const [removing, setRemoving] = useState(false);
 
@@ -67,7 +66,6 @@ export function McpSetting() {
 
     setSubmitting(true);
     setError(undefined);
-    setSyncWarning(undefined);
     const now = getServerNow();
     const existing = editor?.mode === 'edit' ? editor.entry : undefined;
     const entry: WorkspaceMcpServerMeta = {
@@ -82,14 +80,9 @@ export function McpSetting() {
       ...(existing?.createdBy || user?.id ? { createdBy: existing?.createdBy ?? user?.id } : {}),
     };
     try {
-      const result = await upsert(entry);
-      if (!result.synced) {
-        // The authored row is already durable. Reuse its identity on retry so
-        // an add cannot create a second catalog row after an upload failure.
-        setEditor({ mode: 'edit', entry });
-        setError(t('settings.mcp.errors.savedLocally', { reason: result.syncError }));
-        return;
-      }
+      // Resolves on durability: the row exists, so the editor is done. The
+      // upload runs on its own and is deliberately not reported.
+      await upsert(entry);
       setEditor(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -99,32 +92,23 @@ export function McpSetting() {
   };
 
   const toggleDefault = async (entry: WorkspaceMcpServerMeta, enabledByDefault: boolean) => {
-    setSyncWarning(undefined);
     try {
-      const result = await upsert({ ...entry, enabledByDefault, updatedAt: getServerNow() });
-      if (!result.synced) {
-        setSyncWarning(t('settings.mcp.errors.savedLocally', { reason: result.syncError }));
-      }
+      await upsert({ ...entry, enabledByDefault, updatedAt: getServerNow() });
     } catch (cause) {
-      setSyncWarning(cause instanceof Error ? cause.message : String(cause));
+      console.error('Failed to update MCP server default', cause);
     }
   };
 
   const confirmRemoval = async () => {
     if (!pendingRemoval) return;
-    setSyncWarning(undefined);
     setRemoving(true);
     try {
-      const result = await remove(pendingRemoval.id);
-      if (!result.synced) {
-        setSyncWarning(t('settings.mcp.errors.deletedLocally', { reason: result.syncError }));
-      }
-      setPendingRemoval(null);
+      await remove(pendingRemoval.id);
     } catch (cause) {
-      setSyncWarning(cause instanceof Error ? cause.message : String(cause));
-      setPendingRemoval(null);
+      console.error('Failed to remove MCP server', cause);
     } finally {
       setRemoving(false);
+      setPendingRemoval(null);
     }
   };
 
@@ -133,19 +117,6 @@ export function McpSetting() {
   return (
     <div className={settingContainerClass}>
       <p className="text-xs leading-snug text-muted-foreground">{t('settings.mcp.description')}</p>
-
-      {syncWarning ? (
-        <p
-          role="status"
-          className="flex items-start gap-2 rounded-md border border-status-warning/30 bg-status-warning/10 px-3 py-2 text-xs leading-snug text-foreground/90"
-        >
-          <CloudOff
-            className="mt-0.5 h-3.5 w-3.5 shrink-0 text-status-warning"
-            aria-hidden="true"
-          />
-          {syncWarning}
-        </p>
-      ) : null}
 
       <section className="flex flex-col">
         <div className="flex items-center justify-between gap-2 pb-1 pt-0.5">

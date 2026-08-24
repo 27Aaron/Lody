@@ -34,6 +34,7 @@ import { MachineAgentSettings } from './machine-agent-settings';
 import { IntegrationsSettingsComponent } from './integrations-setting';
 import { KeyboardShortcutsSetting } from './keyboard-shortcuts-setting';
 import { AboutSettingsComponent } from './about-setting';
+import { AgentRolesSetting } from './agent-roles-setting';
 import { McpSetting } from './mcp-setting';
 
 /**
@@ -237,6 +238,8 @@ function SettingsTabContent({ tabId }: { tabId: SettingsTabId }) {
           onSelectedMachineChange={setSelectedMachineId}
         />
       );
+    case 'agent-roles':
+      return <AgentRolesSetting />;
     case 'mcp':
       return <McpSetting />;
     case 'machines':

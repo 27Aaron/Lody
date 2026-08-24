@@ -33,14 +33,32 @@ this file; edit `AGENTS.md` only.
   restoration, search/group-expansion suppression, and viewport resize handling
   for the mobile keyboard and terminal dock. The library observes content growth;
   it does not replace Virtua or own those product-level behaviors.
-- `use-workspace-mcp-catalog.ts` reads a ref-counted per-workspace room in
-  `lib/workspace-mcp-catalog-room.ts`; it must not open the Flock document,
+- `use-workspace-catalog.ts` reads a ref-counted per-workspace room in
+  `lib/workspace-catalog-room.ts`; it must not open the Flock document,
   subscribe, or join the room per mount. The catalog is ONE small document, but
   a consumer mounts for every visible session plus every hidden child tab and
   side chat, so per-mount leases multiply room joins and duplicate row maps for
   one list — the same problem `use-machine-flock-rows.ts` ref-counts away. The
   shared snapshot is also identity-stable across mounts, which is what lets the
-  selection and composer-menu memos built on it actually hit.
+  selection and composer-menu memos built on it actually hit. MCP servers and
+  Agent Roles are two row families of that ONE document, so
+  `use-workspace-mcp-catalog.ts` and `use-workspace-agent-roles.ts` both derive
+  from that room rather than opening a second one.
+- Catalog `upsert`/`remove` (Agent Roles and MCP alike) resolve on DURABILITY;
+  the upload runs on its own and no surface waits for it or reports it. A dialog
+  that awaited the upload sat open for the whole round trip, and the row it had
+  already written showed up in the catalog underneath it — so the open create
+  form reported its own name as taken (`resolveAgentRoleNameCheckExemption`)
+  moments before closing on success.
+- `use-workspace-agent-roles.ts` filters the catalog through the shared
+  `listAccessibleAgentRoles` / `resolveAgentRoleAvailability` rules, never a
+  local predicate: hiding a private Role in the UI is not an access check, and
+  an availability rule copied into a component is one that can drift into a
+  silent fallback. Availability stays `unknown` — not `unavailable` — until that
+  machine's agent-config rows are read, which is why it subscribes exactly the
+  machines the given Roles point at. The Settings list groups by machine, so a
+  row states only the reasons about its own binding; `machine_offline` is left
+  to the group's machine pill rather than repeated on every row under it.
 - `use-app-store-review-prompt.ts` establishes its historical baseline only from
   the first ready-and-synced session snapshot. Hydrated turns seed eligibility but
   never trigger a prompt; later finalized turns are processed once, and streaming

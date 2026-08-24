@@ -32,7 +32,7 @@ import {
   type ExpandedMentionPrompt,
   type MentionPromptExpansionArgs,
 } from '@/components/mentions/mention-expansion';
-import { reanchorMessageTextSpansForTrim } from '@lody/shared';
+import { reanchorMessageTextSpansForTrim, type AgentRoleInvocationSnapshot } from '@lody/shared';
 import type { Mention as MentionRange } from '@/ui/mention/index';
 import {
   toPersistedMentionRanges,
@@ -397,7 +397,10 @@ export interface SessionChatInputAreaProps {
   onModeChange: (value: string) => void;
   onModelChange: (value: string) => void;
   onConfigOptionChange?: (configId: string, value: AcpConfigOptionValue) => void;
-  onSendMessage: (inputBlocks: SessionInputBlock[]) => Promise<boolean>;
+  onSendMessage: (
+    inputBlocks: SessionInputBlock[],
+    options?: { agentRoleInvocations?: readonly AgentRoleInvocationSnapshot[] }
+  ) => Promise<boolean>;
   onStop: () => void | Promise<void>;
   onRemoveQueueItem: (itemId: string) => Promise<void>;
   /** When provided and conversation is empty, the agent config badge becomes a selector. */
@@ -1810,7 +1813,12 @@ export const SessionChatInputArea = memo(
         }
         let accepted = false;
         try {
-          accepted = await onSendMessage(inputBlocks);
+          accepted = await onSendMessage(inputBlocks, {
+            // Frozen from the same committed ranges the rewrite above used, so
+            // the instruction the agent reads and the authorization the CLI
+            // will check can never describe different Roles.
+            agentRoleInvocations: expandedPrompt.agentRoleInvocations,
+          });
           if (accepted) {
             clearInput();
             clearPendingImages();

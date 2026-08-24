@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import type { McpServerId, WorkspaceId } from '../src/ids';
+import { AGENT_ROLE_VERSION, type AgentRole } from '../src/agent-role';
+import type { AgentConfigId, AgentRoleId, MachineId, McpServerId, WorkspaceId } from '../src/ids';
 import {
   applyWorkspaceFlockRowEvents,
+  deleteWorkspaceAgentRoleFromFlock,
   deleteWorkspaceMcpServerFromFlock,
+  listWorkspaceAgentRoles,
+  writeWorkspaceAgentRoleToFlock,
   getWorkspaceFlockDocId,
   listWorkspaceMcpServers,
   parseWorkspaceFlockRow,
@@ -17,6 +21,21 @@ import {
 import type { WorkspaceMcpServerMeta } from '../src/workspace-mcp';
 
 const id = (value: string): McpServerId => value as McpServerId;
+const agentRole = (roleId: string, overrides: Partial<AgentRole> = {}): AgentRole => ({
+  v: AGENT_ROLE_VERSION,
+  id: roleId as AgentRoleId,
+  ownerUserId: 'user-1',
+  visibility: 'private',
+  name: roleId,
+  machineId: 'machine-1' as MachineId,
+  agentConfigId: 'config-1' as AgentConfigId,
+  runConfig: {},
+  revision: 1,
+  createdAt: 1,
+  updatedAt: 1,
+  ...overrides,
+});
+
 const entry = (serverId: string, name = serverId): WorkspaceMcpServerMeta => ({
   id: id(serverId),
   name,
@@ -69,7 +88,8 @@ describe('workspace Flock helpers', () => {
     const rows = readWorkspaceFlockRowsFromFlock(flock);
     expect(rows[serializeWorkspaceFlockKey(key)]).toEqual({ key, value: valid });
     expect(Object.keys(rows)).toHaveLength(1);
-    expect(flock.scanOptions).toEqual([{ prefix: ['mcpServer'] }]);
+    // One prefixed scan per family, never an unprefixed full-document scan.
+    expect(flock.scanOptions).toEqual([{ prefix: ['mcpServer'] }, { prefix: ['agentRole'] }]);
   });
 
   it('does not commit unchanged writes and deletes only once', () => {
@@ -103,5 +123,52 @@ describe('workspace Flock helpers', () => {
     const deleted = applyWorkspaceFlockRowEvents(updated, [{ key: secondKey }]);
     expect(deleted[serializeWorkspaceFlockKey(secondKey)]).toBeUndefined();
     expect(applyWorkspaceFlockRowEvents(deleted, [{ key: ['unknown'] }])).toBe(deleted);
+  });
+
+  it('keeps agent roles and MCP servers in one document without either reading the other', () => {
+    const flock = new FakeWorkspaceFlock();
+    const server = entry('server-1');
+    const role = agentRole('role-1', { name: 'Reviewer' });
+    expect(writeWorkspaceMcpServerToFlock(flock, server)).toBe(true);
+    expect(writeWorkspaceAgentRoleToFlock(flock, role)).toBe(true);
+
+    const rows = readWorkspaceFlockRowsFromFlock(flock);
+    expect(listWorkspaceMcpServers(rows)).toEqual([server]);
+    expect(listWorkspaceAgentRoles(rows)).toEqual([role]);
+  });
+
+  it('shares a role by updating its own row rather than moving it', () => {
+    const flock = new FakeWorkspaceFlock();
+    const role = agentRole('role-1');
+    writeWorkspaceAgentRoleToFlock(flock, role);
+    const shared = { ...role, visibility: 'workspace' as const, revision: 2, updatedAt: 2 };
+    expect(writeWorkspaceAgentRoleToFlock(flock, shared)).toBe(true);
+
+    const rows = readWorkspaceFlockRowsFromFlock(flock);
+    expect(Object.keys(rows)).toHaveLength(1);
+    expect(listWorkspaceAgentRoles(rows)).toEqual([shared]);
+    expect(writeWorkspaceAgentRoleToFlock(flock, shared)).toBe(false);
+    expect(deleteWorkspaceAgentRoleFromFlock(flock, role.id)).toBe(true);
+    expect(deleteWorkspaceAgentRoleFromFlock(flock, role.id)).toBe(false);
+  });
+
+  it('drops a role row whose stored value no longer validates', () => {
+    const flock = new FakeWorkspaceFlock();
+    const role = agentRole('role-1');
+    flock.set(workspaceFlockKeys.agentRole(role.id), { ...role, name: '   ' });
+    expect(listWorkspaceAgentRoles(readWorkspaceFlockRowsFromFlock(flock))).toEqual([]);
+  });
+
+  it('normalizes a secret-shaped option out of a stored role row', () => {
+    const flock = new FakeWorkspaceFlock();
+    const role = agentRole('role-1');
+    flock.set(workspaceFlockKeys.agentRole(role.id), {
+      ...role,
+      runConfig: { modelId: 'gpt-5.6', configOptionValues: { api_key: 'sk-live', fast: true } },
+    });
+    expect(listWorkspaceAgentRoles(readWorkspaceFlockRowsFromFlock(flock))[0]?.runConfig).toEqual({
+      modelId: 'gpt-5.6',
+      configOptionValues: { fast: true },
+    });
   });
 });

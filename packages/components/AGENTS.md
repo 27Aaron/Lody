@@ -14,6 +14,21 @@ mobile surfaces.
 - Compact number units (K/M/B vs 万/亿) follow the product language via
   `toIntlLocaleOrEn` / `formatCompactNumber`, never the host OS locale.
 - Prefer shared primitives from `src/components/ui` over private replacements.
+- `ui/emoji-picker.tsx` is the shadcn `frimousse` registry component, with its
+  two copy strings on i18n rather than the registry's inline English. Its dataset
+  SHIPS WITH THE APP: `frimousse` otherwise fetches
+  `${emojibaseUrl}/${locale}/{data,messages}.json` from a public CDN, which
+  leaves the picker spinning forever in an offline desktop or mobile app. Every
+  host build therefore registers `vite-emojibase-assets.ts` (see
+  `apps/electron/electron.vite.config.ts`) and the picker reads
+  `getBundledEmojibaseUrl()`. It is a URL contract, not an import — the library
+  builds those paths at runtime, so a hashed `?url` asset cannot satisfy it, and
+  a host that forgets the plugin gets an empty picker. Keep the locale list in
+  the plugin and `lib/emojibase-assets.ts` in step; each locale is ~750 KB.
+  The URL is anchored on the Vite BASE, never on `document.baseURI` alone: the
+  router uses browser history over http, so the document URL is a deep route and
+  resolving against it asks for `…/settings/emojibase`, which the dev server
+  answers with the SPA fallback — the picker then parses HTML as JSON.
 - A settings row (`settings/compact-layout.tsx`) is one grid: the label column takes the
   remaining space and the control column hugs its content. Never size either column from a
   viewport breakpoint — settings render in a panel far narrower than the window, and the

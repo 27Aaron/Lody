@@ -31,6 +31,13 @@ vi.mock('../src/components/mentions/mention-session-source', async (importOrigin
   useSessionMentionItems: () => sessionItems,
 }));
 
+// Agent Roles read the visible-machine index, which needs the authenticated
+// Convex context; the same reason the session source above is stubbed.
+vi.mock('../src/components/mentions/mention-agent-role-source', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  useAgentRoleMentionItems: () => [],
+}));
+
 import { CombinedMentionTextarea } from '../src/components/mentions/combined-mention-textarea';
 import { getComposerMentionChip } from '../src/components/mentions/mention-chips';
 import {

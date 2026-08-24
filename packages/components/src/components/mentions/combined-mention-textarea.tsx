@@ -25,6 +25,13 @@ import {
   useSessionMentionItems,
   type SessionMentionItem,
 } from '@/components/mentions/mention-session-source';
+import {
+  buildAgentRoleMentionContext,
+  hydrateAgentRoleMentionsFromText,
+  useAgentRoleMentionItems,
+  type AgentRoleMentionItem,
+} from '@/components/mentions/mention-agent-role-source';
+import { applyAgentRoleEmojiChip } from '@/components/mentions/mention-chips';
 import { useMentionFuseCtor } from '@/components/mentions/mention-fuse';
 import { useMentionHydration } from '@/components/mentions/mention-hydration';
 import {
@@ -51,7 +58,7 @@ import {
   type SkillMentionItem,
   useMentionProjectSkills,
 } from '@/components/mentions/mention-skill-source';
-import { type AcpCommandSummary } from '@lody/shared';
+import { getAgentRoleEmoji, type AcpCommandSummary } from '@lody/shared';
 import { Mention, MentionInput, MentionLabel, useMentionContext } from '@/ui/mention';
 import type { Mention as MentionRange, MentionChipResolver } from '@/ui/mention/index';
 import { Textarea, type TextareaProps } from '@/ui/textarea';
@@ -91,6 +98,8 @@ function TwoLevelMentionMenu({
   availableCommands,
   enableSessionMentions,
   sessionItems,
+  enableAgentRoleMentions,
+  agentRoleItems,
   surface,
 }: {
   fileData: MentionFileDataState;
@@ -110,6 +119,8 @@ function TwoLevelMentionMenu({
   availableCommands?: AcpCommandSummary[];
   enableSessionMentions: boolean;
   sessionItems: SessionMentionItem[];
+  enableAgentRoleMentions: boolean;
+  agentRoleItems: readonly AgentRoleMentionItem[];
   surface: MentionSurface;
 }) {
   const context = useMentionContext('TwoLevelMentionMenu');
@@ -244,6 +255,11 @@ function TwoLevelMentionMenu({
     [enableSessionMentions, sessionItems]
   );
 
+  const agentRoleSource = React.useMemo<MentionCategorySources['agentRole']>(
+    () => ({ enabled: enableAgentRoleMentions, items: agentRoleItems }),
+    [agentRoleItems, enableAgentRoleMentions]
+  );
+
   const commandSource = React.useMemo<MentionCategorySources['command']>(
     () => ({ enabled: enableCommandMentions, commands: availableCommands ?? [] }),
     [availableCommands, enableCommandMentions]
@@ -256,9 +272,10 @@ function TwoLevelMentionMenu({
         issuePr: issuePrSource,
         skill: skillSource,
         session: sessionSource,
+        agentRole: agentRoleSource,
         command: commandSource,
       }),
-      [commandSource, fileSource, issuePrSource, sessionSource, skillSource]
+      [agentRoleSource, commandSource, fileSource, issuePrSource, sessionSource, skillSource]
     )
   );
 
@@ -386,6 +403,30 @@ function SessionMentionHydrator({
     [getKnownFileTokens, slugToId]
   );
   useMentionHydration('SessionMentionHydrator', { text, enabled, hydrate });
+
+  return null;
+}
+
+function AgentRoleMentionHydrator({
+  getKnownFileTokens,
+  text,
+  items,
+  enabled,
+}: {
+  /** Paths the file source knows; they win a token both sources claim. */
+  getKnownFileTokens: () => ReadonlySet<string>;
+  text: string;
+  items: readonly AgentRoleMentionItem[];
+  enabled: boolean;
+}) {
+  const hydrate = React.useCallback(
+    (value: string) =>
+      value.includes('@')
+        ? hydrateAgentRoleMentionsFromText(value, items, getKnownFileTokens())
+        : null,
+    [getKnownFileTokens, items]
+  );
+  useMentionHydration('AgentRoleMentionHydrator', { text, enabled, hydrate });
 
   return null;
 }
@@ -613,6 +654,34 @@ export const CombinedMentionTextarea = React.forwardRef<
       [initializeLazyDirectory]
     );
     const sessionItems = useSessionMentionItems(currentSessionId);
+    const agentRoleContext = React.useMemo(
+      () =>
+        buildAgentRoleMentionContext({
+          mentionSource,
+          currentMachineId: skillAgent?.machineId,
+        }),
+      [mentionSource, skillAgent?.machineId]
+    );
+    const agentRoleItems = useAgentRoleMentionItems(agentRoleContext);
+    // A committed range carries only the Role id, so the caller's chip resolver
+    // cannot reach the Role's emoji on its own. The composer already owns the
+    // mentionable list, so it upgrades the glyph on the way through.
+    const agentRoleEmojiById = React.useMemo(
+      () =>
+        new Map(
+          agentRoleItems.map((item) => [item.role.id as string, getAgentRoleEmoji(item.role)])
+        ),
+      [agentRoleItems]
+    );
+    const resolveMentionChip = React.useMemo<MentionChipResolver | undefined>(() => {
+      if (!getMentionChip) return undefined;
+      return (mention, text) => {
+        const chip = getMentionChip(mention, text);
+        if (!chip || mention.kind !== 'agent_role') return chip;
+        const emoji = agentRoleEmojiById.get(mention.value);
+        return emoji ? applyAgentRoleEmojiChip(chip, emoji) : chip;
+      };
+    }, [agentRoleEmojiById, getMentionChip]);
 
     const { skillState, skillItems, knownSkillTokens } = useMentionProjectSkills(
       mentionSource,
@@ -730,8 +799,16 @@ export const CombinedMentionTextarea = React.forwardRef<
     // the mention tree can never disagree about a type. They drifted once
     // already: a composer with only issues rendered a plain textarea.
     const enableSessionMentions = sessionItems.length > 0;
+    // Having any mentionable Role IS the enablement rule: the list is already
+    // filtered by visibility, executability, and work context, so an empty one
+    // means there is nothing this composer could offer.
+    const enableAgentRoleMentions = agentRoleItems.length > 0;
     const enableAtMentions =
-      enableFileMentions || enableIssueMentions || enableSkillMentions || enableSessionMentions;
+      enableFileMentions ||
+      enableIssueMentions ||
+      enableSkillMentions ||
+      enableSessionMentions ||
+      enableAgentRoleMentions;
     const enableMentions = enableAtMentions || enableCommandMentions || hasExternalMentionSupport;
 
     // `/` trigger is only active when the entire input is a slash command (e.g. "" or "/review")
@@ -775,7 +852,7 @@ export const CombinedMentionTextarea = React.forwardRef<
         mentions={mergedMentions}
         onMentionsChange={handleMentionsChange}
         onMentionClick={onMentionClick}
-        getMentionChip={getMentionChip}
+        getMentionChip={resolveMentionChip}
         value={mentionValues}
         onValueChange={handleMentionValuesChange}
         onFilter={(options) => options}
@@ -796,6 +873,12 @@ export const CombinedMentionTextarea = React.forwardRef<
           text={value}
           items={sessionItems}
           enabled={enableSessionMentions}
+        />
+        <AgentRoleMentionHydrator
+          getKnownFileTokens={getKnownFileTokens}
+          text={value}
+          items={agentRoleItems}
+          enabled={enableAgentRoleMentions}
         />
         {mentionActionsRef ? (
           <MentionActionsBridge actionsRef={mentionActionsRef} items={sessionItems} />
@@ -848,6 +931,8 @@ export const CombinedMentionTextarea = React.forwardRef<
           availableCommands={availableCommands}
           enableSessionMentions={enableSessionMentions}
           sessionItems={sessionItems}
+          enableAgentRoleMentions={enableAgentRoleMentions}
+          agentRoleItems={agentRoleItems}
           surface={mentionSurface}
         />
       </Mention>

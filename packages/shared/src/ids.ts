@@ -1,4 +1,5 @@
 export type AgentConfigId = string & { __brand: 'AgentConfigId' };
+export type AgentRoleId = string & { __brand: 'AgentRoleId' };
 export type MachineId = string & { __brand: 'MachineId' };
 export type McpServerId = string & { __brand: 'McpServerId' };
 export type ClientId = string & { __brand: 'ClientId' };

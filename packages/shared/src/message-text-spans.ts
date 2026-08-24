@@ -36,6 +36,7 @@ export const MESSAGE_TEXT_SPAN_KINDS = [
   'skill',
   'session',
   'command',
+  'agent_role',
   'pasted_text',
 ] as const;
 
@@ -54,7 +55,27 @@ export type MessageTextSpan = {
   label: string;
   /** What activating the chip resolves to: a repo path, an issue number, a session id. */
   target?: string;
+  /**
+   * A glyph shown in place of the kind's icon — an Agent Role's emoji today.
+   *
+   * FROZEN here rather than resolved when the transcript renders: the mark is
+   * part of what the user sent, so renaming or re-marking the Role afterwards
+   * must not repaint history, and painting a bubble must not depend on a
+   * mutable catalog being loaded.
+   */
+  mark?: string;
 };
+
+/**
+ * A mark is decoration, so the only real bar is that it cannot smuggle a line of
+ * text into a chip. Sized for one emoji, including a ZWJ sequence.
+ *
+ * Exported because the SEND path validates the same field with a strict zod
+ * schema: two different bars there would mean a span this reader keeps is a
+ * span that schema rejects — and rejecting one field drops the whole text
+ * block, which reads as "you typed nothing".
+ */
+export const MAX_MESSAGE_TEXT_SPAN_MARK_LENGTH = 16;
 
 const SPAN_KINDS: ReadonlySet<string> = new Set(MESSAGE_TEXT_SPAN_KINDS);
 
@@ -112,12 +133,18 @@ export const sanitizeMessageTextSpans = (
   const candidates: MessageTextSpan[] = [];
   for (const span of spans) {
     if (!isRecord(span)) continue;
-    const { start, end, kind, label, target } = span;
+    const { start, end, kind, label, target, mark } = span;
     if (!isOffset(start) || !isOffset(end)) continue;
     if (end <= start || end > text.length) continue;
     if (typeof kind !== 'string' || !SPAN_KINDS.has(kind)) continue;
     if (typeof label !== 'string' || label.length === 0) continue;
     if (target !== undefined && typeof target !== 'string') continue;
+    const keptMark =
+      typeof mark === 'string' &&
+      mark.length > 0 &&
+      mark.length <= MAX_MESSAGE_TEXT_SPAN_MARK_LENGTH
+        ? mark
+        : undefined;
 
     candidates.push({
       start,
@@ -125,6 +152,7 @@ export const sanitizeMessageTextSpans = (
       kind: kind as MessageTextSpanKind,
       label,
       ...(target === undefined ? {} : { target }),
+      ...(keptMark === undefined ? {} : { mark: keptMark }),
     });
   }
 
@@ -148,7 +176,7 @@ export type TextRewrite = {
   /** Replaces `[start, end)` in the output. Defaults to the source slice. */
   replacement?: string;
   /** Marks the replaced region as a mention in the output. */
-  span?: { kind: MessageTextSpanKind; label: string; target?: string };
+  span?: { kind: MessageTextSpanKind; label: string; target?: string; mark?: string };
 };
 
 /**

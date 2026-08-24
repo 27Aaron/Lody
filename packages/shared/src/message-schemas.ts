@@ -8,8 +8,9 @@ import {
   type ACPSessionId,
   type SessionTurnInputConfig,
 } from './ai';
+import { normalizeAgentRoleInvocationSnapshots } from './agent-role';
 import type { SessionId } from './ids';
-import { MESSAGE_TEXT_SPAN_KINDS } from './message-text-spans';
+import { MAX_MESSAGE_TEXT_SPAN_MARK_LENGTH, MESSAGE_TEXT_SPAN_KINDS } from './message-text-spans';
 import { RpcSecretPublicKeySchema } from './rpc-secret';
 import { LodyOperationIdSchema } from './session-orchestration';
 import { isSensitiveAcpConfigOptionId } from './session-preparation';
@@ -164,6 +165,11 @@ const MessageTextSpanSchema = z
     kind: z.enum(MESSAGE_TEXT_SPAN_KINDS),
     label: z.string().min(1),
     target: z.string().optional(),
+    // The same bar `sanitizeMessageTextSpans` applies. This object is `.strict()`,
+    // and a rejected span fails the whole block list — which surfaces as an empty
+    // prompt, not as a missing chip — so a field one side knows must be declared
+    // on both.
+    mark: z.string().min(1).max(MAX_MESSAGE_TEXT_SPAN_MARK_LENGTH).optional(),
   })
   .strict();
 
@@ -349,6 +355,7 @@ export const ACPSessionConfigSchema = z
     modelId: z.string().optional(),
     configOptionValues: AcpConfigOptionValuesSchema.optional(),
     mcpServerIds: z.array(z.string()).optional(),
+    agentRoleInvocations: z.array(z.unknown()).optional(),
     issuePRMentions: z.array(IssuePRMentionSchema).optional(),
     resume: ACPSessionIdSchema.optional(),
     chainDepth: z.number().int().nonnegative().optional(),
@@ -367,6 +374,7 @@ const LooseSessionTurnInputConfigSchema = z
     modelId: z.string().optional(),
     configOptionValues: AcpConfigOptionValuesSchema.optional(),
     mcpServerIds: z.array(z.string()).optional(),
+    agentRoleInvocations: z.array(z.unknown()).optional(),
     issuePRMentions: z.array(IssuePRMentionSchema).optional(),
     resume: ACPSessionIdSchema.optional(),
     chainDepth: z.number().int().nonnegative().optional(),
@@ -457,6 +465,14 @@ export const normalizeSessionTurnInputConfig = (
   const mcpServerIds = normalizeMcpServerIdSelection(record.mcpServerIds);
   if (mcpServerIds) {
     normalized.mcpServerIds = mcpServerIds;
+  }
+
+  // Normalized rather than schema-parsed: the same reader that drops a
+  // secret-shaped option out of a Role row must drop it out of a Turn that
+  // recorded one, however that Turn was written.
+  const agentRoleInvocations = normalizeAgentRoleInvocationSnapshots(record.agentRoleInvocations);
+  if (agentRoleInvocations) {
+    normalized.agentRoleInvocations = agentRoleInvocations;
   }
 
   const issuePRMentions = maybeParseField(z.array(IssuePRMentionSchema), record.issuePRMentions);

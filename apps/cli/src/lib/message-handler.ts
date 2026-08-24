@@ -2828,6 +2828,10 @@ export class MessageHandler {
       };
       if (typeof command.machineId === 'string') options.machine = command.machineId;
       if (typeof command.agentConfigId === 'string') options.agentConfig = command.agentConfigId;
+      if (typeof command.agentRoleId === 'string') options.agentRoleId = command.agentRoleId;
+      if (typeof command.agentRoleRevision === 'number') {
+        options.agentRoleRevision = command.agentRoleRevision;
+      }
       if (typeof command.useCurrentSessionAsParent === 'boolean') {
         options.useCurrentSessionAsParent = command.useCurrentSessionAsParent;
       }

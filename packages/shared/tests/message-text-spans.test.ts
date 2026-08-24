@@ -8,7 +8,11 @@ import {
   sanitizeMessageTextSpans,
   type MessageTextSpan,
 } from '../src/message-text-spans';
-import { historyItemsToInputBlocks, inputBlocksToHistoryItems } from '../src/session-input';
+import {
+  historyItemsToInputBlocks,
+  inputBlocksToHistoryItems,
+  normalizeSessionInputBlocks,
+} from '../src/session-input';
 import { SessionInputBlocksSchema } from '../src/message-schemas';
 import { sessionDocSchema } from '../src/schema';
 import type { MessageContent, SessionId, SessionInputBlock } from '../src/ai';
@@ -62,6 +66,19 @@ describe('sanitizeMessageTextSpans', () => {
     expect(sanitizeMessageTextSpans(TEXT, [FILE_SPAN, overlapping, ISSUE_SPAN])).toEqual([
       FILE_SPAN,
       ISSUE_SPAN,
+    ]);
+  });
+
+  it('keeps a frozen mark, and drops one that is not one short glyph', () => {
+    // The mark is what a bubble paints instead of the kind's icon, so the only
+    // real bar is that it cannot smuggle a line of text into a chip.
+    expect(sanitizeMessageTextSpans(TEXT, [{ ...FILE_SPAN, mark: '🔍' }])).toEqual([
+      { ...FILE_SPAN, mark: '🔍' },
+    ]);
+    expect(sanitizeMessageTextSpans(TEXT, [{ ...FILE_SPAN, mark: '' }])).toEqual([FILE_SPAN]);
+    expect(sanitizeMessageTextSpans(TEXT, [{ ...FILE_SPAN, mark: 42 }])).toEqual([FILE_SPAN]);
+    expect(sanitizeMessageTextSpans(TEXT, [{ ...FILE_SPAN, mark: 'x'.repeat(17) }])).toEqual([
+      FILE_SPAN,
     ]);
   });
 
@@ -190,6 +207,21 @@ describe('session input block plumbing', () => {
   it('still accepts a text block with no spans at all', () => {
     const parsed = SessionInputBlocksSchema.safeParse([{ type: 'text', text: TEXT }]);
     expect(parsed.success).toBe(true);
+  });
+
+  it('carries a frozen mark all the way to a normalized block', () => {
+    // The strict span schema and `sanitizeMessageTextSpans` have to agree on
+    // every field. When they did not, the send path rejected the whole block
+    // list over one unknown key and `normalizeSessionInputBlocks` fell back to
+    // its empty prompt — the composer answered a real message with "please
+    // enter something to discuss".
+    const marked: SessionInputBlock = {
+      type: 'text',
+      text: TEXT,
+      spans: [{ ...FILE_SPAN, mark: '🔍' }],
+    };
+    expect(SessionInputBlocksSchema.safeParse([marked]).success).toBe(true);
+    expect(normalizeSessionInputBlocks([marked], '')).toEqual([marked]);
   });
 
   it('rejects a malformed span rather than silently stripping it', () => {

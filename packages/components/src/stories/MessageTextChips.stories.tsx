@@ -21,12 +21,13 @@ const PASTED_BLOB = [
   '    at Object.superRefine (packages/shared/src/message-schemas.ts:172:5)',
   ...Array.from(
     { length: 40 },
-    (_, i) => `    at frame${i} (packages/components/src/components/sessions/session-detail.tsx:${i})`
+    (_, i) =>
+      `    at frame${i} (packages/components/src/components/sessions/session-detail.tsx:${i})`
   ),
 ].join('\n');
 
 const COMPOSER_TEXT =
-  'Compare @src/ui/mention/mention-highlighter.tsx against #482, run $review-diff on it, then summarise [Pasted] for @session:crdt-metadata-cleanup.';
+  'Compare @src/ui/mention/mention-highlighter.tsx against #482, run $review-diff on it, then summarise [Pasted] for @session:crdt-metadata-cleanup. Ask @Code-Reviewer to check it.';
 
 const at = (token: string) => {
   const start = COMPOSER_TEXT.indexOf(token);
@@ -59,6 +60,14 @@ const SENT = applyTextRewrites(COMPOSER_TEXT, [
     ...at('@session:crdt-metadata-cleanup'),
     replacement: 'use lody mcp to query session[id: 9f2c-4a11] history',
     span: { kind: 'session', label: 'CRDT metadata cleanup', target: '9f2c-4a11' },
+  },
+  {
+    ...at('@Code-Reviewer'),
+    replacement:
+      'use lody mcp to create a session with agent role[id: role-1, name: Code Reviewer]',
+    // An Agent Role freezes its emoji into the span, so the bubble paints the
+    // same mark the composer did without reading the catalog.
+    span: { kind: 'agent_role', label: 'Code-Reviewer', target: 'role-1', mark: '🔍' },
   },
 ]);
 

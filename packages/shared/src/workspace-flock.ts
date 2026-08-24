@@ -1,4 +1,5 @@
-import type { McpServerId, WorkspaceId } from './ids';
+import { normalizeAgentRole, type AgentRole } from './agent-role';
+import type { AgentRoleId, McpServerId, WorkspaceId } from './ids';
 import {
   isWorkspaceMcpServerMeta,
   type WorkspaceMcpServerMeta,
@@ -11,37 +12,67 @@ export const getWorkspaceFlockDocId = (workspaceId: WorkspaceId): string =>
   `${workspaceId}:${WORKSPACE_FLOCK_DOC_STREAM_SEGMENT}:${WORKSPACE_FLOCK_DOC_NAME}`;
 
 export type WorkspaceFlockMcpServerKey = ['mcpServer', McpServerId];
-export type WorkspaceFlockKey = WorkspaceFlockMcpServerKey;
+export type WorkspaceFlockAgentRoleKey = ['agentRole', AgentRoleId];
+export type WorkspaceFlockKey = WorkspaceFlockMcpServerKey | WorkspaceFlockAgentRoleKey;
+
+/**
+ * Every family stored in the one workspace document.
+ *
+ * Agent Roles share this document with the MCP catalog rather than getting a
+ * document of their own, and private/workspace Roles share one family rather
+ * than two: sharing a Role is then an ordinary update of its own row, with no
+ * data moved between documents and no window where a Role exists in both or
+ * neither.
+ */
+export const WORKSPACE_FLOCK_ROW_FAMILIES = ['mcpServer', 'agentRole'] as const;
 
 export const workspaceFlockKeys = {
   mcpServer: (id: McpServerId): WorkspaceFlockMcpServerKey => ['mcpServer', id],
+  agentRole: (id: AgentRoleId): WorkspaceFlockAgentRoleKey => ['agentRole', id],
 } as const;
 
-export type ParsedWorkspaceFlockKey = {
-  kind: 'mcpServer';
-  key: WorkspaceFlockMcpServerKey;
-  mcpServerId: McpServerId;
-};
+export type ParsedWorkspaceFlockKey =
+  | {
+      kind: 'mcpServer';
+      key: WorkspaceFlockMcpServerKey;
+      mcpServerId: McpServerId;
+    }
+  | {
+      kind: 'agentRole';
+      key: WorkspaceFlockAgentRoleKey;
+      agentRoleId: AgentRoleId;
+    };
 
 export const parseWorkspaceFlockKey = (
   key: readonly unknown[]
 ): ParsedWorkspaceFlockKey | undefined => {
-  if (key.length !== 2 || key[0] !== 'mcpServer' || typeof key[1] !== 'string') {
+  if (key.length !== 2 || typeof key[1] !== 'string') {
     return undefined;
   }
   const id = key[1].trim();
   if (!id) {
     return undefined;
   }
-  const mcpServerId = id as McpServerId;
-  return { kind: 'mcpServer', key: workspaceFlockKeys.mcpServer(mcpServerId), mcpServerId };
+  if (key[0] === 'mcpServer') {
+    const mcpServerId = id as McpServerId;
+    return { kind: 'mcpServer', key: workspaceFlockKeys.mcpServer(mcpServerId), mcpServerId };
+  }
+  if (key[0] === 'agentRole') {
+    const agentRoleId = id as AgentRoleId;
+    return { kind: 'agentRole', key: workspaceFlockKeys.agentRole(agentRoleId), agentRoleId };
+  }
+  return undefined;
 };
 
 export type WorkspaceFlockMcpServerRow = {
   key: WorkspaceFlockMcpServerKey;
   value: WorkspaceMcpServerMeta;
 };
-export type WorkspaceFlockRow = WorkspaceFlockMcpServerRow;
+export type WorkspaceFlockAgentRoleRow = {
+  key: WorkspaceFlockAgentRoleKey;
+  value: AgentRole;
+};
+export type WorkspaceFlockRow = WorkspaceFlockMcpServerRow | WorkspaceFlockAgentRoleRow;
 export type WorkspaceFlockRowId = string & { __brand: 'WorkspaceFlockRowId' };
 export type WorkspaceFlockRowMap = Record<WorkspaceFlockRowId, WorkspaceFlockRow>;
 
@@ -68,20 +99,41 @@ export const parseWorkspaceFlockRow = (
   value: unknown
 ): WorkspaceFlockRow | undefined => {
   const parsedKey = parseWorkspaceFlockKey(key);
-  if (!parsedKey || !isWorkspaceMcpServerMeta(value) || value.id !== parsedKey.mcpServerId) {
+  if (!parsedKey) {
     return undefined;
   }
-  return { key: parsedKey.key, value };
+  if (parsedKey.kind === 'mcpServer') {
+    if (!isWorkspaceMcpServerMeta(value) || value.id !== parsedKey.mcpServerId) {
+      return undefined;
+    }
+    return { key: parsedKey.key, value };
+  }
+  // Normalized rather than merely validated: an option key an older client
+  // should never have written must not survive into a Session config just
+  // because it is already in the document.
+  const role = normalizeAgentRole(value);
+  if (!role || role.id !== parsedKey.agentRoleId) {
+    return undefined;
+  }
+  return { key: parsedKey.key, value: role };
 };
+
+const isMcpServerRow = (row: WorkspaceFlockRow): row is WorkspaceFlockMcpServerRow =>
+  row.key[0] === 'mcpServer';
+
+const isAgentRoleRow = (row: WorkspaceFlockRow): row is WorkspaceFlockAgentRoleRow =>
+  row.key[0] === 'agentRole';
 
 export const readWorkspaceFlockRowsFromFlock = (
   flock: WorkspaceFlockReadableFlock
 ): WorkspaceFlockRowMap => {
   const rows: WorkspaceFlockRowMap = {};
-  for (const row of flock.scan({ prefix: ['mcpServer'] })) {
-    const parsed = parseWorkspaceFlockRow(row.key, row.value);
-    if (parsed) {
-      rows[serializeWorkspaceFlockKey(parsed.key)] = parsed;
+  for (const family of WORKSPACE_FLOCK_ROW_FAMILIES) {
+    for (const row of flock.scan({ prefix: [family] })) {
+      const parsed = parseWorkspaceFlockRow(row.key, row.value);
+      if (parsed) {
+        rows[serializeWorkspaceFlockKey(parsed.key)] = parsed;
+      }
     }
   }
   return rows;
@@ -92,13 +144,22 @@ export const getWorkspaceMcpCatalog = (
 ): Record<McpServerId, WorkspaceMcpServerMeta> => {
   const catalog = {} as Record<McpServerId, WorkspaceMcpServerMeta>;
   for (const row of Object.values(rows)) {
-    catalog[row.key[1]] = row.value;
+    if (isMcpServerRow(row)) {
+      catalog[row.key[1]] = row.value;
+    }
   }
   return catalog;
 };
 
 export const listWorkspaceMcpServers = (rows: WorkspaceFlockRowMap): WorkspaceMcpServerMeta[] =>
   Object.values(rows)
+    .filter(isMcpServerRow)
+    .map((row) => row.value)
+    .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
+
+export const listWorkspaceAgentRoles = (rows: WorkspaceFlockRowMap): AgentRole[] =>
+  Object.values(rows)
+    .filter(isAgentRoleRow)
     .map((row) => row.value)
     .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
 
@@ -114,8 +175,29 @@ const workspaceFlockRowsEqual = (
 export const writeWorkspaceMcpServerToFlock = (
   flock: WorkspaceFlockWritableFlock,
   entry: WorkspaceMcpServerMeta
+): boolean => writeWorkspaceFlockRow(flock, workspaceFlockKeys.mcpServer(entry.id), entry);
+
+export const deleteWorkspaceMcpServerFromFlock = (
+  flock: WorkspaceFlockWritableFlock,
+  id: McpServerId
+): boolean => deleteWorkspaceFlockRow(flock, workspaceFlockKeys.mcpServer(id));
+
+export const writeWorkspaceAgentRoleToFlock = (
+  flock: WorkspaceFlockWritableFlock,
+  role: AgentRole
+): boolean => writeWorkspaceFlockRow(flock, workspaceFlockKeys.agentRole(role.id), role);
+
+export const deleteWorkspaceAgentRoleFromFlock = (
+  flock: WorkspaceFlockWritableFlock,
+  id: AgentRoleId
+): boolean => deleteWorkspaceFlockRow(flock, workspaceFlockKeys.agentRole(id));
+
+const writeWorkspaceFlockRow = (
+  flock: WorkspaceFlockWritableFlock,
+  key: WorkspaceFlockKey,
+  value: unknown
 ): boolean => {
-  const row = parseWorkspaceFlockRow(workspaceFlockKeys.mcpServer(entry.id), entry);
+  const row = parseWorkspaceFlockRow(key, value);
   if (!row) {
     return false;
   }
@@ -129,11 +211,10 @@ export const writeWorkspaceMcpServerToFlock = (
   return true;
 };
 
-export const deleteWorkspaceMcpServerFromFlock = (
+const deleteWorkspaceFlockRow = (
   flock: WorkspaceFlockWritableFlock,
-  id: McpServerId
+  key: WorkspaceFlockKey
 ): boolean => {
-  const key = workspaceFlockKeys.mcpServer(id);
   const rowId = serializeWorkspaceFlockKey(key);
   if (!readSingleRow(flock, key)[rowId]) {
     return false;

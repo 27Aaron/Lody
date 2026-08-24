@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useTranslation } from 'react-i18next';
-import type { AcpCommandSummary } from '@lody/shared';
+import { getAgentRoleEmoji, type AcpCommandSummary } from '@lody/shared';
 import { filterAndRankSlashCommands } from '@/lib/command-slash-search';
 import {
   buildPathSuggestions,
@@ -21,6 +21,10 @@ import {
   selectSessionMentionCandidates,
   type SessionMentionItem,
 } from '@/components/mentions/mention-session-source';
+import {
+  selectAgentRoleMentionCandidates,
+  type AgentRoleMentionItem,
+} from '@/components/mentions/mention-agent-role-source';
 import { parseMentionNamespaceSearch } from '@/ui/mention/mention-trigger';
 import type { MentionKind } from '@/ui/mention/index';
 
@@ -31,9 +35,11 @@ export const MENTION_TRIGGER = '@';
 /** Per-category cap when one query is answered across every category. */
 export const AGGREGATE_LIMIT_PER_CATEGORY = 4;
 
-export type MentionCategoryId = 'file' | 'issue' | 'pr' | 'skill' | 'command' | 'session';
+export type MentionCategoryId =
+  'file' | 'issue' | 'pr' | 'skill' | 'command' | 'session' | 'agent_role';
 
-export type MentionIcon = 'file' | 'dir' | 'issue' | 'pr' | 'skill' | 'command' | 'session';
+export type MentionIcon =
+  'file' | 'dir' | 'issue' | 'pr' | 'skill' | 'command' | 'session' | 'agent_role';
 
 export type MentionCategoryStatus = 'ready' | 'loading' | 'error';
 
@@ -46,6 +52,15 @@ export type MentionCandidateDetail = {
   title: string;
   badges?: string[];
   description?: string;
+  /**
+   * A block of the candidate's own text, shown above the rows in its own capped
+   * scroll area — a Role's default instruction today.
+   *
+   * Separate from `description` because it is authored content of no bounded
+   * length: left to grow, it would push every row off a pane whose whole job is
+   * showing what accepting the candidate commits to.
+   */
+  body?: { label?: string; text: string; mono?: boolean };
   rows?: Array<{ label: string; value: string; mono?: boolean }>;
 };
 
@@ -70,6 +85,12 @@ export type MentionCandidate = {
   mono?: boolean;
   /** Path an extension-aware icon derives its glyph from. */
   iconPath?: string;
+  /**
+   * The candidate's OWN mark, rendered instead of `icon`. An Agent Role is
+   * picked by its emoji, and showing the category glyph beside it says only
+   * what the category header already did.
+   */
+  iconEmoji?: string;
   /** Rendered in the desktop side panel while this candidate is highlighted. */
   detail?: MentionCandidateDetail;
 };
@@ -424,6 +445,74 @@ export function buildSessionCandidates(
   );
 }
 
+export type AgentRoleDetailLabels = {
+  machine: string;
+  agentConfig: string;
+  model: string;
+  reasoning: string;
+  /** Heading for the Role's default instruction, shown above the rows. */
+  prompt: string;
+  visibility: Record<'private' | 'workspace', string>;
+};
+
+/**
+ * A Role candidate shows the whole binding it would execute — machine, provider,
+ * model, reasoning — because accepting it authorizes exactly that, and a Role
+ * never silently resolves to anything else.
+ */
+export function toAgentRoleCandidate(
+  item: AgentRoleMentionItem,
+  labels: AgentRoleDetailLabels
+): MentionCandidate {
+  const { role } = item;
+  const rows: NonNullable<MentionCandidateDetail['rows']> = [];
+  if (item.machineLabel) rows.push({ label: labels.machine, value: item.machineLabel });
+  if (item.agentConfigLabel) rows.push({ label: labels.agentConfig, value: item.agentConfigLabel });
+  if (role.runConfig.modelId) {
+    rows.push({ label: labels.model, value: role.runConfig.modelId, mono: true });
+  }
+  if (role.runConfig.modeId) {
+    rows.push({ label: labels.reasoning, value: role.runConfig.modeId, mono: true });
+  }
+  // The emoji REPLACES the category glyph on the row: the category header above
+  // already says these are Agent Roles, so a second generic glyph only crowds
+  // out the Role's own mark. Every Role has one, defaulted, so rows stay aligned.
+  const emoji = getAgentRoleEmoji(role);
+  return {
+    // The range payload is the stable Role id; the text only carries the token
+    // derived from the name, which its owner may rename at any time.
+    value: role.id,
+    label: item.slug,
+    insertText: `${MENTION_TRIGGER}${item.slug}`,
+    kind: 'agent_role',
+    icon: 'agent_role',
+    iconEmoji: emoji,
+    title: role.name,
+    detail: {
+      // The pane has no icon slot, so the mark rides in its title instead.
+      title: `${emoji} ${role.name}`,
+      badges: [labels.visibility[role.visibility]],
+      // The instruction itself, not a badge saying one exists: what it SAYS is
+      // the part that decides whether this is the Role you meant.
+      ...(role.promptPrefix
+        ? { body: { label: labels.prompt, text: role.promptPrefix, mono: true } }
+        : {}),
+      rows,
+    },
+  };
+}
+
+export function buildAgentRoleCandidates(
+  items: readonly AgentRoleMentionItem[],
+  term: string,
+  labels: AgentRoleDetailLabels,
+  limit?: number
+): MentionCandidate[] {
+  return selectAgentRoleMentionCandidates(items, term, limit).map((item) =>
+    toAgentRoleCandidate(item, labels)
+  );
+}
+
 export function toCommandCandidate(command: AcpCommandSummary): MentionCandidate {
   return {
     value: command.name,
@@ -496,6 +585,9 @@ export type MentionCategorySources = {
   session?: SourceState & {
     items: readonly SessionMentionItem[];
   };
+  agentRole?: SourceState & {
+    items: readonly AgentRoleMentionItem[];
+  };
 };
 
 export type MentionSourceKey = keyof MentionCategorySources;
@@ -506,7 +598,7 @@ export type MentionSourceKey = keyof MentionCategorySources;
  */
 export function useMentionCategories(sources: MentionCategorySources): MentionCategory[] {
   const { t } = useTranslation();
-  const { file, issuePr, skill, command, session } = sources;
+  const { file, issuePr, skill, command, session, agentRole } = sources;
 
   // Partitioned once and shared with the Fuse indexes: the cache holds both
   // types, and re-splitting it inside `getCandidates` walked the whole list
@@ -612,6 +704,33 @@ export function useMentionCategories(sources: MentionCategorySources): MentionCa
       });
     }
 
+    if (agentRole?.enabled) {
+      categories.push({
+        id: 'agent_role',
+        namespace: 'role',
+        label: t('mention.category.agentRole.label', 'Agent Roles'),
+        icon: 'agent_role',
+        ...sourceCategoryFields('agentRole', agentRole),
+        getCandidates: (term, limit) =>
+          buildAgentRoleCandidates(
+            agentRole.items,
+            term,
+            {
+              machine: t('mention.agentRole.detailMachine', 'Machine'),
+              agentConfig: t('mention.agentRole.detailAgentConfig', 'Agent'),
+              model: t('mention.agentRole.detailModel', 'Model'),
+              reasoning: t('mention.agentRole.detailReasoning', 'Reasoning'),
+              prompt: t('mention.agentRole.detailPrompt', 'Prompt'),
+              visibility: {
+                private: t('settings.agentRoles.visibility.private', 'Private'),
+                workspace: t('settings.agentRoles.visibility.workspace', 'Workspace'),
+              },
+            },
+            limit
+          ),
+      });
+    }
+
     if (command?.enabled) {
       categories.push({
         id: 'command',
@@ -626,6 +745,7 @@ export function useMentionCategories(sources: MentionCategorySources): MentionCa
 
     return categories;
   }, [
+    agentRole,
     command,
     file,
     issueFuse,

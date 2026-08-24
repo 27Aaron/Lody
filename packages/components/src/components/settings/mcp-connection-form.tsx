@@ -13,6 +13,7 @@ import { Input } from '@/ui/input';
 import { Label } from '@/ui/label';
 import { Switch } from '@/ui/switch';
 import { Textarea } from '@/ui/textarea';
+import { Field, Section } from './form-primitives';
 
 type KeyValueDraft = { key: string; value: string };
 
@@ -336,47 +337,6 @@ export function McpConnectionForm({
         </Button>
       </footer>
     </form>
-  );
-}
-
-function Section({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
-  return (
-    <section className="space-y-3 rounded-lg border border-border/70 bg-card/60 p-3">
-      <header>
-        <h3 className="text-xs font-semibold text-muted-foreground">{title}</h3>
-        {hint ? (
-          <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground/90">{hint}</p>
-        ) : null}
-      </header>
-      {children}
-    </section>
-  );
-}
-
-function Field({
-  htmlFor,
-  label,
-  hint,
-  icon,
-  children,
-}: {
-  htmlFor?: string;
-  label: string;
-  hint?: string;
-  icon?: ReactNode;
-  children: ReactNode;
-}) {
-  return (
-    <div className="space-y-1.5">
-      <div className="flex items-center gap-1.5">
-        {icon ? <span className="text-muted-foreground">{icon}</span> : null}
-        <Label htmlFor={htmlFor} className="text-xs font-medium">
-          {label}
-        </Label>
-      </div>
-      {children}
-      {hint ? <p className="text-[11px] leading-snug text-muted-foreground">{hint}</p> : null}
-    </div>
   );
 }
 

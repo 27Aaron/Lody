@@ -12,6 +12,7 @@ import {
 } from '../../packages/components/vite-wasm-workarounds'
 import { injectPreviewPublicBaseDomain } from '../../scripts/preview-public-base-domain.mjs'
 import { mermaidLazyBoundaryGuardPlugin } from '../../packages/components/vite-mermaid-lazy-boundary-guard'
+import { emojibaseAssetsPlugin } from '../../packages/components/vite-emojibase-assets'
 
 function getGitCommitHash(): string {
   try {
@@ -195,6 +196,9 @@ export default defineConfig(({ mode }) => {
         loroCrdtWasmUrlWorkaround(),
         react(),
         wasm(),
+        // The desktop app must work with no network, so the emoji picker's
+        // dataset ships in the bundle instead of being fetched from a CDN.
+        emojibaseAssetsPlugin(),
         mermaidLazyBoundaryGuardPlugin()
       ]
     }

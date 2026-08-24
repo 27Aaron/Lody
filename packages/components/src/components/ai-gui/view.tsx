@@ -25,6 +25,7 @@ import {
 } from '@/components/shared/zoomable-image-viewer';
 import { useIsMessageSendingVisible } from './message-send-status-context';
 import {
+  getCopyTextFromMessageItems,
   getTextContentFromMessageItems,
   getUserTextRenderSlice,
   getVisibleAssistantTextContent,
@@ -2026,8 +2027,7 @@ const SystemNoticeView = ({
       break;
     case 'session_fork_origin': {
       const meta = notice.meta as
-        | { sourceSessionId: SessionId; sourceTurnId: string; sourceTitle: string }
-        | undefined;
+        { sourceSessionId: SessionId; sourceTurnId: string; sourceTitle: string } | undefined;
       if (!meta) return null;
       return (
         <div className="flex items-center gap-3 py-4 text-xs text-muted-foreground/75">
@@ -2549,7 +2549,8 @@ const UserMessageRowView = ({
   const handleCopy = useCallback(async () => {
     if (!hasTextContent) return;
 
-    const textContent = getTextContentFromMessageItems(message.items);
+    // The chip form, not the rewritten instruction the agent received.
+    const textContent = getCopyTextFromMessageItems(message.items);
     const ok = await writeTextToClipboard(textContent);
     if (!ok) return;
 

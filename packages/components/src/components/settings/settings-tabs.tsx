@@ -15,6 +15,7 @@ import {
   Plug,
   SlidersHorizontal,
   UserRound,
+  UserRoundCog,
 } from 'lucide-react';
 
 export type SettingsSectionId = 'account' | 'personal' | 'workspace' | 'other';
@@ -28,6 +29,7 @@ export type SettingsTabId =
   | 'people'
   | 'machines'
   | 'agents'
+  | 'agent-roles'
   | 'mcp'
   | 'projects'
   | 'github'
@@ -44,6 +46,7 @@ export type SettingsPath =
   | '/$workspaceName/settings/people'
   | '/$workspaceName/settings/machines'
   | '/$workspaceName/settings/agents'
+  | '/$workspaceName/settings/agent-roles'
   | '/$workspaceName/settings/mcp'
   | '/$workspaceName/settings/projects'
   | '/$workspaceName/settings/github'
@@ -127,6 +130,16 @@ export const SETTINGS_TAB_CONFIGS: SettingsTabConfig[] = [
     path: '/$workspaceName/settings/agents',
   },
   {
+    // Beside Agents on purpose: a provider says how an agent starts, a Role
+    // says how one is used, and the two must not read as one editor.
+    id: 'agent-roles',
+    section: 'workspace',
+    labelKey: 'settings.tabs.agentRoles',
+    descriptionKey: 'settings.categories.agentRoles.description',
+    icon: UserRoundCog,
+    path: '/$workspaceName/settings/agent-roles',
+  },
+  {
     id: 'mcp',
     section: 'workspace',
     labelKey: 'settings.tabs.mcp',
@@ -205,6 +218,7 @@ export function getActiveSettingsTabId(pathname: string): SettingsTabId | null {
     ['/settings/devices', 'machines'],
     ['/settings/agents', 'agents'],
     ['/settings/agent-config', 'agents'],
+    ['/settings/agent-roles', 'agent-roles'],
     ['/settings/mcp', 'mcp'],
     ['/settings/projects', 'projects'],
     ['/settings/github', 'github'],

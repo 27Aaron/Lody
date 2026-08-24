@@ -115,6 +115,50 @@ Product-level mention sources built on `src/ui/mention`.
   `ConversationDropOverlay` via `SessionMentionDropLayer`. Do not put that mask
   inside each keep-alive tab page: hidden panes and draft tabs make a per-page
   overlay vanish or stack on the wrong surface.
+- An Agent Role mention is the session mention's shape — a plain `@<token>` whose
+  committed RANGE carries the stable Role id — with a different payload. The
+  rewrite asks the agent to CREATE a Session and carries the Role id ONLY; the
+  machine, agent config, model, reasoning, and prompt prefix are frozen into the
+  Turn's `agentRoleInvocations`. So the agent cannot restate the config
+  differently, and editing or deleting the Role cannot change an accepted
+  operation. Both come out of `useMentionPromptExpansion` in one pass from the
+  SAME ranges; a Role the composer no longer offers stays plain text and
+  authorizes nothing.
+- A Role candidate's emoji REPLACES the category glyph (`MentionCandidate.iconEmoji`),
+  defaulted through `getAgentRoleEmoji` so rows stay aligned and a Role with none
+  does not read as half-authored. The category header above already says these
+  are Agent Roles, so a second generic glyph only crowds out the Role's own mark.
+  The detail pane has no icon slot, so there the mark rides in the title.
+- The COMMITTED range shows that emoji too, through `applyAgentRoleEmojiChip`:
+  the composer wraps the caller's chip resolver, because a range carries only the
+  Role id and only the composer holds the live catalog. The emoji is boxed to the
+  icon slot and clipped — the slot covers ONE character of real text and an emoji
+  glyph is wider than a latin one.
+- The transcript shows it from `MessageTextSpan.mark`, FROZEN with the span at
+  send time rather than resolved from the catalog when the bubble renders. A sent
+  message shows the Role as it was, so renaming or re-marking it later cannot
+  repaint history, and painting a bubble never waits on a mutable catalog. A span
+  field must be declared in BOTH `sanitizeMessageTextSpans` and the strict
+  `MessageTextSpanSchema`: that schema is `.strict()` and a rejected span fails
+  the whole block list, so the send path answers a real message with "please
+  enter something to discuss" rather than dropping one chip.
+- The token is DERIVED from the Role's name (`getAgentRoleMentionSlug`), not a
+  second authored field: a Role has one label, and keeping "name" and "mention
+  name" in sync is a chore with no payoff when the range carries the id anyway.
+  Renaming therefore renames the mention, and name uniqueness is checked on the
+  derived token so two names that complete identically cannot coexist.
+- `agent_role` is the one span kind the message COPY button collapses back to its
+  label (`getCopyTextFromMessageItems`). Its rewritten region is an instruction
+  addressed to this agent and means nothing pasted elsewhere, while the chip on
+  screen says `@Reviewer`. Edit-and-resend still reads the expanded text through
+  `getTextContentFromMessageItems`: a token with no committed range would reach
+  the agent as a word.
+- Role candidates pass visibility, executability, then work context. Local
+  Project (and V1 plain chat) is pinned to its own machine; a GitHub project may
+  reach any authorized machine, because the target Session clones the repo
+  itself — but one already checked out (`localWorktree`) is pinned like a local
+  one. An unavailable Role stays in Settings with its exact reason and is never a
+  submittable candidate: no fallback machine, provider, or model.
 - A session token with no committed range is sent verbatim. A stale token the
   agent can ignore beats a confidently wrong session id, so the rewrite never
   resolves a slug itself.
@@ -141,7 +185,12 @@ Product-level mention sources built on `src/ui/mention`.
   send paths, per-type expansion hooks must compose here, not be wired into both.
 - A candidate describes its side panel through the neutral
   `MentionCandidateDetail` fields, not its own component, so one pane serves
-  every category. The pane is desktop-only: the docked mobile strip is too
+  every category. `body` is the authored-content field — a Role's default
+  instruction — and renders in its OWN capped scroll area above the rows,
+  because content of no bounded length would otherwise push the rows a reader
+  needs (machine, agent, model) off a pane whose job is showing what accepting
+  the candidate commits to. A Role shows the instruction itself rather than a
+  badge saying one exists. The pane is desktop-only: the docked mobile strip is too
   narrow and has no hover to preview with. It keeps a fixed height and reserves
   a stable scrollbar gutter so switching between short and overflowing
   descriptions changes neither the menu height nor text width. Its fields
@@ -169,6 +218,13 @@ Product-level mention sources built on `src/ui/mention`.
   navigation item never fires `onMentionSelect`, and the keyboard route counts.
 - `mention-session-source.ts` owns session slugs, candidates, the slug -> id
   cache, hydration, the drop-time insertion, and the before-send expansion.
+- `mention-agent-role-source.ts` owns the Agent Roles work-context rule,
+  candidates, hydration, the before-send rewrite, and the Turn's invocation
+  snapshots. `useAgentRoleMentionItems` is the single owner of the mentionable
+  list, like `useSessionMentionItems`: the menu and the expansion both read it,
+  so what the user picked from is what gets authorized. It reads the
+  visible-machine index, so a test that renders a composer stubs it the same way
+  it already stubs the session source.
 - `mention-expansion.ts` composes every before-send transform into one hook.
   Which kinds it rewrites is the short list (`REWRITTEN_SPAN_KINDS`); the
   verbatim ones are derived from `MESSAGE_TEXT_SPAN_KINDS` minus it, so a new

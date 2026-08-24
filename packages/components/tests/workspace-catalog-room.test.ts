@@ -1,16 +1,39 @@
 import { describe, expect, it, vi } from 'vitest';
-import { workspaceFlockKeys, type WorkspaceMcpServerMeta } from '@lody/shared';
+import {
+  AGENT_ROLE_VERSION,
+  workspaceFlockKeys,
+  type AgentConfigId,
+  type AgentRole,
+  type AgentRoleId,
+  type MachineId,
+  type WorkspaceMcpServerMeta,
+} from '@lody/shared';
 import type { WorkspaceRuntime } from '../src/atoms/runtime';
 import {
-  acquireWorkspaceMcpCatalog,
-  type WorkspaceMcpCatalogSnapshot,
-} from '../src/lib/workspace-mcp-catalog-room';
+  acquireWorkspaceCatalog,
+  type WorkspaceCatalogSnapshot,
+} from '../src/lib/workspace-catalog-room';
 
 const entry = (id: string, name: string): WorkspaceMcpServerMeta => ({
   id: id as WorkspaceMcpServerMeta['id'],
   name,
   transport: 'stdio',
   connection: { transport: 'stdio', command: 'mcp-files' },
+  createdAt: 1,
+  updatedAt: 1,
+});
+
+const roleRow = (id: string, name: string): AgentRole => ({
+  v: AGENT_ROLE_VERSION,
+  id: id as AgentRoleId,
+  ownerUserId: 'user-1',
+  visibility: 'private',
+  name,
+  mentionSlug: name.toLowerCase(),
+  machineId: 'machine-1' as MachineId,
+  agentConfigId: 'config-1' as AgentConfigId,
+  runConfig: {},
+  revision: 1,
   createdAt: 1,
   updatedAt: 1,
 });
@@ -27,7 +50,7 @@ const settle = async (): Promise<void> => {
  * Minimal stand-in for the workspace runtime: one Flock document whose rows,
  * events, and first remote sync are driven by the test rather than a transport.
  */
-function createRuntime(workspaceId: string, rows: WorkspaceMcpServerMeta[]) {
+function createRuntime(workspaceId: string, rows: WorkspaceMcpServerMeta[], roles: AgentRole[] = []) {
   const listeners: Array<(batch: unknown) => void> = [];
   let completeFirstSync!: () => void;
   const firstSyncedWithRemote = new Promise<void>((resolve) => {
@@ -37,7 +60,10 @@ function createRuntime(workspaceId: string, rows: WorkspaceMcpServerMeta[]) {
   const current = [...rows];
 
   const flock = {
-    scan: () => current.map((value) => ({ key: workspaceFlockKeys.mcpServer(value.id), value })),
+    scan: (options?: { prefix?: readonly unknown[] }) =>
+      options?.prefix?.[0] === 'agentRole'
+        ? roles.map((value) => ({ key: workspaceFlockKeys.agentRole(value.id), value }))
+        : current.map((value) => ({ key: workspaceFlockKeys.mcpServer(value.id), value })),
     subscribe: (listener: (batch: unknown) => void) => {
       listeners.push(listener);
       return () => {
@@ -67,11 +93,11 @@ function createRuntime(workspaceId: string, rows: WorkspaceMcpServerMeta[]) {
 describe('workspace MCP catalog room', () => {
   it('opens one document, subscription, and room for every consumer of a workspace', async () => {
     const harness = createRuntime('workspace-shared', [entry('server-1', 'Files')]);
-    const first: WorkspaceMcpCatalogSnapshot[] = [];
-    const second: WorkspaceMcpCatalogSnapshot[] = [];
+    const first: WorkspaceCatalogSnapshot[] = [];
+    const second: WorkspaceCatalogSnapshot[] = [];
 
-    const leaseA = acquireWorkspaceMcpCatalog(harness.runtime, (snapshot) => first.push(snapshot));
-    const leaseB = acquireWorkspaceMcpCatalog(harness.runtime, (snapshot) => second.push(snapshot));
+    const leaseA = acquireWorkspaceCatalog(harness.runtime, (snapshot) => first.push(snapshot));
+    const leaseB = acquireWorkspaceCatalog(harness.runtime, (snapshot) => second.push(snapshot));
     await settle();
 
     expect(harness.openFlockDoc).toHaveBeenCalledTimes(1);
@@ -89,8 +115,8 @@ describe('workspace MCP catalog room', () => {
 
   it('keeps the room alive until the last consumer releases', async () => {
     const harness = createRuntime('workspace-refcount', [entry('server-1', 'Files')]);
-    const leaseA = acquireWorkspaceMcpCatalog(harness.runtime, vi.fn());
-    const leaseB = acquireWorkspaceMcpCatalog(harness.runtime, vi.fn());
+    const leaseA = acquireWorkspaceCatalog(harness.runtime, vi.fn());
+    const leaseB = acquireWorkspaceCatalog(harness.runtime, vi.fn());
     await settle();
 
     leaseA.release();
@@ -104,8 +130,8 @@ describe('workspace MCP catalog room', () => {
 
   it('publishes flock events and the authoritative post-sync read to every consumer', async () => {
     const harness = createRuntime('workspace-events', [entry('server-1', 'Files')]);
-    const seen: WorkspaceMcpCatalogSnapshot[] = [];
-    const lease = acquireWorkspaceMcpCatalog(harness.runtime, (snapshot) => seen.push(snapshot));
+    const seen: WorkspaceCatalogSnapshot[] = [];
+    const lease = acquireWorkspaceCatalog(harness.runtime, (snapshot) => seen.push(snapshot));
     await settle();
     expect(seen.at(-1)?.synced).toBe(false);
 
@@ -116,6 +142,22 @@ describe('workspace MCP catalog room', () => {
     await settle();
     expect(seen.at(-1)?.synced).toBe(true);
     expect(seen.at(-1)?.servers.map(({ name }) => name)).toEqual(['Ada', 'Files']);
+
+    lease.release();
+  });
+
+  it('publishes both row families of the one workspace document', async () => {
+    const harness = createRuntime('workspace-families', [entry('server-1', 'Files')], [
+      roleRow('role-1', 'Reviewer'),
+    ]);
+    const seen: WorkspaceCatalogSnapshot[] = [];
+    const lease = acquireWorkspaceCatalog(harness.runtime, (snapshot) => seen.push(snapshot));
+    await settle();
+
+    // One document, one room: a second room for Roles would open the same doc.
+    expect(harness.openFlockDoc).toHaveBeenCalledTimes(1);
+    expect(seen.at(-1)?.servers.map(({ name }) => name)).toEqual(['Files']);
+    expect(seen.at(-1)?.roles.map(({ name }) => name)).toEqual(['Reviewer']);
 
     lease.release();
   });

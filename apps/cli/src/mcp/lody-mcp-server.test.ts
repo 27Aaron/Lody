@@ -4,10 +4,12 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  normalizeAgentRoleInvocationSnapshots,
   SESSION_FILE_MAX_COUNT,
   TASK_LABEL_MAX_COUNT,
   type SessionHistoryInput,
   type SessionId,
+  type SessionTurnInputConfig,
 } from '@lody/shared';
 import {
   LocalDaemonAvailabilityError,
@@ -47,6 +49,10 @@ const {
   buildMcpCreateOptions,
   bindMcpCreateContext,
   buildMcpTurnDispatchConfig,
+  composeAgentRolePrompt,
+  readAgentRoleInvocationSnapshot,
+  resolveMcpSessionCreate,
+  buildResolvedMcpCreateCanonicalCommand,
   buildOperationTargetCancelArgs,
   summarizeAgentConfig,
   getSessionContext,
@@ -434,6 +440,153 @@ describe('session MCP input schemas', () => {
         items: [{ prompt: 'review this', useCurrentSessionAsParent: true }],
       }).success
     ).toBe(false);
+  });
+
+  it('accepts Agent Role creates and rejects manual Role-owned overrides', () => {
+    expect(
+      SessionCreateToolInputSchema.safeParse({
+        operationId: 'role-review-1',
+        prompt: 'review this',
+        agentRoleId: 'reviewer',
+      }).success
+    ).toBe(true);
+    expect(
+      SessionCreateToolInputSchema.safeParse({
+        operationId: 'role-review-1',
+        prompt: 'review this',
+        agentRoleId: 'reviewer',
+        modelId: 'opus',
+      }).success
+    ).toBe(false);
+    expect(
+      SessionCreateManyToolInputSchema.safeParse({
+        operationId: 'role-review-many-1',
+        defaults: { agentRoleId: 'reviewer' },
+        items: [{ prompt: 'one' }, { prompt: 'two', reasoningEffort: 'high' }],
+      }).success
+    ).toBe(false);
+  });
+
+  it('resolves a frozen Agent Role mention without rereading mutable settings', () => {
+    const frozenInputConfig = {
+      agentRoleInvocations: [
+        {
+          roleId: 'reviewer',
+          roleRevision: 7,
+          roleName: 'Reviewer',
+          machineId: 'remote-machine',
+          agentConfigId: 'claude-opus',
+          runConfig: {
+            modeId: 'default',
+            modelId: 'opus',
+            configOptionValues: { reasoning_effort: 'medium' },
+          },
+          promptPrefix: 'Act as a careful reviewer.',
+        },
+      ],
+    } as unknown as SessionTurnInputConfig;
+    const role = readAgentRoleInvocationSnapshot(frozenInputConfig, 'reviewer');
+    const resolved = resolveMcpSessionCreate(
+      {
+        operationId: 'role-review-1',
+        prompt: 'Review the current diff.',
+        agentRoleId: 'reviewer',
+        useCurrentSessionAsParent: false,
+      },
+      { chainDepth: 0, frozenInputConfig },
+      {
+        machineId: 'current-machine',
+        project: { kind: 'github', repoFullName: 'loro-dev/lody-oss', branch: 'feature/roles' },
+      }
+    );
+
+    expect(role.roleRevision).toBe(7);
+    expect(resolved.prompt).toBe('Act as a careful reviewer.\n\nReview the current diff.');
+    expect(resolved.input).toMatchObject({
+      machineId: 'remote-machine',
+      agentConfigId: 'claude-opus',
+      useCurrentSessionAsParent: false,
+      workContext: {
+        kind: 'github',
+        repo: 'loro-dev/lody-oss',
+        branch: 'feature/roles',
+      },
+    });
+    expect(resolved.dispatchConfig).toEqual({
+      modeId: 'default',
+      modelId: 'opus',
+      configOptionValues: { reasoning_effort: 'medium' },
+      inheritSessionDefaults: false,
+    });
+    expect(buildResolvedMcpCreateCanonicalCommand(resolved)).toMatchObject({
+      prompt: 'Act as a careful reviewer.\n\nReview the current diff.',
+      agentRoleId: 'reviewer',
+      agentRoleRevision: 7,
+      machineId: 'remote-machine',
+      agentConfigId: 'claude-opus',
+    });
+  });
+
+  it('keeps Local Project Role execution on its Machine and defaults to a child Session', () => {
+    const frozenInputConfig = {
+      agentRoleInvocations: [
+        {
+          roleId: 'implementer',
+          roleRevision: 1,
+          roleName: 'Implementer',
+          machineId: 'local-machine',
+          agentConfigId: 'codex',
+          runConfig: {},
+        },
+      ],
+    } as unknown as SessionTurnInputConfig;
+    const input = {
+      operationId: 'role-implement-1',
+      prompt: 'Implement this.',
+      agentRoleId: 'implementer',
+    } as const;
+    expect(
+      resolveMcpSessionCreate(
+        input,
+        { chainDepth: 0, frozenInputConfig },
+        {
+          machineId: 'local-machine',
+          project: { kind: 'local', localProjectId: 'project-id', useWorktree: true },
+        }
+      ).input.useCurrentSessionAsParent
+    ).toBe(true);
+    expect(() =>
+      resolveMcpSessionCreate(
+        input,
+        { chainDepth: 0, frozenInputConfig },
+        {
+          machineId: 'different-machine',
+          project: { kind: 'local', localProjectId: 'project-id', useWorktree: true },
+        }
+      )
+    ).toThrow(/Local Project's Machine/);
+    expect(composeAgentRolePrompt('  ', 'Implement this.')).toBe('Implement this.');
+  });
+
+  it('rejects a Role id the driving turn did not authorize', () => {
+    expect(() => readAgentRoleInvocationSnapshot({}, 'reviewer')).toThrow(/not mentioned/);
+    expect(() =>
+      readAgentRoleInvocationSnapshot(
+        {
+          agentRoleInvocations: normalizeAgentRoleInvocationSnapshots([
+            {
+              roleId: 'implementer',
+              roleRevision: 1,
+              roleName: 'Implementer',
+              machineId: 'local-machine',
+              agentConfigId: 'codex',
+              runConfig: {},
+            },
+          ]),
+        },
+        'reviewer'
+      )
+    ).toThrow(/not mentioned/);
   });
 
   it('defers run config to capability resolution instead of guessing ACP option ids', () => {
