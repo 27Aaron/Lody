@@ -121,7 +121,6 @@ const AGENT_ROLE_LABELS = {
   model: 'Model',
   reasoning: 'Reasoning',
   prompt: 'Prompt',
-  visibility: { private: 'Private', workspace: 'Workspace' } as const,
 };
 
 const agentRole = (overrides: Partial<AgentRole>): AgentRole => ({

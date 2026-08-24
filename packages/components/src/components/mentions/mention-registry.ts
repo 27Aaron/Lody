@@ -36,10 +36,23 @@ export const MENTION_TRIGGER = '@';
 export const AGGREGATE_LIMIT_PER_CATEGORY = 4;
 
 export type MentionCategoryId =
-  'file' | 'issue' | 'pr' | 'skill' | 'command' | 'session' | 'agent_role';
+  | 'file'
+  | 'issue'
+  | 'pr'
+  | 'skill'
+  | 'command'
+  | 'session'
+  | 'agent_role';
 
 export type MentionIcon =
-  'file' | 'dir' | 'issue' | 'pr' | 'skill' | 'command' | 'session' | 'agent_role';
+  | 'file'
+  | 'dir'
+  | 'issue'
+  | 'pr'
+  | 'skill'
+  | 'command'
+  | 'session'
+  | 'agent_role';
 
 export type MentionCategoryStatus = 'ready' | 'loading' | 'error';
 
@@ -452,7 +465,6 @@ export type AgentRoleDetailLabels = {
   reasoning: string;
   /** Heading for the Role's default instruction, shown above the rows. */
   prompt: string;
-  visibility: Record<'private' | 'workspace', string>;
 };
 
 /**
@@ -491,7 +503,9 @@ export function toAgentRoleCandidate(
     detail: {
       // The pane has no icon slot, so the mark rides in its title instead.
       title: `${emoji} ${role.name}`,
-      badges: [labels.visibility[role.visibility]],
+      // Deliberately no visibility badge: every Role the menu offers is one this
+      // user may run, so private-vs-workspace changes nothing about accepting
+      // it — it is a Settings concern, and here it only crowds the pane.
       // The instruction itself, not a badge saying one exists: what it SAYS is
       // the part that decides whether this is the Role you meant.
       ...(role.promptPrefix
@@ -721,10 +735,6 @@ export function useMentionCategories(sources: MentionCategorySources): MentionCa
               model: t('mention.agentRole.detailModel', 'Model'),
               reasoning: t('mention.agentRole.detailReasoning', 'Reasoning'),
               prompt: t('mention.agentRole.detailPrompt', 'Prompt'),
-              visibility: {
-                private: t('settings.agentRoles.visibility.private', 'Private'),
-                workspace: t('settings.agentRoles.visibility.workspace', 'Workspace'),
-              },
             },
             limit
           ),

@@ -5,18 +5,14 @@ import { useTranslation } from 'react-i18next';
 import {
   canManageAgentRole,
   getAgentRoleEmoji,
-  getServerNow,
   type AgentConfigMeta,
   type AgentRole,
   type AgentRoleAvailability,
-  type AgentRoleId,
   type MachineId,
 } from '@lody/shared';
 import { userAtom } from '@/atoms';
 import { getAllAgentConfigAtom } from '@/atoms/agents';
 import { onlineMachineIdsAtom } from '@/atoms/presence';
-import { useAcpSelectorOptions } from '@/hooks/use-acp-selector-options';
-import { useIsMobile } from '@/hooks/use-mobile';
 import { useVisibleMachineMetas } from '@/hooks/use-visible-machine-metas';
 import {
   useAgentRoleAvailability,
@@ -24,17 +20,7 @@ import {
   useWorkspaceAgentRoles,
 } from '@/hooks/use-workspace-agent-roles';
 import { AgentIcon } from '@/components/icons/agent-icon';
-import {
-  applyAgentRoleRunConfigDefaults,
-  buildAgentRoleFormValue,
-  buildAgentRoleFromForm,
-  buildAgentRoleRunConfig,
-  buildAgentRoleRunConfigSummary,
-  EMPTY_AGENT_ROLE_FORM_VALUE,
-  findAgentRoleRunConfigIssues,
-  validateAgentRoleForm,
-  type AgentRoleFormValue,
-} from '@/lib/agent-role-form';
+import { buildAgentRoleRunConfigSummary, EMPTY_AGENT_ROLE_FORM_VALUE } from '@/lib/agent-role-form';
 import { cn } from '@/lib/utils';
 import {
   AlertDialog,
@@ -48,22 +34,14 @@ import {
 } from '@/ui/alert-dialog';
 import { Badge } from '@/ui/badge';
 import { Button } from '@/ui/button';
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/ui/dialog';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/ui/tooltip';
 import { settingContainerClass } from '.';
-import { AgentRoleForm } from './agent-role-form';
-
-/**
- * A `create` carries its id from the moment the form opens.
- *
- * The id is what the name check must ignore, and a `create` becomes a catalog
- * row the instant its local write lands — while the dialog is still open. An id
- * allocated at save time would leave a window where the form finds the row it
- * just wrote and reports its own name as taken.
- */
-type EditorState =
-  | { mode: 'add'; roleId: AgentRoleId; value: AgentRoleFormValue }
-  | { mode: 'edit'; role: AgentRole; value: AgentRoleFormValue };
+import {
+  AgentRoleEditorDialog,
+  openAgentRoleEditorForCreate,
+  openAgentRoleEditorForEdit,
+  type AgentRoleEditorState,
+} from './agent-role-editor-dialog';
 
 /**
  * Settings → Agent Roles.
@@ -75,32 +53,17 @@ type EditorState =
  */
 export function AgentRolesSetting() {
   const { t } = useTranslation();
-  const isMobile = useIsMobile();
   const currentUserId = useAtomValue(userAtom)?.id ?? null;
   const onlineMachineIds = useAtomValue(onlineMachineIdsAtom);
   const agentConfigs = useAtomValue(getAllAgentConfigAtom);
   const { machines } = useVisibleMachineMetas();
   const { roles, synced } = useWorkspaceAgentRoles();
   const { resolve } = useAgentRoleAvailability(roles);
-  const { upsert, remove } = useWorkspaceAgentRoleActions();
+  const { remove } = useWorkspaceAgentRoleActions();
 
-  const [editor, setEditor] = useState<EditorState | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string>();
+  const [editor, setEditor] = useState<AgentRoleEditorState | null>(null);
   const [pendingRemoval, setPendingRemoval] = useState<AgentRole | null>(null);
   const [removing, setRemoving] = useState(false);
-
-  const machineOptions = useMemo(
-    () =>
-      [...machines.values()]
-        .map((machine) => ({
-          machineId: machine.id,
-          label: machine.name || machine.id,
-          online: onlineMachineIds.has(machine.id),
-        }))
-        .sort((left, right) => left.label.localeCompare(right.label)),
-    [machines, onlineMachineIds]
-  );
 
   // One group per machine the accessible Roles actually point at, ordered by
   // label so the list does not reshuffle when a machine goes offline.
@@ -120,94 +83,8 @@ export function AgentRolesSetting() {
       .sort((left, right) => left.machineLabel.localeCompare(right.machineLabel));
   }, [machines, roles, t]);
 
-  const selectedMachineId = editor?.value.machineId ?? null;
-  const machineAgentConfigs = useMemo(
-    () => agentConfigs.filter((config) => config.machineId === selectedMachineId),
-    [agentConfigs, selectedMachineId]
-  );
-  const selectedAgentConfig = useMemo(
-    () => machineAgentConfigs.find((config) => config.id === editor?.value.agentConfigId),
-    [editor?.value.agentConfigId, machineAgentConfigs]
-  );
-  const selectorOptions = useAcpSelectorOptions(
-    selectedAgentConfig
-      ? {
-          configId: selectedAgentConfig.id,
-          cliType: selectedAgentConfig.cliType,
-          agentType: selectedAgentConfig.agentType,
-          runtimeOverrides: selectedAgentConfig.runtimeOverrides,
-          machine: selectedMachineId ? (machines.get(selectedMachineId) ?? null) : null,
-        }
-      : undefined
-  );
-
-  // A Role pins concrete values, so as soon as an agent config's capabilities
-  // are known its own defaults fill the unset fields. The user then adjusts a
-  // real selection instead of accepting an "Agent default" that says nothing
-  // about what would run. A stored value is never overwritten — that is what
-  // keeps an incompatible one visible. Derived rather than written back: the
-  // defaults are a function of the value and the capabilities, and the helper
-  // returns the value itself when it changes nothing.
-  const editorValue = editor
-    ? selectedAgentConfig
-      ? applyAgentRoleRunConfigDefaults(editor.value, selectorOptions)
-      : editor.value
-    : null;
-
-  const formErrors = useMemo(
-    () =>
-      editorValue
-        ? validateAgentRoleForm(editorValue, {
-            accessibleRoles: roles,
-            editingRoleId: editor ? (editor.mode === 'edit' ? editor.role.id : editor.roleId) : null,
-          })
-        : [],
-    [editor, editorValue, roles]
-  );
-  const runConfigIssues = useMemo(
-    () =>
-      editorValue && selectedAgentConfig
-        ? findAgentRoleRunConfigIssues(buildAgentRoleRunConfig(editorValue), selectorOptions)
-        : [],
-    [editorValue, selectedAgentConfig, selectorOptions]
-  );
-
-  const openAdd = () => {
-    setError(undefined);
-    setEditor({
-      mode: 'add',
-      roleId: crypto.randomUUID() as AgentRoleId,
-      value: { ...EMPTY_AGENT_ROLE_FORM_VALUE },
-    });
-  };
-  const openEdit = (role: AgentRole) => {
-    setError(undefined);
-    setEditor({ mode: 'edit', role, value: buildAgentRoleFormValue(role) });
-  };
-
-  const save = async () => {
-    if (!editor || !editorValue || formErrors.length > 0 || !currentUserId) return;
-    const role = buildAgentRoleFromForm(editorValue, {
-      existing: editor.mode === 'edit' ? editor.role : undefined,
-      ownerUserId: currentUserId,
-      now: getServerNow(),
-      createId: () => (editor.mode === 'add' ? editor.roleId : editor.role.id),
-    });
-
-    setSubmitting(true);
-    setError(undefined);
-    try {
-      // Resolves on durability: the row exists, so the editor is done. The
-      // upload runs on its own and is deliberately not reported — a deferred
-      // upload is not a failed save and there is nothing to act on.
-      await upsert(role);
-      setEditor(null);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setSubmitting(false);
-    }
-  };
+  const openAdd = () => setEditor(openAgentRoleEditorForCreate({ ...EMPTY_AGENT_ROLE_FORM_VALUE }));
+  const openEdit = (role: AgentRole) => setEditor(openAgentRoleEditorForEdit(role));
 
   const confirmRemoval = async () => {
     if (!pendingRemoval) return;
@@ -301,60 +178,12 @@ export function AgentRolesSetting() {
         )}
       </section>
 
-      <Dialog
-        open={editor !== null}
-        onOpenChange={(open) => {
-          if (open) return;
-          setError(undefined);
-          setEditor(null);
-        }}
-      >
-        <DialogContent
-          overlayClassName={
-            // Desktop settings is itself a dialog; match its z-index so this
-            // later overlay covers it without stacking a second /80 veil.
-            isMobile ? undefined : 'z-[var(--z-dialog)] bg-black/20'
-          }
-          className={cn(
-            'flex max-h-[min(680px,88dvh)] w-[min(620px,96dvw)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none sm:p-0',
-            !isMobile && 'shadow-popover'
-          )}
-        >
-          <header className="shrink-0 border-b border-border/60 px-5 py-3 pr-12">
-            <DialogTitle className="text-sm font-semibold">
-              {editor?.mode === 'edit'
-                ? t('settings.agentRoles.editTitle')
-                : t('settings.agentRoles.addTitle')}
-            </DialogTitle>
-            <DialogDescription className="mt-0.5 text-xs leading-snug text-muted-foreground">
-              {t('settings.agentRoles.dialogDescription')}
-            </DialogDescription>
-          </header>
-          {editor && editorValue ? (
-            <AgentRoleForm
-              className="min-h-0 flex-1"
-              value={editorValue}
-              onChange={(value) => setEditor({ ...editor, value })}
-              machines={machineOptions}
-              agentConfigs={machineAgentConfigs.map((config) => ({
-                agentConfigId: config.id,
-                label: config.name,
-              }))}
-              selectorOptions={selectedAgentConfig ? selectorOptions : null}
-              issues={runConfigIssues}
-              errors={formErrors}
-              submitting={submitting}
-              error={error}
-              isEditing={editor.mode === 'edit'}
-              onSubmit={() => void save()}
-              onCancel={() => {
-                setError(undefined);
-                setEditor(null);
-              }}
-            />
-          ) : null}
-        </DialogContent>
-      </Dialog>
+      <AgentRoleEditorDialog
+        editor={editor}
+        accessibleRoles={roles}
+        onChange={setEditor}
+        onClose={() => setEditor(null)}
+      />
 
       <AlertDialog
         open={pendingRemoval !== null}

@@ -10,8 +10,9 @@ import { DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator } from '@/ui
  * `DesktopRunConfigMenu`.
  *
  * A recent entry is one whole combination the user actually started a chat
- * with — agent + model + reasoning + plan/fast — so picking one is a single
- * click instead of walking three submenus. The row therefore reads like the
+ * with — agent + model + reasoning + plan/fast, or an Agent Role, which IS one
+ * of those combinations — so picking one is a single click instead of walking
+ * three submenus. The row therefore reads like the
  * run-config trigger face (icon · model · reasoning · glyphs) and, unlike the
  * Agent/Model/Reasoning option rows, CLOSES the menu: it is a terminal
  * "run it like this" action, not one knob among several.
@@ -26,6 +27,12 @@ export type RecentRunConfigItem = {
   /** Stable identity of the combination; also what `onSelect` reports back. */
   id: string;
   agent: Pick<AgentConfigMeta, 'name' | 'cliType' | 'agentType' | 'brandId' | 'env'>;
+  /**
+   * Present when the chat was started AS a Role. The row then leads with the
+   * Role's own mark and name instead of the agent's, because that is what the
+   * user picked and what picking the row again does.
+   */
+  role?: { name: string; emoji: string };
   modelLabel: string | null;
   reasoningLabel: string | null;
   planOn: boolean;
@@ -43,7 +50,7 @@ function RowDot() {
 /** Flat, comma-free reading of a row for assistive tech and the row tooltip. */
 function describeItem(item: RecentRunConfigItem, planLabel: string, fastLabel: string): string {
   return [
-    item.agent.name,
+    item.role?.name ?? item.agent.name,
     item.modelLabel,
     item.reasoningLabel,
     item.planOn ? planLabel : null,
@@ -85,13 +92,19 @@ export function RecentRunConfigMenuGroup({
           // row truncates instead of growing.
           className="max-w-80"
         >
-          <AgentIcon
-            cliType={item.agent.cliType}
-            agentType={item.agent.agentType}
-            brandId={item.agent.brandId}
-            env={item.agent.env}
-            className="h-4 w-4 shrink-0"
-          />
+          {item.role ? (
+            <span className="w-4 shrink-0 text-center text-sm leading-none" aria-hidden="true">
+              {item.role.emoji}
+            </span>
+          ) : (
+            <AgentIcon
+              cliType={item.agent.cliType}
+              agentType={item.agent.agentType}
+              brandId={item.agent.brandId}
+              env={item.agent.env}
+              className="h-4 w-4 shrink-0"
+            />
+          )}
           {/* One left-packed phrase — "Claude · Opus 5 · High" reads as a single
               configuration, the way the trigger face does. The dots only work
               while the parts stay adjacent, so nothing in here may grow; the
@@ -101,7 +114,7 @@ export function RecentRunConfigMenuGroup({
               to "Cla…", and a min-width floor padded a short name like "Grok"
               and reopened the gap before the dot. */}
           <span className="flex min-w-0 items-center gap-1.5">
-            <span className="min-w-0 truncate">{item.agent.name}</span>
+            <span className="min-w-0 truncate">{item.role?.name ?? item.agent.name}</span>
             {item.modelLabel ? (
               <>
                 <RowDot />

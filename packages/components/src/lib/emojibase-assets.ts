@@ -39,7 +39,13 @@ export type EmojibaseLocale = (typeof EMOJIBASE_BUNDLED_LOCALES)[number];
  */
 export const getBundledEmojibaseUrl = (): string | undefined => {
   if (typeof document === 'undefined' || typeof window === 'undefined') return undefined;
-  const base = (import.meta.env?.BASE_URL || '/').replace(/\/*$/, '/');
+  // This module is also followed by Electron's Node-side config typecheck,
+  // whose ambient ImportMetaEnv intentionally contains only main-process keys.
+  const base =
+    ((import.meta.env as { readonly BASE_URL?: string } | undefined)?.BASE_URL || '/').replace(
+      /\/*$/,
+      '/'
+    );
   return base.startsWith('/')
     ? new URL(`${base}${EMOJIBASE_ASSET_DIRECTORY}`, window.location.origin).href
     : new URL(`${base}${EMOJIBASE_ASSET_DIRECTORY}`, document.baseURI).href;

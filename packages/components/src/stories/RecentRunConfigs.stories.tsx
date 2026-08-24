@@ -111,9 +111,20 @@ const selectors: AcpConfigOptionSelector[] = [
   },
 ];
 
-/* The three entries a caller would hand over after filtering: a different
-   agent, the same agent with a different model, and a plan/fast variant. */
+/* The three entries a caller would hand over after filtering: a Role, the same
+   agent with a different model, and a plan/fast variant. A Role IS one of these
+   combinations, so it belongs in this list — leading with its own mark and
+   name, since that is what picking the row does. */
 const threeRecents: RecentRunConfigItem[] = [
+  {
+    id: 'recent-role-reviewer',
+    agent: agents[0]!,
+    role: { name: 'Code Reviewer', emoji: '\u{1F50D}' },
+    modelLabel: '5.5',
+    reasoningLabel: 'High',
+    planOn: false,
+    fastOn: false,
+  },
   {
     id: 'recent-claude-opus-high',
     agent: claudeAgent,
@@ -183,22 +194,22 @@ function StoryShell({ recents }: { recents: ReadonlyArray<RecentRunConfigItem> }
         <div className="flex min-h-dvh items-end bg-background p-8">
           {/* Mimic the composer footer row the button lives in. */}
           <div className="mb-6 flex w-full max-w-3xl items-center gap-2 rounded-xl bg-input/90 px-4 py-3">
-          <DesktopRunConfigMenu
-            agentSelection={{ agentId: codexId, machineId }}
-            availableAgentConfigs={agents}
-            showAgentNameInTrigger
-            onAgentConfigChange={fn()}
-            modelOptions={modelOptions}
-            selectedModelId={model}
-            onModelChange={setModel}
-            configOptionSelectors={selectors}
-            configOptionValues={values}
-            onConfigOptionChange={(configId, value) =>
-              setValues((prev) => ({ ...prev, [configId]: value }))
-            }
-            recentRunConfigs={recents}
-            onRecentRunConfigSelect={fn()}
-          />
+            <DesktopRunConfigMenu
+              agentSelection={{ agentId: codexId, machineId }}
+              availableAgentConfigs={agents}
+              showAgentNameInTrigger
+              onAgentConfigChange={fn()}
+              modelOptions={modelOptions}
+              selectedModelId={model}
+              onModelChange={setModel}
+              configOptionSelectors={selectors}
+              configOptionValues={values}
+              onConfigOptionChange={(configId, value) =>
+                setValues((prev) => ({ ...prev, [configId]: value }))
+              }
+              recentRunConfigs={recents}
+              onRecentRunConfigSelect={fn()}
+            />
           </div>
         </div>
       </Provider>

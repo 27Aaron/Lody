@@ -51,6 +51,37 @@ export const EMPTY_AGENT_ROLE_FORM_VALUE: AgentRoleFormValue = {
   shareWithWorkspace: false,
 };
 
+/**
+ * Seed a new Role from a run configuration the user already has in front of
+ * them — the composer's current selection.
+ *
+ * Creating a Role out of "what I am about to run" is the whole point of
+ * offering it from the composer, so the form opens on that configuration with
+ * only the name left to write. The values pass through the shared normalizer,
+ * so the seed refuses exactly the option keys a Role may never store.
+ */
+export const buildAgentRoleFormValueFromRunConfig = (input: {
+  machineId: MachineId | null | undefined;
+  agentConfigId: AgentConfigId | null | undefined;
+  modeId?: string | null;
+  modelId?: string | null;
+  configOptionValues?: Record<string, string | boolean | undefined>;
+}): AgentRoleFormValue => {
+  const runConfig = normalizeAgentRoleRunConfig({
+    modeId: input.modeId ?? undefined,
+    modelId: input.modelId ?? undefined,
+    configOptionValues: input.configOptionValues,
+  });
+  return {
+    ...EMPTY_AGENT_ROLE_FORM_VALUE,
+    machineId: input.machineId ?? null,
+    agentConfigId: input.agentConfigId ?? null,
+    modeId: runConfig.modeId ?? null,
+    modelId: runConfig.modelId ?? null,
+    configOptionValues: { ...(runConfig.configOptionValues ?? {}) },
+  };
+};
+
 export const buildAgentRoleFormValue = (role: AgentRole): AgentRoleFormValue => ({
   name: role.name,
   emoji: role.emoji ?? '',
@@ -64,7 +95,10 @@ export const buildAgentRoleFormValue = (role: AgentRole): AgentRoleFormValue => 
 });
 
 export type AgentRoleFormError =
-  'name_required' | 'name_taken' | 'machine_required' | 'agent_config_required';
+  | 'name_required'
+  | 'name_taken'
+  | 'machine_required'
+  | 'agent_config_required';
 
 /**
  * The name is the only authored label, so it carries both jobs: it is what the

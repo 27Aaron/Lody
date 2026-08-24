@@ -11,6 +11,8 @@ export const chatLandingDefaultsSchema = z.object({
   localProjectId: z.string().nullable().optional(),
   localBranch: z.string().nullable().optional(),
   contextType: z.enum(['local', 'github', 'chat']).nullable().optional(),
+  /** Last Agent Role the composer was configured as, by stable Role id. */
+  agentRoleId: z.string().nullable().optional(),
 });
 
 export type ChatLandingDefaults = z.infer<typeof chatLandingDefaultsSchema>;

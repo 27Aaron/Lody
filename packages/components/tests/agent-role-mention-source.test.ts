@@ -140,7 +140,6 @@ describe('agent role menu rows', () => {
     model: 'Model',
     reasoning: 'Reasoning',
     prompt: 'Prompt',
-    visibility: { private: 'Private', workspace: 'Workspace' },
   };
 
   it('carries the role own mark instead of the category glyph', () => {
@@ -167,13 +166,14 @@ describe('agent role menu rows', () => {
       text: 'Check correctness before style.',
       mono: true,
     });
-    // Visibility is the only badge left; what the prompt SAYS is what decides
-    // whether this is the Role the user meant.
-    expect(withPrompt?.detail?.badges).toEqual(['Private']);
+    // No badges at all: every Role the menu offers is one this user may run, so
+    // what the prompt SAYS is the only thing left that decides whether this is
+    // the Role the user meant.
+    expect(withPrompt?.detail?.badges).toBeUndefined();
 
     const [withoutPrompt] = buildAgentRoleCandidates(items(role()), '', labels);
     expect(withoutPrompt?.detail?.body).toBeUndefined();
-    expect(withoutPrompt?.detail?.badges).toEqual(['Private']);
+    expect(withoutPrompt?.detail?.badges).toBeUndefined();
   });
 
   it('falls back to the shared default mark', () => {

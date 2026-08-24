@@ -25,6 +25,8 @@ import {
   InFlightDedupe,
   normalizeSessionInputBlocks,
   type AgentConfigMeta,
+  type AgentRole,
+  type AgentRoleId,
   githubFetchBranches,
   type LocalProjectGitState,
   type LocalProjectId,
@@ -117,7 +119,24 @@ import {
   sanitizeConfigOptionValues,
   type RecentRunConfigRecord,
 } from '@/lib/recent-run-configs';
+import {
+  buildComposerAgentRoleItems,
+  doesAgentRolePinPermissionMode,
+  isComposerAgentRoleApplied,
+  resolvePendingAgentRoleSelection,
+} from '@/lib/composer-agent-roles';
+import { buildAgentRoleFormValueFromRunConfig } from '@/lib/agent-role-form';
+import {
+  AgentRoleEditorDialog,
+  openAgentRoleEditorForCreate,
+  openAgentRoleEditorForEdit,
+  type AgentRoleEditorState,
+} from '@/components/settings/agent-role-editor-dialog';
 import { useAcpSelectorOptions } from '@/hooks/use-acp-selector-options';
+import {
+  useAgentRoleAvailability,
+  useWorkspaceAgentRoles,
+} from '@/hooks/use-workspace-agent-roles';
 import { useAvailableCommands } from '@/hooks/use-available-commands';
 import { useOrganization } from '@/hooks/useOrganization';
 import { useResolvedTheme } from '../../theme-provider';
@@ -222,6 +241,7 @@ import {
   DesktopMachineMenu,
   DesktopPermissionModeButton,
   DesktopRunConfigMenu,
+  resolvePermissionModeFace,
 } from '@/components/sessions/desktop-run-config-menu';
 import { SessionUsagePopover } from '@/components/sessions/session-usage-popover';
 import { MachinePairingDialog } from './machine-pairing-dialog';
@@ -1525,17 +1545,92 @@ function WorkspaceChatLanding({
       config: selectedConfig,
     });
   const selectedModelLabel = modelOptions.find((option) => option.value === selectedModelId)?.label;
-  const selectedAgentDefaults = useMemo(
-    () => (selectedAgent ? (agentDefaultsCache.get(selectedAgent.agentId) ?? {}) : {}),
-    [selectedAgent]
-  );
+  /* ── Agent Role selection ──
+     A Role is one packaged run configuration, so picking one flows through the
+     SAME preference channel as this agent's remembered defaults rather than a
+     second apply path: the reconcile pass seeds mode/model/options from the
+     Role before paint, and an option the agent no longer supports falls back to
+     the agent's own value there — visibly — instead of being forced in.
+
+     `token` makes re-picking the same Role after hand-editing a knob a new
+     preference, and the preference deliberately OUTLIVES `activeAgentRole`
+     below: clearing it on a hand edit would re-seed the very value the user
+     just changed. */
+  const { roles: workspaceAgentRoles, synced: agentRolesSynced } = useWorkspaceAgentRoles();
+  /* Whether the stored Role has been resolved yet. Until it has, the composer
+     has no opinion to persist — see `selectedAgentRoleId` on the defaults hook. */
+  const [agentRoleRestored, setAgentRoleRestored] = useState(false);
+  /* The Role editor is a Dialog, so it is hosted OUT here rather than inside the
+     run-config dropdown: a Dialog rendered in menu content unmounts with the
+     menu the moment it opens. */
+  const [agentRoleEditor, setAgentRoleEditor] = useState<AgentRoleEditorState | null>(null);
+  const { resolve: resolveAgentRoleAvailability } = useAgentRoleAvailability(workspaceAgentRoles);
+  useEffect(() => {
+    setAgentRoleRestored(false);
+  }, [workspaceId]);
+  const agentRolePreferenceTokenRef = useRef(0);
+  /* The preference NAMES a Role; it does not hold a copy of one. Editing a Role
+     bumps its `revision`, which rides in `preferenceRevision` below, so the
+     composer re-seeds from what the Role says NOW — a captured copy would keep
+     running the old values under the edited Role's name. A deleted Role simply
+     stops resolving. */
+  const [agentRolePreference, setAgentRolePreference] = useState<{
+    roleId: AgentRoleId;
+    token: number;
+  } | null>(null);
+  /* A Role binds `machineId + agentConfigId` exactly, so its preference applies
+     only while the composer is on that agent. Derived rather than cleared: a
+     Role never re-points at whichever agent happens to be selected. */
+  const activeAgentRolePreference = useMemo(() => {
+    if (!agentRolePreference || !selectedAgent) return null;
+    const role = workspaceAgentRoles.find((entry) => entry.id === agentRolePreference.roleId);
+    if (!role) return null;
+    const bound =
+      role.agentConfigId === selectedAgent.agentId && role.machineId === selectedAgent.machineId;
+    return bound ? { role, token: agentRolePreference.token } : null;
+  }, [agentRolePreference, selectedAgent, workspaceAgentRoles]);
+  const selectedAgentDefaults = useMemo(() => {
+    const roleRunConfig = activeAgentRolePreference?.role.runConfig;
+    if (roleRunConfig) {
+      return {
+        modeId: roleRunConfig.modeId ?? null,
+        modelId: roleRunConfig.modelId ?? null,
+        configOptionValues: roleRunConfig.configOptionValues,
+      };
+    }
+    return selectedAgent ? (agentDefaultsCache.get(selectedAgent.agentId) ?? {}) : {};
+  }, [activeAgentRolePreference, selectedAgent]);
   useReconcileAcpSessionConfigSelection({
     targetKey: selectedAgent ? `${selectedAgent.machineId}:${selectedAgent.agentId}` : null,
-    preferenceRevision: selectedAgent?.agentId ?? 'none',
+    preferenceRevision: activeAgentRolePreference
+      ? `role:${activeAgentRolePreference.role.id}:${activeAgentRolePreference.role.revision}:${activeAgentRolePreference.token}`
+      : (selectedAgent?.agentId ?? 'none'),
     preferences: selectedAgentDefaults,
     selectorOptions,
     dispatch: dispatchSessionConfigSelection,
   });
+  /* The Role the composer IS, not the one last clicked. The footer names a Role
+     only while every value that Role pins is still what will run, so moving a
+     knob — or an unsupported pin falling back — takes the name away instead of
+     leaving it claiming a configuration that is no longer the Role's. */
+  const activeAgentRole = useMemo(() => {
+    const role = activeAgentRolePreference?.role;
+    if (!role) return null;
+    return isComposerAgentRoleApplied(role, {
+      agentSelection: selectedAgent,
+      modeId: selectedModeId,
+      modelId: selectedModelId,
+      configOptionValues,
+    })
+      ? role
+      : null;
+  }, [
+    activeAgentRolePreference,
+    configOptionValues,
+    selectedAgent,
+    selectedModeId,
+    selectedModelId,
+  ]);
 
   /* ── Recently used run configurations ──
      Device-local history of whole combinations (agent + model + every config
@@ -1563,9 +1658,10 @@ function WorkspaceChatLanding({
             machineId: selectedAgent.machineId,
             modelId: currentRunConfigFace.modelId,
             configOptionValues: sanitizeConfigOptionValues(dispatchConfigOptionValues),
+            agentRoleId: activeAgentRole?.id ?? null,
           })
         : null,
-    [currentRunConfigFace.modelId, dispatchConfigOptionValues, selectedAgent]
+    [activeAgentRole, currentRunConfigFace.modelId, dispatchConfigOptionValues, selectedAgent]
   );
   /* Picking an entry switches the agent first; its model and options can only
      be applied after that agent's own reconcile pass has seeded the selection
@@ -1929,6 +2025,7 @@ function WorkspaceChatLanding({
     setSelectedLocalProject: handleSelectedLocalProjectChange,
     selectedLocalBranch,
     setSelectedLocalBranch: handleSelectedLocalBranchChange,
+    selectedAgentRoleId: agentRoleRestored ? (activeAgentRole?.id ?? null) : undefined,
   });
 
   // ── Auto-select first repo when none selected ──
@@ -2844,7 +2941,13 @@ function WorkspaceChatLanding({
         .map((line) => line.trim())
         .find((line) => line.length > 0)
         ?.slice(0, 50);
-      const promptPayload = buildAgentPrompt(promptText, selectedConfig.prompt ?? '');
+      /* Agent config prompt, then the Role's instruction, then the task — the
+         Role speaks for how this agent is being used, so it sits between the
+         two. A Role only reaches here while it is still what will run. */
+      const promptPayload = buildAgentPrompt(
+        promptText,
+        buildAgentPrompt(activeAgentRole?.promptPrefix ?? '', selectedConfig.prompt ?? '')
+      );
       const issuePRMentions = extractIssuePRMentionsFromText(
         promptText,
         knownIssuePrItems,
@@ -2898,6 +3001,11 @@ function WorkspaceChatLanding({
           branchName: contextType === 'github' ? githubBranch : localWorktreeBranch,
           title: draftTitle,
           titleSource: draftTitle ? 'draft' : undefined,
+          // Provenance only: the dispatch config above is already frozen, so a
+          // Role edited or deleted later cannot change how this session runs.
+          ...(activeAgentRole
+            ? { agentRoleId: activeAgentRole.id, agentRoleRevision: activeAgentRole.revision }
+            : {}),
         },
         pendingHistoryEntry
       );
@@ -2923,6 +3031,9 @@ function WorkspaceChatLanding({
             planOn: currentRunConfigFace.planOn,
             fastOn: currentRunConfigFace.fastOn,
             configOptionValues: sanitizeConfigOptionValues(dispatchConfigOptionValues),
+            // A Role is one of these combinations, so it is recorded as one —
+            // as the Role, not as the values it happened to set.
+            agentRoleId: activeAgentRole?.id ?? null,
           },
           Date.now()
         )
@@ -3283,6 +3394,136 @@ function WorkspaceChatLanding({
     () => (scopedMachineId ? [scopedMachineId] : undefined),
     [scopedMachineId]
   );
+  /* Roles offered for the machine this chat will start on. Scoped to that one
+     machine because a Role binds its execution site exactly — a Role from
+     another machine could only move the chat off the selected one. */
+  const composerAgentRoleItems = useMemo(
+    () =>
+      buildComposerAgentRoleItems({
+        roles: workspaceAgentRoles,
+        machineId: scopedMachineId,
+        agentConfigs: executorConfigs,
+        resolveAvailability: resolveAgentRoleAvailability,
+      }),
+    [executorConfigs, resolveAgentRoleAvailability, scopedMachineId, workspaceAgentRoles]
+  );
+  const handleAgentRoleSelect = useCallback(
+    (roleId: AgentRoleId | null) => {
+      // Leaving a Role clears the NAME, not the configuration: the values it
+      // seeded are now the user's own, and silently rolling them back would
+      // undo choices they never asked to undo.
+      if (roleId === null) {
+        setAgentRolePreference(null);
+        return;
+      }
+      const item = composerAgentRoleItems.find((entry) => entry.role.id === roleId);
+      // An unavailable Role is listed so its owner can see why it cannot run;
+      // it is never something the composer quietly starts a chat with.
+      if (!item || item.availability.kind !== 'available') return;
+      const { role } = item;
+      agentRolePreferenceTokenRef.current += 1;
+      setPendingRecentRunConfig(null);
+      setSelectedAgent({ agentId: role.agentConfigId, machineId: role.machineId });
+      setAgentRolePreference({ roleId: role.id, token: agentRolePreferenceTokenRef.current });
+    },
+    [composerAgentRoleItems]
+  );
+
+  /* Creating a Role from the composer opens on the configuration already in
+     front of the user — "save what I am about to run" is the whole reason the
+     entry point is here rather than only in Settings. */
+  const handleAgentRoleCreate = useCallback(() => {
+    setAgentRoleEditor(
+      openAgentRoleEditorForCreate(
+        buildAgentRoleFormValueFromRunConfig({
+          machineId: selectedAgent?.machineId ?? scopedMachineId,
+          agentConfigId: selectedAgent?.agentId ?? null,
+          modeId: selectedModeId,
+          modelId: modelOptions.length > 0 ? selectedModelId : null,
+          configOptionValues: sanitizeConfigOptionValues(dispatchConfigOptionValues),
+        })
+      )
+    );
+  }, [
+    dispatchConfigOptionValues,
+    modelOptions.length,
+    scopedMachineId,
+    selectedAgent,
+    selectedModeId,
+    selectedModelId,
+  ]);
+  const handleAgentRoleEdit = useCallback(
+    (roleId: AgentRoleId) => {
+      const role = composerAgentRoleItems.find((entry) => entry.role.id === roleId)?.role;
+      if (role) setAgentRoleEditor(openAgentRoleEditorForEdit(role));
+    },
+    [composerAgentRoleItems]
+  );
+  /* Creating a Role from the composer means "use this now", so the new Role is
+     selected as soon as the composer can offer it. Deferred rather than
+     immediate: the write resolves on durability while the catalog snapshot
+     arrives on its own tick, so the Role is not in the list yet at that moment. */
+  const [pendingAgentRoleSelection, setPendingAgentRoleSelection] = useState<AgentRoleId | null>(
+    null
+  );
+  const handleAgentRoleSaved = useCallback((role: AgentRole, { created }: { created: boolean }) => {
+    if (created) setPendingAgentRoleSelection(role.id);
+  }, []);
+  useEffect(() => {
+    if (!pendingAgentRoleSelection) return;
+    const outcome = resolvePendingAgentRoleSelection({
+      roleId: pendingAgentRoleSelection,
+      items: composerAgentRoleItems,
+      isInCatalog: workspaceAgentRoles.some((role) => role.id === pendingAgentRoleSelection),
+    });
+    if (outcome === 'wait') return;
+    setPendingAgentRoleSelection(null);
+    if (outcome === 'select') handleAgentRoleSelect(pendingAgentRoleSelection);
+  }, [
+    composerAgentRoleItems,
+    handleAgentRoleSelect,
+    pendingAgentRoleSelection,
+    workspaceAgentRoles,
+  ]);
+
+  /* Restore the last-used Role once, and only once the catalog can answer.
+     Until the workspace document has synced, "not in the list" means "not
+     loaded yet", so giving up then would silently drop the stored Role. */
+  useEffect(() => {
+    if (agentRoleRestored || !defaultsReady) return;
+    const storedRoleId = readChatLandingDefaults(workspaceId)?.agentRoleId as
+      | AgentRoleId
+      | undefined;
+    if (!storedRoleId) {
+      setAgentRoleRestored(true);
+      return;
+    }
+    const item = composerAgentRoleItems.find((entry) => entry.role.id === storedRoleId);
+    if (!item) {
+      if (agentRolesSynced) setAgentRoleRestored(true);
+      return;
+    }
+    setAgentRoleRestored(true);
+    handleAgentRoleSelect(storedRoleId);
+  }, [
+    agentRoleRestored,
+    agentRolesSynced,
+    composerAgentRoleItems,
+    defaultsReady,
+    handleAgentRoleSelect,
+    workspaceId,
+  ]);
+  const agentRolePinsPermissionMode = useMemo(() => {
+    if (!activeAgentRole) return false;
+    const { source } = resolvePermissionModeFace({
+      modeOptions,
+      selectedModeId,
+      configOptionSelectors,
+      configOptionValues,
+    });
+    return doesAgentRolePinPermissionMode(activeAgentRole, source);
+  }, [activeAgentRole, configOptionSelectors, configOptionValues, modeOptions, selectedModeId]);
+
   /* Recent entries are offered only for agents the menu itself can select: one
      recorded on another machine must not silently move the chat off the
      selected one. */
@@ -3293,28 +3534,50 @@ function WorkspaceChatLanding({
         : executorConfigs,
     [executorConfigs, scopedMachineId]
   );
+  /* Only Roles the composer could pick right now: a recorded Role entry whose
+     Role is gone or unavailable must drop out rather than re-running its values
+     without it. */
+  const selectableAgentRoles = useMemo(
+    () =>
+      composerAgentRoleItems
+        .filter((item) => item.availability.kind === 'available')
+        .map((item) => item.role),
+    [composerAgentRoleItems]
+  );
   const recentRunConfigItems = useMemo(
     () =>
       buildRecentRunConfigItems({
         records: recentRunConfigRecords,
         agentConfigs: recentRunConfigAgentConfigs,
+        agentRoles: selectableAgentRoles,
         currentKey: currentRunConfigKey,
       }),
-    [currentRunConfigKey, recentRunConfigAgentConfigs, recentRunConfigRecords]
+    [currentRunConfigKey, recentRunConfigAgentConfigs, recentRunConfigRecords, selectableAgentRoles]
   );
   const handleRecentRunConfigSelect = useCallback(
     (id: string) => {
       const record = recentRunConfigRecords.find((entry) => getRecentRunConfigKey(entry) === id);
       if (!record) return;
+      // Recorded AS a Role: re-apply the Role, not the values it set. Those
+      // values are only half of it — the instruction and the provenance ride
+      // with the Role, and re-running "the same knobs" would drop both.
+      if (record.agentRoleId) {
+        handleAgentRoleSelect(record.agentRoleId as AgentRoleId);
+        return;
+      }
       const config = recentRunConfigAgentConfigs.find(
         (entry) => entry.id === record.agentId && entry.machineId === record.machineId
       );
       if (!config) return;
+      // A recent entry and a Role are two whole configurations; the one just
+      // picked owns the selection, so the other stops driving it.
+      setAgentRolePreference(null);
       setSelectedAgent({ agentId: config.id, machineId: config.machineId });
       setPendingRecentRunConfig(record);
     },
-    [recentRunConfigAgentConfigs, recentRunConfigRecords]
+    [handleAgentRoleSelect, recentRunConfigAgentConfigs, recentRunConfigRecords]
   );
+
   const desktopMachineOptions = useMemo(
     () =>
       Array.from(selectableMachines.values()).map((machine) => ({
@@ -3417,15 +3680,32 @@ function WorkspaceChatLanding({
           onConfigOptionChange={handleConfigOptionChange}
           recentRunConfigs={recentRunConfigItems}
           onRecentRunConfigSelect={handleRecentRunConfigSelect}
-        />
-        <DesktopPermissionModeButton
           modeOptions={modeOptions}
           selectedModeId={selectedModeId}
-          onModeChange={setSelectedModeId}
-          configOptionSelectors={configOptionSelectors}
-          configOptionValues={configOptionValues}
-          onConfigOptionChange={handleConfigOptionChange}
+          agentRoles={{
+            items: composerAgentRoleItems,
+            selectedRoleId: activeAgentRole?.id ?? null,
+            onSelect: handleAgentRoleSelect,
+            onCreate: handleAgentRoleCreate,
+            onEdit: handleAgentRoleEdit,
+            machine: scopedMachineId ? (machines.get(scopedMachineId) ?? null) : null,
+          }}
         />
+        {/* Permission is part of what a Role pins, so behind one it stops being
+            a separate control and is stated in the Role's own face instead. It
+            stays a button when the Role pins nothing there — an agent with no
+            permission control leaves a Role nothing to own, and hiding the knob
+            then would take away one the Role never had. */}
+        {agentRolePinsPermissionMode ? null : (
+          <DesktopPermissionModeButton
+            modeOptions={modeOptions}
+            selectedModeId={selectedModeId}
+            onModeChange={setSelectedModeId}
+            configOptionSelectors={configOptionSelectors}
+            configOptionValues={configOptionValues}
+            onConfigOptionChange={handleConfigOptionChange}
+          />
+        )}
         <SessionUsagePopover
           rateLimits={selectedRateLimits}
           agentType={selectedConfig?.agentType ?? ''}
@@ -6218,6 +6498,13 @@ function WorkspaceChatLanding({
           await cancelMachinePairingRequest({ requestId: machinePairing.requestId });
         }}
         onConfigureAgents={() => openSettings('agents')}
+      />
+      <AgentRoleEditorDialog
+        editor={agentRoleEditor}
+        accessibleRoles={workspaceAgentRoles}
+        onChange={setAgentRoleEditor}
+        onClose={() => setAgentRoleEditor(null)}
+        onSaved={handleAgentRoleSaved}
       />
     </>
   );

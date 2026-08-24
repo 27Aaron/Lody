@@ -4,14 +4,19 @@ import { Bot, Check, ListChecks, LockKeyhole, Monitor, Plus, ShieldAlert, Zap } 
 import { useTranslation } from 'react-i18next';
 import {
   classifyPermissionModeFace,
+  getAgentRoleEmoji,
   type AgentConfigCliType,
   type AgentConfigMeta,
+  type AgentRole,
+  type AgentRoleId,
   type MachineId,
+  type MachineViewMeta,
 } from '@lody/shared';
 
 import { getAllAgentConfigAtom } from '@/atoms';
 import { getModeIcon as getPermissionModeIcon } from '@/components/chat/chat-landing-selectors';
 import { AgentIcon } from '@/components/icons/agent-icon';
+import { ComposerAgentRolePanel } from '@/components/sessions/composer-agent-role-panel';
 import {
   RecentRunConfigMenuGroup,
   type RecentRunConfigItem,
@@ -29,6 +34,10 @@ import {
 import type { AcpSessionSelectOption } from '@/components/shared/acp-session-select';
 import type { AgentSelection } from '@/components/shared/agent-selector';
 import { orderAcpConfigOptionSelectors } from '@/lib/acp-selector-order';
+import {
+  doesAgentRolePinPermissionMode,
+  type ComposerAgentRoleItem,
+} from '@/lib/composer-agent-roles';
 import { cn } from '@/lib/utils';
 import { useOnlineMachines } from '@/hooks/use-online-machines';
 import { Badge } from '@/ui/badge';
@@ -116,16 +125,22 @@ function OptionItem({
 function ValueSubTrigger({
   label,
   value,
+  icon,
   disabled = false,
 }: {
   label: string;
   value: string | null;
+  /** Rides beside the value, for a row whose value has a mark of its own. */
+  icon?: ReactNode;
   disabled?: boolean;
 }) {
   return (
     <DropdownMenuSubTrigger className="pr-1.5" disabled={disabled}>
       <span className="min-w-0 flex-1 truncate">{label}</span>
-      <span className="ml-4 max-w-36 truncate text-xs text-muted-foreground">{value}</span>
+      <span className="ml-4 flex min-w-0 max-w-40 items-center gap-1.5 text-xs text-muted-foreground">
+        {icon}
+        <span className="min-w-0 truncate">{value}</span>
+      </span>
     </DropdownMenuSubTrigger>
   );
 }
@@ -330,6 +345,14 @@ export type DesktopRunConfigMenuProps = {
   modelOptions: ReadonlyArray<AcpSessionSelectOption>;
   selectedModelId: string | null;
   onModelChange?: (value: string) => void;
+  /**
+   * Permission inputs, read-only here: the standalone
+   * `DesktopPermissionModeButton` is still the control. They are needed because
+   * a selected Role pins permission too, and its face states everything the
+   * Role decided rather than leaving one knob's value somewhere else.
+   */
+  modeOptions?: ReadonlyArray<AcpSessionSelectOption>;
+  selectedModeId?: string | null;
   configOptionSelectors?: AcpConfigOptionSelector[];
   configOptionValues?: Record<string, AcpConfigOptionValue>;
   onConfigOptionChange?: (configId: string, value: AcpConfigOptionValue) => void;
@@ -340,6 +363,25 @@ export type DesktopRunConfigMenuProps = {
    */
   recentRunConfigs?: ReadonlyArray<RecentRunConfigItem>;
   onRecentRunConfigSelect?: (id: string) => void;
+  /**
+   * Agent Roles for the machine this chat starts on, as the row above Agent.
+   *
+   * Omit to leave the row out entirely: a surface where the agent cannot change
+   * (an in-session composer, a settings preview) has nothing a Role could
+   * apply, and offering one there would promise a switch that cannot happen.
+   */
+  agentRoles?: {
+    items: ReadonlyArray<ComposerAgentRoleItem>;
+    /** The Role the current configuration still IS, not merely the last picked. */
+    selectedRoleId: AgentRoleId | null;
+    /** `null` clears the Role and leaves the configuration exactly as it stands. */
+    onSelect: (roleId: AgentRoleId | null) => void;
+    /** Opens the Role editor seeded with what the composer is set to right now. */
+    onCreate?: () => void;
+    onEdit?: (roleId: AgentRoleId) => void;
+    /** The machine those Roles are bound to, for resolving their stored ids. */
+    machine?: MachineViewMeta | null;
+  };
 };
 
 export function DesktopRunConfigMenu({
@@ -354,11 +396,14 @@ export function DesktopRunConfigMenu({
   modelOptions,
   selectedModelId,
   onModelChange,
+  modeOptions = [],
+  selectedModeId = null,
   configOptionSelectors = [],
   configOptionValues,
   onConfigOptionChange,
   recentRunConfigs,
   onRecentRunConfigSelect,
+  agentRoles,
 }: DesktopRunConfigMenuProps) {
   const { t } = useTranslation();
   const executorConfigs = useAtomValue(getAllAgentConfigAtom);
@@ -467,13 +512,91 @@ export function DesktopRunConfigMenu({
     ? resolveOnOffConfigOptionEnabled(fastSelector, configOptionValues?.[fastSelector.configId])
     : false;
 
+  /* The Role the composer currently IS: the caller only passes an id while the
+     live configuration still matches that Role, so the face can name it. */
+  const selectedRole: AgentRole | undefined = useMemo(
+    () =>
+      agentRoles?.selectedRoleId
+        ? agentRoles.items.find((item) => item.role.id === agentRoles.selectedRoleId)?.role
+        : undefined,
+    [agentRoles]
+  );
+
+  /* The half of the face that describes the run configuration rather than what
+     was picked. Built as parts so the separator dots can be placed by the
+     caller: inside the trigger it continues the agent name, while a Role
+     renders it OUTSIDE the trigger, where a leading dot would dangle. */
+  const configFaceParts: ReactNode[] = [];
+  if (modelLabel) {
+    configFaceParts.push(
+      <span key="model" className="block min-w-0 max-w-40 truncate text-left [direction:rtl]">
+        <span dir="ltr">{modelLabel}</span>
+      </span>
+    );
+  }
+  if (thinkingLabel) {
+    configFaceParts.push(
+      <span key="thinking" className="shrink-0">
+        {thinkingLabel}
+      </span>
+    );
+  }
+  if (planOn) {
+    configFaceParts.push(
+      <ListChecks key="plan" className="h-3.5 w-3.5 shrink-0 text-primary" aria-hidden="true" />
+    );
+  }
+  if (fastOn) {
+    configFaceParts.push(
+      <Zap key="fast" className="h-3.5 w-3.5 shrink-0 text-primary" aria-hidden="true" />
+    );
+  }
+  /* Permission joins the face ONLY behind a Role, and only one the Role pins:
+     otherwise the standalone permission button is showing the same value a step
+     to the right, and saying it twice is worse than saying it once. */
+  const permissionFace = resolvePermissionModeFace({
+    modeOptions,
+    selectedModeId,
+    configOptionSelectors,
+    configOptionValues,
+  });
+  if (
+    selectedRole &&
+    permissionFace.label &&
+    doesAgentRolePinPermissionMode(selectedRole, permissionFace.source)
+  ) {
+    // A warning-tone permission (full access / skip permissions) keeps its
+    // amber shield here. The rest of the face is deliberately quiet because a
+    // Role already decided it — but "this Role runs with full access" is not a
+    // detail, and it is the one value that no longer has a button carrying it.
+    const warning = classifyPermissionModeFace(permissionFace.value);
+    configFaceParts.push(
+      warning.kind !== 'hidden' && warning.tone === 'warning' ? (
+        <span key="permission" className="flex shrink-0 items-center gap-1 text-status-warning">
+          <ShieldAlert className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          {permissionFace.label}
+        </span>
+      ) : (
+        <span key="permission" className="shrink-0">
+          {permissionFace.label}
+        </span>
+      )
+    );
+  }
+  const withFaceDots = (parts: ReactNode[], leadingDot: boolean): ReactNode[] =>
+    parts.flatMap((part, index) =>
+      index === 0 && !leadingDot ? [part] : [<FaceDot key={`dot-${index}`} />, part]
+    );
+
   const agentLabel = t('chat.agentSelector.placeholder', 'Agent');
   const modelRowLabel = t('chat.runConfig.modelLabel', 'Model');
   const reasoningLabel = t('chat.runConfig.reasoningLabel', 'Reasoning');
   const planRowLabel = t('chat.mobileNewChat.planModeLabel', 'Plan');
   const fastRowLabel = t('chat.runConfig.fastLabel', 'Fast');
 
+  const roleLabel = t('chat.runConfig.roles.label', 'Role');
   const hasAnyRow =
+    agentRoles != null ||
     agentOptions.length > 0 ||
     selectedAgentConfig != null ||
     modelPickerOptions.length > 0 ||
@@ -484,7 +607,7 @@ export function DesktopRunConfigMenu({
     fastSelector != null;
   if (!hasAnyRow) return null;
 
-  return (
+  const menu = (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
@@ -492,7 +615,11 @@ export function DesktopRunConfigMenu({
           className={TRIGGER_CLASS}
           aria-label={t('chat.runConfig.buttonAriaLabel', 'Run configuration')}
         >
-          {selectedAgentConfig ? (
+          {selectedRole ? (
+            <span className="shrink-0 text-sm leading-none" aria-hidden="true">
+              {getAgentRoleEmoji(selectedRole)}
+            </span>
+          ) : selectedAgentConfig ? (
             <AgentIcon
               cliType={selectedAgentConfig.cliType}
               agentType={selectedAgentConfig.agentType}
@@ -509,37 +636,21 @@ export function DesktopRunConfigMenu({
           ) : (
             <Bot className="h-4 w-4 shrink-0" aria-hidden="true" />
           )}
-          {showAgentNameInTrigger ? (
-            <span className="block min-w-0 max-w-36 truncate text-left">
-              {selectedAgentConfig?.name ?? emptyAgentLabel ?? agentLabel}
-            </span>
-          ) : null}
-          {modelLabel ? (
+          {/* A Role names itself and nothing else: it IS the whole run
+              configuration, so its values belong beside the button rather than
+              crowding the one thing there is to click. */}
+          {selectedRole ? (
+            <span className="block min-w-0 max-w-44 truncate text-left">{selectedRole.name}</span>
+          ) : (
             <>
-              {showAgentNameInTrigger ? <FaceDot /> : null}
-              <span className="block min-w-0 max-w-40 truncate text-left [direction:rtl]">
-                <span dir="ltr">{modelLabel}</span>
-              </span>
+              {showAgentNameInTrigger ? (
+                <span className="block min-w-0 max-w-36 truncate text-left">
+                  {selectedAgentConfig?.name ?? emptyAgentLabel ?? agentLabel}
+                </span>
+              ) : null}
+              {withFaceDots(configFaceParts, showAgentNameInTrigger)}
             </>
-          ) : null}
-          {thinkingLabel ? (
-            <>
-              <FaceDot />
-              <span className="shrink-0">{thinkingLabel}</span>
-            </>
-          ) : null}
-          {planOn ? (
-            <>
-              <FaceDot />
-              <ListChecks className="h-3.5 w-3.5 shrink-0 text-primary" aria-hidden="true" />
-            </>
-          ) : null}
-          {fastOn ? (
-            <>
-              <FaceDot />
-              <Zap className="h-3.5 w-3.5 shrink-0 text-primary" aria-hidden="true" />
-            </>
-          ) : null}
+          )}
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="min-w-56">
@@ -548,6 +659,47 @@ export function DesktopRunConfigMenu({
             items={recentRunConfigs ?? []}
             onSelect={onRecentRunConfigSelect}
           />
+        ) : null}
+        {/* Above Agent, because a Role ANSWERS every row under it at once. With
+            no Role to pick yet the row's value is the way to make one, seeded
+            with whatever those rows are set to right now. */}
+        {agentRoles ? (
+          agentRoles.items.length === 0 ? (
+            <DropdownMenuItem
+              disabled={!agentRoles.onCreate}
+              onSelect={() => agentRoles.onCreate?.()}
+            >
+              <span className="min-w-0 flex-1 truncate">{roleLabel}</span>
+              <span className="ml-4 inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+                <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                {t('chat.runConfig.roles.create', 'New role')}
+              </span>
+            </DropdownMenuItem>
+          ) : (
+            <DropdownMenuSub>
+              <ValueSubTrigger
+                label={roleLabel}
+                value={selectedRole?.name ?? t('chat.runConfig.roles.none', 'None')}
+                icon={
+                  selectedRole ? (
+                    <span className="text-sm leading-none" aria-hidden="true">
+                      {getAgentRoleEmoji(selectedRole)}
+                    </span>
+                  ) : null
+                }
+              />
+              <DropdownMenuSubContent className="p-0">
+                <ComposerAgentRolePanel
+                  items={agentRoles.items}
+                  machine={agentRoles.machine}
+                  selectedRoleId={agentRoles.selectedRoleId}
+                  onSelect={agentRoles.onSelect}
+                  onCreate={agentRoles.onCreate}
+                  onEdit={agentRoles.onEdit}
+                />
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          )
         ) : null}
         {agentOptions.length > 0 || selectedAgentConfig ? (
           isAgentLocked ? (
@@ -744,6 +896,26 @@ export function DesktopRunConfigMenu({
       </DropdownMenuContent>
     </DropdownMenu>
   );
+
+  /* The values a Role pins, stated but INERT: only the Role itself is a control,
+     because changing one of these by hand is what stops the configuration being
+     that Role — and a knob that silently unnames the thing beside it is a trap.
+     The Detailed tab is where they are changed. */
+  const roleConfigFace =
+    selectedRole && configFaceParts.length > 0 ? (
+      <span className="pointer-events-none flex min-w-0 select-none items-center gap-1 text-[11px] leading-tight text-muted-foreground/60">
+        {withFaceDots(configFaceParts, false)}
+      </span>
+    ) : null;
+
+  return roleConfigFace ? (
+    <>
+      {menu}
+      {roleConfigFace}
+    </>
+  ) : (
+    menu
+  );
 }
 
 function FaceDot() {
@@ -766,6 +938,68 @@ function permissionModeIcon(modeId: string | null): ReactNode {
   return getPermissionModeIcon(modeId);
 }
 
+export type PermissionModeFace = {
+  options: ReadonlyArray<AcpSessionSelectOption>;
+  value: string | null;
+  label: string | null;
+  /**
+   * Where that value lives, so a caller can ask whether something else — an
+   * Agent Role — already pins it. `null` when this agent exposes no permission
+   * control at all.
+   */
+  source: { kind: 'configOption'; configId: string } | { kind: 'modeId' } | null;
+};
+
+/**
+ * What the permission control is showing, from the one rule both surfaces use.
+ *
+ * Explicit `_permission` config options outrank legacy ACP modes; with neither,
+ * a plain mode selector stands in. Shared so the standalone button and the Role
+ * face cannot drift into disagreeing about which knob permission even IS.
+ */
+export function resolvePermissionModeFace({
+  modeOptions,
+  selectedModeId,
+  configOptionSelectors = [],
+  configOptionValues,
+}: {
+  modeOptions: ReadonlyArray<AcpSessionSelectOption>;
+  selectedModeId: string | null;
+  configOptionSelectors?: AcpConfigOptionSelector[];
+  configOptionValues?: Record<string, AcpConfigOptionValue>;
+}): PermissionModeFace {
+  const { permissionModeSelectors, modeSelectors } =
+    orderAcpConfigOptionSelectors(configOptionSelectors);
+  const explicitPermissionSelector = permissionModeSelectors[0];
+  const modeConfigSelector: AcpSelectConfigOptionSelector | undefined =
+    explicitPermissionSelector ?? modeSelectors[0];
+  const usesConfigOption = Boolean(explicitPermissionSelector) || modeOptions.length === 0;
+  const options = explicitPermissionSelector
+    ? explicitPermissionSelector.options
+    : modeOptions.length > 0
+      ? modeOptions
+      : (modeConfigSelector?.options ?? []);
+  const value = usesConfigOption
+    ? modeConfigSelector
+      ? ((resolveConfigOptionValue(
+          modeConfigSelector,
+          configOptionValues?.[modeConfigSelector.configId]
+        ) as string) ?? null)
+      : null
+    : selectedModeId;
+  const source: PermissionModeFace['source'] = usesConfigOption
+    ? modeConfigSelector
+      ? { kind: 'configOption', configId: modeConfigSelector.configId }
+      : null
+    : { kind: 'modeId' };
+  return {
+    options,
+    value,
+    label: options.find((option) => option.value === value)?.label ?? null,
+    source: options.length > 0 ? source : null,
+  };
+}
+
 export type DesktopPermissionModeButtonProps = {
   modeOptions: ReadonlyArray<AcpSessionSelectOption>;
   selectedModeId: string | null;
@@ -784,41 +1018,24 @@ export function DesktopPermissionModeButton({
   onConfigOptionChange,
 }: DesktopPermissionModeButtonProps) {
   const { t } = useTranslation();
-  const { permissionModeSelectors, modeSelectors } = useMemo(
-    () => orderAcpConfigOptionSelectors(configOptionSelectors),
-    [configOptionSelectors]
-  );
-  const explicitPermissionSelector = permissionModeSelectors[0];
-  const modeConfigSelector: AcpSelectConfigOptionSelector | undefined =
-    explicitPermissionSelector ?? modeSelectors[0];
-  const options = useMemo(
+  const { options, value, label, source } = useMemo(
     () =>
-      explicitPermissionSelector
-        ? explicitPermissionSelector.options
-        : modeOptions.length > 0
-          ? modeOptions
-          : (modeConfigSelector?.options ?? []),
-    [explicitPermissionSelector, modeConfigSelector, modeOptions]
+      resolvePermissionModeFace({
+        modeOptions,
+        selectedModeId,
+        configOptionSelectors,
+        configOptionValues,
+      }),
+    [configOptionSelectors, configOptionValues, modeOptions, selectedModeId]
   );
-  const value =
-    explicitPermissionSelector || modeOptions.length === 0
-      ? modeConfigSelector
-        ? ((resolveConfigOptionValue(
-            modeConfigSelector,
-            configOptionValues?.[modeConfigSelector.configId]
-          ) as string) ?? null)
-        : null
-      : selectedModeId;
-  const label = options.find((opt) => opt.value === value)?.label ?? null;
   const permissionLabel = t('chat.runConfig.permissionLabel', 'Permission');
 
   if (options.length === 0) return null;
 
   const handleSelect = (next: string) => {
-    if (explicitPermissionSelector || modeOptions.length === 0) {
-      if (!modeConfigSelector) return;
-      onConfigOptionChange?.(modeConfigSelector.configId, next as AcpConfigOptionValue);
-    } else {
+    if (source?.kind === 'configOption') {
+      onConfigOptionChange?.(source.configId, next as AcpConfigOptionValue);
+    } else if (source?.kind === 'modeId') {
       onModeChange?.(next);
     }
   };

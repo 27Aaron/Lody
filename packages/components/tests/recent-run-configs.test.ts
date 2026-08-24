@@ -6,7 +6,14 @@
 // picking it would be a no-op row at the top of the menu.
 
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { AgentConfigId, AgentConfigMeta, MachineId } from '@lody/shared';
+import {
+  AGENT_ROLE_VERSION,
+  type AgentConfigId,
+  type AgentConfigMeta,
+  type AgentRole,
+  type AgentRoleId,
+  type MachineId,
+} from '@lody/shared';
 
 import type { AcpConfigOptionSelector } from '../src/components/shared/acp-selector-options';
 import {
@@ -209,5 +216,62 @@ describe('applying a record to the current selectors', () => {
     });
     expect(face.modelId).toBeNull();
     expect(face.modelLabel).toBe('Grok 4');
+  });
+});
+
+describe('recent Agent Role entries', () => {
+  const role = (id: string, name: string): AgentRole => ({
+    v: AGENT_ROLE_VERSION,
+    id: id as AgentRoleId,
+    ownerUserId: 'user-1',
+    visibility: 'private',
+    name,
+    emoji: '\u{1F50D}',
+    machineId: MACHINE,
+    agentConfigId: 'agent-1' as AgentConfigId,
+    runConfig: {},
+    revision: 1,
+    createdAt: 1,
+    updatedAt: 1,
+  });
+  const agentConfigs = [agentConfig('agent-1', 'Claude')];
+
+  // The same knobs picked by hand and picked through a Role are not the same
+  // run: the Role also carries its instruction and its provenance.
+  it('is a different combination from the same values picked by hand', () => {
+    expect(getRecentRunConfigKey(record({ agentRoleId: 'role-1' }))).not.toBe(
+      getRecentRunConfigKey(record())
+    );
+  });
+
+  it('reads as the Role, not as the agent it is bound to', () => {
+    const items = buildRecentRunConfigItems({
+      records: [record({ agentRoleId: 'role-1' })],
+      agentConfigs,
+      agentRoles: [role('role-1', 'Code Reviewer')],
+      currentKey: null,
+    });
+    expect(items[0]?.role).toEqual({ name: 'Code Reviewer', emoji: '\u{1F50D}' });
+    expect(items[0]?.agent.name).toBe('Claude');
+  });
+
+  // A Role never falls back, so an entry whose Role is gone or cannot run must
+  // drop out rather than quietly re-running its values without it.
+  it('drops an entry whose Role can no longer run', () => {
+    const records = [record({ agentRoleId: 'role-1' })];
+    expect(
+      buildRecentRunConfigItems({ records, agentConfigs, agentRoles: [], currentKey: null })
+    ).toHaveLength(0);
+    expect(buildRecentRunConfigItems({ records, agentConfigs, currentKey: null })).toHaveLength(0);
+  });
+
+  it('leaves plain entries alone when no Roles are passed', () => {
+    const items = buildRecentRunConfigItems({
+      records: [record()],
+      agentConfigs,
+      currentKey: null,
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0]?.role).toBeUndefined();
   });
 });

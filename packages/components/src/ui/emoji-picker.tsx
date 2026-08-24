@@ -42,8 +42,16 @@ function EmojiPickerSearch({
       data-slot="emoji-picker-search-wrapper"
     >
       <SearchIcon className="size-4 shrink-0 opacity-50" />
+      {/* `focus-visible:shadow-none` opts out of the app's global inset focus
+          ring (tailwind/index.css, "Pro focus style": an inset 1px `--primary`
+          box-shadow on any focused input). That `:where(…)` selector carries no
+          specificity, so every other input in the app overrides it with its own
+          `focus-visible:` utility and never shows it — this bare registry input
+          had none, so it was the one field in the app that did, drawing an
+          accent box inside the row's own divider the moment it was typed in.
+          The caret is the focus affordance here, as it is everywhere else. */}
       <EmojiPickerPrimitive.Search
-        className="outline-hidden placeholder:text-muted-foreground flex h-10 w-full rounded-md bg-transparent py-3 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+        className="outline-hidden placeholder:text-muted-foreground flex h-10 w-full rounded-md bg-transparent py-3 text-sm focus-visible:shadow-none disabled:cursor-not-allowed disabled:opacity-50"
         data-slot="emoji-picker-search"
         {...props}
       />

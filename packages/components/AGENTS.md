@@ -29,6 +29,11 @@ mobile surfaces.
   router uses browser history over http, so the document URL is a deep route and
   resolving against it asks for `…/settings/emojibase`, which the dev server
   answers with the SPA fallback — the picker then parses HTML as JSON.
+  Its search input also carries `focus-visible:shadow-none`. The global "Pro
+  focus style" in `tailwind/index.css` puts an inset `--primary` ring on any
+  focused input through a zero-specificity `:where(…)` selector, so every input
+  with its own `focus-visible:` utility overrides it and never shows it; this
+  bare registry input had none and was the one field in the app that did.
 - A settings row (`settings/compact-layout.tsx`) is one grid: the label column takes the
   remaining space and the control column hugs its content. Never size either column from a
   viewport breakpoint — settings render in a panel far narrower than the window, and the

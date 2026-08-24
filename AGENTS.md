@@ -63,9 +63,16 @@ private service secrets, and the Web and mobile app sources.
   through. The CLI still reports its own sync result to the terminal.
 - Agent Roles are one `agentRole` row family in the same workspace Flock document, not a
   private and a shared catalog: sharing is an ordinary update of `visibility` on the row.
-  A Role stores no secret — no API key, MCP selection, memory, or permission default —
-  and `isSensitiveAgentRoleConfigOptionKey` is applied on read as well as on write,
-  because a workspace row reaches every member's client. Access is
+  A Role stores no secret — no API key, MCP selection, or memory — and
+  `isSensitiveAgentRoleConfigOptionKey` is applied on read as well as on write,
+  because a workspace row reaches every member's client. It DOES pin the permission
+  mode, as `runConfig.modeId` for legacy ACP modes or the agent's own `_permission`
+  option: permission is a run-config value the agent publishes, not a secret, and a
+  Role that left it out would not be the whole configuration it claims to be. So the
+  composer drops its separate permission button while such a Role is selected. A Role
+  may therefore pin a warning-tone mode (full access / skip permissions), which every
+  surface that hides the permission control must keep visibly marked; what stays out
+  of scope is a Role-level auto-approval POLICY. Access is
   `canReadAgentRole`/`canManageAgentRole` everywhere; hiding a private Role in the UI is
   not an access check.
 - A Role never falls back. `machineId + agentConfigId` bind the execution site exactly;

@@ -299,6 +299,86 @@ Session conversation page chain:
   explicit agent selection/machine scope rather than reading `SessionMeta`.
   Agent/Model/Reasoning option selection closes the dropdown and must not return
   keyboard focus to its trigger; Plan/Fast toggle rows intentionally stay open.
+  `DesktopRunConfigMenu` gains a **Role** row ONLY when the caller passes
+  `agentRoles` — currently the chat landing alone, because an in-session
+  composer cannot change the agent a Role binds. It sits ABOVE Agent, since a
+  Role answers every row under it at once. With Roles to pick it is a submenu of
+  `None` + the Roles bound to the machine the chat will start on (a Role's
+  `machineId + agentConfigId` are exact, so a Role from another machine could
+  only move the chat or fall back) beside a pane stating what the highlighted
+  one runs; with NO Roles the row's VALUE is the create action instead, and the
+  editor opens seeded from the composer's current configuration
+  (`buildAgentRoleFormValueFromRunConfig`) — "save what I am about to run" is
+  why that entry point is here at all, and the new Role is SELECTED as soon as
+  the composer can offer it — creating from here means "use this now". That is
+  deferred, not immediate (`resolvePendingAgentRoleSelection`): the write
+  resolves on durability while the catalog snapshot arrives on its own tick, so
+  the Role is not in the list at that moment; and a Role bound to another
+  machine is given up on rather than followed there. `None` clears the NAME, not the
+  configuration: the values the Role seeded are the user's own now, and rolling
+  them back would undo choices they never asked to undo. An unavailable Role
+  stays listed and disabled with its reason, `machine_offline` included, since
+  no machine heading carries it here. The detail pane resolves each stored id
+  against the BOUND agent's capabilities, so a Role reads in that agent's own
+  wording ("Full access", not `agent-full-access`), and it shows ONLY what the
+  Role pins — `resolveConfigOptionValue` would fall back to the agent's current
+  value and print a reasoning level the Role never chose. Each pinned value is
+  ONE line: `glyph label ……… value`, the same row grammar as the Agent / Model /
+  Reasoning rows this submenu opened from, so the pane reads as a continuation
+  of that menu rather than a second vocabulary. The label sits at the glyph's
+  own size — it names the glyph, it does not compete with the value — and the
+  value is pushed to the right edge, which aligns the column without a fixed
+  label width that no single width could give across locales. A value that
+  outruns the line elides rather than wraps, and a model id elides at the START
+  (`claude-opus-5` vs `claude-sonnet-5` differ in the tail). The permission's DESCRIPTION is
+  deliberately absent: a sentence about what one value allows belongs to the
+  Role editor, not to a scan of what is pinned. Its machine is passed
+  in rather than looked up, so the pane stays renderable without the workspace's
+  machine-visibility context. The Role editor is a Dialog and is therefore
+  hosted by the composer, NOT inside menu content, where it would unmount with
+  the menu the moment it opened; `AgentRoleEditorDialog` is the one editor,
+  shared with Settings.
+  Picking a Role flows through the SAME preference channel as that agent's
+  remembered defaults (`useReconcileAcpSessionConfigSelection`), never a second
+  apply path — so a pinned value the agent no longer supports falls back visibly
+  there instead of being forced in. The footer names a Role only while
+  `isComposerAgentRoleApplied` still holds (`lib/composer-agent-roles.ts`):
+  every value the Role pins is what will run. Moving a knob takes the name away
+  rather than clearing the preference, which would re-seed the value just
+  changed. With a Role selected the TRIGGER carries the Role and nothing else,
+  and the model/reasoning/permission/Plan/Fast values render beside it as inert
+  dimmed text: a Role IS the whole configuration, so changing one of those by
+  hand is exactly what unnames it, and a knob that silently unnames the thing
+  next to it is a trap. Permission is one of those values
+  (`doesAgentRolePinPermissionMode`), so `DesktopPermissionModeButton` is not
+  rendered at all while a Role that pins it is selected — but it STAYS a button
+  when the Role pins nothing there, because an agent with no permission control
+  leaves a Role nothing to own and hiding the knob then would remove one the
+  Role never had. The composer's preference NAMES a Role rather than holding a
+  copy: editing one bumps its `revision`, which rides in `preferenceRevision`,
+  so the composer re-seeds from what the Role says NOW — a captured copy would
+  keep running the old values under the edited Role's name, and a deleted Role
+  simply stops resolving. A warning-tone pinned mode (full access / skip permissions)
+  keeps its amber shield in the face and in the detail pane: the rest is quiet
+  because the Role decided it, but that value no longer has a button carrying
+  the warning. `resolvePermissionModeFace` is the one rule for what permission
+  even IS on a given agent, shared by the button and the face.
+  Mobile (`MobileSessionRunConfig`) has NO Role row. Neither the Role pane nor
+  the `@` mention pane shows a private/workspace badge: every Role offered is
+  one this user may run, so visibility changes nothing about accepting it and is
+  a Settings concern. The remembered Role rides in
+  `chatLandingDefaults.agentRoleId` and is restored only once the workspace
+  catalog can answer — before that, "not in the list" means "not loaded yet", so
+  the stored id must not be overwritten with null.
+  `SessionMeta.agentRoleId`/`agentRoleRevision` record provenance only.
+  A Role also appears in **Recently used**, because a Role IS one of those whole
+  combinations: the record carries `agentRoleId`, that id is part of
+  `getRecentRunConfigKey` (the same knobs picked by hand are a DIFFERENT entry —
+  a Role also carries its instruction and its provenance), the row leads with
+  the Role's mark and name, and picking it re-applies the ROLE rather than
+  replaying its values. `buildRecentRunConfigItems` drops a Role entry whose
+  Role is not in the passed `agentRoles` — a Role never falls back, so a deleted
+  or unavailable one must not quietly re-run as loose values.
   The selected mode is applied per TURN (it becomes the user entry's
   `inputConfig.modeId`; `resolveSessionConversationConfig` reads the latest turn
   back as the preference). So approving "Yes, implement this plan" — which only
