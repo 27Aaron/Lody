@@ -226,6 +226,11 @@ mobile surfaces.
   and the in-conversation cards for successful create Operations / the opened
   Session's precise opener. The mobile chat lists render the same tree from the
   same two fields, per bucket, minus the disclosure — see `mobile/AGENTS.md`.
+  Session lifecycle actions traverse both relations: a root archive, restore,
+  or delete includes child Tabs and every independently opened descendant.
+  Child Tabs share the root's machine lifecycle command; independently opened
+  Sessions enqueue their own. The archive list keeps the opened-by indentation
+  while child Tabs remain inside their owning Session's archived-tab UI.
 - Desktop update prompt: `sidebar-update-banner.tsx` plus `update-changelog-dialog.tsx`,
   driven by the pure selectors in `lib/electron-update-banner.ts`. The changelog opens
   in-app; release notes come from a remote feed and render as sanitized Markdown with

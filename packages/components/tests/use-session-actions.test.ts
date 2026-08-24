@@ -953,6 +953,69 @@ describe('useSessionActions', () => {
     );
   });
 
+  it('archives child tabs and independently opened session workspaces together', async () => {
+    const rootSession = {
+      id: 'archive-root' as SessionId,
+      machineId: 'machine-root' as MachineId,
+      createdAt: '2026-08-24T00:00:00.000Z',
+    } as SessionMeta;
+    const tabSession = {
+      id: 'archive-tab' as SessionId,
+      machineId: rootSession.machineId,
+      parentSessionId: rootSession.id,
+      openedBySessionId: rootSession.id,
+      createdAt: '2026-08-24T00:01:00.000Z',
+    } as SessionMeta;
+    const openedSession = {
+      id: 'archive-opened' as SessionId,
+      machineId: 'machine-opened' as MachineId,
+      openedBySessionId: rootSession.id,
+      createdAt: '2026-08-24T00:02:00.000Z',
+    } as SessionMeta;
+    const openedFromTabSession = {
+      id: 'archive-opened-from-tab' as SessionId,
+      machineId: 'machine-opened-from-tab' as MachineId,
+      openedBySessionId: tabSession.id,
+      openedByRootSessionId: rootSession.id,
+      createdAt: '2026-08-24T00:03:00.000Z',
+    } as SessionMeta;
+    const sessionMetaCache = Object.fromEntries(
+      [rootSession, tabSession, openedSession, openedFromTabSession].map((session) => [
+        getSessionRoomId(session.id),
+        session,
+      ])
+    );
+    const upsertDocMeta = vi.fn(async () => undefined);
+    const getDocMeta = vi.fn(async (roomId: string) => {
+      const session = sessionMetaCache[roomId];
+      return { meta: session ?? {} };
+    });
+    const runtime = createRuntime({
+      repo: { getDocMeta, upsertDocMeta } as unknown as WorkspaceRuntime['repo'],
+    });
+    const actions = await renderActions(runtime, { sessionMetaCache });
+
+    await actions.archiveSession(rootSession.id);
+
+    for (const session of [rootSession, tabSession, openedSession, openedFromTabSession]) {
+      expect(upsertDocMeta).toHaveBeenCalledWith(
+        getSessionRoomId(session.id),
+        expect.objectContaining({ isArchived: true, status: { type: 'idle' } })
+      );
+    }
+    expect(runtime.writer.flockRowPut).toHaveBeenCalledTimes(3);
+    expect(runtime.writer.flockRowPut).toHaveBeenCalledWith(
+      expect.any(String),
+      machineFlockKeys.archiveSessionCommand(rootSession.id),
+      expect.any(Object)
+    );
+    expect(runtime.writer.flockRowPut).not.toHaveBeenCalledWith(
+      expect.any(String),
+      machineFlockKeys.archiveSessionCommand(tabSession.id),
+      expect.any(Object)
+    );
+  });
+
   it('writes legacy delete queue before deleting archived code sessions', async () => {
     const sessionId = 'session-delete-legacy-queue' as SessionId;
     const machineId = 'machine-1';
