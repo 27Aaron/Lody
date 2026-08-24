@@ -96,6 +96,64 @@ describe('ManagedAgentRuntimeManager', () => {
     };
     return { archiveBytes, definition, originalArchive };
   }
+
+  async function installCachedCodex(options: {
+    version: string;
+    installedAt: string;
+  }): Promise<string> {
+    const dir = join(rootDir, 'codex', options.version, 'linux-x64');
+    const command = join(dir, 'bin', 'codex');
+    await mkdir(join(dir, 'bin'), { recursive: true });
+    await writeFile(command, `codex-${options.version}`);
+    await writeFile(
+      join(dir, 'metadata.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        runtimeName: 'codex',
+        runtimeVersion: options.version,
+        platformArch: 'linux-x64',
+        command: 'bin/codex',
+        archiveSha256: '0'.repeat(64),
+        archiveSize: 1,
+        installedAt: options.installedAt,
+      })
+    );
+    await writeFile(join(dir, '.lody-complete'), '');
+    return command;
+  }
+
+  it('launches the newest reusable installed runtime without downloading the target', async () => {
+    const olderCommand = await installCachedCodex({
+      version: '0.1.0',
+      installedAt: '2026-01-01T00:00:00.000Z',
+    });
+    const newestCommand = await installCachedCodex({
+      version: '0.2.0',
+      installedAt: '2026-02-01T00:00:00.000Z',
+    });
+    const fetchImpl = vi.fn<FetchImpl>();
+    const manager = new ManagedAgentRuntimeManager({
+      rootDir,
+      platform: 'linux',
+      arch: 'x64',
+      runtimeBaseUrl: 'https://runtime.example.test',
+      fetchImpl,
+    });
+
+    await expect(manager.resolveRuntimeForLaunch('codex')).resolves.toMatchObject({
+      command: newestCommand,
+      version: '0.2.0',
+      targetVersion: CODEX_RUNTIME_VERSION,
+      updateAvailable: true,
+    });
+    await expect(manager.listAvailableUpdates()).resolves.toContain('codex');
+    expect(fetchImpl).not.toHaveBeenCalled();
+
+    await manager.pruneSupersededVersions('codex');
+    expect(existsSync(newestCommand)).toBe(true);
+    expect(existsSync(olderCommand)).toBe(false);
+  });
+
   it('matches the exact locked Codex dependency version', () => {
     expect(CODEX_RUNTIME_VERSION).toBe(
       codexPackageLock.packages['node_modules/@openai/codex']?.version
@@ -171,7 +229,7 @@ describe('ManagedAgentRuntimeManager', () => {
       current: '22.18.0',
       required: KIMI_CODE_MIN_NODE_VERSION,
     });
-    await expect(manager.ensureRuntime('kimi-code')).rejects.toBeInstanceOf(
+    await expect(manager.ensureCurrentRuntime('kimi-code')).rejects.toBeInstanceOf(
       ManagedRuntimeIncompatibleHostError
     );
   });
@@ -212,13 +270,13 @@ describe('ManagedAgentRuntimeManager', () => {
         fetchImpl,
       });
 
-      const command = await downloadingManager.ensureRuntime('kimi-code');
+      const installation = await downloadingManager.ensureCurrentRuntime('kimi-code');
 
       expect(fetchImpl).toHaveBeenCalledTimes(1);
-      expect(command).toBe(
+      expect(installation.command).toBe(
         join(managedRoot, 'kimi-code', KIMI_CODE_VERSION, 'node', 'package', 'dist', 'main.mjs')
       );
-      expect(await readFile(command, 'utf8')).toBe('console.log("tiny-kimi")');
+      expect(await readFile(installation.command, 'utf8')).toBe('console.log("tiny-kimi")');
       expect(existsSync(join(rootDir, 'bin', 'kimi'))).toBe(false);
     } finally {
       definition.platforms.node = originalArchive;
@@ -288,18 +346,18 @@ describe('ManagedAgentRuntimeManager', () => {
       });
 
       const progressEvents: ManagedRuntimeProgressEvent[] = [];
-      const command = await resumedManager.ensureRuntime('codex', {
+      const installation = await resumedManager.ensureCurrentRuntime('codex', {
         onProgress: (event) => {
           progressEvents.push(event);
         },
       });
 
       expect(fetchImpl).toHaveBeenCalledTimes(1);
-      expect(command).toBe(
+      expect(installation.command).toBe(
         join(rootDir, 'codex', CODEX_RUNTIME_VERSION, 'linux-x64', 'bin', 'codex')
       );
-      expect(existsSync(command)).toBe(true);
-      expect(await readFile(command, 'utf8')).toBe('tiny-codex');
+      expect(existsSync(installation.command)).toBe(true);
+      expect(await readFile(installation.command, 'utf8')).toBe('tiny-codex');
       expect(existsSync(partialPath)).toBe(false);
       expect(progressEvents).toEqual(
         expect.arrayContaining([
@@ -354,10 +412,10 @@ describe('ManagedAgentRuntimeManager', () => {
       });
       const firstController = new AbortController();
       const secondController = new AbortController();
-      const first = downloadingManager.ensureRuntime('codex', {
+      const first = downloadingManager.ensureCurrentRuntime('codex', {
         signal: firstController.signal,
       });
-      const second = downloadingManager.ensureRuntime('codex', {
+      const second = downloadingManager.ensureCurrentRuntime('codex', {
         signal: secondController.signal,
       });
       await fetchStarted;
@@ -374,8 +432,8 @@ describe('ManagedAgentRuntimeManager', () => {
         body: new Response(archiveBytes).body,
       });
 
-      const command = await second;
-      expect(command).toBe(
+      const installation = await second;
+      expect(installation.command).toBe(
         join(rootDir, 'codex', CODEX_RUNTIME_VERSION, 'linux-x64', 'bin', 'codex')
       );
       expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -431,7 +489,7 @@ describe('ManagedAgentRuntimeManager', () => {
         fetchImpl,
       });
       const controller = new AbortController();
-      const cancelledInstall = downloadingManager.ensureRuntime('codex', {
+      const cancelledInstall = downloadingManager.ensureCurrentRuntime('codex', {
         signal: controller.signal,
       });
       await fetchStarted;
@@ -440,12 +498,12 @@ describe('ManagedAgentRuntimeManager', () => {
       controller.abort();
       await cancellation;
 
-      const retry = downloadingManager.ensureRuntime('codex');
+      const retry = downloadingManager.ensureCurrentRuntime('codex');
       expect(fetchImpl).toHaveBeenCalledTimes(1);
       releaseCancelledFetch();
 
-      const command = await retry;
-      expect(command).toBe(
+      const installation = await retry;
+      expect(installation.command).toBe(
         join(rootDir, 'codex', CODEX_RUNTIME_VERSION, 'linux-x64', 'bin', 'codex')
       );
       expect(fetchImpl).toHaveBeenCalledTimes(2);
@@ -477,7 +535,7 @@ describe('ManagedAgentRuntimeManager', () => {
       });
       const controller = new AbortController();
 
-      const cancelledInstall = downloadingManager.ensureRuntime('codex', {
+      const cancelledInstall = downloadingManager.ensureCurrentRuntime('codex', {
         signal: controller.signal,
         onProgress: (event) => {
           if (event.phase === 'verifying') controller.abort();
@@ -485,8 +543,8 @@ describe('ManagedAgentRuntimeManager', () => {
       });
       await expect(cancelledInstall).rejects.toMatchObject({ name: 'AbortError' });
 
-      const command = await downloadingManager.ensureRuntime('codex');
-      expect(command).toBe(
+      const installation = await downloadingManager.ensureCurrentRuntime('codex');
+      expect(installation.command).toBe(
         join(rootDir, 'codex', CODEX_RUNTIME_VERSION, 'linux-x64', 'bin', 'codex')
       );
       expect(fetchImpl).not.toHaveBeenCalled();
@@ -542,7 +600,7 @@ describe('ManagedAgentRuntimeManager', () => {
 
       let caught: unknown;
       try {
-        await streamingManager.ensureRuntime('codex');
+        await streamingManager.ensureCurrentRuntime('codex');
       } catch (error) {
         caught = error;
       }

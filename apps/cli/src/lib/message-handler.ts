@@ -8247,6 +8247,7 @@ export class MessageHandler {
     availableCommands?: NonNullable<MachineAcpCapabilitiesRefreshResponse['availableCommands']>;
     sessionFork: boolean;
     modelReasoningEfforts?: Record<string, string[]>;
+    capabilitySourceVersion?: string;
   }> {
     return fetchAcpCapabilities(
       cliType,

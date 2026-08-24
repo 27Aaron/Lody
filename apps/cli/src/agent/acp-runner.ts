@@ -570,6 +570,7 @@ export const startLocalAcpAgent = async (options: StartLocalAcpAgentOptions) => 
         client: started.client as AgentClient,
         acpSessionId: started.acpSessionId as ACPSessionId,
         sessionResponse: started.sessionResponse,
+        capabilitySourceVersion: launch.capabilitySourceVersion,
       };
     } catch (error) {
       // The process died/failed to spawn before startup completed (the startup

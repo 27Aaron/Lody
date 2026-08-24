@@ -186,8 +186,12 @@ arrive: context/message-flow.md "Upstream".
   runtime overrides still need the actual ACP agent.
   `machine/acp-capabilities-refresh` is always a real
   runtime probe: it disables static builtin capabilities, goes through
-  `ensureRuntime()` for managed runtimes, then writes the machine capability
-  cache keyed by `agentConfigId`. Its cancellation signal crosses native auth status,
+  `resolveRuntimeForLaunch()` for managed runtimes, then writes the machine capability
+  cache keyed by `agentConfigId` and the runtime version actually launched. The
+  resolver selects the pinned target, then the most recently installed reusable runtime,
+  and blocks on `ensureCurrentRuntime()` only when no runtime is installed.
+  `ManagedRuntimeUpdateCoordinator` serially downloads stale targets in the background
+  and never hot-swaps a running ACP process. Its cancellation signal crosses native auth status,
   managed/registry download, and adapter startup; an aborted probe must not update the cache.
   Requests and responses carry that id so configs
   sharing a provider remain isolated. Real session creation also normalizes its `NewSessionResponse` through

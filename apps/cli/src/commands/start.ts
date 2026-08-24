@@ -68,6 +68,7 @@ import { consumeElectronBootstrapCredentials } from '../electron-bootstrap-env';
 import { createLocalCloudPort, type CloudPort, type PlatformKind } from '@lody/platform';
 import { createCloudCliPort } from '@/lib/cloud-cli-port';
 import { configureManagedAgentRuntimeManager } from '@/agent/managed-agent-runtime';
+import { configureManagedRuntimeUpdateCoordinator } from '@/agent/managed-runtime-update-coordinator';
 
 type StartAuthMethod =
   | 'api_key'
@@ -564,12 +565,18 @@ async function startAgentService(
     });
   }
 
-  configureManagedAgentRuntimeManager({
+  const managedRuntimeManager = configureManagedAgentRuntimeManager({
     runtimeBaseUrl: cloudPort.runtimeArtifacts.baseUrl,
   });
 
   let fleet: LodyFleet;
+  const managedRuntimeUpdates = configureManagedRuntimeUpdateCoordinator({
+    manager: managedRuntimeManager,
+    logger,
+  });
   try {
+    await managedRuntimeManager.prepareCache();
+    await managedRuntimeUpdates.start();
     fleet = new LodyFleet({
       logger,
       builtinAgentConfigCliTypes,
@@ -585,6 +592,7 @@ async function startAgentService(
       onProcessLifecycleAction: (action) => triggerProcessLifecycleAction?.(action),
     });
   } catch (error) {
+    await managedRuntimeUpdates.shutdown();
     await cloudPort.dispose();
     throw error;
   }
@@ -596,6 +604,7 @@ async function startAgentService(
   };
   registerProcessCleanup(async () => {
     eventLoopLagMonitor.stop();
+    await managedRuntimeUpdates.shutdown();
     await fleet.shutdown();
     await closeForegroundHostLease();
   });
@@ -613,6 +622,7 @@ async function startAgentService(
       unregisterProcessCleanup();
       stopActivePing();
       eventLoopLagMonitor.stop();
+      await managedRuntimeUpdates.shutdown();
       await fleet.shutdown();
       await closeForegroundHostLease();
     },
@@ -726,6 +736,7 @@ async function startAgentService(
     unregisterProcessCleanup();
     stopActivePing();
     eventLoopLagMonitor.stop();
+    await managedRuntimeUpdates.shutdown();
     await fleet.shutdown().catch((err: unknown) => {
       logger.error('Cleanup failed:', err);
     });

@@ -74,6 +74,9 @@ describe('resolveBuiltinACPSetting', () => {
     expect(getAcpCapabilitySourceVersion({ cliType: 'builtin', agentType: 'deepseek' })).toBe(
       DEEPSEEK_HARNESS_CAPABILITY_SOURCE_VERSION
     );
+    expect(getAcpCapabilitySourceVersion({ cliType: 'builtin', agentType: 'kimi' }, '0.36.0')).toBe(
+      'builtin-kimi:0.36.0'
+    );
   });
 
   it('launches DeepSeek Harness through the pinned ACP npm composition', async () => {
@@ -150,6 +153,7 @@ describe('resolveBuiltinACPSetting', () => {
       env: {
         KIMI_CODE_NO_AUTO_UPDATE: '1',
       },
+      capabilitySourceVersion: `${BUILTIN_KIMI_CAPABILITY_SOURCE_VERSION}+override:{"kimiPath":"/opt/kimi"}`,
     });
   });
 
@@ -228,6 +232,7 @@ describe('resolveBuiltinACPSetting', () => {
       command: process.execPath,
       args: [expect.stringMatching(/grok-acp\.js$/u)],
       env: { GROK_PATH: '/opt/grok', GROK_DISABLE_AUTOUPDATER: '1' },
+      capabilitySourceVersion: `${BUILTIN_GROK_CAPABILITY_SOURCE_VERSION}+override:{"grokPath":"/opt/grok"}`,
     });
     await expect(
       resolveBuiltinAuthenticationProcessLaunch({
@@ -252,10 +257,17 @@ describe('resolveBuiltinACPSetting', () => {
   });
 
   it('launches the managed Kimi module with the current Node executable', async () => {
-    const ensureRuntime = vi.fn().mockResolvedValue('/managed/kimi/package/dist/main.mjs');
+    const resolveRuntimeForLaunch = vi.fn().mockResolvedValue({
+      runtimeName: 'kimi-code',
+      version: '0.36.0',
+      targetVersion: '0.37.0',
+      platformArch: 'node',
+      command: '/managed/kimi/package/dist/main.mjs',
+      updateAvailable: false,
+    });
     const managerSpy = vi
       .spyOn(managedRuntime, 'getManagedAgentRuntimeManager')
-      .mockReturnValue({ ensureRuntime } as ReturnType<
+      .mockReturnValue({ resolveRuntimeForLaunch } as ReturnType<
         typeof managedRuntime.getManagedAgentRuntimeManager
       >);
     try {
@@ -267,8 +279,12 @@ describe('resolveBuiltinACPSetting', () => {
         env: {
           KIMI_CODE_NO_AUTO_UPDATE: '1',
         },
+        capabilitySourceVersion: 'builtin-kimi:0.36.0',
       });
-      expect(ensureRuntime).toHaveBeenCalledWith('kimi-code', { onProgress: undefined });
+      expect(resolveRuntimeForLaunch).toHaveBeenCalledWith('kimi-code', {
+        onProgress: undefined,
+        signal: undefined,
+      });
     } finally {
       managerSpy.mockRestore();
     }

@@ -304,6 +304,7 @@ export interface ISession {
   terminalManager: TerminalManager;
   createAgent(config: CreateAgentConfig): Promise<string>;
   getAcpCapabilities?(): AcpCapabilitiesResult | null;
+  getAcpCapabilitySourceVersion?(): string | null;
   getWorkdir(): string;
   /**
    * Host-side working directory for file operations.
@@ -358,6 +359,7 @@ export interface CreateAgentConfig {
   command: string;
   args?: string[];
   env?: Record<string, string>;
+  capabilitySourceVersion?: string;
   /**
    * Optional ACP session id to attempt to resume. This is a per-agent-start hint and is intentionally
    * not stored on the session instance because sessions can be reused, and persisting
@@ -1231,6 +1233,7 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
       command: launch.command,
       args: launch.args,
       env: launch.env,
+      capabilitySourceVersion: launch.capabilitySourceVersion,
       resumeSessionId: options?.resumeSessionId,
       forkSessionId: options?.forkSessionId,
       forkSessionTurnId: options?.forkSessionTurnId,

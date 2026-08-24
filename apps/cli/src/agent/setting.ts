@@ -25,12 +25,16 @@ import {
   BUILTIN_GROK_CAPABILITY_SOURCE_VERSION,
   BUILTIN_KIMI_CAPABILITY_SOURCE_VERSION,
   CLAUDE_ACP_ADAPTER_VERSION,
+  CLAUDE_AGENT_SDK_VERSION,
   CODEX_ACP_ADAPTER_VERSION,
   getManagedAgentRuntimeManager,
   GROK_ACP_ADAPTER_VERSION,
   KIMI_CODE_VERSION,
+  type ManagedRuntimeLaunch,
+  type ManagedRuntimeName,
   type ManagedRuntimeProgressCallback,
 } from '@/agent/managed-agent-runtime';
+import { getManagedRuntimeUpdateCoordinator } from '@/agent/managed-runtime-update-coordinator';
 import {
   DEEPSEEK_HARNESS_CAPABILITY_SOURCE_VERSION,
   resolveDeepSeekHarnessProcessLaunch,
@@ -93,6 +97,7 @@ export type ResolveACPProcessLaunchInput = ResolveACPSettingInput & {
 export type ResolvedACPProcessLaunch = {
   command: string;
   args: string[];
+  capabilitySourceVersion?: string;
   /**
    * Environment overlay required by this ACP launch. Callers that spawn a
    * process directly should merge this over their base environment.
@@ -176,7 +181,10 @@ export function resolveBuiltinACPSetting(agentType: string): ResolvedACPSetting 
   );
 }
 
-export function getAcpCapabilitySourceVersion(input: ResolveACPSettingInput): string {
+export function getAcpCapabilitySourceVersion(
+  input: ResolveACPSettingInput,
+  managedRuntimeVersion?: string
+): string {
   if (input.cliType === 'custom') {
     // Derive from the launch spec itself so editing the command invalidates
     // cached capabilities; there is no package version to key on.
@@ -190,16 +198,24 @@ export function getAcpCapabilitySourceVersion(input: ResolveACPSettingInput): st
         input.runtimeOverrides
       );
       if (input.agentType === 'codex') {
-        return `${BUILTIN_CODEX_CAPABILITY_SOURCE_VERSION}${runtimeOverrideSuffix}`;
+        return managedRuntimeVersion
+          ? `builtin-codex-acp:${CODEX_ACP_ADAPTER_VERSION}+codex:${managedRuntimeVersion}`
+          : `${BUILTIN_CODEX_CAPABILITY_SOURCE_VERSION}${runtimeOverrideSuffix}`;
       }
       if (input.agentType === 'claude') {
-        return `${BUILTIN_CLAUDE_CAPABILITY_SOURCE_VERSION}${runtimeOverrideSuffix}`;
+        return managedRuntimeVersion
+          ? `builtin-claude-acp:${CLAUDE_ACP_ADAPTER_VERSION}+agent-sdk:${CLAUDE_AGENT_SDK_VERSION}+claude-code:${managedRuntimeVersion}`
+          : `${BUILTIN_CLAUDE_CAPABILITY_SOURCE_VERSION}${runtimeOverrideSuffix}`;
       }
       if (input.agentType === 'kimi') {
-        return `${BUILTIN_KIMI_CAPABILITY_SOURCE_VERSION}${runtimeOverrideSuffix}`;
+        return managedRuntimeVersion
+          ? `builtin-kimi:${managedRuntimeVersion}`
+          : `${BUILTIN_KIMI_CAPABILITY_SOURCE_VERSION}${runtimeOverrideSuffix}`;
       }
       if (input.agentType === 'grok') {
-        return `${BUILTIN_GROK_CAPABILITY_SOURCE_VERSION}${runtimeOverrideSuffix}`;
+        return managedRuntimeVersion
+          ? `builtin-grok-acp:${GROK_ACP_ADAPTER_VERSION}+official-grok:${managedRuntimeVersion}`
+          : `${BUILTIN_GROK_CAPABILITY_SOURCE_VERSION}${runtimeOverrideSuffix}`;
       }
       if (input.agentType === 'deepseek') {
         return DEEPSEEK_HARNESS_CAPABILITY_SOURCE_VERSION;
@@ -325,6 +341,20 @@ function trimRuntimeOverride(value: string | undefined): string | undefined {
   return trimmed ? resolve(expandHomePath(trimmed)) : undefined;
 }
 
+async function resolveManagedRuntimeForLaunch(
+  name: ManagedRuntimeName,
+  input: Pick<ResolveACPProcessLaunchInput, 'onManagedRuntimeProgress' | 'signal'>
+): Promise<ManagedRuntimeLaunch> {
+  const launch = await getManagedAgentRuntimeManager().resolveRuntimeForLaunch(name, {
+    onProgress: input.onManagedRuntimeProgress,
+    signal: input.signal,
+  });
+  if (launch.updateAvailable) {
+    getManagedRuntimeUpdateCoordinator().enqueue(name);
+  }
+  return launch;
+}
+
 function resolveCliAdapterEntry(
   adapter: 'claude-acp' | 'codex-acp' | 'deepseek-acp' | 'grok-acp'
 ): [string] {
@@ -352,40 +382,39 @@ async function resolveBuiltinACPProcessLaunch(
   }
   if (input.agentType === 'deepseek') {
     const [adapterPath] = resolveCliAdapterEntry('deepseek-acp');
-    return await resolveDeepSeekHarnessProcessLaunch({
+    const launch = await resolveDeepSeekHarnessProcessLaunch({
       adapterPath,
       extraArgs: input.extraArgs,
     });
+    return {
+      ...launch,
+      capabilitySourceVersion: getAcpCapabilitySourceVersion(input),
+    };
   }
   if (!isManagedBuiltinAgentType(input.agentType)) {
     throw new Error(`Unsupported managed builtin ACP type: ${input.agentType}`);
   }
   if (input.agentType === 'kimi') {
     const overridePath = trimRuntimeOverride(input.runtimeOverrides?.kimiPath);
-    const kimiPath =
-      overridePath ??
-      (await getManagedAgentRuntimeManager().ensureRuntime('kimi-code', {
-        onProgress: input.onManagedRuntimeProgress,
-        signal: input.signal,
-      }));
+    const runtime = overridePath
+      ? { command: overridePath, version: undefined }
+      : await resolveManagedRuntimeForLaunch('kimi-code', input);
     return {
-      command: overridePath ? kimiPath : process.execPath,
+      command: overridePath ? runtime.command : process.execPath,
       args: overridePath
         ? ['acp', ...(input.extraArgs ?? [])]
-        : [kimiPath, 'acp', ...(input.extraArgs ?? [])],
+        : [runtime.command, 'acp', ...(input.extraArgs ?? [])],
       env: {
         KIMI_CODE_NO_AUTO_UPDATE: '1',
       },
+      capabilitySourceVersion: getAcpCapabilitySourceVersion(input, runtime.version),
     };
   }
   if (input.agentType === 'codex') {
     const overridePath = trimRuntimeOverride(input.runtimeOverrides?.codexPath);
-    const codexPath =
-      overridePath ??
-      (await getManagedAgentRuntimeManager().ensureRuntime('codex', {
-        onProgress: input.onManagedRuntimeProgress,
-        signal: input.signal,
-      }));
+    const runtime = overridePath
+      ? { command: overridePath, version: undefined }
+      : await resolveManagedRuntimeForLaunch('codex', input);
     return {
       command: process.execPath,
       args: [
@@ -393,31 +422,27 @@ async function resolveBuiltinACPProcessLaunch(
         ...(BuiltinACPSetting.codex.args ?? []),
         ...(input.extraArgs ?? []),
       ],
-      env: { CODEX_PATH: codexPath },
+      env: { CODEX_PATH: runtime.command },
+      capabilitySourceVersion: getAcpCapabilitySourceVersion(input, runtime.version),
     };
   }
   if (input.agentType === 'grok') {
     const overridePath = trimRuntimeOverride(input.runtimeOverrides?.grokPath);
-    const grokPath =
-      overridePath ??
-      (await getManagedAgentRuntimeManager().ensureRuntime('grok-build', {
-        onProgress: input.onManagedRuntimeProgress,
-        signal: input.signal,
-      }));
+    const runtime = overridePath
+      ? { command: overridePath, version: undefined }
+      : await resolveManagedRuntimeForLaunch('grok-build', input);
     return {
       command: process.execPath,
       args: [...resolveCliAdapterEntry('grok-acp'), ...(input.extraArgs ?? [])],
-      env: { GROK_PATH: grokPath, GROK_DISABLE_AUTOUPDATER: '1' },
+      env: { GROK_PATH: runtime.command, GROK_DISABLE_AUTOUPDATER: '1' },
+      capabilitySourceVersion: getAcpCapabilitySourceVersion(input, runtime.version),
     };
   }
 
   const overridePath = trimRuntimeOverride(input.runtimeOverrides?.claudeCodeExecutable);
-  const claudePath =
-    overridePath ??
-    (await getManagedAgentRuntimeManager().ensureRuntime('claude-code', {
-      onProgress: input.onManagedRuntimeProgress,
-      signal: input.signal,
-    }));
+  const runtime = overridePath
+    ? { command: overridePath, version: undefined }
+    : await resolveManagedRuntimeForLaunch('claude-code', input);
   return {
     command: process.execPath,
     args: [
@@ -425,7 +450,8 @@ async function resolveBuiltinACPProcessLaunch(
       ...(BuiltinACPSetting.claude.args ?? []),
       ...(input.extraArgs ?? []),
     ],
-    env: { CLAUDE_CODE_EXECUTABLE: claudePath },
+    env: { CLAUDE_CODE_EXECUTABLE: runtime.command },
+    capabilitySourceVersion: getAcpCapabilitySourceVersion(input, runtime.version),
   };
 }
 
@@ -445,20 +471,18 @@ export async function resolveBuiltinAuthenticationProcessLaunch(
 
   if (input.agentType === 'kimi') {
     if (input.action === 'status') return null;
-    return await resolveBuiltinACPProcessLaunch({
-      ...input,
-      extraArgs: ['--login'],
-    });
+    const { capabilitySourceVersion: _capabilitySourceVersion, ...launch } =
+      await resolveBuiltinACPProcessLaunch({
+        ...input,
+        extraArgs: ['--login'],
+      });
+    return launch;
   }
 
   if (input.agentType === 'codex') {
     const overridePath = trimRuntimeOverride(input.runtimeOverrides?.codexPath);
     const codexPath =
-      overridePath ??
-      (await getManagedAgentRuntimeManager().ensureRuntime('codex', {
-        onProgress: input.onManagedRuntimeProgress,
-        signal: input.signal,
-      }));
+      overridePath ?? (await resolveManagedRuntimeForLaunch('codex', input)).command;
     return {
       command: codexPath,
       args: input.action === 'login' ? ['login', '--device-auth'] : ['login', 'status'],
@@ -468,11 +492,7 @@ export async function resolveBuiltinAuthenticationProcessLaunch(
     if (input.action === 'status') return null;
     const overridePath = trimRuntimeOverride(input.runtimeOverrides?.grokPath);
     const grokPath =
-      overridePath ??
-      (await getManagedAgentRuntimeManager().ensureRuntime('grok-build', {
-        onProgress: input.onManagedRuntimeProgress,
-        signal: input.signal,
-      }));
+      overridePath ?? (await resolveManagedRuntimeForLaunch('grok-build', input)).command;
     return {
       command: grokPath,
       args: ['login', '--device-auth'],
@@ -482,11 +502,7 @@ export async function resolveBuiltinAuthenticationProcessLaunch(
 
   const overridePath = trimRuntimeOverride(input.runtimeOverrides?.claudeCodeExecutable);
   const claudePath =
-    overridePath ??
-    (await getManagedAgentRuntimeManager().ensureRuntime('claude-code', {
-      onProgress: input.onManagedRuntimeProgress,
-      signal: input.signal,
-    }));
+    overridePath ?? (await resolveManagedRuntimeForLaunch('claude-code', input)).command;
   return {
     command: claudePath,
     args: input.action === 'login' ? ['auth', 'login', '--claudeai'] : ['auth', 'status', '--json'],
@@ -501,6 +517,7 @@ export function resolveACPProcessLaunch(
     command: setting.exec.command,
     args: [...setting.exec.args, ...(input.extraArgs ?? [])],
     env: setting.exec.env,
+    capabilitySourceVersion: getAcpCapabilitySourceVersion(input),
   };
 }
 
@@ -527,6 +544,7 @@ export async function resolveACPProcessLaunchAsync(
         command: launch.command,
         args: [...launch.args, ...(input.extraArgs ?? [])],
         env: launch.env,
+        capabilitySourceVersion: getAcpCapabilitySourceVersion(input),
       };
     }
   }

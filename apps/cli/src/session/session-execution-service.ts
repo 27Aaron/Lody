@@ -494,6 +494,7 @@ export type SessionExecutionServiceDeps = {
     availableCommands?: AcpCommandSummary[];
     sessionFork: boolean;
     modelReasoningEfforts?: Record<string, string[]>;
+    capabilitySourceVersion?: string;
   }>;
   /** Evict idle sessions if system memory is under pressure */
   evictForMemoryPressure: (excludeSessionId?: SessionId) => Promise<MemoryPressureEvictionResult>;
@@ -4827,12 +4828,14 @@ export class SessionExecutionService {
     }
 
     void (async () => {
-      const sourceVersion = getAcpCapabilitySourceVersion({
-        cliType: config.agentCliType,
-        agentType: config.agentType,
-        customAcp: config.customAcp,
-        runtimeOverrides: config.runtimeOverrides,
-      });
+      const sourceVersion =
+        session.getAcpCapabilitySourceVersion?.() ??
+        getAcpCapabilitySourceVersion({
+          cliType: config.agentCliType,
+          agentType: config.agentType,
+          customAcp: config.customAcp,
+          runtimeOverrides: config.runtimeOverrides,
+        });
       const existing = await this.deps.workspaceDocument.getAcpCapabilities(
         this.deps.machineId,
         agentConfigId
@@ -5070,6 +5073,7 @@ export class SessionExecutionService {
         availableCommands,
         sessionFork,
         modelReasoningEfforts,
+        capabilitySourceVersion,
       } = await this.deps.fetchAcpCapabilities(
         message.cliType,
         message.agentType,
@@ -5098,12 +5102,13 @@ export class SessionExecutionService {
         configOptions,
         availableCommands,
         sessionFork,
-        getAcpCapabilitySourceVersion({
-          cliType: message.cliType,
-          agentType: message.agentType,
-          customAcp: message.customAcp,
-          runtimeOverrides: message.runtimeOverrides,
-        }),
+        capabilitySourceVersion ??
+          getAcpCapabilitySourceVersion({
+            cliType: message.cliType,
+            agentType: message.agentType,
+            customAcp: message.customAcp,
+            runtimeOverrides: message.runtimeOverrides,
+          }),
         modelReasoningEfforts,
         { signal: options.signal }
       );
@@ -5340,7 +5345,7 @@ export class SessionExecutionService {
                 error: `${displayName} requires Node >=${runtimeStatus.required}; current Node is ${runtimeStatus.current}`,
               };
             }
-            const command = await getManagedAgentRuntimeManager().ensureRuntime(
+            const installation = await getManagedAgentRuntimeManager().ensureCurrentRuntime(
               resolved.runtimeName,
               {
                 onProgress: (event) => {
@@ -5348,10 +5353,14 @@ export class SessionExecutionService {
                 },
               }
             );
-            const version = getManagedAgentRuntimeManager().getDefinition(
-              resolved.runtimeName
-            ).version;
-            return { ...base, success: true, command, installPath: command, version };
+            await getManagedAgentRuntimeManager().pruneSupersededVersions(resolved.runtimeName);
+            return {
+              ...base,
+              success: true,
+              command: installation.command,
+              installPath: installation.command,
+              version: installation.version,
+            };
           } catch (error) {
             // Managed-runtime install failures should emit sanitized PostHog
             // diagnostics with the concrete fetch/HTTP/verify reason.

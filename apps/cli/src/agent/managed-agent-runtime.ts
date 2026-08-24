@@ -4,6 +4,7 @@ import {
   lstat,
   mkdir,
   mkdtemp,
+  readFile,
   readdir,
   rename,
   rm,
@@ -18,6 +19,7 @@ import { finished as waitForStreamFinished, pipeline } from 'node:stream/promise
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 
 import * as tar from 'tar';
+import { z } from 'zod';
 import { decompressStream } from 'zstd-stream';
 import claudePackageJson from '../../../../packages/acp-extension-claude/package.json';
 import codexPackageJson from '../../../../packages/acp-extension-codex/package.json';
@@ -76,7 +78,26 @@ export type ManagedRuntimeStatus =
       required: string;
     }
   | { kind: 'not-installed'; platformArch: string; version: string }
-  | { kind: 'installed'; platformArch: string; version: string; command: string };
+  | {
+      kind: 'installed';
+      platformArch: string;
+      version: string;
+      targetVersion: string;
+      command: string;
+      updateAvailable: boolean;
+    };
+
+export type ManagedRuntimeInstallation = {
+  runtimeName: ManagedRuntimeName;
+  version: string;
+  platformArch: string;
+  command: string;
+};
+
+export type ManagedRuntimeLaunch = ManagedRuntimeInstallation & {
+  targetVersion: string;
+  updateAvailable: boolean;
+};
 
 export type ManagedRuntimeProgressPhase =
   | 'downloading'
@@ -105,9 +126,25 @@ export type EnsureManagedRuntimeOptions = {
 type ManagedRuntimeInstallEntry = {
   consumers: Set<object>;
   controller: AbortController;
-  promise: Promise<string>;
+  promise: Promise<ManagedRuntimeInstallation>;
   settled: boolean;
 };
+
+const ManagedRuntimeInstallMetadataSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    runtimeName: z.enum(['codex', 'claude-code', 'kimi-code', 'grok-build']),
+    runtimeVersion: z.string().min(1),
+    platformArch: z.string().min(1),
+    command: z.string().min(1),
+    minNodeVersion: z.string().min(1).optional(),
+    archiveSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+    archiveSize: z.number().int().positive(),
+    installedAt: z.string().min(1),
+  })
+  .strict();
+
+type ManagedRuntimeInstallMetadata = z.infer<typeof ManagedRuntimeInstallMetadataSchema>;
 
 export type ManagedRuntimeDiagnostics = {
   runtimeName: ManagedRuntimeName;
@@ -418,6 +455,13 @@ const RUNTIMES: Record<ManagedRuntimeName, RuntimeDefinition> = {
   },
 };
 
+export const MANAGED_RUNTIME_NAMES = Object.freeze([
+  'codex',
+  'claude-code',
+  'kimi-code',
+  'grok-build',
+] as const satisfies readonly ManagedRuntimeName[]);
+
 function sanitizeSegment(segment: string): string {
   return segment.replace(/[^a-zA-Z0-9._-]/g, '_');
 }
@@ -515,6 +559,10 @@ export class ManagedAgentRuntimeManager {
     return RUNTIMES[name];
   }
 
+  getTargetVersion(name: ManagedRuntimeName): string {
+    return RUNTIMES[name].version;
+  }
+
   getDiagnostics(name: ManagedRuntimeName): ManagedRuntimeDiagnostics {
     const resolvedArchive = this.resolveArchive(name);
     const definition = RUNTIMES[name];
@@ -591,12 +639,153 @@ export class ManagedAgentRuntimeManager {
     )}/${encodeURIComponent(platformArch)}/${encodeURIComponent(fileName)}`;
   }
 
+  private async readInstallation(
+    name: ManagedRuntimeName,
+    version: string,
+    platformArch: string
+  ): Promise<(ManagedRuntimeInstallation & { metadata: ManagedRuntimeInstallMetadata }) | null> {
+    const dir = this.targetDir(name, version, platformArch);
+    if (!existsSync(join(dir, COMPLETE_MARKER))) {
+      return null;
+    }
+
+    let metadata: ManagedRuntimeInstallMetadata;
+    try {
+      metadata = ManagedRuntimeInstallMetadataSchema.parse(
+        JSON.parse(await readFile(join(dir, 'metadata.json'), 'utf8'))
+      );
+    } catch (error) {
+      throw new ManagedRuntimeError(
+        `Managed runtime cache metadata is invalid for ${name}/${version}/${platformArch}`,
+        { cause: error }
+      );
+    }
+    if (
+      metadata.runtimeName !== name ||
+      metadata.runtimeVersion !== version ||
+      metadata.platformArch !== platformArch
+    ) {
+      throw new ManagedRuntimeError(
+        `Managed runtime cache metadata does not match its directory for ${name}/${version}/${platformArch}`
+      );
+    }
+    const command = resolve(dir, metadata.command);
+    const relativeCommand = relative(dir, command);
+    if (
+      relativeCommand === '' ||
+      relativeCommand === '..' ||
+      relativeCommand.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) ||
+      !existsSync(command)
+    ) {
+      throw new ManagedRuntimeError(
+        `Managed runtime command is invalid for ${name}/${version}/${platformArch}: ${metadata.command}`
+      );
+    }
+    return {
+      runtimeName: name,
+      version,
+      platformArch,
+      command,
+      metadata,
+    };
+  }
+
+  private isHostCompatible(installation: { metadata: ManagedRuntimeInstallMetadata }): boolean {
+    const required = installation.metadata.minNodeVersion;
+    return !required || isNodeVersionAtLeast(this.nodeVersion, required);
+  }
+
+  private isTargetHostCompatible(definition: RuntimeDefinition): boolean {
+    return (
+      !definition.minNodeVersion ||
+      isNodeVersionAtLeast(this.nodeVersion, definition.minNodeVersion)
+    );
+  }
+
+  private async readCurrentInstallation(
+    name: ManagedRuntimeName,
+    definition: RuntimeDefinition,
+    platformArch: string,
+    archive: RuntimeArchive
+  ): Promise<(ManagedRuntimeInstallation & { metadata: ManagedRuntimeInstallMetadata }) | null> {
+    const installation = await this.readInstallation(name, definition.version, platformArch);
+    if (!installation) return null;
+    if (
+      installation.metadata.command !== archive.cmd ||
+      installation.metadata.archiveSha256 !== archive.sha256 ||
+      installation.metadata.archiveSize !== archive.size ||
+      installation.metadata.minNodeVersion !== definition.minNodeVersion
+    ) {
+      throw new ManagedRuntimeError(
+        `Managed runtime cache metadata does not match the current definition for ${name}/${definition.version}/${platformArch}`
+      );
+    }
+    return installation;
+  }
+
+  private async findReusableInstallation(
+    name: ManagedRuntimeName,
+    definition: RuntimeDefinition,
+    platformArch: string
+  ): Promise<(ManagedRuntimeInstallation & { metadata: ManagedRuntimeInstallMetadata }) | null> {
+    const runtimeRoot = join(this.rootDir, sanitizeSegment(name));
+    const entries = await readdir(runtimeRoot, { withFileTypes: true }).catch(() => []);
+    const installations: Array<
+      ManagedRuntimeInstallation & { metadata: ManagedRuntimeInstallMetadata }
+    > = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name === sanitizeSegment(definition.version)) continue;
+      const installation = await this.readInstallation(name, entry.name, platformArch);
+      if (installation && this.isHostCompatible(installation)) {
+        installations.push(installation);
+      }
+    }
+    installations.sort((left, right) =>
+      right.metadata.installedAt.localeCompare(left.metadata.installedAt)
+    );
+    return installations[0] ?? null;
+  }
+
+  private toLaunch(
+    installation: ManagedRuntimeInstallation,
+    targetVersion: string,
+    targetInstallable = true
+  ): ManagedRuntimeLaunch {
+    return {
+      ...installation,
+      targetVersion,
+      updateAvailable: targetInstallable && installation.version !== targetVersion,
+    };
+  }
+
   async getRuntimeStatus(name: ManagedRuntimeName): Promise<ManagedRuntimeStatus> {
     const resolvedArchive = this.resolveArchive(name);
     if ('unsupported' in resolvedArchive) {
       return { kind: 'unsupported-platform', platformArch: resolvedArchive.platformArch };
     }
     const { definition, platformArch, archive } = resolvedArchive;
+    const current = await this.readCurrentInstallation(name, definition, platformArch, archive);
+    if (current && this.isHostCompatible(current)) {
+      return {
+        kind: 'installed',
+        platformArch,
+        version: current.version,
+        targetVersion: definition.version,
+        command: current.command,
+        updateAvailable: false,
+      };
+    }
+    const fallback = await this.findReusableInstallation(name, definition, platformArch);
+    if (fallback) {
+      return {
+        kind: 'installed',
+        platformArch,
+        version: fallback.version,
+        targetVersion: definition.version,
+        command: fallback.command,
+        updateAvailable: this.isTargetHostCompatible(definition),
+      };
+    }
     if (
       definition.minNodeVersion &&
       !isNodeVersionAtLeast(this.nodeVersion, definition.minNodeVersion)
@@ -608,24 +797,76 @@ export class ManagedAgentRuntimeManager {
         required: definition.minNodeVersion,
       };
     }
-    const dir = this.targetDir(name, definition.version, platformArch);
-    const command = resolve(dir, archive.cmd);
-    if (existsSync(join(dir, COMPLETE_MARKER)) && existsSync(command)) {
-      return { kind: 'installed', platformArch, version: definition.version, command };
-    }
     return { kind: 'not-installed', platformArch, version: definition.version };
   }
 
-  async ensureRuntime(
+  async resolveRuntimeForLaunch(
     name: ManagedRuntimeName,
     options: EnsureManagedRuntimeOptions = {}
-  ): Promise<string> {
+  ): Promise<ManagedRuntimeLaunch> {
     options.signal?.throwIfAborted();
     const resolvedArchive = this.resolveArchive(name);
     if ('unsupported' in resolvedArchive) {
       throw new ManagedRuntimeUnsupportedPlatformError(name, resolvedArchive.platformArch);
     }
     const { definition, platformArch, archive } = resolvedArchive;
+    const current = await this.readCurrentInstallation(name, definition, platformArch, archive);
+    if (current && this.isHostCompatible(current)) {
+      return this.toLaunch(current, definition.version);
+    }
+    const fallback = await this.findReusableInstallation(name, definition, platformArch);
+    if (fallback) {
+      return this.toLaunch(fallback, definition.version, this.isTargetHostCompatible(definition));
+    }
+    return this.toLaunch(await this.ensureCurrentRuntime(name, options), definition.version);
+  }
+
+  async listAvailableUpdates(): Promise<ManagedRuntimeName[]> {
+    const updates: ManagedRuntimeName[] = [];
+    for (const name of MANAGED_RUNTIME_NAMES) {
+      const status = await this.getRuntimeStatus(name);
+      if (status.kind === 'installed' && status.updateAvailable) {
+        updates.push(name);
+      }
+    }
+    return updates;
+  }
+
+  async pruneSupersededVersions(name: ManagedRuntimeName): Promise<void> {
+    const resolvedArchive = this.resolveArchive(name);
+    if ('unsupported' in resolvedArchive) return;
+    const { definition, platformArch, archive } = resolvedArchive;
+    const current = await this.readCurrentInstallation(name, definition, platformArch, archive);
+    const fallback = await this.findReusableInstallation(name, definition, platformArch);
+    const retainedVersions = new Set(
+      [current?.version, fallback?.version].filter((version): version is string => Boolean(version))
+    );
+    const runtimeRoot = join(this.rootDir, sanitizeSegment(name));
+    const entries = await readdir(runtimeRoot, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      if (entry.isDirectory() && !retainedVersions.has(entry.name)) {
+        await rm(join(runtimeRoot, entry.name), { recursive: true, force: true });
+      }
+    }
+  }
+
+  async prepareCache(): Promise<void> {
+    for (const name of MANAGED_RUNTIME_NAMES) {
+      await this.pruneSupersededVersions(name);
+    }
+  }
+
+  async ensureCurrentRuntime(
+    name: ManagedRuntimeName,
+    options: EnsureManagedRuntimeOptions = {}
+  ): Promise<ManagedRuntimeInstallation> {
+    options.signal?.throwIfAborted();
+    const resolvedArchive = this.resolveArchive(name);
+    if ('unsupported' in resolvedArchive) {
+      throw new ManagedRuntimeUnsupportedPlatformError(name, resolvedArchive.platformArch);
+    }
+    const { definition, platformArch, archive } = resolvedArchive;
+    const dir = this.targetDir(name, definition.version, platformArch);
     if (
       definition.minNodeVersion &&
       !isNodeVersionAtLeast(this.nodeVersion, definition.minNodeVersion)
@@ -636,9 +877,8 @@ export class ManagedAgentRuntimeManager {
         definition.minNodeVersion
       );
     }
-    const dir = this.targetDir(name, definition.version, platformArch);
-    const command = resolve(dir, archive.cmd);
-    if (existsSync(join(dir, COMPLETE_MARKER)) && existsSync(command)) {
+    const current = await this.readCurrentInstallation(name, definition, platformArch, archive);
+    if (current) {
       options.onProgress?.({
         runtimeName: name,
         version: definition.version,
@@ -648,14 +888,14 @@ export class ManagedAgentRuntimeManager {
         totalBytes: archive.size,
         percent: 100,
       });
-      return command;
+      return current;
     }
 
     const key = `${name}:${definition.version}:${platformArch}`;
     let entry = this.inFlight.get(key);
     if (entry?.controller.signal.aborted) {
       await this.waitForCancelledInstallCleanup(entry, options.signal);
-      return await this.ensureRuntime(name, options);
+      return await this.ensureCurrentRuntime(name, options);
     }
 
     if (!entry) {
@@ -735,14 +975,14 @@ export class ManagedAgentRuntimeManager {
     entry: ManagedRuntimeInstallEntry,
     signal: AbortSignal | undefined,
     cleanupProgress: (() => void) | undefined
-  ): Promise<string> {
+  ): Promise<ManagedRuntimeInstallation> {
     if (signal?.aborted) {
       cleanupProgress?.();
       signal.throwIfAborted();
     }
     const consumer = {};
     entry.consumers.add(consumer);
-    return await new Promise<string>((completeInstall, reject) => {
+    return await new Promise<ManagedRuntimeInstallation>((completeInstall, reject) => {
       let finished = false;
       const release = (): void => {
         signal?.removeEventListener('abort', handleAbort);
@@ -812,7 +1052,7 @@ export class ManagedAgentRuntimeManager {
     archive: RuntimeArchive,
     dir: string,
     signal: AbortSignal
-  ): Promise<string> {
+  ): Promise<ManagedRuntimeInstallation> {
     signal.throwIfAborted();
     await mkdir(this.rootDir, { recursive: true });
     const scratch = await mkdtemp(join(this.rootDir, 'tmp-'));
@@ -889,13 +1129,14 @@ export class ManagedAgentRuntimeManager {
         join(dir, 'metadata.json'),
         JSON.stringify(
           {
-            name,
-            version: definition.version,
-            platform: platformArch,
+            schemaVersion: 1,
+            runtimeName: name,
+            runtimeVersion: definition.version,
+            platformArch,
+            command: archive.cmd,
+            minNodeVersion: definition.minNodeVersion,
             archiveSha256: archive.sha256,
             archiveSize: archive.size,
-            executableSha256: archive.executableSha256,
-            executableSize: archive.executableSize,
             installedAt: new Date().toISOString(),
           },
           null,
@@ -911,7 +1152,6 @@ export class ManagedAgentRuntimeManager {
       if (definition.kind !== 'node-package') {
         await this.publishBinLink(name, resolve(dir, archive.cmd));
       }
-      await this.pruneOldVersions(name, definition.version);
       this.emitProgress(progressKey, {
         runtimeName: name,
         version: definition.version,
@@ -921,7 +1161,12 @@ export class ManagedAgentRuntimeManager {
         totalBytes: archive.size,
         percent: 100,
       });
-      return resolve(dir, archive.cmd);
+      return {
+        runtimeName: name,
+        version: definition.version,
+        platformArch,
+        command: resolve(dir, archive.cmd),
+      };
     } catch (error) {
       if (
         signal.aborted &&
@@ -1221,21 +1466,6 @@ export class ManagedAgentRuntimeManager {
       throw error;
     }
   }
-
-  private async pruneOldVersions(name: ManagedRuntimeName, currentVersion: string): Promise<void> {
-    const runtimeRoot = join(this.rootDir, sanitizeSegment(name));
-    const entries = await readdir(runtimeRoot, { withFileTypes: true }).catch(() => []);
-    const oldVersions = entries
-      .filter((entry) => entry.isDirectory() && entry.name !== sanitizeSegment(currentVersion))
-      .map((entry) => entry.name)
-      .sort();
-    while (oldVersions.length > 1) {
-      const stale = oldVersions.shift();
-      if (stale) {
-        await rm(join(runtimeRoot, stale), { recursive: true, force: true });
-      }
-    }
-  }
 }
 
 let sharedManager: ManagedAgentRuntimeManager | undefined;
@@ -1243,7 +1473,7 @@ let sharedManagerBaseUrl: string | null | undefined;
 
 export function configureManagedAgentRuntimeManager(options: {
   runtimeBaseUrl: string | null;
-}): void {
+}): ManagedAgentRuntimeManager {
   const runtimeBaseUrl = normalizeBaseUrl(options.runtimeBaseUrl);
   if (sharedManager) {
     if (sharedManagerBaseUrl !== runtimeBaseUrl) {
@@ -1251,10 +1481,11 @@ export function configureManagedAgentRuntimeManager(options: {
         `Managed runtime channel was already configured as ${sharedManagerBaseUrl ?? 'disabled'}`
       );
     }
-    return;
+    return sharedManager;
   }
   sharedManagerBaseUrl = runtimeBaseUrl;
   sharedManager = new ManagedAgentRuntimeManager({ runtimeBaseUrl });
+  return sharedManager;
 }
 
 export function getManagedAgentRuntimeManager(): ManagedAgentRuntimeManager {

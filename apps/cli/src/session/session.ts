@@ -115,6 +115,7 @@ export class Session extends EventEmitter<SessionEvents> implements ISession {
   public agentClient: AgentClient | null = null;
   public acpSessionId: ACPSessionId | null = null;
   private acpCapabilities: AcpCapabilitiesResult | null = null;
+  private acpCapabilitySourceVersion: string | null = null;
   public terminalManager: TerminalManager;
   public ghTokenInjected: boolean = false;
 
@@ -477,6 +478,7 @@ export class Session extends EventEmitter<SessionEvents> implements ISession {
   }
 
   async createAgent(callbacks: CreateAgentConfig): Promise<string> {
+    this.acpCapabilitySourceVersion = callbacks.capabilitySourceVersion ?? null;
     const loginShellEnv = await getLoginShellEnv();
     callbacks.abortSignal?.throwIfAborted();
     const env = withLodyNpmCacheForNpx(
@@ -709,6 +711,10 @@ export class Session extends EventEmitter<SessionEvents> implements ISession {
 
   getAcpCapabilities(): AcpCapabilitiesResult | null {
     return this.acpCapabilities;
+  }
+
+  getAcpCapabilitySourceVersion(): string | null {
+    return this.acpCapabilitySourceVersion;
   }
 
   private runCommand(
