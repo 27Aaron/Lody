@@ -457,6 +457,8 @@ const acpSessionConfigSchema = schema
       configOptionValues: schema.Any({ required: false }),
       /** Workspace MCP catalog ids selected for this session (string[]). */
       mcpServerIds: schema.Any({ required: false }),
+      /** Whether the built-in Lody Task MCP tools are mounted for this Turn. */
+      taskToolsEnabled: schema.Boolean({ required: false }),
       /**
        * Agent Role snapshots this user Turn authorized. Declared so the field is
        * a real column rather than catchall data, and read only through

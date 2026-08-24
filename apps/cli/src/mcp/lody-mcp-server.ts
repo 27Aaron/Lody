@@ -898,6 +898,7 @@ export interface McpSessionContext {
   sessionId: SessionId;
   localControlSocketPath: string | undefined;
   workdir: string;
+  taskToolsEnabled: boolean;
 }
 
 // The stdio entrypoint is a dedicated per-session process, so its context can
@@ -918,6 +919,7 @@ const getSessionContext = (): McpSessionContext =>
     ),
     localControlSocketPath: readOptionalEnv('LODY_MCP_SOCKET_PATH', 'LODY_PREVIEW_MCP_SOCKET_PATH'),
     workdir: readOptionalEnv('LODY_MCP_WORKDIR', 'LODY_PREVIEW_MCP_WORKDIR') ?? process.cwd(),
+    taskToolsEnabled: readOptionalEnv('LODY_MCP_TASK_TOOLS_ENABLED') === '1',
   };
 
 // One connection for the whole MCP server process, opened without the
@@ -1220,7 +1222,10 @@ const resolveMcpSessionCreate = (
     return {
       input,
       prompt: input.prompt,
-      dispatchConfig: buildMcpTurnDispatchConfig(input),
+      dispatchConfig: {
+        ...buildMcpTurnDispatchConfig(input),
+        taskToolsEnabled: invoking?.frozenInputConfig.taskToolsEnabled === true,
+      },
     };
   }
 
@@ -1268,6 +1273,7 @@ const resolveMcpSessionCreate = (
     prompt: composeAgentRolePrompt(role.promptPrefix, input.prompt),
     dispatchConfig: {
       ...role.runConfig,
+      taskToolsEnabled: invoking?.frozenInputConfig.taskToolsEnabled === true,
       inheritSessionDefaults: false,
     },
     role,
@@ -2158,6 +2164,29 @@ const resolveInvokingHistoryInput = (
     .find((entry) => entry.role === 'user' || entry.role === 'system');
 };
 
+const assertInvokingTurnTaskToolsEnabled = async (
+  manager: LoroDocumentManager,
+  sessionId: SessionId
+): Promise<void> => {
+  const session = await readCurrentSessionMeta(manager, sessionId);
+  if (!session) {
+    throw new LodyOperationStoreError(
+      'SESSION_NOT_FOUND',
+      `Requester Session not found: ${sessionId}`,
+      false
+    );
+  }
+  const sessionDoc = await manager.getOrCreateSessionDoc(session.id);
+  const source = resolveInvokingHistoryInput(await sessionDoc.getHistory());
+  if (source?.inputConfig?.taskToolsEnabled !== true) {
+    throw new LodyOperationStoreError(
+      'TASK_TOOLS_DISABLED',
+      'Lody Task tools are disabled for the driving user turn.',
+      false
+    );
+  }
+};
+
 const resolveInvokingTurnContext = async (
   manager: LoroDocumentManager,
   session: SessionMeta
@@ -2736,7 +2765,10 @@ const startSessionChatOperation = async (args: SessionChatToolInput): Promise<un
         manager,
         pendingItem.target.sessionId,
         args.prompt,
-        resolveTurnDispatchConfig({}),
+        {
+          ...resolveTurnDispatchConfig({}),
+          taskToolsEnabled: invoking.frozenInputConfig.taskToolsEnabled === true,
+        },
         undefined,
         auth.userId,
         {
@@ -3217,7 +3249,10 @@ const startSessionChatManyOperation = async (args: SessionChatManyToolInput): Pr
             manager,
             storedItem.target.sessionId,
             expandedItem.prompt,
-            resolveTurnDispatchConfig({}),
+            {
+              ...resolveTurnDispatchConfig({}),
+              taskToolsEnabled: invoking.frozenInputConfig.taskToolsEnabled === true,
+            },
             undefined,
             auth.userId,
             {
@@ -3730,7 +3765,7 @@ export const __lodyMcpServerInternals = {
   SESSION_CONTROL_TIMEOUT_MS,
 };
 
-export function buildLodyMcpServer(): McpServer {
+export function buildLodyMcpServer(config: { taskToolsEnabled?: boolean } = {}): McpServer {
   const server = new McpServer({
     name: 'lody',
     version: '0.1.0',
@@ -3901,7 +3936,7 @@ export function buildLodyMcpServer(): McpServer {
     }
   );
 
-  server.registerTool(
+  const taskImageUploadTool = server.registerTool(
     TASK_IMAGE_UPLOAD_TOOL_NAME,
     {
       title: 'Upload images for a Lody task',
@@ -3914,6 +3949,9 @@ export function buildLodyMcpServer(): McpServer {
         const ctx = getSessionContext();
         const auth = getCliAuthContextOrThrow('mcp');
         const workspace = await resolveWorkspaceOrThrow(auth, getMcpWorkspaceId(ctx));
+        await withWorkspaceManager(auth, workspace, 'mcp', async (manager) => {
+          await assertInvokingTurnTaskToolsEnabled(manager, ctx.sessionId as SessionId);
+        });
         const images = await uploadTaskImages({
           paths: args.paths.map((filePath) => resolveUploadPath(filePath, ctx.workdir)),
           workspaceId: workspace.id as WorkspaceId,
@@ -4339,7 +4377,7 @@ export function buildLodyMcpServer(): McpServer {
     }
   );
 
-  server.registerTool(
+  const taskListTool = server.registerTool(
     TASK_LIST_TOOL_NAME,
     {
       title: 'List Lody tasks',
@@ -4353,6 +4391,7 @@ export function buildLodyMcpServer(): McpServer {
         const auth = getCliAuthContextOrThrow('mcp');
         const workspace = await resolveWorkspaceOrThrow(auth, getMcpWorkspaceId(ctx));
         return await withWorkspaceManager(auth, workspace, 'mcp', async (manager) => {
+          await assertInvokingTurnTaskToolsEnabled(manager, ctx.sessionId as SessionId);
           const filter = buildTaskListFilter(args, auth.userId);
           const page = await listTasksFromIndex(manager, workspace.id as WorkspaceId, filter);
           return jsonTextResult({
@@ -4368,7 +4407,7 @@ export function buildLodyMcpServer(): McpServer {
     }
   );
 
-  server.registerTool(
+  const taskGetTool = server.registerTool(
     TASK_GET_TOOL_NAME,
     {
       title: 'Read a Lody task',
@@ -4382,6 +4421,7 @@ export function buildLodyMcpServer(): McpServer {
         const auth = getCliAuthContextOrThrow('mcp');
         const workspace = await resolveWorkspaceOrThrow(auth, getMcpWorkspaceId(ctx));
         return await withWorkspaceManager(auth, workspace, 'mcp', async (manager) => {
+          await assertInvokingTurnTaskToolsEnabled(manager, ctx.sessionId as SessionId);
           const snapshot = await readTask(manager, args.taskId as TaskId);
           if (!snapshot) {
             return jsonTextResult(
@@ -4400,7 +4440,7 @@ export function buildLodyMcpServer(): McpServer {
     }
   );
 
-  server.registerTool(
+  const taskCreateTool = server.registerTool(
     TASK_CREATE_TOOL_NAME,
     {
       title: 'Create a Lody task',
@@ -4414,6 +4454,7 @@ export function buildLodyMcpServer(): McpServer {
         const auth = getCliAuthContextOrThrow('mcp');
         const workspace = await resolveWorkspaceOrThrow(auth, getMcpWorkspaceId(ctx));
         return await withWorkspaceManager(auth, workspace, 'mcp', async (manager) => {
+          await assertInvokingTurnTaskToolsEnabled(manager, ctx.sessionId as SessionId);
           const actor = await resolveTaskActor(manager, ctx.sessionId as SessionId);
           const snapshot = await createTaskFromAgent(
             manager,
@@ -4447,7 +4488,7 @@ export function buildLodyMcpServer(): McpServer {
     }
   );
 
-  server.registerTool(
+  const taskProposeTool = server.registerTool(
     TASK_PROPOSE_TOOL_NAME,
     {
       title: 'Propose a Lody task',
@@ -4461,6 +4502,7 @@ export function buildLodyMcpServer(): McpServer {
         const auth = getCliAuthContextOrThrow('mcp');
         const workspace = await resolveWorkspaceOrThrow(auth, getMcpWorkspaceId(ctx));
         return await withWorkspaceManager(auth, workspace, 'mcp', async (manager) => {
+          await assertInvokingTurnTaskToolsEnabled(manager, ctx.sessionId as SessionId);
           const sessionId = ctx.sessionId as SessionId;
           const actor = await resolveTaskActor(manager, sessionId);
           const proposal = await publishTaskProposal(manager, sessionId, args, actor);
@@ -4479,7 +4521,7 @@ export function buildLodyMcpServer(): McpServer {
     }
   );
 
-  server.registerTool(
+  const taskUpdateTool = server.registerTool(
     TASK_UPDATE_TOOL_NAME,
     {
       title: 'Update a Lody task',
@@ -4493,6 +4535,7 @@ export function buildLodyMcpServer(): McpServer {
         const auth = getCliAuthContextOrThrow('mcp');
         const workspace = await resolveWorkspaceOrThrow(auth, getMcpWorkspaceId(ctx));
         return await withWorkspaceManager(auth, workspace, 'mcp', async (manager) => {
+          await assertInvokingTurnTaskToolsEnabled(manager, ctx.sessionId as SessionId);
           const sessionId = ctx.sessionId as SessionId;
           const actor = await resolveTaskActor(manager, sessionId);
           const snapshot = await applyAgentTaskUpdate(
@@ -4519,7 +4562,7 @@ export function buildLodyMcpServer(): McpServer {
     }
   );
 
-  server.registerTool(
+  const taskEditBodyTool = server.registerTool(
     TASK_EDIT_BODY_TOOL_NAME,
     {
       title: 'Edit a Lody task description',
@@ -4533,6 +4576,7 @@ export function buildLodyMcpServer(): McpServer {
         const auth = getCliAuthContextOrThrow('mcp');
         const workspace = await resolveWorkspaceOrThrow(auth, getMcpWorkspaceId(ctx));
         return await withWorkspaceManager(auth, workspace, 'mcp', async (manager) => {
+          await assertInvokingTurnTaskToolsEnabled(manager, ctx.sessionId as SessionId);
           const sessionId = ctx.sessionId as SessionId;
           const actor = await resolveTaskActor(manager, sessionId);
           const result = await applyAgentTaskBodyEdit(
@@ -4592,7 +4636,7 @@ export function buildLodyMcpServer(): McpServer {
     }
   );
 
-  server.registerTool(
+  const taskCommentTool = server.registerTool(
     TASK_COMMENT_TOOL_NAME,
     {
       title: 'Comment on a Lody task',
@@ -4606,6 +4650,7 @@ export function buildLodyMcpServer(): McpServer {
         const auth = getCliAuthContextOrThrow('mcp');
         const workspace = await resolveWorkspaceOrThrow(auth, getMcpWorkspaceId(ctx));
         return await withWorkspaceManager(auth, workspace, 'mcp', async (manager) => {
+          await assertInvokingTurnTaskToolsEnabled(manager, ctx.sessionId as SessionId);
           const sessionId = ctx.sessionId as SessionId;
           const actor = await resolveTaskActor(manager, sessionId);
           const appended = await appendAgentTaskComment(
@@ -4762,9 +4807,26 @@ export function buildLodyMcpServer(): McpServer {
     }
   );
 
+  if (config.taskToolsEnabled !== true) {
+    for (const tool of [
+      taskImageUploadTool,
+      taskListTool,
+      taskGetTool,
+      taskCreateTool,
+      taskProposeTool,
+      taskUpdateTool,
+      taskEditBodyTool,
+      taskCommentTool,
+    ]) {
+      tool.disable();
+    }
+  }
   return server;
 }
 
 export async function runLodyMcpServer(): Promise<void> {
-  await buildLodyMcpServer().connect(new StdioServerTransport());
+  const context = getSessionContext();
+  await buildLodyMcpServer({ taskToolsEnabled: context.taskToolsEnabled }).connect(
+    new StdioServerTransport()
+  );
 }

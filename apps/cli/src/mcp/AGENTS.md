@@ -28,3 +28,8 @@ Root and `apps/cli/AGENTS.md` instructions apply.
   `agentRoleInvocations` snapshot on the driving turn. Resolve its target, Prompt prefix, and
   concrete run config before Operation acceptance. Recovery uses the frozen canonical Prompt
   and target dispatch config and must never reread the mutable Role catalog.
+- The driving Turn's frozen `taskToolsEnabled` gates the complete `lody_task_*` family for
+  both stdio and HTTP transports. Missing means disabled. Do not merely hide creation: disabled
+  servers publish no Task tools, and a still-resident Agent whose next Turn disables the feature
+  is rejected at every Task handler. Task-originated automation explicitly freezes `true` so it
+  can update and comment on the Task it is executing.

@@ -67,6 +67,7 @@ export type SessionConversationConfig = {
   modelId?: string;
   configOptionValues?: Record<string, AcpConfigOptionValue>;
   mcpServerIds?: McpServerId[];
+  taskToolsEnabled?: boolean;
 };
 
 export const resolveSessionConversationConfig = (
@@ -90,6 +91,9 @@ export const resolveSessionConversationConfig = (
         ? { configOptionValues: inputConfig.configOptionValues }
         : {}),
       ...(inputConfig.mcpServerIds ? { mcpServerIds: inputConfig.mcpServerIds } : {}),
+      ...(typeof inputConfig.taskToolsEnabled === 'boolean'
+        ? { taskToolsEnabled: inputConfig.taskToolsEnabled }
+        : {}),
     };
   };
 
@@ -121,6 +125,12 @@ export const resolveSessionMcpSelection = (
   history: readonly { id: string; role: unknown; inputConfig?: unknown }[],
   messageQueue: readonly { $cid?: unknown; acpSessionConfig?: unknown }[] = []
 ): McpServerId[] => resolveSessionConversationConfig(history, messageQueue).mcpServerIds ?? [];
+
+/** The Task MCP gate frozen by the latest driving Turn. Missing legacy values are disabled. */
+export const resolveSessionTaskToolsEnabled = (
+  history: readonly { id: string; role: unknown; inputConfig?: unknown }[],
+  messageQueue: readonly { $cid?: unknown; acpSessionConfig?: unknown }[] = []
+): boolean => resolveSessionConversationConfig(history, messageQueue).taskToolsEnabled === true;
 
 const normalizeTextInputBlock = (
   block: Extract<SessionInputBlock, { type: 'text' }>
@@ -480,6 +490,7 @@ export const buildSessionTurnInputConfig = (args: {
   modelId?: string | null;
   configOptionValues?: Record<string, AcpConfigOptionValue> | null;
   mcpServerIds?: readonly McpServerId[] | null;
+  taskToolsEnabled?: boolean;
   /** Roles this Turn authorized, already frozen by the composer. */
   agentRoleInvocations?: readonly AgentRoleInvocationSnapshot[] | null;
   issuePRMentions?: IssuePRMention[];
@@ -500,6 +511,9 @@ export const buildSessionTurnInputConfig = (args: {
         ? args.configOptionValues
         : undefined,
     mcpServerIds: args.mcpServerIds ? [...args.mcpServerIds] : undefined,
+    ...(args.taskToolsEnabled !== undefined
+      ? { taskToolsEnabled: args.taskToolsEnabled === true }
+      : {}),
     // Re-normalized rather than copied: the snapshot is persisted evidence of
     // an authorization, so it passes the same reader as a stored one.
     agentRoleInvocations: normalizeAgentRoleInvocationSnapshots(args.agentRoleInvocations),

@@ -10,8 +10,10 @@ starts now and a Task for work recorded for later.
 
 - The complete UI is gated by `tasksFeatureEnabledAtom` (developer mode AND the
   per-device Tasks beta toggle). When disabled, routes, navigation, commands,
-  quick-add, subscriptions, watchers, chips, and proposal cards must not mount. Task
-  CLI/MCP storage is deliberately independent of this presentation gate.
+  quick-add, subscriptions, watchers, chips, and proposal cards must not mount. Every
+  human-authored Turn freezes that effective gate as `taskToolsEnabled`; ordinary Agent
+  sessions omit all `lody_task_*` MCP tools while it is false. Task-originated runs and
+  comments set it true explicitly so delegated work can report back after the UI closes.
 - The Task document is authoritative. Mutations update it first, then derive and
   publish the index row with the shared `buildTaskIndexRow`/`countTaskLinks` helpers.
   Board and list views read only the index and must never open every Task document.

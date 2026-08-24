@@ -54,6 +54,9 @@ arrive: context/message-flow.md "Upstream".
   extension's native `dsh-mcp-client` bridge. Keep passing the same config on
   initial and replacement sessions; the bridge owns namespace collision handling
   and releases the MCP child with `session/close` or Agent teardown.
+  The same session entry carries the driving Turn's `taskToolsEnabled` bit (HTTP header or
+  stdio allowlisted environment). Missing/false keeps the Lody MCP server itself mounted but
+  removes every `lody_task_*` tool; a replacement or restored ACP session must preserve that bit.
   Workspace MCP resolution is TWO phases and must stay that way:
   `loadExternalMcpServers` (catalog sync + document read) is invoked BEFORE
   `initialize` so its remote round trip overlaps spawn and the handshake, and

@@ -1295,6 +1295,7 @@ function buildCliHistoryInputConfig(args: {
   modeId?: string;
   modelId?: string;
   configOptionValues?: Record<string, string | boolean>;
+  taskToolsEnabled?: boolean;
   resume?: ACPSessionConfig['resume'];
   chainDepth?: number;
 }): NonNullable<SessionHistoryInput['inputConfig']> {
@@ -1308,6 +1309,7 @@ function buildCliHistoryInputConfig(args: {
       args.configOptionValues && Object.keys(args.configOptionValues).length > 0
         ? args.configOptionValues
         : undefined,
+    taskToolsEnabled: args.taskToolsEnabled === true,
     resume: args.resume,
     chainDepth: args.chainDepth,
   };
@@ -1317,6 +1319,8 @@ export type ResolvedTurnDispatchConfig = {
   modeId?: string;
   modelId?: string;
   configOptionValues?: Record<string, string | boolean>;
+  /** Frozen capability gate for the built-in Lody Task MCP tools. */
+  taskToolsEnabled?: boolean;
   /** Prevent create replay from re-reading mutable defaults from the requester history. */
   inheritSessionDefaults?: false;
   /**
@@ -1364,6 +1368,7 @@ export function applyAgentRunConfigSelection(
   };
   return {
     config: {
+      ...(rest.taskToolsEnabled !== undefined ? { taskToolsEnabled: rest.taskToolsEnabled } : {}),
       ...((resolved.modeId ?? rest.modeId) ? { modeId: resolved.modeId ?? rest.modeId } : {}),
       ...((resolved.modelId ?? rest.modelId) ? { modelId: resolved.modelId ?? rest.modelId } : {}),
       ...(Object.keys(configOptionValues).length > 0 ? { configOptionValues } : {}),
@@ -1436,6 +1441,7 @@ function mergeTurnDispatchConfig(
     modeId: explicitConfig.modeId ?? fallbackConfig?.modeId,
     modelId: explicitConfig.modelId ?? fallbackConfig?.modelId,
     configOptionValues: explicitConfig.configOptionValues ?? fallbackConfig?.configOptionValues,
+    taskToolsEnabled: explicitConfig.taskToolsEnabled ?? fallbackConfig?.taskToolsEnabled,
   };
 }
 
@@ -1557,6 +1563,7 @@ export function filterCompatibleInheritedTurnConfig(
     ...(config.modeId && supportedModes.has(config.modeId) ? { modeId: config.modeId } : {}),
     ...(config.modelId && supportedModels.has(config.modelId) ? { modelId: config.modelId } : {}),
     ...(configOptionValues ? { configOptionValues } : {}),
+    ...(config.taskToolsEnabled !== undefined ? { taskToolsEnabled: config.taskToolsEnabled } : {}),
   };
 }
 
@@ -1599,6 +1606,9 @@ export function resolveTurnDispatchConfigFromInputConfig(
     ...(inputConfig.modelId ? { modelId: inputConfig.modelId } : {}),
     ...(inputConfig.configOptionValues
       ? { configOptionValues: inputConfig.configOptionValues }
+      : {}),
+    ...(inputConfig.taskToolsEnabled !== undefined
+      ? { taskToolsEnabled: inputConfig.taskToolsEnabled }
       : {}),
   };
 }
@@ -2886,6 +2896,7 @@ export async function createSessionResult(
         modeId: modeId ?? undefined,
         modelId: modelId ?? undefined,
         configOptionValues: effectiveDispatchConfig.configOptionValues,
+        taskToolsEnabled: taskId ? true : effectiveDispatchConfig.taskToolsEnabled,
         chainDepth: options.chainDepth,
       }),
       preallocatedId: options.userTurnId,
@@ -3077,6 +3088,7 @@ export async function sendSessionChatResult(
       modeId: effectiveDispatchConfig.modeId,
       modelId: effectiveDispatchConfig.modelId,
       configOptionValues: effectiveDispatchConfig.configOptionValues,
+      taskToolsEnabled: effectiveDispatchConfig.taskToolsEnabled,
       resume: session.acpSessionId ?? undefined,
       chainDepth: orchestration?.chainDepth,
     }),

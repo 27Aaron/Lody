@@ -11,6 +11,7 @@ import {
   inputBlocksToHistoryItems,
   normalizeSessionInputBlocks,
   resolveSessionConversationConfig,
+  resolveSessionTaskToolsEnabled,
 } from '../src/session-input';
 import { normalizeSessionTurnInputConfig } from '../src/message-schemas';
 import { sessionDocSchema } from '../src/schema';
@@ -188,6 +189,32 @@ describe('session-input helpers', () => {
       modelId: 'model-b',
       configOptionValues: { approval: 'never' },
     });
+  });
+
+  it('resolves the frozen Task tool gate with legacy inputs disabled', () => {
+    expect(
+      resolveSessionTaskToolsEnabled([
+        {
+          id: 'turn-1',
+          role: 'user',
+          inputConfig: {
+            prompt: 'create a task',
+            cliType: 'builtin',
+            agentType: 'codex',
+            taskToolsEnabled: true,
+          },
+        },
+      ])
+    ).toBe(true);
+    expect(
+      resolveSessionTaskToolsEnabled([
+        {
+          id: 'legacy-turn',
+          role: 'user',
+          inputConfig: { prompt: 'hello', cliType: 'builtin', agentType: 'codex' },
+        },
+      ])
+    ).toBe(false);
   });
 
   it('ignores invalid and unconfigured history when resolving conversation config', () => {
@@ -543,6 +570,8 @@ describe('session-input helpers', () => {
       modeId: undefined,
       modelId: undefined,
       configOptionValues: undefined,
+      mcpServerIds: undefined,
+      agentRoleInvocations: undefined,
       issuePRMentions: undefined,
       resume: undefined,
     });
@@ -563,6 +592,8 @@ describe('session-input helpers', () => {
       modeId: undefined,
       modelId: undefined,
       configOptionValues: undefined,
+      mcpServerIds: undefined,
+      agentRoleInvocations: undefined,
       issuePRMentions: undefined,
       resume: undefined,
     });

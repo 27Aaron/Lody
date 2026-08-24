@@ -17,7 +17,7 @@ import {
   WorkspaceSyncUnavailableError,
 } from '@/lib/command-runtime';
 
-import { __lodyMcpServerInternals } from './lody-mcp-server';
+import { __lodyMcpServerInternals, buildLodyMcpServer } from './lody-mcp-server';
 
 const {
   TaskListToolInputSchema,
@@ -83,6 +83,43 @@ const createMcpContext = (): ReturnType<typeof getSessionContext> => ({
   sessionId: 'current-session-id',
   localControlSocketPath: '/tmp/lody-control.sock',
   workdir: '/tmp/workspace',
+  taskToolsEnabled: false,
+});
+
+const listPublishedToolNames = async (taskToolsEnabled: boolean): Promise<string[]> => {
+  const server = buildLodyMcpServer({ taskToolsEnabled });
+  const client = new Client({ name: 'task-gate-test-client', version: '1.0.0' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  try {
+    return (await client.listTools()).tools.map((tool) => tool.name);
+  } finally {
+    await Promise.all([client.close(), server.close()]);
+  }
+};
+
+describe('Lody Task MCP tool gate', () => {
+  const taskToolNames = [
+    'lody_task_list',
+    'lody_task_get',
+    'lody_task_create',
+    'lody_task_propose',
+    'lody_task_update',
+    'lody_task_edit_body',
+    'lody_task_comment',
+    'lody_task_upload_images',
+  ];
+
+  it('omits every Task tool while leaving the rest of Lody MCP available when disabled', async () => {
+    const names = await listPublishedToolNames(false);
+    expect(names).toContain('lody_feedback');
+    expect(names.filter((name) => name.startsWith('lody_task_'))).toEqual([]);
+  });
+
+  it('publishes the complete Task tool family when enabled', async () => {
+    const names = await listPublishedToolNames(true);
+    expect(names).toEqual(expect.arrayContaining(taskToolNames));
+  });
 });
 
 describe('lody_feedback input schema', () => {
@@ -516,6 +553,7 @@ describe('session MCP input schemas', () => {
       modeId: 'default',
       modelId: 'opus',
       configOptionValues: { reasoning_effort: 'medium' },
+      taskToolsEnabled: false,
       inheritSessionDefaults: false,
     });
     expect(buildResolvedMcpCreateCanonicalCommand(resolved)).toMatchObject({

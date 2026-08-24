@@ -254,6 +254,14 @@ export function useTaskCommentDispatch() {
       }
 
       const promptText = buildTaskCommentPrompt(input.taskTitle, input.comment, input.quote);
+      const inputBlocks = [{ type: 'text' as const, text: input.comment }];
+      const inputConfig = buildSessionTurnInputConfig({
+        inputBlocks,
+        prompt: buildAgentPrompt(promptText, config.prompt ?? ''),
+        cliType: config.cliType,
+        agentType: config.agentType,
+        taskToolsEnabled: true,
+      });
 
       if (target.busy) {
         // The agent is mid-turn: queue the comment instead of racing it.
@@ -262,17 +270,11 @@ export function useTaskCommentDispatch() {
           userId,
           timestamp: new Date(getServerNow()).toISOString(),
           isEditing: false,
+          acpSessionConfig: { ...inputConfig, chainDepth: 0 },
         });
         return { ok: true, sessionId: target.sessionId, queued: true };
       }
 
-      const inputBlocks = [{ type: 'text' as const, text: input.comment }];
-      const inputConfig = buildSessionTurnInputConfig({
-        inputBlocks,
-        prompt: buildAgentPrompt(promptText, config.prompt ?? ''),
-        cliType: config.cliType,
-        agentType: config.agentType,
-      });
       const entry = buildPendingUserHistoryEntry({
         userId,
         inputBlocks,

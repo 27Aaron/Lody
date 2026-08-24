@@ -1931,6 +1931,7 @@ export class SessionDispatchWatcher {
         modelId: entry.inputConfig?.modelId,
         configOptionValues: entry.inputConfig?.configOptionValues,
         mcpServerIds: entry.inputConfig?.mcpServerIds ?? [],
+        taskToolsEnabled: entry.inputConfig?.taskToolsEnabled === true,
         issuePRMentions: entry.inputConfig?.issuePRMentions,
         resume: entry.inputConfig?.resume ?? resolveDispatchAcpSessionId(meta),
       },
@@ -1972,6 +1973,7 @@ export class SessionDispatchWatcher {
         modelId: entry.inputConfig?.modelId,
         configOptionValues: entry.inputConfig?.configOptionValues,
         mcpServerIds: entry.inputConfig?.mcpServerIds ?? [],
+        taskToolsEnabled: entry.inputConfig?.taskToolsEnabled === true,
         issuePRMentions: entry.inputConfig?.issuePRMentions,
         resume: entry.inputConfig?.resume,
       },
@@ -2068,6 +2070,7 @@ export class SessionDispatchWatcher {
           : undefined,
         mcpServerIds:
           normalizeMcpServerIdSelection(queuedItem.acpSessionConfig?.mcpServerIds) ?? [],
+        taskToolsEnabled: queuedItem.acpSessionConfig?.taskToolsEnabled === true,
         issuePRMentions: queuedItem.acpSessionConfig?.issuePRMentions,
         resume: resolveResumableAcpSessionId(meta),
       });

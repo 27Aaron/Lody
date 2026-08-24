@@ -355,6 +355,7 @@ export const ACPSessionConfigSchema = z
     modelId: z.string().optional(),
     configOptionValues: AcpConfigOptionValuesSchema.optional(),
     mcpServerIds: z.array(z.string()).optional(),
+    taskToolsEnabled: z.boolean().optional(),
     agentRoleInvocations: z.array(z.unknown()).optional(),
     issuePRMentions: z.array(IssuePRMentionSchema).optional(),
     resume: ACPSessionIdSchema.optional(),
@@ -374,6 +375,7 @@ const LooseSessionTurnInputConfigSchema = z
     modelId: z.string().optional(),
     configOptionValues: AcpConfigOptionValuesSchema.optional(),
     mcpServerIds: z.array(z.string()).optional(),
+    taskToolsEnabled: z.boolean().optional(),
     agentRoleInvocations: z.array(z.unknown()).optional(),
     issuePRMentions: z.array(IssuePRMentionSchema).optional(),
     resume: ACPSessionIdSchema.optional(),
@@ -465,6 +467,11 @@ export const normalizeSessionTurnInputConfig = (
   const mcpServerIds = normalizeMcpServerIdSelection(record.mcpServerIds);
   if (mcpServerIds) {
     normalized.mcpServerIds = mcpServerIds;
+  }
+
+  const taskToolsEnabled = maybeParseField(z.boolean(), record.taskToolsEnabled);
+  if (taskToolsEnabled !== undefined) {
+    normalized.taskToolsEnabled = taskToolsEnabled;
   }
 
   // Normalized rather than schema-parsed: the same reader that drops a
@@ -893,6 +900,7 @@ export const SessionPreparationRunConfigSchema = z
       .array(z.string())
       .transform((ids) => normalizeMcpServerIdSelection(ids) ?? [])
       .optional(),
+    taskToolsEnabled: z.boolean().optional(),
   })
   .strict();
 

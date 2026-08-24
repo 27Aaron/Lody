@@ -529,6 +529,7 @@ function WorkspaceChatLanding({
   const multiWorkspaceAvailable = useAppCapability('multiWorkspace');
   const currentUser = useAtomValue(userAtom);
   const userId = currentUser?.id;
+  const tasksFeatureEnabled = useAtomValue(tasksFeatureEnabledAtom);
   const { activeOrganization, organizations, switchOrganization } = useOrganization({
     targetSlug: workspaceSlug,
   });
@@ -2859,6 +2860,7 @@ function WorkspaceChatLanding({
         configOptionValues: dispatchConfigOptionValues,
         issuePRMentions,
         mcpServerIds: mcpSelection.selectedIds,
+        taskToolsEnabled: tasksFeatureEnabled,
         // The first Turn of the new Session authorizes any Role it mentioned.
         agentRoleInvocations: expandedPrompt.agentRoleInvocations,
       });
@@ -3847,6 +3849,7 @@ function WorkspaceChatLanding({
         modelId: modelOptions.length > 0 ? selectedModelId : null,
         configOptionValues: dispatchConfigOptionValues,
         mcpServerIds: mcpSelection.selectedIds,
+        taskToolsEnabled: tasksFeatureEnabled,
       }),
     [
       dispatchConfigOptionValues,
@@ -3855,6 +3858,7 @@ function WorkspaceChatLanding({
       modelOptions.length,
       selectedModeId,
       selectedModelId,
+      tasksFeatureEnabled,
     ]
   );
   const { handoffToSession: handoffSessionPreparation } = useSessionPreparation({
@@ -4716,7 +4720,6 @@ function WorkspaceChatLanding({
   /* Developer-only beta gates drive the extra dock tabs on mobile home.
      When a gate is off, a stale selection must render as Chat — as if
      the tab were never built. Inbox also retains its team-workspace gate. */
-  const tasksFeatureEnabled = useAtomValue(tasksFeatureEnabledAtom);
   const inboxFeatureEnabled = useAtomValue(inboxFeatureEnabledAtom);
   const showMobileInbox = showProjectSharing && inboxFeatureEnabled;
   const effectiveMobileHomeTab: MobileHomeTab =

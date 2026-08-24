@@ -1551,6 +1551,8 @@ export type ACPSessionConfig = {
   configOptionValues?: Record<string, AcpConfigOptionValue>;
   /** Workspace MCP catalog ids selected for this session. */
   mcpServerIds?: McpServerId[];
+  /** Whether the built-in Lody Task MCP tools are available to this Turn's Agent session. */
+  taskToolsEnabled?: boolean;
   /**
    * Agent Roles this user Turn authorized, frozen at send time.
    *

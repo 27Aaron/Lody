@@ -2863,7 +2863,10 @@ export class MessageHandler {
       this.workspaceDocument,
       item.target.sessionId,
       prompt,
-      resolveTurnDispatchConfig({}),
+      {
+        ...resolveTurnDispatchConfig({}),
+        taskToolsEnabled: operation.frozenContinuationConfig.inputConfig.taskToolsEnabled === true,
+      },
       undefined,
       operation.requesterUserId,
       {

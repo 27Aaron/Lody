@@ -1937,6 +1937,7 @@ export const SessionChatInterface = memo(
     const localeObj = i18n.language?.startsWith('zh') ? zhCN : enUS;
     const workspaceId = useAtomValue(currentWorkspaceIdAtom);
     const currentUser = useAtomValue(userAtom);
+    const tasksEnabled = useAtomValue(tasksFeatureEnabledAtom);
     const { openSettings } = useOpenSettings();
     const billingEntitlement = useCloudQuery(
       cloudOperations.billing.getWorkspaceBillingEntitlement,
@@ -3504,6 +3505,7 @@ export const SessionChatInterface = memo(
             configOptionValues: turnConfigOptionValues,
             issuePRMentions,
             mcpServerIds: mcpSelection.selectedIds,
+            taskToolsEnabled: tasksEnabled,
             agentRoleInvocations: options?.agentRoleInvocations,
             resume: session.acpSessionId ?? undefined,
           });
@@ -3610,6 +3612,7 @@ export const SessionChatInterface = memo(
         touchSessionActivity,
         updateHistoryEntry,
         t,
+        tasksEnabled,
       ]
     );
 
@@ -3644,6 +3647,7 @@ export const SessionChatInterface = memo(
             configOptionValues: turnConfigOptionValues,
             issuePRMentions,
             mcpServerIds: mcpSelection.selectedIds,
+            taskToolsEnabled: tasksEnabled,
             agentRoleInvocations: options?.agentRoleInvocations,
             resume: session.acpSessionId ?? undefined,
           });
@@ -3657,6 +3661,7 @@ export const SessionChatInterface = memo(
             configOptionValues: inputConfig.configOptionValues ?? undefined,
             issuePRMentions: inputConfig.issuePRMentions ?? undefined,
             mcpServerIds: [...mcpSelection.selectedIds],
+            taskToolsEnabled: inputConfig.taskToolsEnabled,
             agentRoleInvocations: inputConfig.agentRoleInvocations ?? undefined,
             resume: inputConfig.resume ?? undefined,
             chainDepth: 0,
@@ -3704,6 +3709,7 @@ export const SessionChatInterface = memo(
         session.userId,
         sessionProject,
         t,
+        tasksEnabled,
       ]
     );
 
@@ -4286,7 +4292,6 @@ export const SessionChatInterface = memo(
     // beta (an agent or another device can set it), so the chip is gated too —
     // otherwise it would be a visible door to a feature that is supposed to be
     // absent, and the index it reads from is not even synced.
-    const tasksEnabled = useAtomValue(tasksFeatureEnabledAtom);
     const sessionTaskChip = useMemo(() => {
       if (!tasksEnabled || !sessionTaskId) return null;
       const row = taskIndexRows[sessionTaskId];
