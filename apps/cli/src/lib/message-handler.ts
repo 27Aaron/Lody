@@ -271,6 +271,10 @@ import {
 } from 'src/agent/agent-client';
 import type { RateLimit, SessionUsageUpdate } from 'acp-extension-core';
 import { getWorktreeManager } from '@/session/worktree/worktree-manager';
+import {
+  isManagedWorktreeBranchName,
+  renameBranchWithAvailableSuffix,
+} from '@/session/worktree/branch-name-allocation';
 import { createWorktreeScriptHistoryRecorder } from '@/session/worktree/worktree-script-history';
 import { runWorktreeCleanup } from '@/session/worktree/worktree-setup-runner';
 import {
@@ -9465,7 +9469,7 @@ export class MessageHandler {
       });
       metaCustomAcp = agentConfig?.customAcp ?? legacyLaunchConfig?.customAcp;
       metaRuntimeOverrides = agentConfig?.runtimeOverrides ?? legacyLaunchConfig?.runtimeOverrides;
-      if (metaBranchName && !metaBranchName.startsWith('session/')) {
+      if (metaBranchName && !isManagedWorktreeBranchName(metaBranchName)) {
         return;
       }
     } catch (error) {
@@ -9497,9 +9501,9 @@ export class MessageHandler {
     if (!currentBranch || currentBranch === branchName) {
       return;
     }
-    if (!currentBranch.startsWith('session/')) {
+    if (!isManagedWorktreeBranchName(currentBranch)) {
       this.logger.debug(
-        `[${sessionId}] Skipping branch rename: not on a session branch (currentBranch=${currentBranch})`
+        `[${sessionId}] Skipping branch rename: not on a managed worktree branch (currentBranch=${currentBranch})`
       );
       return;
     }
@@ -9511,7 +9515,19 @@ export class MessageHandler {
     }
 
     try {
-      await session.exec('git', ['branch', '-m', currentBranch, branchName], workdir, false);
+      const renamedBranch = await renameBranchWithAvailableSuffix({
+        exec: session.exec.bind(session),
+        workdir,
+        currentBranch,
+        desiredBranchName: branchName,
+        maxLength: 50,
+      });
+      if (!renamedBranch) {
+        this.logger.debug(
+          `[${sessionId}] Skipping branch rename: branch changed or git rejected the rename`
+        );
+        return;
+      }
       await this.turnPostProcessingService.syncSessionBranchName(sessionId, session);
     } catch (error) {
       this.logger.debug(`[${sessionId}] Failed to rename branch: ${formatErrorMessage(error)}`);

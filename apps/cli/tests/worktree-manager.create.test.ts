@@ -129,6 +129,21 @@ describe('WorktreeManager', () => {
       expect(info1.branch).toBe(info2.branch);
     });
 
+    it('should rebuild a missing registered worktree without reusing its old branch', async () => {
+      const sourceDir = createLocalRepo(testDir);
+      manager.updateSource({ kind: 'local-shared', originalRootPath: sourceDir });
+      const sessionId = 'staleadd-session-worktree' as SessionId;
+      const first = await manager.createWorktree(sessionId);
+
+      // Model a worktree directory disappearing before Git's registration is pruned.
+      fs.rmSync(first.hostPath, { recursive: true, force: true });
+
+      const rebuilt = await manager.createWorktree(sessionId);
+
+      expect(rebuilt.branch).toBe(`${first.branch}-2`);
+      expect(fs.existsSync(rebuilt.hostPath)).toBe(true);
+    });
+
     it('should create multiple worktrees', async () => {
       await manager.ensureRepo();
 
@@ -201,7 +216,7 @@ describe('WorktreeManager', () => {
       expect(info.branch).toBe(`session/${sessionId.slice(0, 8)}`);
     });
 
-    it('should reuse the specified non-default branch instead of creating a session branch', async () => {
+    it('should create a fresh session branch from a specified non-default base', async () => {
       const { sourceDir, remoteBareDir } = createRemoteRepo(testDir, 'main');
       manager.updateRepoUrl(toFileUrl(remoteBareDir));
 
@@ -214,7 +229,26 @@ describe('WorktreeManager', () => {
       const sessionId = 'rbranch02-remote-feature-1' as SessionId;
       const info = await manager.createWorktree(sessionId, 'feature/reuse-existing-branch');
       expect(info.headSha).toBe(featureHead);
-      expect(info.branch).toBe('feature/reuse-existing-branch');
+      expect(info.branch).toBe(`session/${sessionId.slice(0, 8)}`);
+      expect(info.branch).not.toBe('feature/reuse-existing-branch');
+    });
+
+    it('should suffix a stale generated session branch even when a tag shares its name', async () => {
+      await manager.ensureRepo();
+      const sessionId = 'collision-session-branch' as SessionId;
+      const staleBranch = `session/${sessionId.slice(0, 8)}`;
+      // @ts-expect-error - accessing private property for testing
+      runGit(manager.bareGitDir, ['branch', staleBranch, 'main']);
+      // @ts-expect-error - accessing private property for testing
+      runGit(manager.bareGitDir, ['tag', staleBranch, 'main']);
+
+      const info = await manager.createWorktree(sessionId);
+
+      expect(info.branch).toBe(`${staleBranch}-2`);
+      // @ts-expect-error - accessing private property for testing
+      expect(
+        runGit(manager.bareGitDir, ['show-ref', '--verify', `refs/heads/${staleBranch}`])
+      ).toContain(`refs/heads/${staleBranch}`);
     });
 
     it('should create a shared-local worktree on a lody session branch', async () => {
@@ -231,6 +265,24 @@ describe('WorktreeManager', () => {
       expect(fs.existsSync(info.hostPath)).toBe(true);
       expect(runGit(info.hostPath, ['rev-parse', '--show-toplevel'])).toBe(info.hostPath);
       expect(runGit(sourceDir, ['worktree', 'list'])).toContain(info.hostPath);
+    });
+
+    it('should suffix a stale generated shared-local branch instead of restoring it', async () => {
+      const sourceDir = createLocalRepo(testDir);
+      manager.updateSource({
+        kind: 'local-shared',
+        originalRootPath: sourceDir,
+      });
+      const sessionId = 'local007-session-collision' as SessionId;
+      const staleBranch = 'lody/local007-ses';
+      runGit(sourceDir, ['branch', staleBranch]);
+
+      const info = await manager.createWorktree(sessionId);
+
+      expect(info.branch).toBe(`${staleBranch}-2`);
+      expect(runGit(sourceDir, ['show-ref', '--verify', `refs/heads/${staleBranch}`])).toContain(
+        `refs/heads/${staleBranch}`
+      );
     });
 
     it('should create from the captured commit even after the source HEAD advances', async () => {
@@ -376,7 +428,7 @@ describe('WorktreeManager', () => {
       runGit(manager.bareGitDir, ['worktree', 'remove', '--force', created.hostPath]);
       fs.rmSync(remoteBareDir, { recursive: true, force: true });
 
-      const restored = await manager.createWorktree(sessionId);
+      const restored = await manager.createWorktree(sessionId, undefined, created.branch);
       expect(restored.branch).toBe(created.branch);
       expect(restored.headSha).toBe(created.headSha);
       expect(fs.existsSync(restored.hostPath)).toBe(true);
@@ -392,6 +444,18 @@ describe('WorktreeManager', () => {
       await expect(manager.createWorktree('roffl03-fresh-cut' as SessionId)).rejects.toThrow(
         /Failed to fetch from origin/
       );
+    });
+
+    it('should fail closed when an explicit restore branch is missing', async () => {
+      await manager.ensureRepo();
+
+      await expect(
+        manager.createWorktree(
+          'restore-missing-branch' as SessionId,
+          undefined,
+          'feat/missing-restore'
+        )
+      ).rejects.toThrow('Session restore branch not found: feat/missing-restore');
     });
   });
 });

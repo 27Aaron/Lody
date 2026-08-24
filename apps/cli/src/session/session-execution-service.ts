@@ -4479,7 +4479,7 @@ export class SessionExecutionService {
           self.deps.logger.debug(
             `[${sessionId}] session ready (workdir=${session.getWorkdir()} acpSessionId=${session.acpSessionId ?? 'null'})`
           );
-          if (githubRepoFullName) {
+          if (shouldPrepareWorktree) {
             void self.deps.maybeRenameSessionBranchFromPrompt(
               sessionId,
               session,

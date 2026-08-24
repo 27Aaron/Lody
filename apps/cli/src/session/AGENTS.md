@@ -152,6 +152,9 @@ delegation proofs or a shared-machine gate without a new product and security de
   Worktree setup scripts are per worktree-directory lifetime: session runtime restore
   after idle GC must skip setup when the session's worktree directory already exists,
   but setup still runs when a missing worktree directory is materialized again.
+  A fresh local/GitHub worktree always owns a newly allocated branch from its selected
+  base ref; suffix collisions instead of attaching to an existing ref. Reattaching an
+  existing branch is reserved for an explicit `restoreBranchName` from the same Session.
   INVARIANT: any `sandbox.spawn` whose OUTPUT is the result must pass
   `captureOutput: true` (`session-sandbox.ts`). spawn() does async post-spawn work
   (pid wait, resource profile, cgroup attach), and under a stalled event loop a short
