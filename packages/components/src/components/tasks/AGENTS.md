@@ -81,7 +81,7 @@ starts now and a Task for work recorded for later.
   keep guarding the local draft until the exact Loro echo arrives, and leave a rejected
   commit dirty so a stale snapshot cannot erase it and a later flush can retry it.
 - Keep both meowdown stylesheets, explicit `mode="hide"`, the app theme variable mapping,
-  and the React 18 manual `handle.editor.unmount()` cleanup.
+  and the manual `handle.editor.unmount()` cleanup.
 - Selection-toolbar pointer-down handlers must preserve editor focus. Keep the popover
   hoisted above the surrounding scroll area.
 - Task images are stored as `lody-image://<imageId>` references. Comments remain a

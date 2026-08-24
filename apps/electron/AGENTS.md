@@ -63,6 +63,11 @@ Root `AGENTS.md` also applies.
   `releaseNotes` fallback. Main validates and bounds those remote strings before
   exposing them through `ElectronUpdaterState`; renderer code must use the shared
   safe Markdown renderer rather than raw HTML.
+- React render failures are split by owner: the root `createRoot` error callbacks
+  persist fatal IPC diagnostics, while `ErrorBoundary` owns caught-error UI and
+  PostHog reporting. De-duplicate the same error across React and window events.
+  Renderer-mounted notification must come from a committed layout-effect sentinel,
+  never a timer or microtask guess.
 - Theme changes must also update the native window color in `window-theme.ts`.
   OS appearance changes while `themeSource` is `system` must retint chrome and
   notify the renderer (`lodyApp:nativeThemeUpdated`). On macOS also subscribe
