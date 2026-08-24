@@ -9,7 +9,6 @@ import {
   useRef,
   useState,
   type ReactNode,
-  type RefObject,
 } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
@@ -1108,7 +1107,7 @@ function ProjectsSubTabSelector({
     key: MobileProjectsSubTab;
     label: string;
     icon: ReactNode;
-    ref: RefObject<HTMLButtonElement | null>;
+    ref: { current: HTMLButtonElement | null };
   }> = [
     {
       key: 'local',
@@ -1186,7 +1185,9 @@ function ProjectsSubTabSelector({
           return (
             <button
               key={seg.key}
-              ref={seg.ref}
+              ref={(button) => {
+                seg.ref.current = button;
+              }}
               type="button"
               role="tab"
               aria-selected={isActive}
