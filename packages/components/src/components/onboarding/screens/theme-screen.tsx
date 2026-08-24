@@ -9,7 +9,7 @@ interface ModeOption {
   value: Theme;
   labelKey: string;
   labelDefault: string;
-  Icon: (props: { className?: string }) => JSX.Element;
+  Icon: (props: { className?: string }) => React.JSX.Element;
 }
 
 const MODE_OPTIONS: ModeOption[] = [
