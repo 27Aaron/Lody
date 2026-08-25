@@ -128,7 +128,8 @@ Product-level mention sources built on `src/ui/mention`.
   defaulted through `getAgentRoleEmoji` so rows stay aligned and a Role with none
   does not read as half-authored. The category header above already says these
   are Agent Roles, so a second generic glyph only crowds out the Role's own mark.
-  The detail pane has no icon slot, so there the mark rides in the title.
+  The Role's pane heads itself with that same mark, so its candidate sets no
+  detail `title` — the field is optional for exactly that reason.
 - The COMMITTED range shows that emoji too, through `applyAgentRoleEmojiChip`:
   the composer wraps the caller's chip resolver, because a range carries only the
   Role id and only the composer holds the live catalog. The emoji is boxed to the
@@ -185,13 +186,18 @@ Product-level mention sources built on `src/ui/mention`.
   send paths, per-type expansion hooks must compose here, not be wired into both.
 - A candidate describes its side panel through the neutral
   `MentionCandidateDetail` fields, not its own component, so one pane serves
-  every category. `body` is the authored-content field — a Role's default
-  instruction — and renders in its OWN capped scroll area above the rows,
-  because content of no bounded length would otherwise push the rows a reader
-  needs (machine, agent, model) off a pane whose job is showing what accepting
-  the candidate commits to. A Role shows the instruction itself rather than a
-  badge saying one exists. The pane is desktop-only: the docked mobile strip is too
-  narrow and has no hover to preview with. It keeps a fixed height and reserves
+  every category. An Agent Role is the exception, through `detail.agentRole`:
+  it renders `sessions/agent-role-detail-pane.tsx`, the SAME pane the composer's
+  Role submenu shows. A Role is one object with one reading — which agent, which
+  machine, which values it pins, and its instruction — so the neutral rows were
+  a second description of it, and they had drifted: they printed the stored ids
+  raw and labelled `runConfig.modeId`, the permission mode, "Reasoning". Its
+  agent config and machine therefore ride on `AgentRoleMentionItem`, since only
+  the bound agent's published capabilities turn a stored id into a label. That
+  pane shows the instruction itself rather than a badge saying one exists, and
+  it is what retired the neutral `body` field and made `title` optional — the
+  Role was their only producer. The pane is desktop-only: the docked mobile
+  strip is too narrow and has no hover to preview with. It keeps a fixed height and reserves
   a stable scrollbar gutter so switching between short and overflowing
   descriptions changes neither the menu height nor text width. Its fields
   render verbatim, so a source must put i18n'd text in them — never a raw enum

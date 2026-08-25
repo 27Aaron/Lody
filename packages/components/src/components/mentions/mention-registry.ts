@@ -25,6 +25,7 @@ import {
   selectAgentRoleMentionCandidates,
   type AgentRoleMentionItem,
 } from '@/components/mentions/mention-agent-role-source';
+import type { AgentRoleDetailSubject } from '@/components/sessions/agent-role-detail-pane';
 import { parseMentionNamespaceSearch } from '@/ui/mention/mention-trigger';
 import type { MentionKind } from '@/ui/mention/index';
 
@@ -62,19 +63,19 @@ export type MentionCategoryStatus = 'ready' | 'loading' | 'error';
  * plain fields rather than shipping its own component.
  */
 export type MentionCandidateDetail = {
-  title: string;
+  /** Absent on a candidate whose pane carries its own heading — a Role's does. */
+  title?: string;
   badges?: string[];
   description?: string;
-  /**
-   * A block of the candidate's own text, shown above the rows in its own capped
-   * scroll area — a Role's default instruction today.
-   *
-   * Separate from `description` because it is authored content of no bounded
-   * length: left to grow, it would push every row off a pane whose whole job is
-   * showing what accepting the candidate commits to.
-   */
-  body?: { label?: string; text: string; mono?: boolean };
   rows?: Array<{ label: string; value: string; mono?: boolean }>;
+  /**
+   * An Agent Role reads through its own pane instead of these fields.
+   *
+   * A Role is the same object the composer's Role submenu previews, so it gets
+   * the same pane; the neutral fields above stay for every candidate whose
+   * description IS a title, a badge, and some rows.
+   */
+  agentRole?: AgentRoleDetailSubject;
 };
 
 export type MentionCandidate = {
@@ -458,34 +459,19 @@ export function buildSessionCandidates(
   );
 }
 
-export type AgentRoleDetailLabels = {
-  machine: string;
-  agentConfig: string;
-  model: string;
-  reasoning: string;
-  /** Heading for the Role's default instruction, shown above the rows. */
-  prompt: string;
-};
-
 /**
- * A Role candidate shows the whole binding it would execute — machine, provider,
- * model, reasoning — because accepting it authorizes exactly that, and a Role
- * never silently resolves to anything else.
+ * A Role candidate shows the whole binding it would execute — agent, machine,
+ * model, reasoning, permission, instruction — because accepting it authorizes
+ * exactly that, and a Role never silently resolves to anything else.
+ *
+ * That reading is handed to `AgentRoleDetailPane`, the same pane the composer's
+ * Role submenu renders, rather than restated as generic rows here: a Role is
+ * one object, and describing it twice is how the two descriptions drift. The
+ * generic rows had already drifted — they printed the stored ids raw and
+ * labelled the permission mode "Reasoning".
  */
-export function toAgentRoleCandidate(
-  item: AgentRoleMentionItem,
-  labels: AgentRoleDetailLabels
-): MentionCandidate {
+export function toAgentRoleCandidate(item: AgentRoleMentionItem): MentionCandidate {
   const { role } = item;
-  const rows: NonNullable<MentionCandidateDetail['rows']> = [];
-  if (item.machineLabel) rows.push({ label: labels.machine, value: item.machineLabel });
-  if (item.agentConfigLabel) rows.push({ label: labels.agentConfig, value: item.agentConfigLabel });
-  if (role.runConfig.modelId) {
-    rows.push({ label: labels.model, value: role.runConfig.modelId, mono: true });
-  }
-  if (role.runConfig.modeId) {
-    rows.push({ label: labels.reasoning, value: role.runConfig.modeId, mono: true });
-  }
   // The emoji REPLACES the category glyph on the row: the category header above
   // already says these are Agent Roles, so a second generic glyph only crowds
   // out the Role's own mark. Every Role has one, defaulted, so rows stay aligned.
@@ -501,17 +487,19 @@ export function toAgentRoleCandidate(
     iconEmoji: emoji,
     title: role.name,
     detail: {
-      // The pane has no icon slot, so the mark rides in its title instead.
-      title: `${emoji} ${role.name}`,
-      // Deliberately no visibility badge: every Role the menu offers is one this
-      // user may run, so private-vs-workspace changes nothing about accepting
-      // it — it is a Settings concern, and here it only crowds the pane.
-      // The instruction itself, not a badge saying one exists: what it SAYS is
-      // the part that decides whether this is the Role you meant.
-      ...(role.promptPrefix
-        ? { body: { label: labels.prompt, text: role.promptPrefix, mono: true } }
-        : {}),
-      rows,
+      // No `title` and no badges: the pane heads itself with the Role's own
+      // mark and name, and visibility is deliberately absent — every Role the menu
+      // offers is one this user may run, so private-vs-workspace changes
+      // nothing about accepting it. It is a Settings concern.
+      agentRole: {
+        role,
+        agentConfig: item.agentConfig,
+        machine: item.machine,
+        // Named here, unlike the composer's list: this menu offers Roles from
+        // every machine the user may reach, so which one a Role binds to is
+        // part of what accepting it authorizes.
+        machineLabel: item.machine?.name,
+      },
     },
   };
 }
@@ -519,12 +507,9 @@ export function toAgentRoleCandidate(
 export function buildAgentRoleCandidates(
   items: readonly AgentRoleMentionItem[],
   term: string,
-  labels: AgentRoleDetailLabels,
   limit?: number
 ): MentionCandidate[] {
-  return selectAgentRoleMentionCandidates(items, term, limit).map((item) =>
-    toAgentRoleCandidate(item, labels)
-  );
+  return selectAgentRoleMentionCandidates(items, term, limit).map(toAgentRoleCandidate);
 }
 
 export function toCommandCandidate(command: AcpCommandSummary): MentionCandidate {
@@ -725,19 +710,7 @@ export function useMentionCategories(sources: MentionCategorySources): MentionCa
         label: t('mention.category.agentRole.label', 'Agent Roles'),
         icon: 'agent_role',
         ...sourceCategoryFields('agentRole', agentRole),
-        getCandidates: (term, limit) =>
-          buildAgentRoleCandidates(
-            agentRole.items,
-            term,
-            {
-              machine: t('mention.agentRole.detailMachine', 'Machine'),
-              agentConfig: t('mention.agentRole.detailAgentConfig', 'Agent'),
-              model: t('mention.agentRole.detailModel', 'Model'),
-              reasoning: t('mention.agentRole.detailReasoning', 'Reasoning'),
-              prompt: t('mention.agentRole.detailPrompt', 'Prompt'),
-            },
-            limit
-          ),
+        getCandidates: (term, limit) => buildAgentRoleCandidates(agentRole.items, term, limit),
       });
     }
 

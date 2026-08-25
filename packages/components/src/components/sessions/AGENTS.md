@@ -332,7 +332,14 @@ Session conversation page chain:
   configuration: the values the Role seeded are the user's own now, and rolling
   them back would undo choices they never asked to undo. An unavailable Role
   stays listed and disabled with its reason, `machine_offline` included, since
-  no machine heading carries it here. The detail pane resolves each stored id
+  no machine heading carries it here. `AgentRoleDetailPane`
+  (`sessions/agent-role-detail-pane.tsx`) is the ONE pane that reads a Role, and
+  the `@` mention menu renders the same one — a Role is the same object on both
+  surfaces, and describing it twice is how the two drift (the mention menu's own
+  generic rows had already drifted: they printed the stored ids raw and labelled
+  the permission mode "Reasoning"). Each host passes the subject and sizes the
+  box; the mention menu also passes `machineLabel`, because that list spans
+  machines while the composer's is one machine by construction. It resolves each stored id
   against the BOUND agent's capabilities, so a Role reads in that agent's own
   wording ("Full access", not `agent-full-access`), and it shows ONLY what the
   Role pins — `resolveConfigOptionValue` would fall back to the agent's current
@@ -375,8 +382,13 @@ Session conversation page chain:
   simply stops resolving. A warning-tone pinned mode (full access / skip permissions)
   keeps its amber shield in the face and in the detail pane: the rest is quiet
   because the Role decided it, but that value no longer has a button carrying
-  the warning. `resolvePermissionModeFace` is the one rule for what permission
-  even IS on a given agent, shared by the button and the face.
+  the warning. `resolvePermissionModeFace` (`lib/permission-mode-face.ts`) is
+  the one rule for what permission even IS on a given agent — an explicit
+  `_permission` option, a legacy ACP mode, or a plain mode selector standing in
+  — shared by the button, the face, and the Role detail pane. The pane takes
+  only its `source` from that rule: the face RESOLVES a value, and resolution
+  falls back to the agent's current one, which the pane must never present as
+  something the Role pinned.
   Mobile (`MobileSessionRunConfig` → `MobileRunConfigSheet`) has the same Role
   row, in the same place — above Agent — as an ordinary `MobileInlinePicker`,
   with no detail pane and no edit: a phone row cannot carry the binding a Role

@@ -3,12 +3,12 @@ import { useAtomValue } from 'jotai';
 import type { AgentRoleId } from '@lody/shared';
 
 import { getAllAgentConfigAtom } from '@/atoms/agents';
-import {
-  isConfigOptionValueValid,
-  type AcpConfigOptionSelector,
-  type AcpConfigOptionValue,
+import type {
+  AcpConfigOptionSelector,
+  AcpConfigOptionValue,
 } from '@/components/shared/acp-selector-options';
 import type { AcpSessionSelectOption } from '@/components/shared/acp-session-select';
+import { filterAcpSessionConfigOptionValues } from '@/lib/acp-session-config-selection';
 import {
   isAgentRoleRunConfigApplied,
   selectSessionAgentRoles,
@@ -105,14 +105,13 @@ export function useSessionAgentRole({
       if (modeId && modeOptions.some((option) => option.value === modeId)) {
         onModeChange?.(modeId);
       }
-      for (const selector of configOptionSelectors) {
-        const value = pinned?.[selector.configId];
-        if (value === undefined) continue;
-        // An option this agent dropped, or whose value it no longer offers, is
-        // skipped rather than forced back in — the same rule a recent run
-        // configuration follows.
-        if (!isConfigOptionValueValid(selector, value)) continue;
-        onConfigOptionChange?.(selector.configId, value);
+      // An option this agent dropped, or whose value it no longer offers, is
+      // skipped rather than forced back in — through the same filter every
+      // other surface applies to remembered values.
+      for (const [configId, value] of Object.entries(
+        filterAcpSessionConfigOptionValues(pinned, configOptionSelectors)
+      )) {
+        onConfigOptionChange?.(configId, value);
       }
     },
     [

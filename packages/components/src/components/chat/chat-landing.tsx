@@ -241,8 +241,8 @@ import {
   DesktopMachineMenu,
   DesktopPermissionModeButton,
   DesktopRunConfigMenu,
-  resolvePermissionModeFace,
 } from '@/components/sessions/desktop-run-config-menu';
+import { resolvePermissionModeFace } from '@/lib/permission-mode-face';
 import { SessionUsagePopover } from '@/components/sessions/session-usage-popover';
 import { MachinePairingDialog } from './machine-pairing-dialog';
 import {

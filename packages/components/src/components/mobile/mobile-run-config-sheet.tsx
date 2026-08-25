@@ -205,24 +205,26 @@ function MobileRunConfigSheetRows({
         // Role under it.
         icon: <span aria-hidden="true" />,
       },
-      ...agentRoles.items.map(({ role, availability }) => ({
-        value: role.id as string,
-        label: role.name,
-        searchText: role.name,
-        icon: (
-          <span className="text-base leading-none" aria-hidden="true">
-            {getAgentRoleEmoji(role)}
-          </span>
-        ),
-
-        disabled: availability.kind === 'unavailable',
-        ...(availability.kind === 'unavailable'
-          ? {
-              description: t(AGENT_ROLE_UNAVAILABLE_REASON_KEYS[availability.reason]),
-              disabledReason: t(AGENT_ROLE_UNAVAILABLE_REASON_KEYS[availability.reason]),
-            }
-          : {}),
-      })),
+      ...agentRoles.items.map(({ role, availability }) => {
+        // Listed either way, so the reason is what makes a disabled row
+        // readable rather than broken-looking.
+        const reason =
+          availability.kind === 'unavailable'
+            ? t(AGENT_ROLE_UNAVAILABLE_REASON_KEYS[availability.reason])
+            : null;
+        return {
+          value: role.id as string,
+          label: role.name,
+          searchText: role.name,
+          icon: (
+            <span className="text-base leading-none" aria-hidden="true">
+              {getAgentRoleEmoji(role)}
+            </span>
+          ),
+          disabled: reason !== null,
+          ...(reason ? { description: reason, disabledReason: reason } : {}),
+        };
+      }),
       ...(agentRoles.onCreate
         ? [
             {

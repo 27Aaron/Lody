@@ -10,9 +10,11 @@ import {
   type AgentRoleInvocationSnapshot,
   type AgentRoleMentionScope,
   type MachineId,
+  type MachineViewMeta,
   type TextRewrite,
 } from '@lody/shared';
 import { userAtom } from '@/atoms';
+import type { AgentRoleDetailSubject } from '@/components/sessions/agent-role-detail-pane';
 import { getAllAgentConfigAtom } from '@/atoms/agents';
 import {
   hydrateSlugMentionsFromText,
@@ -51,8 +53,14 @@ export type AgentRoleMentionItem = {
    */
   slug: string;
   role: AgentRole;
-  machineLabel?: string;
-  agentConfigLabel?: string;
+  /**
+   * The bound agent and the machine it runs on, carried so the detail pane can
+   * resolve this Role's stored ids into the labels that agent publishes, and
+   * name the machine it binds. The pane is shared with the composer, which
+   * passes the same pair.
+   */
+  agentConfig?: AgentRoleDetailSubject['agentConfig'];
+  machine?: Pick<MachineViewMeta, 'acpCapabilities' | 'name'> | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -67,7 +75,8 @@ export type AgentRoleMentionItem = {
  * later, by the hook that already reads the visible-machine index.
  */
 export type AgentRoleMentionContext =
-  { kind: 'github' } | { kind: 'machine'; machineId: MachineId | null };
+  | { kind: 'github' }
+  | { kind: 'machine'; machineId: MachineId | null };
 
 /**
  * Where a composer's Roles may run.
@@ -133,16 +142,16 @@ export const selectAgentRoleMentionCandidates = (
 
 export const buildAgentRoleMentionItems = (
   roles: readonly AgentRole[],
-  labels: {
-    machineLabel: (machineId: MachineId) => string | undefined;
-    agentConfigLabel: (role: AgentRole) => string | undefined;
+  resolve: {
+    machine: (machineId: MachineId) => AgentRoleMentionItem['machine'] | undefined;
+    agentConfig: (role: AgentRole) => AgentRoleDetailSubject['agentConfig'] | undefined;
   }
 ): AgentRoleMentionItem[] =>
   roles.map((role) => ({
     slug: getAgentRoleMentionSlug(role),
     role,
-    machineLabel: labels.machineLabel(role.machineId),
-    agentConfigLabel: labels.agentConfigLabel(role),
+    machine: resolve.machine(role.machineId) ?? null,
+    agentConfig: resolve.agentConfig(role),
   }));
 
 /**
@@ -168,10 +177,10 @@ export function useAgentRoleMentionItems(context: AgentRoleMentionContext): Agen
     });
     // Indexed once: the same list is walked per Role, and this rebuilds on
     // every machine-presence tick.
-    const agentConfigNames = new Map(agentConfigs.map((config) => [config.id, config.name]));
+    const agentConfigById = new Map(agentConfigs.map((config) => [config.id, config]));
     return buildAgentRoleMentionItems(mentionable, {
-      machineLabel: (machineId) => machines.get(machineId)?.name,
-      agentConfigLabel: (role) => agentConfigNames.get(role.agentConfigId),
+      machine: (machineId) => machines.get(machineId),
+      agentConfig: (role) => agentConfigById.get(role.agentConfigId),
     });
   }, [agentConfigs, context, currentUserId, machines, resolve, roles]);
 }

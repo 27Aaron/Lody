@@ -21,6 +21,7 @@ import {
 } from '@/hooks/use-workspace-agent-roles';
 import { AgentIcon } from '@/components/icons/agent-icon';
 import { buildAgentRoleRunConfigSummary, EMPTY_AGENT_ROLE_FORM_VALUE } from '@/lib/agent-role-form';
+import { AGENT_ROLE_UNAVAILABLE_REASON_KEYS } from '@/lib/composer-agent-roles';
 import { cn } from '@/lib/utils';
 import {
   AlertDialog,
@@ -354,11 +355,7 @@ function AgentRoleAvailabilityText({ availability }: { availability: AgentRoleAv
     );
   }
   if (availability.reason === 'machine_offline') return null;
-  const reason = {
-    machine_unknown: t('settings.agentRoles.unavailable.machineUnknown'),
-    agent_config_missing: t('settings.agentRoles.unavailable.agentConfigMissing'),
-    agent_config_machine_mismatch: t('settings.agentRoles.unavailable.agentConfigMismatch'),
-  }[availability.reason];
+  const reason = t(AGENT_ROLE_UNAVAILABLE_REASON_KEYS[availability.reason]);
   return (
     <span className="mt-0.5 block truncate text-[11px] leading-tight text-status-warning">
       {t('settings.agentRoles.unavailable.label', { reason })}

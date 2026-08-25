@@ -18,8 +18,8 @@ import { agentConfigMetaCacheAtom } from '@/atoms/doc-meta';
 import {
   DesktopPermissionModeButton,
   DesktopRunConfigMenu,
-  resolvePermissionModeFace,
 } from '@/components/sessions/desktop-run-config-menu';
+import { resolvePermissionModeFace } from '@/lib/permission-mode-face';
 import type {
   AcpConfigOptionSelector,
   AcpConfigOptionValue,

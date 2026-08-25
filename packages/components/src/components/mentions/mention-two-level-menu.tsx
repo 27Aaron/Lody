@@ -16,6 +16,7 @@ import {
 import { cn } from '@/lib/utils';
 import { useFireOnKeyChange, useFireOncePerCycle } from '@/hooks/use-fire-once';
 import { FileIcon, FolderIcon } from '@/components/icons/file-icons';
+import { AgentRoleDetailPane } from '@/components/sessions/agent-role-detail-pane';
 import { MentionContent, MentionItem, useMentionContext } from '@/ui/mention';
 import { useIsMentionMobile } from '@/ui/mention/mention-mobile-content';
 import {
@@ -190,6 +191,19 @@ function CandidateRow({
  * full-width strip with no hover, so it stays list-only.
  */
 function CandidateDetailPane({ detail }: { detail: MentionCandidateDetail }) {
+  // A Role is the composer's object, read with the composer's pane: same rows,
+  // same wording for the ids, same instruction block — sized to this menu.
+  if (detail.agentRole) {
+    return (
+      <AgentRoleDetailPane
+        role={detail.agentRole.role}
+        agentConfig={detail.agentRole.agentConfig}
+        machine={detail.agentRole.machine}
+        machineLabel={detail.agentRole.machineLabel}
+        className="h-[320px] w-[248px]"
+      />
+    );
+  }
   return (
     <div className="scrollbar-pro h-[320px] w-[248px] shrink-0 overflow-y-auto border-l border-border px-3 py-2.5 [scrollbar-gutter:stable]">
       <p className="truncate text-sm font-semibold text-foreground">{detail.title}</p>
@@ -209,25 +223,6 @@ function CandidateDetailPane({ detail }: { detail: MentionCandidateDetail }) {
         <p className="mt-2 whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground">
           {detail.description}
         </p>
-      ) : null}
-      {detail.body ? (
-        <div className="mt-2.5">
-          {detail.body.label ? (
-            <p className="text-[10px] uppercase tracking-[0.06em] text-muted-foreground/70">
-              {detail.body.label}
-            </p>
-          ) : null}
-          {/* Capped and scrolled on its own so a long instruction cannot push
-              the machine/model rows out of the pane. */}
-          <div
-            className={cn(
-              'scrollbar-pro mt-0.5 max-h-[104px] overflow-y-auto whitespace-pre-wrap break-words text-[11px] leading-relaxed text-muted-foreground',
-              detail.body.mono && 'font-mono text-[10.5px]'
-            )}
-          >
-            {detail.body.text}
-          </div>
-        </div>
       ) : null}
       {detail.rows?.length ? (
         <dl className="mt-2.5 flex flex-col gap-1 text-[11px]">

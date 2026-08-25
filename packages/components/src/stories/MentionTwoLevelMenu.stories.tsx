@@ -115,13 +115,14 @@ const SKILLS: MentionCandidate[] = [
   ),
 ];
 
-const AGENT_ROLE_LABELS = {
-  machine: 'Machine',
-  agentConfig: 'Agent',
-  model: 'Model',
-  reasoning: 'Reasoning',
-  prompt: 'Prompt',
-};
+const ROLE_MACHINE = { name: 'Studio' };
+
+const ROLE_AGENT_CONFIG = {
+  cliType: 'builtin',
+  agentType: 'codex',
+  env: {},
+  name: 'Codex',
+} as const;
 
 const agentRole = (overrides: Partial<AgentRole>): AgentRole => ({
   v: AGENT_ROLE_VERSION,
@@ -140,39 +141,33 @@ const agentRole = (overrides: Partial<AgentRole>): AgentRole => ({
 });
 
 const AGENT_ROLES: MentionCandidate[] = [
-  toAgentRoleCandidate(
-    {
-      slug: 'Code-Reviewer',
-      role: agentRole({
-        // Long on purpose: the instruction scrolls inside its own block so the
-        // machine/agent/model rows stay on screen.
-        promptPrefix: [
-          'Review the diff for correctness before style.',
-          'Name the failure a reader could hit, with the input that triggers it.',
-          'Prefer one concrete repro over three hedged observations.',
-          'If the change is fine, say so in one line and stop.',
-        ].join('\n'),
-      }),
-      machineLabel: 'Studio',
-      agentConfigLabel: 'Codex',
-    },
-    AGENT_ROLE_LABELS
-  ),
-  toAgentRoleCandidate(
-    {
-      slug: 'Release-Notes',
-      role: agentRole({
-        id: 'role-2' as AgentRoleId,
-        name: 'Release Notes',
-        emoji: '📝',
-        visibility: 'private',
-        runConfig: { modelId: 'gpt-5.6-luna' },
-      }),
-      machineLabel: 'Studio',
-      agentConfigLabel: 'Codex',
-    },
-    AGENT_ROLE_LABELS
-  ),
+  toAgentRoleCandidate({
+    slug: 'Code-Reviewer',
+    role: agentRole({
+      // Long on purpose: the instruction scrolls inside its own block so the
+      // pinned-value rows stay on screen.
+      promptPrefix: [
+        'Review the diff for correctness before style.',
+        'Name the failure a reader could hit, with the input that triggers it.',
+        'Prefer one concrete repro over three hedged observations.',
+        'If the change is fine, say so in one line and stop.',
+      ].join('\n'),
+    }),
+    machine: ROLE_MACHINE,
+    agentConfig: ROLE_AGENT_CONFIG,
+  }),
+  toAgentRoleCandidate({
+    slug: 'Release-Notes',
+    role: agentRole({
+      id: 'role-2' as AgentRoleId,
+      name: 'Release Notes',
+      emoji: '📝',
+      visibility: 'private',
+      runConfig: { modelId: 'gpt-5.6-luna' },
+    }),
+    machine: ROLE_MACHINE,
+    agentConfig: ROLE_AGENT_CONFIG,
+  }),
 ];
 
 const COMMANDS: MentionCandidate[] = [

@@ -42,10 +42,12 @@ const role = (overrides: Partial<AgentRole> = {}): AgentRole => ({
   ...overrides,
 });
 
+const agentConfig = { cliType: 'builtin', agentType: 'codex', env: {}, name: 'Codex' } as const;
+
 const items = (...roles: AgentRole[]): AgentRoleMentionItem[] =>
   buildAgentRoleMentionItems(roles, {
-    machineLabel: () => 'Studio',
-    agentConfigLabel: () => 'Codex',
+    machine: () => ({ name: 'Studio' }),
+    agentConfig: () => agentConfig,
   });
 
 describe('agent role mention work context', () => {
@@ -134,16 +136,8 @@ describe('agent role candidates', () => {
 });
 
 describe('agent role menu rows', () => {
-  const labels = {
-    machine: 'Machine',
-    agentConfig: 'Agent',
-    model: 'Model',
-    reasoning: 'Reasoning',
-    prompt: 'Prompt',
-  };
-
   it('carries the role own mark instead of the category glyph', () => {
-    const [candidate] = buildAgentRoleCandidates(items(role({ emoji: '🔍' })), '', labels);
+    const [candidate] = buildAgentRoleCandidates(items(role({ emoji: '🔍' })), '');
     expect(candidate).toMatchObject({
       iconEmoji: '🔍',
       // The name alone: the emoji is the row's icon, not a prefix on the text.
@@ -151,33 +145,33 @@ describe('agent role menu rows', () => {
       insertText: '@Code-Reviewer',
       value: 'role-1',
     });
-    // The pane has no icon slot, so the mark rides in its title there.
-    expect(candidate?.detail?.title).toBe('🔍 Code Reviewer');
+    // Nothing restated in the detail: the pane heads itself with the same mark
+    // and name.
+    expect(candidate?.detail?.title).toBeUndefined();
   });
 
-  it('shows the instruction itself rather than a badge saying one exists', () => {
-    const [withPrompt] = buildAgentRoleCandidates(
-      items(role({ promptPrefix: 'Check correctness before style.' })),
-      '',
-      labels
-    );
-    expect(withPrompt?.detail?.body).toEqual({
-      label: 'Prompt',
-      text: 'Check correctness before style.',
-      mono: true,
+  it('hands the Role to the shared pane instead of restating it as rows', () => {
+    const withPrompt = role({ promptPrefix: 'Check correctness before style.' });
+    const [candidate] = buildAgentRoleCandidates(items(withPrompt), '');
+    // The pane reads the Role itself — including its instruction — resolving
+    // each stored id against the BOUND agent's capabilities. Generic rows here
+    // could only print those ids raw, which is how this menu ended up labelling
+    // the permission mode "Reasoning".
+    expect(candidate?.detail?.agentRole).toEqual({
+      role: withPrompt,
+      agentConfig,
+      machine: { name: 'Studio' },
+      // Named because this menu spans machines, unlike the composer's list.
+      machineLabel: 'Studio',
     });
+    expect(candidate?.detail?.rows).toBeUndefined();
     // No badges at all: every Role the menu offers is one this user may run, so
-    // what the prompt SAYS is the only thing left that decides whether this is
-    // the Role the user meant.
-    expect(withPrompt?.detail?.badges).toBeUndefined();
-
-    const [withoutPrompt] = buildAgentRoleCandidates(items(role()), '', labels);
-    expect(withoutPrompt?.detail?.body).toBeUndefined();
-    expect(withoutPrompt?.detail?.badges).toBeUndefined();
+    // visibility changes nothing about accepting it.
+    expect(candidate?.detail?.badges).toBeUndefined();
   });
 
   it('falls back to the shared default mark', () => {
-    const [candidate] = buildAgentRoleCandidates(items(role({ emoji: undefined })), '', labels);
+    const [candidate] = buildAgentRoleCandidates(items(role({ emoji: undefined })), '');
     expect(candidate?.iconEmoji).toBe(DEFAULT_AGENT_ROLE_EMOJI);
   });
 });
