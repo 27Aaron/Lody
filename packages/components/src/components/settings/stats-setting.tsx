@@ -13,8 +13,7 @@ import {
   type SettingsUsageRange,
   type SettingsUsageTimelineData,
 } from './settings-data-cache';
-
-const TWO_HOUR_MS = 2 * 60 * 60 * 1000;
+import { formatUsageTimelineBucketLabel } from './usage-timeline-bucket-label';
 
 export function StatsSettingsComponent() {
   const usageAnalyticsAvailable = useAppCapability('usageAnalytics');
@@ -50,15 +49,7 @@ function CloudStatsSettings() {
       if (!usageTimeline) {
         return bucket.bucketLabel;
       }
-      if (usageTimeline.bucketSizeMs !== TWO_HOUR_MS) {
-        return bucket.bucketLabel;
-      }
-
-      const bucketEndMs = Math.min(
-        usageTimeline.endMs,
-        bucket.bucketStartMs + usageTimeline.bucketSizeMs
-      );
-      return dayTimeFormatter.format(new Date(bucketEndMs));
+      return formatUsageTimelineBucketLabel(usageTimeline, bucket, dayTimeFormatter);
     },
     [dayTimeFormatter, usageTimeline]
   );

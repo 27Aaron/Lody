@@ -16,10 +16,9 @@ import {
   type SettingsUsageTimelineData,
 } from '@/components/settings/settings-data-cache';
 import { UsageCalendarVisualization } from '@/components/settings/usage-calendar-visualization';
+import { formatUsageTimelineBucketLabel } from '@/components/settings/usage-timeline-bucket-label';
 import { formatCompactNumber, formatUsdAmount } from '@/lib/format-compact-number';
 import { toIntlLocaleOrEn } from '@/lib/intl-locale';
-
-const TWO_HOUR_MS = 2 * 60 * 60 * 1000;
 
 /* Full-bleed hero stat: oversized count-up number with a quiet label
    above it. Used for the headline tokens + cost totals so they read
@@ -89,15 +88,7 @@ export function MobileStatsSettings() {
       if (!usageTimeline) {
         return bucket.bucketLabel;
       }
-      if (usageTimeline.bucketSizeMs !== TWO_HOUR_MS) {
-        return bucket.bucketLabel;
-      }
-
-      const bucketEndMs = Math.min(
-        usageTimeline.endMs,
-        bucket.bucketStartMs + usageTimeline.bucketSizeMs
-      );
-      return dayTimeFormatter.format(new Date(bucketEndMs));
+      return formatUsageTimelineBucketLabel(usageTimeline, bucket, dayTimeFormatter);
     },
     [dayTimeFormatter, usageTimeline]
   );
