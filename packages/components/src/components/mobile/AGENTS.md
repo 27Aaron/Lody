@@ -217,7 +217,20 @@ embedded` lazy-imported from `../tasks/tasks-workspace.tsx` (`embedded`
   (Plan/Fast live inside the run-config sheet).
 - `mobile-inline-picker.tsx` dropdown is keyboard-operable (↑/↓/Enter/Esc, desktop
   search autofocus on `pointer: fine`) and **virtualizes lists >40 options** via
-  `@tanstack/react-virtual` (scroll-by-index keeps the active row mounted). The
+  `@tanstack/react-virtual` (scroll-by-index keeps the active row mounted). Its
+  search filters FUZZILY and re-ranks through `lib/fuzzy-option-filter.ts`,
+  shared with the desktop run-config menu so one query behaves the same on both:
+  a substring match cannot find `claude-opus-5` from `op5`, and a provider's
+  model list can run to dozens of ids. `shouldOfferOptionSearch` is the single
+  threshold for when a row gets a field at all. Its input is `type="text"`, not
+  `type="search"` — the search type draws a UA cancel glyph in the browser's own
+  accent, which belongs to no theme and is no thumb's target — and the clear
+  button beside it is ours.
+- Any mobile sheet that can put a FIELD on screen owes the native-keyboard
+  contract, `mobile-run-config-sheet.tsx` included (its rows open pickers with
+  search fields). Call `useKeyboardAwareSheet()` rather than assembling it: it
+  is three parts that only work together (lift, capped scroller, centered
+  focus), and sheets carrying two of the three exist and misbehave on iOS. The
   desktop chat landing layers 2D-spatial keyboard nav on top — see
   [chat-landing-keyboard-nav.md](chat-landing-keyboard-nav.md).
 

@@ -72,6 +72,21 @@ const modelOptions: AcpSessionSelectOption[] = [
   { value: 'gpt-5.4-mini', label: '5.4-mini', description: 'Smaller, faster Codex model' },
 ];
 
+/* What a provider with a large catalog publishes — the case the Model submenu's
+   fuzzy search exists for. */
+const manyModelOptions: AcpSessionSelectOption[] = [
+  { value: 'gpt-5.5', label: '5.5', description: 'Latest frontier Codex model' },
+  { value: 'gpt-5.5-codex', label: '5.5-codex', description: 'Tuned for coding' },
+  { value: 'gpt-5.4', label: '5.4', description: 'Frontier Codex model' },
+  { value: 'gpt-5.4-mini', label: '5.4-mini', description: 'Smaller, faster Codex model' },
+  { value: 'gpt-5.3', label: '5.3', description: 'Previous frontier model' },
+  { value: 'gpt-5.3-mini', label: '5.3-mini', description: 'Previous small model' },
+  { value: 'o5-preview', label: 'o5-preview', description: 'Reasoning preview' },
+  { value: 'o5-mini', label: 'o5-mini', description: 'Small reasoning model' },
+  { value: 'o4', label: 'o4', description: 'Older reasoning model' },
+  { value: 'gpt-4.1', label: '4.1', description: 'Legacy general model' },
+];
+
 const modeOptions: AcpSessionSelectOption[] = [
   {
     value: 'read-only',
@@ -206,9 +221,12 @@ const storyPlatform = createLocalPlatformProvider({
 function StoryShell({
   items,
   initialRoleId = null,
+  models = modelOptions,
 }: {
   items: ReadonlyArray<ComposerAgentRoleItem>;
   initialRoleId?: AgentRoleId | null;
+  /** Overridden by the long-list story: what an agent provider may publish. */
+  models?: AcpSessionSelectOption[];
 }) {
   const store = useMemo(() => {
     const s = createStore();
@@ -226,7 +244,7 @@ function StoryShell({
       : { agentId: codexId, machineId }
   );
   const [model, setModel] = useState<string | null>(
-    initialRole?.runConfig.modelId ?? modelOptions[0]?.value ?? null
+    initialRole?.runConfig.modelId ?? models[0]?.value ?? null
   );
   const [mode, setMode] = useState<string | null>(
     initialRole?.runConfig.modeId ?? modeOptions[1]?.value ?? null
@@ -272,7 +290,7 @@ function StoryShell({
               availableAgentConfigs={agents}
               showAgentNameInTrigger
               onAgentConfigChange={setAgentSelection}
-              modelOptions={modelOptions}
+              modelOptions={models}
               selectedModelId={model}
               onModelChange={setModel}
               configOptionSelectors={selectors}
@@ -394,6 +412,19 @@ export const RoleWithWarningPermission: Story = {
       ...roleItems.slice(1),
     ],
     initialRoleId: 'role-reviewer' as AgentRoleId,
+  },
+};
+
+/**
+ * A provider with a long model list: the Model submenu gains a fuzzy search row
+ * that stays put while the options scroll under it. Type `54m` to see it narrow
+ * to `5.4-mini` — a scroll is not a way to find one model among dozens.
+ */
+export const ModelSearch: Story = {
+  args: { models: manyModelOptions },
+  play: async ({ canvasElement }) => {
+    await openMenu(canvasElement);
+    await userEvent.hover(await within(document.body).findByText('Model'));
   },
 };
 

@@ -33,6 +33,7 @@ import {
 } from '@/components/shared/acp-selector-options';
 import type { AcpSessionSelectOption } from '@/components/shared/acp-session-select';
 import type { AgentSelection } from '@/components/shared/agent-selector';
+import { MenuOptionSearchList } from '@/components/shared/menu-option-search-list';
 import { orderAcpConfigOptionSelectors } from '@/lib/acp-selector-order';
 import { resolvePermissionModeFace } from '@/lib/permission-mode-face';
 import {
@@ -591,6 +592,8 @@ export function DesktopRunConfigMenu({
 
   const agentLabel = t('chat.agentSelector.placeholder', 'Agent');
   const modelRowLabel = t('chat.runConfig.modelLabel', 'Model');
+  const modelSearchPlaceholder = t('chat.runConfig.modelSearchPlaceholder', 'Search models');
+  const modelSearchEmptyLabel = t('chat.runConfig.modelSearchEmpty', 'No models match');
   const reasoningLabel = t('chat.runConfig.reasoningLabel', 'Reasoning');
   const planRowLabel = t('chat.mobileNewChat.planModeLabel', 'Plan');
   const fastRowLabel = t('chat.runConfig.fastLabel', 'Fast');
@@ -792,7 +795,9 @@ export function DesktopRunConfigMenu({
           <DropdownMenuSub>
             <ValueSubTrigger label={modelRowLabel} value={modelLabel} />
             <DropdownMenuSubContent
-              className="max-w-80"
+              // `p-0` + column layout so the search row stays put while only the
+              // options scroll; the padding it drops moves onto the list itself.
+              className="flex max-w-80 flex-col overflow-y-hidden p-0"
               // Cap the list so a long model list scrolls inside a compact menu
               // instead of running the full viewport height. Inline (not a max-h-*
               // class) so it reliably wins over the base content's max-h, and clamps
@@ -801,16 +806,24 @@ export function DesktopRunConfigMenu({
                 maxHeight: 'min(20rem, var(--radix-dropdown-menu-content-available-height, 20rem))',
               }}
             >
-              {modelPickerOptions.map((opt) => (
-                <OptionItem
-                  key={opt.value}
-                  label={opt.label}
-                  description={opt.description}
-                  selected={opt.value === modelValue}
-                  disabled={opt.disabled}
-                  onSelect={() => handleModelSelect(opt.value)}
-                />
-              ))}
+              {/* A provider can publish dozens of models; past
+                  `OPTION_SEARCH_MIN_OPTIONS` this list gains a fuzzy search row. */}
+              <MenuOptionSearchList
+                options={modelPickerOptions}
+                onSelect={(opt) => handleModelSelect(opt.value)}
+                searchPlaceholder={modelSearchPlaceholder}
+                emptyText={modelSearchEmptyLabel}
+                renderOption={(opt, select) => (
+                  <OptionItem
+                    key={opt.value}
+                    label={opt.label}
+                    description={opt.description}
+                    selected={opt.value === modelValue}
+                    disabled={opt.disabled}
+                    onSelect={select}
+                  />
+                )}
+              />
             </DropdownMenuSubContent>
           </DropdownMenuSub>
         ) : null}

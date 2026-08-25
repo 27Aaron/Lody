@@ -247,6 +247,30 @@ export const Claude: Story = {
   args: { session: claudeSession, modelOptions: claudeModelOptions, selectors: claudeSelectors },
 };
 
+/**
+ * A provider with a long model catalog: the Model row's picker gains a fuzzy
+ * search field (`shouldOfferOptionSearch`, the same rule the desktop menu uses).
+ * Type `54m` to see it narrow to `gpt-5.4-mini` — a substring filter would not.
+ */
+export const ManyModels: Story = {
+  args: {
+    session: codexSession,
+    modelOptions: [
+      { value: 'gpt-5.5', label: 'gpt-5.5' },
+      { value: 'gpt-5.5-codex', label: 'gpt-5.5-codex' },
+      { value: 'gpt-5.4', label: 'gpt-5.4' },
+      { value: 'gpt-5.4-mini', label: 'gpt-5.4-mini' },
+      { value: 'gpt-5.3', label: 'gpt-5.3' },
+      { value: 'gpt-5.3-mini', label: 'gpt-5.3-mini' },
+      { value: 'o5-preview', label: 'o5-preview' },
+      { value: 'o5-mini', label: 'o5-mini' },
+      { value: 'o4', label: 'o4' },
+      { value: 'gpt-4.1', label: 'gpt-4.1' },
+    ],
+    selectors: codexSelectors,
+  },
+};
+
 const makeRole = (overrides: Partial<AgentRole> & Pick<AgentRole, 'id' | 'name'>): AgentRole => ({
   v: AGENT_ROLE_VERSION,
   ownerUserId: 'user-1',

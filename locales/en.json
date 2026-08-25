@@ -436,6 +436,8 @@
   "chat.runConfig.grok.permission.description": "Controls how protected tool actions are approved",
   "chat.runConfig.grok.permission.label": "Permission Mode",
   "chat.runConfig.modelLabel": "Model",
+  "chat.runConfig.modelSearchEmpty": "No models match",
+  "chat.runConfig.modelSearchPlaceholder": "Search models",
   "chat.runConfig.permissionLabel": "Permission",
   "chat.runConfig.reasoningLabel": "Reasoning",
   "chat.runConfig.recentLabel": "Recently used",

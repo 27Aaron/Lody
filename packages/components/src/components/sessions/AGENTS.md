@@ -299,6 +299,15 @@ Session conversation page chain:
   explicit agent selection/machine scope rather than reading `SessionMeta`.
   Agent/Model/Reasoning option selection closes the dropdown and must not return
   keyboard focus to its trigger; Plan/Fast toggle rows intentionally stay open.
+  Once the model list reaches `OPTION_SEARCH_MIN_OPTIONS`
+  (`lib/fuzzy-option-filter.ts` — the same threshold and matcher the mobile
+  sheet uses) the Model submenu gains a fuzzy search row over
+  `MenuOptionSearchList`: a provider may publish dozens of models, and scrolling
+  is not a way to find one. A search field inside a Radix menu must be
+  `DropdownMenuSearchInput`, which owns the fight with the menu's typeahead and
+  roving focus (its jsdoc has the details); the same tasks-side Model submenu
+  (`tasks/task-agent-run-config-menu.tsx`) is still an unsearchable clone and
+  should adopt it.
   `DesktopRunConfigMenu` gains a **Role** row when the caller passes
   `agentRoles`. It sits ABOVE Agent, since a Role answers every row under it at
   once. BOTH composers pass it, but they mean different things by it and the

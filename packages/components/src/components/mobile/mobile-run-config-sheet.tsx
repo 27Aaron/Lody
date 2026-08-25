@@ -23,6 +23,8 @@ import {
   AGENT_ROLE_UNAVAILABLE_REASON_KEYS,
   type ComposerAgentRoleItem,
 } from '@/lib/composer-agent-roles';
+import { shouldOfferOptionSearch } from '@/lib/fuzzy-option-filter';
+import { useKeyboardAwareSheet } from '@/hooks/use-keyboard-aware-scroll-into-view';
 import { cn } from '@/lib/utils';
 import { Drawer, DrawerContent, DrawerDescription, DrawerTitle } from '@/ui/drawer';
 import { Switch } from '@/ui/switch';
@@ -104,10 +106,19 @@ export function MobileRunConfigSheet({
 }: MobileRunConfigSheetProps) {
   const { t } = useTranslation();
   const title = t('chat.runConfig.title', 'Run configuration');
+
+  /* This sheet's rows OPEN pickers with search fields (Model above all, which a
+     provider can fill with dozens of entries). Tapping one puts the caret at the
+     bottom of the screen, exactly where the soft keyboard lands. */
+  const keyboard = useKeyboardAwareSheet();
+
   return (
     <Drawer open={open} onOpenChange={onOpenChange} repositionInputs={false}>
       <DrawerContent
-        className="h-auto! max-h-[85dvh]! rounded-t-2xl border-border/60"
+        className={cn(
+          'h-auto! max-h-[85dvh]! rounded-t-2xl border-border/60',
+          keyboard.contentClassName
+        )}
         onCloseAutoFocus={(event) => event.preventDefault()}
       >
         <DrawerTitle className="sr-only">{title}</DrawerTitle>
@@ -117,7 +128,11 @@ export function MobileRunConfigSheet({
             {title}
           </h2>
         </header>
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-[calc(16px+var(--safe-area-bottom,0px))] pt-2">
+        <div
+          ref={keyboard.scrollRef}
+          className="min-h-0 flex-1 overflow-y-auto px-4 pt-2"
+          style={keyboard.scrollStyle}
+        >
           <MobileInlinePickerCoordinator>
             <MobileRunConfigSheetRows {...contentProps} />
           </MobileInlinePickerCoordinator>
@@ -405,6 +420,8 @@ function MobileRunConfigSheetRows({
   const roleRowLabel = t('chat.runConfig.roles.label', 'Role');
   const agentLabel = t('chat.agentSelector.placeholder', 'Agent');
   const modelRowLabel = t('chat.runConfig.modelLabel', 'Model');
+  const modelSearchPlaceholder = t('chat.runConfig.modelSearchPlaceholder', 'Search models');
+  const modelSearchEmptyLabel = t('chat.runConfig.modelSearchEmpty', 'No models match');
   const reasoningLabel = t('chat.runConfig.reasoningLabel', 'Reasoning');
   const permissionRowLabel = t('chat.runConfig.permissionLabel', 'Permission');
   const planRowLabel = t('chat.mobileNewChat.planModeLabel', 'Plan');
@@ -429,7 +446,7 @@ function MobileRunConfigSheetRows({
             }}
             options={roleOptions}
             ariaLabel={roleRowLabel}
-            searchable={roleOptions.length > 5}
+            searchable={shouldOfferOptionSearch(roleOptions.length)}
             triggerContent={
               <>
                 {/* No reserved slot here: the trigger is one value, not a list,
@@ -464,7 +481,7 @@ function MobileRunConfigSheetRows({
             }}
             options={agentOptions}
             ariaLabel={agentLabel}
-            searchable={agentOptions.length > 5}
+            searchable={shouldOfferOptionSearch(agentOptions.length)}
             disabled={agentRowLocked}
             triggerContent={
               <>
@@ -510,7 +527,7 @@ function MobileRunConfigSheetRows({
               }
               options={pickerOptions}
               ariaLabel={selector.label}
-              searchable={pickerOptions.length > 5}
+              searchable={shouldOfferOptionSearch(pickerOptions.length)}
               disabled={locked}
               triggerContent={<span className="truncate">{selectedLabel ?? selector.label}</span>}
             />
@@ -532,7 +549,12 @@ function MobileRunConfigSheetRows({
             }}
             options={modelPickerOptions}
             ariaLabel={modelRowLabel}
-            searchable={modelPickerOptions.length > 5}
+            /* A provider can publish dozens of models, so this row is the one
+               that most needs typing at — name the search and say when nothing
+               matched rather than leaving an unlabelled field and a dash. */
+            searchable={shouldOfferOptionSearch(modelPickerOptions.length)}
+            searchPlaceholder={modelSearchPlaceholder}
+            emptyText={modelSearchEmptyLabel}
             triggerContent={<span className="truncate">{modelLabel ?? modelRowLabel}</span>}
           />
         </RunConfigRow>

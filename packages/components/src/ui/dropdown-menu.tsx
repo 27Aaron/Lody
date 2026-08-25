@@ -1,6 +1,6 @@
 import * as React from 'react';
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu';
-import { Check, ChevronRight, Circle } from 'lucide-react';
+import { Check, ChevronRight, Circle, Search } from 'lucide-react';
 
 import { handleMenuCloseAutoFocus } from '@/lib/menu-focus';
 import { cn } from '@/lib/utils';
@@ -446,6 +446,132 @@ const DropdownMenuSeparator = React.forwardRef<
 ));
 DropdownMenuSeparator.displayName = DropdownMenuPrimitive.Separator.displayName;
 
+/* Every focusable row of a menu, in DOM order — where an arrow key from the
+   search field should land. Radix marks disabled items, which cannot take focus. */
+const MENU_ITEM_SELECTOR = [
+  '[role="menuitem"]',
+  '[role="menuitemradio"]',
+  '[role="menuitemcheckbox"]',
+]
+  .map((role) => `${role}:not([data-disabled])`)
+  .join(',');
+
+const MENU_CONTENT_SELECTOR = '[data-radix-menu-content]';
+
+type DropdownMenuSearchInputProps = {
+  value: string;
+  onValueChange: (value: string) => void;
+  placeholder?: string;
+  /** Defaults to `placeholder`; give one when the field has no visible label. */
+  ariaLabel?: string;
+  /** Enter with focus still in the field — typically "take the top match". */
+  onSubmit?: () => void;
+  className?: string;
+};
+
+/**
+ * Search field for a menu whose list is too long to read at a glance.
+ *
+ * A Radix menu owns every keystroke inside its content: printable keys drive
+ * typeahead (which jumps focus to a matching row) and the arrows drive roving
+ * focus between items. A plain `<input>` mounted in menu content is therefore
+ * unusable. This keeps typing in the field and hands only the navigation keys
+ * back to the menu, moving focus onto the first/last row itself because the
+ * input is not part of the roving group — and it claims back the keystrokes
+ * that land on a row once the POINTER has moved focus there, so the whole
+ * primitive works wherever it is dropped rather than only inside a list that
+ * remembers to re-route them.
+ *
+ * Focus is claimed a frame after mount: Radix focuses the content element on
+ * open (keyboard) and never focuses a non-item child, so an `autoFocus` would
+ * simply be overwritten. Only with a precise pointer — on touch, grabbing focus
+ * would raise the soft keyboard over the menu the user just opened.
+ */
+const DropdownMenuSearchInput = React.forwardRef<HTMLInputElement, DropdownMenuSearchInputProps>(
+  ({ value, onValueChange, placeholder, ariaLabel, onSubmit, className }, forwardedRef) => {
+    const inputRef = React.useRef<HTMLInputElement | null>(null);
+    /* Read by the menu-level listener below, which binds once: rebinding it per
+       keystroke would drop the key that caused the re-render. */
+    const latest = React.useRef({ value, onValueChange });
+    latest.current = { value, onValueChange };
+
+    React.useEffect(() => {
+      if (typeof window === 'undefined') return undefined;
+      if (!window.matchMedia?.('(pointer: fine)').matches) return undefined;
+      const frame = requestAnimationFrame(() => inputRef.current?.focus());
+      return () => cancelAnimationFrame(frame);
+    }, []);
+
+    React.useEffect(() => {
+      const content = inputRef.current?.closest<HTMLElement>(MENU_CONTENT_SELECTOR);
+      if (!content) return undefined;
+      /* Native listener on the menu content, not a React handler: it runs while
+         the event is still bubbling to the portal container React listens on,
+         so stopping it here is what keeps the menu's typeahead from seeing the
+         key at all. */
+      const claimTyping = (event: KeyboardEvent) => {
+        if (event.target === inputRef.current) return;
+        if (event.metaKey || event.ctrlKey || event.altKey) return;
+        const { value: current, onValueChange: change } = latest.current;
+        if (event.key.length === 1) change(current + event.key);
+        else if (event.key === 'Backspace') change(current.slice(0, -1));
+        else return;
+        event.preventDefault();
+        event.stopPropagation();
+        inputRef.current?.focus();
+      };
+      content.addEventListener('keydown', claimTyping);
+      return () => content.removeEventListener('keydown', claimTyping);
+    }, []);
+
+    const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        const items = Array.from(
+          event.currentTarget
+            .closest(MENU_CONTENT_SELECTOR)
+            ?.querySelectorAll<HTMLElement>(MENU_ITEM_SELECTOR) ?? []
+        );
+        const target = event.key === 'ArrowDown' ? items[0] : items[items.length - 1];
+        if (!target) return;
+        event.preventDefault();
+        event.stopPropagation();
+        target.focus();
+        return;
+      }
+      // Escape closes the menu and Tab is Radix's to block; everything else —
+      // including ←/→/Home/End, which would otherwise close the submenu or jump
+      // rows — is text editing and stays in the field.
+      if (event.key === 'Escape' || event.key === 'Tab') return;
+      if (event.key === 'Enter' && onSubmit) {
+        event.preventDefault();
+        onSubmit();
+      }
+      event.stopPropagation();
+    };
+
+    return (
+      <div className={cn('flex items-center gap-2 px-2.5 py-1.5', className)}>
+        <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <input
+          ref={(node) => {
+            inputRef.current = node;
+            if (typeof forwardedRef === 'function') forwardedRef(node);
+            else if (forwardedRef) forwardedRef.current = node;
+          }}
+          type="text"
+          value={value}
+          onChange={(event) => onValueChange(event.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder={placeholder}
+          aria-label={ariaLabel ?? placeholder}
+          className="min-w-0 flex-1 border-none bg-transparent text-[0.8rem] leading-tight outline-none placeholder:text-muted-foreground focus:outline-none focus:ring-0"
+        />
+      </div>
+    );
+  }
+);
+DropdownMenuSearchInput.displayName = 'DropdownMenuSearchInput';
+
 const DropdownMenuShortcut = ({ className, ...props }: React.HTMLAttributes<HTMLSpanElement>) => {
   return (
     <span className={cn('ml-auto text-xs tracking-widest opacity-60', className)} {...props} />
@@ -461,6 +587,7 @@ export {
   DropdownMenuCheckboxItem,
   DropdownMenuRadioItem,
   DropdownMenuLabel,
+  DropdownMenuSearchInput,
   DropdownMenuSeparator,
   DropdownMenuShortcut,
   DropdownMenuGroup,

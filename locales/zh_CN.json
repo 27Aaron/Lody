@@ -436,6 +436,8 @@
   "chat.runConfig.grok.permission.description": "控制如何允许受保护的工具操作",
   "chat.runConfig.grok.permission.label": "权限模式",
   "chat.runConfig.modelLabel": "模型",
+  "chat.runConfig.modelSearchEmpty": "没有匹配的模型",
+  "chat.runConfig.modelSearchPlaceholder": "搜索模型",
   "chat.runConfig.permissionLabel": "权限",
   "chat.runConfig.reasoningLabel": "推理",
   "chat.runConfig.recentLabel": "最近使用",
