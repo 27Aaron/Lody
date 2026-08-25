@@ -130,10 +130,19 @@ type ManagedRuntimeInstallEntry = {
   settled: boolean;
 };
 
+const MANAGED_RUNTIME_NAME_VALUES = [
+  'codex',
+  'claude-code',
+  'kimi-code',
+  'grok-build',
+] as const satisfies readonly ManagedRuntimeName[];
+
+const ManagedRuntimeNameSchema = z.enum(MANAGED_RUNTIME_NAME_VALUES);
+
 const ManagedRuntimeInstallMetadataSchema = z
   .object({
     schemaVersion: z.literal(1),
-    runtimeName: z.enum(['codex', 'claude-code', 'kimi-code', 'grok-build']),
+    runtimeName: ManagedRuntimeNameSchema,
     runtimeVersion: z.string().min(1),
     platformArch: z.string().min(1),
     command: z.string().min(1),
@@ -145,6 +154,22 @@ const ManagedRuntimeInstallMetadataSchema = z
   .strict();
 
 type ManagedRuntimeInstallMetadata = z.infer<typeof ManagedRuntimeInstallMetadataSchema>;
+
+const LegacyManagedRuntimeInstallMetadataSchema = z
+  .object({
+    name: ManagedRuntimeNameSchema,
+    version: z.string().min(1),
+    platform: z.string().min(1),
+    archiveSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+    archiveSize: z.number().int().positive(),
+    executableSha256: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/u)
+      .optional(),
+    executableSize: z.number().int().positive().optional(),
+    installedAt: z.string().min(1),
+  })
+  .strict();
 
 export type ManagedRuntimeDiagnostics = {
   runtimeName: ManagedRuntimeName;
@@ -455,12 +480,7 @@ const RUNTIMES: Record<ManagedRuntimeName, RuntimeDefinition> = {
   },
 };
 
-export const MANAGED_RUNTIME_NAMES = Object.freeze([
-  'codex',
-  'claude-code',
-  'kimi-code',
-  'grok-build',
-] as const satisfies readonly ManagedRuntimeName[]);
+export const MANAGED_RUNTIME_NAMES = Object.freeze([...MANAGED_RUNTIME_NAME_VALUES]);
 
 function sanitizeSegment(segment: string): string {
   return segment.replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -651,9 +671,31 @@ export class ManagedAgentRuntimeManager {
 
     let metadata: ManagedRuntimeInstallMetadata;
     try {
-      metadata = ManagedRuntimeInstallMetadataSchema.parse(
-        JSON.parse(await readFile(join(dir, 'metadata.json'), 'utf8'))
-      );
+      const rawMetadata: unknown = JSON.parse(await readFile(join(dir, 'metadata.json'), 'utf8'));
+      const currentMetadata = ManagedRuntimeInstallMetadataSchema.safeParse(rawMetadata);
+      if (currentMetadata.success) {
+        metadata = currentMetadata.data;
+      } else {
+        const legacyMetadata = LegacyManagedRuntimeInstallMetadataSchema.parse(rawMetadata);
+        const legacyDefinition = RUNTIMES[legacyMetadata.name];
+        const legacyArchive = legacyDefinition.platforms[legacyMetadata.platform];
+        if (!legacyArchive) {
+          throw new ManagedRuntimeError(
+            `Managed runtime legacy cache platform is unsupported for ${legacyMetadata.name}/${legacyMetadata.version}/${legacyMetadata.platform}`
+          );
+        }
+        metadata = {
+          schemaVersion: 1,
+          runtimeName: legacyMetadata.name,
+          runtimeVersion: legacyMetadata.version,
+          platformArch: legacyMetadata.platform,
+          command: legacyArchive.cmd,
+          minNodeVersion: legacyDefinition.minNodeVersion,
+          archiveSha256: legacyMetadata.archiveSha256,
+          archiveSize: legacyMetadata.archiveSize,
+          installedAt: legacyMetadata.installedAt,
+        };
+      }
     } catch (error) {
       throw new ManagedRuntimeError(
         `Managed runtime cache metadata is invalid for ${name}/${version}/${platformArch}`,

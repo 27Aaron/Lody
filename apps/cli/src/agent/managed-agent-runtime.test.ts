@@ -3,7 +3,7 @@ import { createReadStream } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { Readable } from 'node:stream';
 
 import * as tar from 'tar';
@@ -31,6 +31,7 @@ import {
   ManagedAgentRuntimeManager,
   ManagedRuntimeIncompatibleHostError,
   ManagedRuntimeError,
+  type ManagedRuntimeName,
   type FetchImpl,
   type ManagedRuntimeProgressEvent,
 } from './managed-agent-runtime';
@@ -100,26 +101,73 @@ describe('ManagedAgentRuntimeManager', () => {
   async function installCachedCodex(options: {
     version: string;
     installedAt: string;
+    metadataFormat?: 'current' | 'legacy';
+    archiveSha256?: string;
+    archiveSize?: number;
   }): Promise<string> {
     const dir = join(rootDir, 'codex', options.version, 'linux-x64');
     const command = join(dir, 'bin', 'codex');
     await mkdir(join(dir, 'bin'), { recursive: true });
     await writeFile(command, `codex-${options.version}`);
+    const archiveSha256 = options.archiveSha256 ?? '0'.repeat(64);
+    const archiveSize = options.archiveSize ?? 1;
     await writeFile(
       join(dir, 'metadata.json'),
-      JSON.stringify({
-        schemaVersion: 1,
-        runtimeName: 'codex',
-        runtimeVersion: options.version,
-        platformArch: 'linux-x64',
-        command: 'bin/codex',
-        archiveSha256: '0'.repeat(64),
-        archiveSize: 1,
-        installedAt: options.installedAt,
-      })
+      JSON.stringify(
+        options.metadataFormat === 'legacy'
+          ? {
+              name: 'codex',
+              version: options.version,
+              platform: 'linux-x64',
+              archiveSha256,
+              archiveSize,
+              installedAt: options.installedAt,
+            }
+          : {
+              schemaVersion: 1,
+              runtimeName: 'codex',
+              runtimeVersion: options.version,
+              platformArch: 'linux-x64',
+              command: 'bin/codex',
+              archiveSha256,
+              archiveSize,
+              installedAt: options.installedAt,
+            }
+      )
     );
     await writeFile(join(dir, '.lody-complete'), '');
     return command;
+  }
+
+  async function installLegacyCachedRuntime(options: {
+    manager: ManagedAgentRuntimeManager;
+    name: ManagedRuntimeName;
+    platformArch: string;
+  }): Promise<{ command: string; version: string }> {
+    const definition = options.manager.getDefinition(options.name);
+    const archive = definition.platforms[options.platformArch];
+    if (!archive) {
+      throw new Error(`Missing ${options.name}/${options.platformArch} test archive`);
+    }
+    const dir = join(rootDir, options.name, definition.version, options.platformArch);
+    const command = join(dir, archive.cmd);
+    await mkdir(dirname(command), { recursive: true });
+    await writeFile(command, `cached-${options.name}`);
+    await writeFile(
+      join(dir, 'metadata.json'),
+      JSON.stringify({
+        name: options.name,
+        version: definition.version,
+        platform: options.platformArch,
+        archiveSha256: archive.sha256,
+        archiveSize: archive.size,
+        executableSha256: archive.executableSha256,
+        executableSize: archive.executableSize,
+        installedAt: '2026-08-01T00:00:00.000Z',
+      })
+    );
+    await writeFile(join(dir, '.lody-complete'), '');
+    return { command, version: definition.version };
   }
 
   it('launches the newest reusable installed runtime without downloading the target', async () => {
@@ -130,6 +178,7 @@ describe('ManagedAgentRuntimeManager', () => {
     const newestCommand = await installCachedCodex({
       version: '0.2.0',
       installedAt: '2026-02-01T00:00:00.000Z',
+      metadataFormat: 'legacy',
     });
     const fetchImpl = vi.fn<FetchImpl>();
     const manager = new ManagedAgentRuntimeManager({
@@ -152,6 +201,61 @@ describe('ManagedAgentRuntimeManager', () => {
     await manager.pruneSupersededVersions('codex');
     expect(existsSync(newestCommand)).toBe(true);
     expect(existsSync(olderCommand)).toBe(false);
+  });
+
+  it.each([
+    ['codex', 'linux', 'x64', 'linux-x64'],
+    ['claude-code', 'linux', 'x64', 'linux-x64'],
+    ['kimi-code', 'linux', 'x64', 'node'],
+    ['grok-build', 'linux', 'x64', 'linux-x64'],
+    ['grok-build', 'win32', 'x64', 'win32-x64'],
+  ] as const)(
+    'reuses a completed %s/%s runtime written with legacy metadata',
+    async (name, platform, arch, platformArch) => {
+      const manager = new ManagedAgentRuntimeManager({
+        rootDir,
+        platform,
+        arch,
+        nodeVersion: KIMI_CODE_MIN_NODE_VERSION,
+        runtimeBaseUrl: 'https://runtime.example.test',
+        fetchImpl: vi.fn(),
+      });
+      const cached = await installLegacyCachedRuntime({
+        manager,
+        name,
+        platformArch,
+      });
+
+      await expect(manager.getRuntimeStatus(name)).resolves.toMatchObject({
+        kind: 'installed',
+        version: cached.version,
+        command: cached.command,
+        updateAvailable: false,
+      });
+      await expect(manager.prepareCache()).resolves.toBeUndefined();
+      expect(existsSync(cached.command)).toBe(true);
+    }
+  );
+
+  it('rejects malformed legacy runtime metadata', async () => {
+    const command = await installCachedCodex({
+      version: '0.147.0',
+      installedAt: '2026-08-01T00:00:00.000Z',
+      metadataFormat: 'legacy',
+    });
+    const metadataPath = join(rootDir, 'codex', '0.147.0', 'linux-x64', 'metadata.json');
+    const metadata = JSON.parse(await readFile(metadataPath, 'utf8')) as Record<string, unknown>;
+    await writeFile(metadataPath, JSON.stringify({ ...metadata, unexpected: true }));
+    const manager = new ManagedAgentRuntimeManager({
+      rootDir,
+      platform: 'linux',
+      arch: 'x64',
+    });
+
+    await expect(manager.prepareCache()).rejects.toThrow(
+      'Managed runtime cache metadata is invalid for codex/0.147.0/linux-x64'
+    );
+    expect(existsSync(command)).toBe(true);
   });
 
   it('matches the exact locked Codex dependency version', () => {

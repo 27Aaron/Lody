@@ -110,6 +110,10 @@ arrive: context/message-flow.md "Upstream".
 - `managed-agent-runtime.ts` — pinned Codex/Claude Code/Grok native and Kimi Node-package `.tar.zst`
   artifacts, checksums, resumable downloads, the active installation profile's
   `agent-binaries` layout, and best-effort `bin` symlinks for complete native CLIs.
+  Completed caches written before metadata schema v1 remain reusable through a separate strict
+  legacy schema; normalize their old `name`/`version`/`platform` fields in memory and infer only
+  the trusted runtime definition's command and host requirement. Do not loosen the current schema
+  or accept unknown legacy fields.
   Codex version/archive pins come only from `codex-runtime-manifest.json`, which the
   outer `mirror:agent-runtimes` operator command atomically refreshes from the exact
   official GitHub Release when the adapter's `@openai/codex` dependency changes.
