@@ -2074,6 +2074,8 @@ export const SessionChatInputArea = memo(
     const [agentRoleEditor, setAgentRoleEditor] = useState<AgentRoleEditorState | null>(null);
     const { roles: accessibleAgentRoles } = useWorkspaceAgentRoles();
     const sessionAgentRole = useSessionAgentRole({
+      sessionId: session.id,
+      provenanceRoleId: session.agentRoleId,
       agentType: session.agentType,
       modelOptions,
       selectedModelId,

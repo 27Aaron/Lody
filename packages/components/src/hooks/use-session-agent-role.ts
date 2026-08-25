@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useAtomValue } from 'jotai';
-import type { AgentRoleId } from '@lody/shared';
+import type { AgentRoleId, SessionId } from '@lody/shared';
 
 import { getAllAgentConfigAtom } from '@/atoms/agents';
 import type {
@@ -39,6 +39,8 @@ export type SessionAgentRoleControl = {
  * the agent does not support is skipped rather than forced in.
  */
 export function useSessionAgentRole({
+  sessionId,
+  provenanceRoleId,
   agentType,
   modelOptions,
   selectedModelId,
@@ -50,6 +52,9 @@ export function useSessionAgentRole({
   configOptionValues,
   onConfigOptionChange,
 }: {
+  sessionId: SessionId;
+  /** Role that created this session; seeds only the composer's display name. */
+  provenanceRoleId?: AgentRoleId;
   agentType: string | null | undefined;
   modelOptions: ReadonlyArray<AcpSessionSelectOption>;
   selectedModelId: string | null;
@@ -68,9 +73,20 @@ export function useSessionAgentRole({
     [agentConfigs, agentType, roles]
   );
 
-  /* Which Role was picked, as a NAME. Whether it still describes the run config
-     is derived below, so a knob moved by hand takes the name away on its own. */
-  const [pickedRoleId, setPickedRoleId] = useState<AgentRoleId | null>(null);
+  /* Which Role was picked, as a NAME. A newly created session starts with its
+     provenance Role, while an explicit choice (including None) overrides that
+     seed for this mounted session. Scoping the override keeps a reused composer
+     from carrying one session's Role into another. Whether the Role still
+     describes the run config is derived below, so a knob moved by hand takes
+     the name away on its own. */
+  const [selectionOverride, setSelectionOverride] = useState<{
+    sessionId: SessionId;
+    roleId: AgentRoleId | null;
+  } | null>(null);
+  const pickedRoleId =
+    selectionOverride?.sessionId === sessionId
+      ? selectionOverride.roleId
+      : (provenanceRoleId ?? null);
   const selection = useMemo(
     () => ({
       modeId: selectedModeId,
@@ -91,12 +107,12 @@ export function useSessionAgentRole({
       if (roleId === null) {
         // Clears the NAME, not the configuration: the values are the user's own
         // now, and rolling them back would undo choices they never asked to undo.
-        setPickedRoleId(null);
+        setSelectionOverride({ sessionId, roleId: null });
         return;
       }
       const role = items.find((item) => item.role.id === roleId)?.role;
       if (!role) return;
-      setPickedRoleId(roleId);
+      setSelectionOverride({ sessionId, roleId });
 
       const { modelId, modeId, configOptionValues: pinned } = role.runConfig;
       if (modelId && modelOptions.some((option) => option.value === modelId)) {
@@ -122,6 +138,7 @@ export function useSessionAgentRole({
       onConfigOptionChange,
       onModeChange,
       onModelChange,
+      sessionId,
     ]
   );
 
