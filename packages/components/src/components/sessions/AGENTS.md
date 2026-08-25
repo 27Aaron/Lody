@@ -363,7 +363,15 @@ Session conversation page chain:
   because the Role decided it, but that value no longer has a button carrying
   the warning. `resolvePermissionModeFace` is the one rule for what permission
   even IS on a given agent, shared by the button and the face.
-  Mobile (`MobileSessionRunConfig`) has NO Role row. Neither the Role pane nor
+  Mobile (`MobileSessionRunConfig` → `MobileRunConfigSheet`) has the same Role
+  row, in the same place — above Agent — as an ordinary `MobileInlinePicker`,
+  and NOTHING else: no detail pane, no create, no edit. A phone row cannot
+  carry the binding a Role authorizes, so mobile is the picker and the binding
+  is read on desktop or in Settings. `None` still leads the list and an
+  unavailable Role is still listed, disabled, with its reason (from the shared
+  `AGENT_ROLE_UNAVAILABLE_REASON_KEYS`). The collapsed
+  `MobileRunConfigButton` face is unchanged: it shows the agent icon + model +
+  reasoning, which stays true whether or not a Role set them. Neither the Role pane nor
   the `@` mention pane shows a private/workspace badge: every Role offered is
   one this user may run, so visibility changes nothing about accepting it and is
   a Settings concern. The remembered Role rides in

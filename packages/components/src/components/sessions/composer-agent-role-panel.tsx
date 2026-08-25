@@ -23,7 +23,10 @@ import {
 import { AgentIcon } from '@/components/icons/agent-icon';
 import { useAcpSelectorOptions } from '@/hooks/use-acp-selector-options';
 import { orderAcpConfigOptionSelectors } from '@/lib/acp-selector-order';
-import type { ComposerAgentRoleItem } from '@/lib/composer-agent-roles';
+import {
+  AGENT_ROLE_UNAVAILABLE_REASON_KEYS,
+  type ComposerAgentRoleItem,
+} from '@/lib/composer-agent-roles';
 import { cn } from '@/lib/utils';
 import { DropdownMenuItem, DropdownMenuSeparator } from '@/ui/dropdown-menu';
 
@@ -405,11 +408,9 @@ function RoleAvailabilityNote({ availability }: { availability: AgentRoleAvailab
       </span>
     );
   }
-  const reason = {
-    machine_unknown: t('settings.agentRoles.unavailable.machineUnknown'),
-    machine_offline: t('settings.agentRoles.unavailable.machineOffline'),
-    agent_config_missing: t('settings.agentRoles.unavailable.agentConfigMissing'),
-    agent_config_machine_mismatch: t('settings.agentRoles.unavailable.agentConfigMismatch'),
-  }[availability.reason];
-  return <span className="text-[10.5px] leading-snug text-status-warning">{reason}</span>;
+  return (
+    <span className="text-[10.5px] leading-snug text-status-warning">
+      {t(AGENT_ROLE_UNAVAILABLE_REASON_KEYS[availability.reason])}
+    </span>
+  );
 }

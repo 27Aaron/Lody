@@ -3988,6 +3988,11 @@ function WorkspaceChatLanding({
               cliType: selectedConfig?.cliType,
               agentType: selectedConfig?.agentType,
             }}
+            agentRoles={{
+              items: composerAgentRoleItems,
+              selectedRoleId: activeAgentRole?.id ?? null,
+              onSelect: handleAgentRoleSelect,
+            }}
           />
         </div>
         <SessionUsagePopover

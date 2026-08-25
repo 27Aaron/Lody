@@ -3,8 +3,11 @@ import { Provider, createStore } from 'jotai';
 import { useMemo, useState } from 'react';
 import { fn } from 'storybook/test';
 import {
+  AGENT_ROLE_VERSION,
   type AgentConfigId,
   type AgentConfigMeta,
+  type AgentRole,
+  type AgentRoleId,
   type MachineId,
   type SessionId,
   type SessionMeta,
@@ -18,6 +21,7 @@ import type {
   AcpConfigOptionValue,
 } from '@/components/shared/acp-selector-options';
 import type { AcpSessionSelectOption } from '@/components/shared/acp-session-select';
+import type { ComposerAgentRoleItem } from '@/lib/composer-agent-roles';
 
 /**
  * The mobile composer's consolidated run-config bottom sheet, opened by
@@ -155,10 +159,12 @@ function StoryShell({
   session,
   modelOptions,
   selectors,
+  agentRoles,
 }: {
   session: SessionMeta;
   modelOptions: AcpSessionSelectOption[];
   selectors: AcpConfigOptionSelector[];
+  agentRoles?: ComposerAgentRoleItem[];
 }) {
   const store = useMemo(() => {
     const s = createStore();
@@ -171,6 +177,7 @@ function StoryShell({
 
   const [open, setOpen] = useState(true);
   const [model, setModel] = useState<string | null>(modelOptions[0]?.value ?? null);
+  const [roleId, setRoleId] = useState<AgentRoleId | null>(null);
   const [values, setValues] = useState<Record<string, AcpConfigOptionValue>>(() =>
     Object.fromEntries(selectors.map((sel) => [sel.configId, sel.currentValue]))
   );
@@ -205,6 +212,11 @@ function StoryShell({
           configOptionSelectors={selectors}
           configOptionValues={values}
           onConfigOptionChange={(id, v) => setValues((p) => ({ ...p, [id]: v }))}
+          agentRoles={
+            agentRoles
+              ? { items: agentRoles, selectedRoleId: roleId, onSelect: setRoleId }
+              : undefined
+          }
         />
       </div>
     </Provider>
@@ -228,4 +240,44 @@ export const Codex: Story = {
 
 export const Claude: Story = {
   args: { session: claudeSession, modelOptions: claudeModelOptions, selectors: claudeSelectors },
+};
+
+const makeRole = (overrides: Partial<AgentRole> & Pick<AgentRole, 'id' | 'name'>): AgentRole => ({
+  v: AGENT_ROLE_VERSION,
+  ownerUserId: 'user-1',
+  visibility: 'private',
+  machineId,
+  agentConfigId: 'agent-codex' as AgentConfigId,
+  runConfig: {},
+  revision: 1,
+  createdAt: 1,
+  updatedAt: 1,
+  ...overrides,
+});
+
+/**
+ * The Role row sits above Agent, because a Role answers every row under it.
+ * Mobile is the picker only: no detail pane, no create action. `None` leads the
+ * list, and an unavailable Role stays listed and disabled with its reason.
+ */
+export const WithAgentRoles: Story = {
+  args: {
+    session: codexSession,
+    modelOptions: codexModelOptions,
+    selectors: codexSelectors,
+    agentRoles: [
+      {
+        role: makeRole({ id: 'role-reviewer' as AgentRoleId, name: 'Code Reviewer', emoji: '🔍' }),
+        availability: { kind: 'available' },
+      },
+      {
+        role: makeRole({ id: 'role-docs' as AgentRoleId, name: 'Docs Writer', emoji: '📝' }),
+        availability: { kind: 'available' },
+      },
+      {
+        role: makeRole({ id: 'role-gone' as AgentRoleId, name: 'Retired Reviewer', emoji: '🗑️' }),
+        availability: { kind: 'unavailable', reason: 'agent_config_missing' },
+      },
+    ],
+  },
 };

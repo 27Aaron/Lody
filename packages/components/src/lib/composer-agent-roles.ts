@@ -3,6 +3,7 @@ import type {
   AgentRole,
   AgentRoleAvailability,
   AgentRoleId,
+  AgentRoleUnavailableReason,
   MachineId,
 } from '@lody/shared';
 import type { AcpConfigOptionValue } from '@/components/shared/acp-selector-options';
@@ -121,6 +122,20 @@ export function resolvePendingAgentRoleSelection({
   if (item.availability.kind === 'unknown') return 'wait';
   return item.availability.kind === 'available' ? 'select' : 'give-up';
 }
+
+/**
+ * Why a Role cannot run, as translation keys.
+ *
+ * One mapping, because every surface that lists Roles has to say the same thing
+ * for the same reason — a second copy is one that drifts into describing a
+ * `machine_offline` Role as a missing config.
+ */
+export const AGENT_ROLE_UNAVAILABLE_REASON_KEYS = {
+  machine_unknown: 'settings.agentRoles.unavailable.machineUnknown',
+  machine_offline: 'settings.agentRoles.unavailable.machineOffline',
+  agent_config_missing: 'settings.agentRoles.unavailable.agentConfigMissing',
+  agent_config_machine_mismatch: 'settings.agentRoles.unavailable.agentConfigMismatch',
+} as const satisfies Record<AgentRoleUnavailableReason, string>;
 
 export type ComposerRunConfigSelection = {
   agentSelection: AgentSelection | null;

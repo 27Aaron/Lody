@@ -192,11 +192,21 @@ embedded` lazy-imported from `../tasks/tasks-workspace.tsx` (`embedded`
   (`[agent icon] model · reasoning · [mode face] · plan/fast`; mode face =
   `permission-mode-face.tsx`, classified by `@lody/shared`
   `classifyPermissionModeFace`), and opens `mobile-run-config-sheet.tsx`
-  (Agent/Model/Interaction/Reasoning/Permission/Plan/Fast rows plus
+  (Role/Agent/Model/Interaction/Reasoning/Permission/Plan/Fast rows plus
   provider-defined select rows; Agent/Model/Interaction/Reasoning/Permission and
   provider-defined selects use coordinated inline pickers; explicit
   permission selectors take precedence over legacy ACP modes; closing the sheet must not restore
   focus to the composer). New-chat scopes agents via `allowedMachineIds` from
+  The **Role** row renders only when the caller passes `agentRoles` (new-chat
+  alone; an in-session composer cannot change the agent a Role binds) and only
+  when that machine HAS Roles. It sits above Agent, since a Role answers every
+  row under it, and is an ordinary inline picker: `None` first, then the
+  machine's Roles by emoji + name, an unavailable one listed but disabled with
+  its reason. Mobile deliberately stops there — no detail pane, no create, no
+  edit: a phone row cannot carry the binding a Role authorizes, so the picker is
+  the surface and the binding is read on desktop or in Settings. `None` reports
+  `null`, which clears the NAME and leaves the configuration as it stands.
+  New-chat scopes agents via `allowedMachineIds` from
   the selected machine and leaves agent unlocked; in-session locks agent once
   the conversation has turns. `mobile-session-composer-footer.tsx` still
   exports the legacy `MobileModelPickerLabel` helpers for any remaining chip

@@ -19,10 +19,19 @@ import {
 import type { AcpSessionSelectOption } from '@/components/shared/acp-session-select';
 import type { AgentSelection } from '@/components/shared/agent-selector';
 import { orderAcpConfigOptionSelectors } from '@/lib/acp-selector-order';
+import {
+  AGENT_ROLE_UNAVAILABLE_REASON_KEYS,
+  type ComposerAgentRoleItem,
+} from '@/lib/composer-agent-roles';
 import { cn } from '@/lib/utils';
 import { Drawer, DrawerContent, DrawerDescription, DrawerTitle } from '@/ui/drawer';
 import { Switch } from '@/ui/switch';
-import { classifyPermissionModeFace, type MachineId } from '@lody/shared';
+import {
+  classifyPermissionModeFace,
+  getAgentRoleEmoji,
+  type AgentRoleId,
+  type MachineId,
+} from '@lody/shared';
 import {
   MobileInlinePicker,
   MobileInlinePickerCoordinator,
@@ -69,6 +78,21 @@ export type MobileRunConfigSheetProps = {
   configOptionSelectors?: AcpConfigOptionSelector[];
   configOptionValues?: Record<string, AcpConfigOptionValue>;
   onConfigOptionChange?: (configId: string, value: AcpConfigOptionValue) => void;
+  /**
+   * Agent Roles for the machine this chat starts on, as the row above Agent.
+   *
+   * Omit to leave the row out: a surface where the agent cannot change has
+   * nothing a Role could apply. Mobile deliberately has no detail pane and no
+   * create action — this is the picker, and a Role's full binding is read on
+   * desktop or in Settings.
+   */
+  agentRoles?: {
+    items: ReadonlyArray<ComposerAgentRoleItem>;
+    /** The Role the current configuration still IS, not merely the last picked. */
+    selectedRoleId: AgentRoleId | null;
+    /** `null` clears the Role and leaves the configuration exactly as it stands. */
+    onSelect: (roleId: AgentRoleId | null) => void;
+  };
 };
 
 export function MobileRunConfigSheet({
@@ -113,6 +137,11 @@ function permissionModeIcon(modeId: string | null): ReactNode {
   return getPermissionModeIcon(modeId);
 }
 
+/* The picker carries strings, so "no Role" needs a value of its own. Not the
+   empty string: an option with a falsy value is indistinguishable from "nothing
+   selected" in the picker's own comparisons. */
+const ROLE_NONE_VALUE = '__none__';
+
 type MobileRunConfigSheetRowsProps = Omit<MobileRunConfigSheetProps, 'open' | 'onOpenChange'>;
 
 function MobileRunConfigSheetRows({
@@ -129,6 +158,7 @@ function MobileRunConfigSheetRows({
   configOptionSelectors = [],
   configOptionValues,
   onConfigOptionChange,
+  agentRoles,
 }: MobileRunConfigSheetRowsProps) {
   const { t } = useTranslation();
   const executorConfigs = useAtomValue(getAllAgentConfigAtom);
@@ -150,6 +180,49 @@ function MobileRunConfigSheetRows({
       ),
     [otherSelectors]
   );
+
+  /* ── Role (the row above Agent, because a Role ANSWERS every row under it) ──
+     `None` leads the list: leaving a Role clears the NAME, not the
+     configuration, and that is not the same gesture as picking one. An
+     unavailable Role stays listed and disabled, carrying its reason, so a Role
+     that cannot run is visibly broken rather than missing. */
+  const roleNoneLabel = t('chat.runConfig.roles.none', 'None');
+  const roleOptions = useMemo<MobileInlinePickerOption<string>[]>(() => {
+    if (!agentRoles) return [];
+    return [
+      {
+        value: ROLE_NONE_VALUE,
+        label: roleNoneLabel,
+        searchText: roleNoneLabel,
+        // An EMPTY glyph, not a missing one: the picker only renders its
+        // fixed-size icon box when an option has an icon, so without this the
+        // one row with no emoji would start its label further left than every
+        // Role under it.
+        icon: <span aria-hidden="true" />,
+      },
+      ...agentRoles.items.map(({ role, availability }) => ({
+        value: role.id as string,
+        label: role.name,
+        searchText: role.name,
+        icon: (
+          <span className="text-base leading-none" aria-hidden="true">
+            {getAgentRoleEmoji(role)}
+          </span>
+        ),
+
+        disabled: availability.kind === 'unavailable',
+        ...(availability.kind === 'unavailable'
+          ? {
+              description: t(AGENT_ROLE_UNAVAILABLE_REASON_KEYS[availability.reason]),
+              disabledReason: t(AGENT_ROLE_UNAVAILABLE_REASON_KEYS[availability.reason]),
+            }
+          : {}),
+      })),
+    ];
+  }, [agentRoles, roleNoneLabel, t]);
+  const selectedRole = agentRoles?.selectedRoleId
+    ? agentRoles.items.find((item) => item.role.id === agentRoles.selectedRoleId)?.role
+    : undefined;
 
   /* ── Agent (options scoped by allowedMachineIds when provided) ── */
   const agentOptions = useMemo<MobileInlinePickerOption<string>[]>(() => {
@@ -312,6 +385,7 @@ function MobileRunConfigSheetRows({
     ? resolveOnOffConfigOptionEnabled(fastSelector, configOptionValues?.[fastSelector.configId])
     : false;
 
+  const roleRowLabel = t('chat.runConfig.roles.label', 'Role');
   const agentLabel = t('chat.agentSelector.placeholder', 'Agent');
   const modelRowLabel = t('chat.runConfig.modelLabel', 'Model');
   const reasoningLabel = t('chat.runConfig.reasoningLabel', 'Reasoning');
@@ -321,6 +395,35 @@ function MobileRunConfigSheetRows({
 
   return (
     <div className="flex flex-col gap-1">
+      {agentRoles && agentRoles.items.length > 0 ? (
+        <RunConfigRow label={roleRowLabel}>
+          <MobileInlinePicker<string>
+            id="run-config-role"
+            value={agentRoles.selectedRoleId ?? ROLE_NONE_VALUE}
+            onChange={(value) =>
+              agentRoles.onSelect(value === ROLE_NONE_VALUE ? null : (value as AgentRoleId))
+            }
+            options={roleOptions}
+            ariaLabel={roleRowLabel}
+            searchable={roleOptions.length > 5}
+            triggerContent={
+              <>
+                {/* No reserved slot here: the trigger is one value, not a list,
+                    so `None` reads better flush against the row than indented
+                    past an empty box. The OPTIONS keep the slot, because there
+                    the labels are read as a column. */}
+                {selectedRole ? (
+                  <span className="text-base leading-none" aria-hidden="true">
+                    {getAgentRoleEmoji(selectedRole)}
+                  </span>
+                ) : null}
+                <span className="truncate">{selectedRole?.name ?? roleNoneLabel}</span>
+              </>
+            }
+          />
+        </RunConfigRow>
+      ) : null}
+
       {showAgent ? (
         <RunConfigRow label={agentLabel}>
           <MobileInlinePicker<string>
