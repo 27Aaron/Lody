@@ -781,12 +781,10 @@ describe('SessionDispatchWatcher', () => {
         read: true,
       })
     );
-    expect(upsertDocMeta).toHaveBeenCalledWith(
-      roomId,
-      expect.objectContaining({
-        lastHandledUserMsgId: 'turn-denied',
-      })
-    );
+    expect(upsertDocMeta).toHaveBeenCalledWith(roomId, {
+      lastHandledUserMsgId: 'turn-denied',
+      processingUserMsgId: undefined,
+    });
     // A definitive denial must be surfaced to the user, not silently marked
     // "Delivered". The watcher emits a chat_failed notice for it.
     expect(recordChatFailure).toHaveBeenCalledWith(
@@ -2598,6 +2596,8 @@ describe('SessionDispatchWatcher', () => {
     expect(
       sessionNeedsActiveWatch({
         ...baseMeta,
+        latestUserMsgId: 'turn-missing',
+        processingUserMsgId: 'turn-missing',
         lastMissingHistoryUserMsgId: 'turn-missing',
       })
     ).toBe(false);
@@ -2692,16 +2692,10 @@ describe('SessionDispatchWatcher', () => {
 
       expect(startSession).not.toHaveBeenCalled();
       expect(continueSession).not.toHaveBeenCalled();
-      expect(upsertDocMeta).toHaveBeenCalledWith(
-        roomId,
-        expect.objectContaining({
-          status: { type: 'idle' },
-          latestUserMsgId: undefined,
-          processingUserMsgId: undefined,
-          lastMissingHistoryUserMsgId: 'turn-missing',
-        })
-      );
-      expect(upsertDocMeta.mock.calls[0]?.[1]).not.toHaveProperty('lastHandledUserMsgId');
+      expect(upsertDocMeta).toHaveBeenCalledWith(roomId, {
+        status: { type: 'idle' },
+        lastMissingHistoryUserMsgId: 'turn-missing',
+      });
       expect(recordChatFailure).toHaveBeenCalledWith(
         sessionDoc,
         'message_delivery_failed',

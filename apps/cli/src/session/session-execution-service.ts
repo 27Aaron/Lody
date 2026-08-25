@@ -2963,19 +2963,12 @@ export class SessionExecutionService {
     sessionDoc: SessionDocument,
     userTurnId: string
   ): Promise<void> {
-    const existingMeta = await this.getSessionMeta(sessionId);
     await this.setUserTurnStatus(sessionDoc, userTurnId, 'processing');
     await this.upsertSessionMeta(sessionId, {
-      // Taking ownership must not demote a pointer that already names a LATER
-      // turn (a send that landed while this one was starting, or a second
-      // refused steer). `sessionNeedsActiveWatch` reads meta only, so demoting
-      // it here means this turn's own completion writes
-      // `latestUserMsgId === lastHandledUserMsgId` and every turn queued behind
-      // it becomes invisible to the watcher — including after a restart. The
-      // terminal writes preserve the pointer for exactly the same reason.
-      latestUserMsgId: this.resolveLatestUserMsgIdForTerminalTurn(existingMeta, userTurnId),
+      // Dispatch producers own `latestUserMsgId`. Execution only claims its
+      // own processing slot, so an awaited status write can never overwrite a
+      // newer activation published by another peer.
       processingUserMsgId: userTurnId,
-      lastMissingHistoryUserMsgId: undefined,
     });
   }
 
@@ -3082,7 +3075,6 @@ export class SessionExecutionService {
     if (cancelledUserMsgId) {
       await this.setTerminalUserTurnStatus(sessionId, sessionDoc, cancelledUserMsgId, 'canceled');
       await this.upsertSessionMeta(sessionId, {
-        latestUserMsgId: existingMeta?.latestUserMsgId ?? cancelledUserMsgId,
         lastHandledUserMsgId: cancelledUserMsgId,
         processingUserMsgId: undefined,
       });
@@ -3091,34 +3083,15 @@ export class SessionExecutionService {
     await this.clearDispatchProcessing(sessionId);
   }
 
-  /**
-   * The dispatch pointer for a turn this machine owns: keep a pointer that names
-   * a DIFFERENT turn (one that arrived while this one held the session and is
-   * still outstanding), otherwise name this turn. Applies both when a turn takes
-   * ownership and when it releases it — collapsing the pointer in either place
-   * hides the turns queued behind it from `sessionNeedsActiveWatch`.
-   */
-  private resolveLatestUserMsgIdForTerminalTurn(
-    meta: SessionMeta | undefined,
-    terminalUserTurnId: string
-  ): string {
-    return meta?.latestUserMsgId && meta.latestUserMsgId !== terminalUserTurnId
-      ? meta.latestUserMsgId
-      : terminalUserTurnId;
-  }
-
   private async setDispatchHandled(
     sessionId: SessionId,
     sessionDoc: SessionDocument,
     userTurnId: string
   ): Promise<void> {
-    const existingMeta = await this.getSessionMeta(sessionId);
     await this.setTerminalUserTurnStatus(sessionId, sessionDoc, userTurnId, 'handled');
     await this.upsertSessionMeta(sessionId, {
-      latestUserMsgId: this.resolveLatestUserMsgIdForTerminalTurn(existingMeta, userTurnId),
       lastHandledUserMsgId: userTurnId,
       processingUserMsgId: undefined,
-      lastMissingHistoryUserMsgId: undefined,
     });
   }
 
@@ -3176,13 +3149,10 @@ export class SessionExecutionService {
     sessionDoc: SessionDocument,
     userTurnId: string
   ): Promise<void> {
-    const existingMeta = await this.getSessionMeta(sessionId);
     await this.setTerminalUserTurnStatus(sessionId, sessionDoc, userTurnId, 'failed');
     await this.upsertSessionMeta(sessionId, {
-      latestUserMsgId: this.resolveLatestUserMsgIdForTerminalTurn(existingMeta, userTurnId),
       lastHandledUserMsgId: userTurnId,
       processingUserMsgId: undefined,
-      lastMissingHistoryUserMsgId: undefined,
     });
   }
 
@@ -4020,16 +3990,9 @@ export class SessionExecutionService {
               message: failureMessage,
             });
           }
-          yield* self.tryPromise(async () => {
-            if (executionUserTurnId) {
-              await self.upsertSessionMeta(sessionId, {
-                latestUserMsgId: executionUserTurnId,
-              });
-            }
-            if (incomingProjectBranch) {
-              await sessionDoc.setBaseBranch(incomingProjectBranch);
-            }
-          });
+          if (incomingProjectBranch) {
+            yield* self.tryPromise(() => sessionDoc.setBaseBranch(incomingProjectBranch));
+          }
           yield* ctx.openAssistantEntry({
             analytics: turnAnalytics,
             unhandledErrorContext: turnErrorContext,

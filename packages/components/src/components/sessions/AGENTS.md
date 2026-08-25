@@ -488,7 +488,14 @@ Session conversation page chain:
   later phase reports its own presence, so do not widen the timeout to cover a
   whole agent run. Durable resolution of a truly stalled turn still comes from
   CLI-side reconciliation on the next daemon start; the timeout only bounds the
-  optimistic UI. That pre-start label is additionally suppressed whenever the
+  optimistic UI. Message SUBMISSION ROUTING has one deliberate conservative
+  exception to presence-only display state: an unfinished assistant transcript is
+  an ordering barrier when presence is momentarily absent. `session-message-submit-route.ts`
+  must queue in that state (even when the preference is guide; steering requires
+  positive live prompt activity), because queue promotion is safe for both a live
+  turn and a stale transcript while direct dispatch can create a second accepted
+  turn. This barrier affects routing only; it must not relight Working UI or enable
+  Stop. That pre-start label is additionally suppressed whenever the
   status chip has an active connection/machine problem (`statusStripState !=
 null`: browser offline, machine removed or offline) — the chip owns that story,
   and "Starting…" next to "machine offline" is a contradiction. `isSessionWorking`

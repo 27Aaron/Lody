@@ -192,6 +192,7 @@ import {
   getPromptBridgeGoalCommands,
   isSessionPromptBusy,
 } from './session-goal-control';
+import { resolveSessionMessageSubmitRoute } from './session-message-submit-route';
 import { buildFixCiErrorsPrompt, buildResolvePrConflictsPrompt } from './session-pr-prompts';
 import { resolveConflictsActionAtomFamily } from './session-pr-agent-action';
 import { setPreferredPrMergeMethod, usePreferredPrMergeMethod } from './pr-merge-method';
@@ -3749,13 +3750,13 @@ export const SessionChatInterface = memo(
           options?.modelIdOverride !== undefined ? options.modelIdOverride : selectedModelId;
         const turnConfigOptionValues = options?.configOptionValuesOverride ?? configOptionValues;
         const forceDirect = options?.forceDirect === true;
-        const shouldGuide =
-          !forceDirect &&
-          !options?.forceQueue &&
-          isAgentBusy &&
-          queuedMessageBehavior === 'guide' &&
-          !!activeAssistantTurnId;
-        const shouldQueue = !forceDirect && !shouldGuide && (options?.forceQueue || isAgentBusy);
+        const submitRoute = resolveSessionMessageSubmitRoute({
+          forceDirect,
+          forceQueue: options?.forceQueue === true,
+          isPromptBusy: isAgentBusy,
+          hasUnfinishedAssistantTurn: activeAssistantTurnId != null,
+          queuedMessageBehavior,
+        });
         const startedAtMs = getPerformanceNowMs();
         const inputSummary = summarizeInputBlocksForAnalytics(normalized);
         if (isArchivedSession) {
@@ -3778,13 +3779,13 @@ export const SessionChatInterface = memo(
           ...inputSummary,
           force_queue: Boolean(options?.forceQueue),
           force_direct: forceDirect,
-          submit_route: shouldGuide ? 'guide' : shouldQueue ? 'queue' : 'direct_dispatch',
+          submit_route: submitRoute.type,
           is_agent_busy: isAgentBusy,
           mode_id: turnModeId ?? null,
           model_id: turnModelId ?? null,
           config_option_count: Object.keys(turnConfigOptionValues).length,
         });
-        if (shouldQueue) {
+        if (submitRoute.type === 'queue') {
           const accepted = await queueInputBlocks(normalized, {
             modeIdOverride: turnModeId,
             modelIdOverride: turnModelId,
@@ -3797,13 +3798,13 @@ export const SessionChatInterface = memo(
               ...inputSummary,
               submit_route: 'queue',
               duration_ms: getDurationSinceMs(startedAtMs),
-              queue_reason: options?.forceQueue ? 'forced' : 'agent_busy',
+              queue_reason: submitRoute.reason,
             }
           );
           return accepted;
         }
 
-        if (shouldGuide && activeAssistantTurnId) {
+        if (submitRoute.type === 'guide' && activeAssistantTurnId) {
           const accepted = await enqueueInputBlocks(normalized, {
             createHistory: true,
             guideExpectedTurnId: activeAssistantTurnId,

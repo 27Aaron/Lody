@@ -822,7 +822,10 @@ export type SessionMeta = {
    */
   pullRequestState?: Record<string, SessionPullRequestStateMeta>;
   contextWindowUsage?: SessionContextWindowUsage;
-  /** Latest user history entry id waiting to be handled by the machine. */
+  /**
+   * Latest user history entry published for dispatch. Owned by dispatch
+   * producers; execution terminal bookkeeping must never rewrite it.
+   */
   latestUserMsgId?: string;
   /** Assistant turn id the client wants to stop; cancel is ignored unless it matches the machine's in-memory active turn. */
   lastCanceledTurn?: string;
@@ -830,7 +833,10 @@ export type SessionMeta = {
   lastHandledUserMsgId?: string;
   /** User history entry id currently being processed by the machine. */
   processingUserMsgId?: string;
-  /** Latest user turn pointer cleared because its history payload never synced to the machine. */
+  /**
+   * Exact dispatch activation negatively acknowledged because its history
+   * payload never synced. It suppresses only a matching producer pointer.
+   */
   lastMissingHistoryUserMsgId?: string;
   /** Goal thread id the user dismissed from the banner after it reached a terminal state.
    *  The banner stays hidden until a goal with a different threadId arrives. */

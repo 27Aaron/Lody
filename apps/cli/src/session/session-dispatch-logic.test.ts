@@ -7,6 +7,8 @@ import {
 } from '@lody/shared';
 import {
   findNextDispatchableUserTurn,
+  getPendingUserTurnActivationId,
+  hasPendingUserTurnActivation,
   resolveSessionDispatchAction,
   shouldWatchSession,
 } from './session-dispatch-logic';
@@ -49,6 +51,30 @@ describe('shouldWatchSession', () => {
     expect(decide({ ...baseMeta, processingUserMsgId: 'turn-processing' })).toBe(true);
     expect(decide({ ...baseMeta, messageQueueUpdatedAt: 2, messageQueueCheckedAt: 1 })).toBe(true);
     expect(decide({ ...baseMeta, status: SessionStatusFactory.running() })).toBe(true);
+  });
+
+  it('suppresses only the exact activation whose history payload was missing', () => {
+    const missingMeta = {
+      ...baseMeta,
+      latestUserMsgId: 'turn-missing',
+      processingUserMsgId: 'turn-missing',
+      lastMissingHistoryUserMsgId: 'turn-missing',
+    };
+    expect(hasPendingUserTurnActivation(missingMeta)).toBe(false);
+    expect(getPendingUserTurnActivationId(missingMeta)).toBeUndefined();
+    expect(decide(missingMeta)).toBe(false);
+    expect(
+      decide({
+        ...missingMeta,
+        latestUserMsgId: 'turn-new',
+      })
+    ).toBe(true);
+    expect(
+      getPendingUserTurnActivationId({
+        ...missingMeta,
+        latestUserMsgId: 'turn-new',
+      })
+    ).toBe('turn-new');
   });
 
   it('opens rooms for process-local RPC, access-retry, and cancel signals', () => {
@@ -136,6 +162,32 @@ describe('findNextDispatchableUserTurn steer intent', () => {
         lastHandledUserMsgId: 'guide-user',
       })
     ).toBeNull();
+  });
+});
+
+describe('findNextDispatchableUserTurn missing-history acknowledgement', () => {
+  it('does not resurrect a turn whose payload arrived after recovery timed out', () => {
+    const turn = {
+      id: 'turn-missing',
+      timestamp: '2026-08-03T00:00:01.000Z',
+      role: 'user' as const,
+      items: [{ type: 'text' as const, text: 'late payload' }],
+      fileDiff: [],
+      status: 'pending' as const,
+    };
+    const meta = {
+      id: 'session-1',
+      machineId: 'machine-1',
+      createdAt: '2026-08-03T00:00:00.000Z',
+      userId: 'user-1',
+      cliType: 'builtin',
+      agentType: 'codex',
+      status: SessionStatusFactory.idle(),
+      latestUserMsgId: turn.id,
+      lastMissingHistoryUserMsgId: turn.id,
+    } as SessionMeta;
+
+    expect(findNextDispatchableUserTurn([turn], meta)).toBeNull();
   });
 });
 

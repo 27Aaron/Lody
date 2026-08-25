@@ -867,17 +867,14 @@ describe('SessionExecutionService', () => {
     expect(upsertDocMeta).not.toHaveBeenCalled();
   });
 
-  it('keeps a later dispatch pointer when an earlier turn takes ownership', async () => {
-    // Two refused steers requeue as `user-2` then `user-3`, so the pointer names
-    // `user-3` while dispatch starts the older `user-2`. Demoting it here would
-    // make `user-2`'s completion write `latestUserMsgId === lastHandledUserMsgId`
-    // and hide `user-3` from `sessionNeedsActiveWatch` — meta-only — for good.
+  it('leaves the producer-owned dispatch pointer untouched when execution takes ownership', async () => {
     const upsertDocMeta = vi.fn(async () => {});
+    const getDocMeta = vi.fn(async () => ({ meta: { latestUserMsgId: 'user-3' } }));
     const deps = createBaseDeps({
       workspaceDocument: {
         repo: {
           upsertDocMeta,
-          getDocMeta: vi.fn(async () => ({ meta: { latestUserMsgId: 'user-3' } })),
+          getDocMeta,
         },
         getOrCreateSessionDoc: vi.fn(async () => ({ updateHistory: vi.fn(async () => {}) })),
       } as unknown as LoroDocumentManager,
@@ -896,34 +893,53 @@ describe('SessionExecutionService', () => {
 
     await setDispatchProcessing('session-pointer' as SessionId, sessionDoc, 'user-2');
 
-    expect(upsertDocMeta).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ latestUserMsgId: 'user-3', processingUserMsgId: 'user-2' })
-    );
-
-    // The ordinary case is unchanged: with nothing newer outstanding the turn
-    // taking ownership owns the pointer too.
-    const plainDeps = createBaseDeps({
-      workspaceDocument: {
-        repo: { upsertDocMeta, getDocMeta: vi.fn(async () => undefined) },
-        getOrCreateSessionDoc: vi.fn(async () => ({ updateHistory: vi.fn(async () => {}) })),
-      } as unknown as LoroDocumentManager,
+    expect(upsertDocMeta).toHaveBeenCalledWith(expect.any(String), {
+      processingUserMsgId: 'user-2',
     });
-    upsertDocMeta.mockClear();
-    await (
-      new SessionExecutionService(plainDeps) as unknown as {
-        setDispatchProcessing: (
+    expect(getDocMeta).not.toHaveBeenCalled();
+  });
+
+  it('cannot overwrite a newer activation while an earlier turn becomes terminal', async () => {
+    let releaseHistoryWrite!: () => void;
+    const historyWriteBlocked = new Promise<void>((resolve) => {
+      releaseHistoryWrite = resolve;
+    });
+    const updateHistory = vi.fn(async () => {
+      await historyWriteBlocked;
+    });
+    const upsertDocMeta = vi.fn(async () => {});
+    const getDocMeta = vi.fn(async () => ({ meta: { latestUserMsgId: 'user-new' } }));
+    const service = new SessionExecutionService(
+      createBaseDeps({
+        workspaceDocument: {
+          repo: { upsertDocMeta, getDocMeta },
+        } as unknown as LoroDocumentManager,
+      })
+    );
+    const setDispatchHandled = (
+      service as unknown as {
+        setDispatchHandled: (
           sessionId: SessionId,
           doc: unknown,
           userTurnId: string
         ) => Promise<void>;
       }
-    ).setDispatchProcessing('session-pointer' as SessionId, sessionDoc, 'user-2');
+    ).setDispatchHandled.bind(service);
 
-    expect(upsertDocMeta).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ latestUserMsgId: 'user-2', processingUserMsgId: 'user-2' })
+    const completion = setDispatchHandled(
+      'session-terminal-pointer' as SessionId,
+      { updateHistory },
+      'user-old'
     );
+    await vi.waitFor(() => expect(updateHistory).toHaveBeenCalledTimes(1));
+    releaseHistoryWrite();
+    await completion;
+
+    expect(upsertDocMeta).toHaveBeenCalledWith(expect.any(String), {
+      lastHandledUserMsgId: 'user-old',
+      processingUserMsgId: undefined,
+    });
+    expect(getDocMeta).not.toHaveBeenCalled();
   });
 
   it('keeps a steer that failed after submission out of the dispatch queue', async () => {
@@ -1297,7 +1313,6 @@ describe('SessionExecutionService', () => {
     expect(upsertDocMeta).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({
-        latestUserMsgId: 'turn-user-1',
         lastHandledUserMsgId: 'turn-user-1',
         processingUserMsgId: undefined,
       })
@@ -3002,11 +3017,9 @@ describe('SessionExecutionService', () => {
       })
     );
     expect(upsertDocMeta).toHaveBeenCalledWith('session-session-2', {
-      latestUserMsgId: 'turn-create-1',
       processingUserMsgId: 'turn-create-1',
     });
     expect(upsertDocMeta).toHaveBeenCalledWith('session-session-2', {
-      latestUserMsgId: 'turn-create-1',
       lastHandledUserMsgId: 'turn-create-1',
       processingUserMsgId: undefined,
     });
@@ -3721,7 +3734,6 @@ describe('SessionExecutionService', () => {
     expect(deps.turnFinalization.finalizeACPState).toHaveBeenCalledTimes(1);
     expect(deps.processMessageQueue).not.toHaveBeenCalled();
     expect(upsertDocMeta).toHaveBeenCalledWith('session-session-create-interrupt', {
-      latestUserMsgId: 'turn-create-interrupt',
       lastHandledUserMsgId: 'turn-create-interrupt',
       processingUserMsgId: undefined,
     });
@@ -3897,7 +3909,7 @@ describe('SessionExecutionService', () => {
       expectedMessage
     );
     expect(upsertDocMeta).toHaveBeenCalledWith('session-session-restore-fail', {
-      latestUserMsgId: 'turn-restore-fail',
+      lastHandledUserMsgId: 'turn-restore-fail',
       processingUserMsgId: undefined,
     });
     expect(sessionDoc.setStatus).toHaveBeenCalledWith(SessionStatusFactory.idle());
@@ -3991,7 +4003,7 @@ describe('SessionExecutionService', () => {
         expectedMessage
       );
       expect(upsertDocMeta).toHaveBeenCalledWith('session-session-pending-init-fail', {
-        latestUserMsgId: 'turn-pending-init-fail',
+        lastHandledUserMsgId: 'turn-pending-init-fail',
         processingUserMsgId: undefined,
       });
       expect(deps.turnFinalization.finalizeACPState).toHaveBeenCalledTimes(1);
@@ -4064,7 +4076,7 @@ describe('SessionExecutionService', () => {
     });
 
     expect(upsertDocMeta).toHaveBeenCalledWith('session-session-chat-1', {
-      latestUserMsgId: 'turn-chat-1',
+      lastHandledUserMsgId: 'turn-chat-1',
       processingUserMsgId: undefined,
     });
     expect(deps.turnFinalization.finalizeACPState).toHaveBeenCalledTimes(1);
@@ -4245,7 +4257,7 @@ describe('SessionExecutionService', () => {
       'prompt build failed'
     );
     expect(upsertDocMeta).toHaveBeenCalledWith('session-session-pre-prompt-fail', {
-      latestUserMsgId: 'turn-pre-prompt-fail',
+      lastHandledUserMsgId: 'turn-pre-prompt-fail',
       processingUserMsgId: undefined,
     });
     expect(deps.turnFinalization.finalizeACPState).toHaveBeenCalledTimes(1);
@@ -4357,7 +4369,6 @@ describe('SessionExecutionService', () => {
     expect(deps.turnFinalization.finalizeACPState).toHaveBeenCalledTimes(1);
     expect(deps.processMessageQueue).not.toHaveBeenCalled();
     expect(upsertDocMeta).toHaveBeenCalledWith('session-session-pre-prompt-interrupt', {
-      latestUserMsgId: 'turn-pre-prompt-interrupt',
       lastHandledUserMsgId: 'turn-pre-prompt-interrupt',
       processingUserMsgId: undefined,
     });
@@ -4566,7 +4577,6 @@ describe('SessionExecutionService', () => {
     expect(sessionDoc.setStatus).toHaveBeenCalledWith(SessionStatusFactory.idle());
     expect(history[0]).toMatchObject({ id: 'turn-prompt-cancel', status: 'canceled' });
     expect(upsertDocMeta).toHaveBeenCalledWith('session-session-prompt-cancel', {
-      latestUserMsgId: 'turn-prompt-cancel',
       lastHandledUserMsgId: 'turn-prompt-cancel',
       processingUserMsgId: undefined,
     });
@@ -4696,7 +4706,6 @@ describe('SessionExecutionService', () => {
     await startPromise;
     expect(deps.processMessageQueue).not.toHaveBeenCalled();
     expect(upsertDocMeta).toHaveBeenCalledWith('session-session-prompt-cancel-immediate', {
-      latestUserMsgId: 'turn-prompt-cancel-immediate',
       lastHandledUserMsgId: 'turn-prompt-cancel-immediate',
       processingUserMsgId: undefined,
     });
@@ -4799,7 +4808,6 @@ describe('SessionExecutionService', () => {
     expect(deps.turnFinalization.notifySessionCompleted).not.toHaveBeenCalled();
     expect(deps.processMessageQueue).not.toHaveBeenCalled();
     expect(upsertDocMeta).toHaveBeenCalledWith('session-session-prompt-cancel-resolved', {
-      latestUserMsgId: 'turn-prompt-cancel-resolved',
       lastHandledUserMsgId: 'turn-prompt-cancel-resolved',
       processingUserMsgId: undefined,
     });
@@ -4914,7 +4922,6 @@ describe('SessionExecutionService', () => {
     expect(deps.processMessageQueue).not.toHaveBeenCalled();
     expect(sessionDoc.setStatus).toHaveBeenCalledWith(SessionStatusFactory.idle());
     expect(upsertDocMeta).toHaveBeenCalledWith('session-session-finalizing-cancel', {
-      latestUserMsgId: 'turn-finalizing-user',
       lastHandledUserMsgId: 'turn-finalizing-user',
       processingUserMsgId: undefined,
     });
@@ -5179,7 +5186,6 @@ describe('SessionExecutionService', () => {
     expect(session.agentClient.cancel).toHaveBeenCalledWith('acp-3');
     expect(sessionDoc.setStatus).toHaveBeenCalledWith(SessionStatusFactory.idle());
     expect(upsertDocMeta).toHaveBeenCalledWith('session-session-3', {
-      latestUserMsgId: 'turn-cancel-1',
       lastHandledUserMsgId: 'turn-cancel-1',
       processingUserMsgId: undefined,
     });
@@ -5351,7 +5357,6 @@ describe('SessionExecutionService', () => {
     expect(result).toEqual({ success: true });
     expect(session.agentClient.cancel).toHaveBeenCalledWith('acp-queued-cancel');
     expect(upsertDocMeta).toHaveBeenCalledWith('session-session-queued-cancel', {
-      latestUserMsgId: 'turn-queued-2',
       lastHandledUserMsgId: 'turn-running-1',
       processingUserMsgId: undefined,
     });

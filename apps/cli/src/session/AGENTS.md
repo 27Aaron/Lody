@@ -32,8 +32,11 @@ delegation proofs or a shared-machine gate without a new product and security de
   dispatch directly from the RPC handler. History synchronization continues as
   the durable fallback and output-ordering gate, not as a fast-path prerequisite.
   Missing-history delivery recovery must never advance `lastHandledUserMsgId`;
-  clear `latestUserMsgId`/`processingUserMsgId`, set `lastMissingHistoryUserMsgId`,
-  and surface a `chat_failed` notice instead. The watcher must not publish or clear
+  preserve the producer/executor pointers, set `lastMissingHistoryUserMsgId` as a
+  negative acknowledgement for that exact turn, and surface a `chat_failed` notice
+  instead. Watch activation and turn selection suppress pointers only when their id
+  matches that marker; a different producer id wakes the session without any
+  read-await-clear race. The watcher must not publish or clear
   session active presence; `../lib/loro/session-active-presence.ts` is the only owner
   for start/phase/heartbeat/clear. Owned-session startup/meta bootstrap scans may contain
   thousands of rooms. Session metadata is the activation index: an idle row with no
@@ -90,6 +93,14 @@ delegation proofs or a shared-machine gate without a new product and security de
   qualify: after submission the provider may already have committed the steer, and
   re-sending would duplicate it. An entry that is already active, terminal, or past
   `lastHandledUserMsgId` is left alone so a late duplicate cannot resurrect a turn.
+  `latestUserMsgId` has single-writer-role ownership: dispatch producers (Web/CLI
+  sends, edit-and-resend, refused-steer requeue, and accepted steer ownership
+  transfer) may publish it and clear a prior missing-history marker. Ordinary turn
+  execution writes only `processingUserMsgId` and `lastHandledUserMsgId`; its start,
+  success, failure, denial, and cancel paths must never read-await-rewrite
+  `latestUserMsgId` or `lastMissingHistoryUserMsgId`. Otherwise a terminal write for
+  turn A can overwrite the activation for turn B that arrived during an awaited
+  history mutation, leaving B pending and permanently unwatched.
   Because teardown/cancel finalize (`message-handler.ts`
   `finalizeACPState`, no-turnId overload) stamps `finished=true`/`endedAt` on the
   in-progress entry, resume must **reopen** it: `writeAssistantEntryForTurn`'s

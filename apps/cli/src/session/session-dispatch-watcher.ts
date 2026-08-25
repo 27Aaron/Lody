@@ -37,6 +37,8 @@ import {
 import type { SessionUserResolver, SessionUserProfile } from './session-user-resolver';
 import {
   findNextDispatchableUserTurn,
+  getPendingUserTurnActivationId,
+  hasPendingUserTurnActivation,
   resolveDispatchTurnInput,
   resolveDispatchAcpSessionId,
   resolveResumableAcpSessionId,
@@ -260,8 +262,8 @@ const isConfigOptionValueRecord = (
  *    - If no turn found in history, try promoting from the message queue (I/O).
  *    - If still nothing, wait for remote sync and retry (handles the race where
  *      metadata arrives before session doc content syncs from the web client).
- *    └─ pending meta still has no history turn after 5m → mark delivery recovery
- *       failed, clear pending pointers, and unload the session doc
+ *    └─ pending meta still has no history turn after 5m → negatively acknowledge
+ *       that exact turn id and unload the session doc
  *
  * 5. Dispatch the turn:
  *    ├─ No reusable session AND no acpSessionId → startSession (create)
@@ -328,12 +330,14 @@ const isConfigOptionValueRecord = (
  * confusing "message could not be delivered" failures when metadata won the
  * sync race.
  *
- * If the five-minute window expires, we mark dispatch recovery unhealthy, clear
- * only the pending pointers (`latestUserMsgId`, `processingUserMsgId`), preserve
- * `lastHandledUserMsgId`, record `lastMissingHistoryUserMsgId`, and unload the
- * session doc. Clearing the pending pointers is intentional: it leaves the
- * session idle/unwatched until a future Web send writes a new metadata pointer,
- * which naturally wakes dispatch again.
+ * If the five-minute window expires, we mark dispatch recovery unhealthy,
+ * preserve the producer/executor pointers and `lastHandledUserMsgId`, record the
+ * exact id in `lastMissingHistoryUserMsgId`, and unload the session doc. Watch
+ * activation and turn selection ignore a pointer only while it equals that
+ * negative acknowledgement. A future send publishes a different id (and clears
+ * the marker), which naturally wakes dispatch again. Preserving the pointers is
+ * essential: clearing either one after an awaited refresh can overwrite a newer
+ * activation or processing claim from another peer.
  * The tradeoff is that a genuinely late History CRDT update after the timeout
  * will not be auto-dispatched; the UI instead asks the user to send another
  * message. That is preferred over an unbounded silent wait or repeated recovery
@@ -1781,10 +1785,8 @@ export class SessionDispatchWatcher {
     this.consumeStashedRpcTurn(sessionId, userTurnId);
 
     await this.deps.workspaceDocument.repo.upsertDocMeta?.(getSessionRoomId(sessionId), {
-      latestUserMsgId: userTurnId,
       lastHandledUserMsgId: userTurnId,
       processingUserMsgId: undefined,
-      lastMissingHistoryUserMsgId: undefined,
     } satisfies Partial<SessionMeta>);
     await sessionDoc.setStatus(SessionStatusFactory.idle());
 
@@ -2168,10 +2170,7 @@ export class SessionDispatchWatcher {
   }
 
   private hasPendingUserTurnSignal(meta: SessionMeta): boolean {
-    if (meta.processingUserMsgId) {
-      return true;
-    }
-    return Boolean(meta.latestUserMsgId && meta.latestUserMsgId !== meta.lastHandledUserMsgId);
+    return hasPendingUserTurnActivation(meta);
   }
 
   /**
@@ -2493,12 +2492,9 @@ export class SessionDispatchWatcher {
     // Rejected: advancing `lastHandledUserMsgId` here. The machine never read
     // the turn payload, so "handled" would poison dispatch and silently drop a
     // late-arriving history entry. Use an explicit recovery marker instead.
-    const pendingUserMsgId =
-      meta.processingUserMsgId ?? meta.latestUserMsgId ?? meta.lastHandledUserMsgId;
+    const pendingUserMsgId = getPendingUserTurnActivationId(meta);
     const recoveryPatch: Partial<SessionMeta> = {
       status: SessionStatusFactory.idle(),
-      latestUserMsgId: undefined,
-      processingUserMsgId: undefined,
     };
     if (pendingUserMsgId) {
       recoveryPatch.lastMissingHistoryUserMsgId = pendingUserMsgId;
