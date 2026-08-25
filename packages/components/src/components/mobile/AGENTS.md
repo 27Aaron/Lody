@@ -197,15 +197,18 @@ embedded` lazy-imported from `../tasks/tasks-workspace.tsx` (`embedded`
   provider-defined selects use coordinated inline pickers; explicit
   permission selectors take precedence over legacy ACP modes; closing the sheet must not restore
   focus to the composer). New-chat scopes agents via `allowedMachineIds` from
-  The **Role** row renders only when the caller passes `agentRoles` (new-chat
-  alone; an in-session composer cannot change the agent a Role binds) and only
-  when that machine HAS Roles. It sits above Agent, since a Role answers every
-  row under it, and is an ordinary inline picker: `None` first, then the
-  machine's Roles by emoji + name, an unavailable one listed but disabled with
-  its reason. Mobile deliberately stops there — no detail pane, no create, no
-  edit: a phone row cannot carry the binding a Role authorizes, so the picker is
-  the surface and the binding is read on desktop or in Settings. `None` reports
-  `null`, which clears the NAME and leaves the configuration as it stands.
+  The **Role** row renders whenever the caller passes `agentRoles` — BOTH
+  composers do, meaning different things by it (see `sessions/AGENTS.md`) — and
+  renders even when there is nothing to list, reading `None`. It sits above
+  Agent, since a Role answers every row under it, and is an ordinary inline
+  picker: `None` first, then the Roles by emoji + name, an unavailable one
+  listed but disabled with its reason, and `New role` last. Mobile has no detail
+  pane and no edit: a phone row cannot carry the binding a Role authorizes, so
+  that is read on desktop or in Settings. `None` reports `null`, which clears
+  the NAME and leaves the configuration as it stands. `None` also carries an
+  EMPTY glyph so its label lines up with the emoji-led rows under it; the
+  trigger deliberately does not, because it shows one value rather than a
+  column.
   New-chat scopes agents via `allowedMachineIds` from
   the selected machine and leaves agent unlocked; in-session locks agent once
   the conversation has turns. `mobile-session-composer-footer.tsx` still

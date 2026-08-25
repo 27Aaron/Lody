@@ -3633,7 +3633,7 @@
   "mention.agentRole.detailPrompt": "Prompt",
   "settings.tabs.agentRoles": "Agent Roles",
   "settings.categories.agentRoles.description": "Reusable presets for creating sessions with a chosen agent, model, and prompt",
-  "settings.agentRoles.description": "An Agent Role saves how an agent config is used — machine, model, reasoning, and a prompt prefix — so you can mention it with @ instead of describing it each time. Roles never store API keys, MCP selections, or permission defaults.",
+  "settings.agentRoles.description": "An Agent Role saves how an agent config is used — machine, model, reasoning, permission, and a default instruction — so you can pick it in one click or mention it with @ instead of describing it each time. Roles never store API keys or MCP selections.",
   "settings.agentRoles.catalogTitle": "Roles",
   "settings.agentRoles.add": "Add role",
   "settings.agentRoles.addTitle": "New Agent Role",

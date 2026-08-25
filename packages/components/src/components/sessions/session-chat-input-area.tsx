@@ -14,6 +14,14 @@ import { useAtomValue } from 'jotai';
 import { ArrowUp, Loader2 } from 'lucide-react';
 import { Button } from '@/ui/button';
 import type { AcpSessionSelectOption } from '@/components/shared/acp-session-select';
+import { useSessionAgentRole } from '@/hooks/use-session-agent-role';
+import { buildAgentRoleFormValueFromRunConfig } from '@/lib/agent-role-form';
+import {
+  AgentRoleEditorDialog,
+  openAgentRoleEditorForCreate,
+  type AgentRoleEditorState,
+} from '@/components/settings/agent-role-editor-dialog';
+import { useWorkspaceAgentRoles } from '@/hooks/use-workspace-agent-roles';
 import {
   DesktopPermissionModeButton,
   DesktopRunConfigMenu,
@@ -2075,6 +2083,53 @@ export const SessionChatInputArea = memo(
       session.agentConfigId && session.machineId
         ? { agentId: session.agentConfigId, machineId: session.machineId }
         : null;
+    /* Role, in an EXISTING session. The agent is fixed here, so this offers
+       only Roles bound to an agent of the same TYPE and applies only their run
+       config — see `useSessionAgentRole`. The row is NOT gated on
+       `isEmptyConversation`: those values stay changeable every turn, so a Role
+       that packages them stays useful for the whole conversation. */
+    const [agentRoleEditor, setAgentRoleEditor] = useState<AgentRoleEditorState | null>(null);
+    const { roles: accessibleAgentRoles } = useWorkspaceAgentRoles();
+    const sessionAgentRole = useSessionAgentRole({
+      agentType: session.agentType,
+      modelOptions,
+      selectedModelId,
+      onModelChange,
+      modeOptions,
+      selectedModeId,
+      onModeChange,
+      configOptionSelectors: configOptionSelectors ?? [],
+      configOptionValues,
+      onConfigOptionChange,
+    });
+    const agentRolesProp = useMemo(
+      () => ({
+        items: sessionAgentRole.items,
+        selectedRoleId: sessionAgentRole.selectedRoleId,
+        onSelect: sessionAgentRole.onSelect,
+        onCreate: () =>
+          setAgentRoleEditor(
+            openAgentRoleEditorForCreate(
+              buildAgentRoleFormValueFromRunConfig({
+                machineId: session.machineId,
+                agentConfigId: session.agentConfigId,
+                modeId: selectedModeId,
+                modelId: modelOptions.length > 0 ? selectedModelId : null,
+                configOptionValues,
+              })
+            )
+          ),
+      }),
+      [
+        configOptionValues,
+        modelOptions.length,
+        selectedModelId,
+        selectedModeId,
+        session.agentConfigId,
+        session.machineId,
+        sessionAgentRole,
+      ]
+    );
     const mobileFooterSelectorNode = isMobile ? (
       <MobileSessionRunConfig
         agentSelection={mobileAgentSelection}
@@ -2091,6 +2146,7 @@ export const SessionChatInputArea = memo(
         configOptionValues={configOptionValues}
         onConfigOptionChange={onConfigOptionChange}
         fallbackAgent={{ cliType: session.cliType, agentType: session.agentType }}
+        agentRoles={agentRolesProp}
       />
     ) : null;
     const desktopAgentMachineIds = useMemo(
@@ -2121,6 +2177,9 @@ export const SessionChatInputArea = memo(
           configOptionSelectors={configOptionSelectors}
           configOptionValues={configOptionValues}
           onConfigOptionChange={onConfigOptionChange}
+          modeOptions={modeOptions}
+          selectedModeId={selectedModeId}
+          agentRoles={agentRolesProp}
         />
         <DesktopPermissionModeButton
           modeOptions={modeOptions}
@@ -2323,6 +2382,19 @@ export const SessionChatInputArea = memo(
           protectFromEdgeBackZone: isMobile,
         })}
       >
+        {/* The Role editor is a Dialog, so it is hosted OUT here rather than
+            inside the run-config menu or the mobile drawer, where it would
+            unmount with them the moment it opened. Mounted only while OPEN:
+            it reads machine visibility, and the composer must stay renderable
+            in hosts that do not provide that context. */}
+        {agentRoleEditor ? (
+          <AgentRoleEditorDialog
+            editor={agentRoleEditor}
+            accessibleRoles={accessibleAgentRoles}
+            onChange={setAgentRoleEditor}
+            onClose={() => setAgentRoleEditor(null)}
+          />
+        ) : null}
         <ConversationColumn>
           <div aria-hidden="true" className="h-1" />
           {queueDisplay ? <div className="pb-2">{queueDisplay}</div> : null}

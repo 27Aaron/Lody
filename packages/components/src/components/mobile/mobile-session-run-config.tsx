@@ -57,6 +57,7 @@ export type MobileSessionRunConfigProps = {
     items: ReadonlyArray<ComposerAgentRoleItem>;
     selectedRoleId: AgentRoleId | null;
     onSelect: (roleId: AgentRoleId | null) => void;
+    onCreate?: () => void;
   };
 };
 

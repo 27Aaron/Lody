@@ -1,6 +1,6 @@
 import { useMemo, type ReactNode } from 'react';
 import { useAtomValue } from 'jotai';
-import { ListChecks, ShieldAlert, Zap } from 'lucide-react';
+import { ListChecks, Plus, ShieldAlert, Zap } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { getAllAgentConfigAtom } from '@/atoms';
@@ -92,6 +92,8 @@ export type MobileRunConfigSheetProps = {
     selectedRoleId: AgentRoleId | null;
     /** `null` clears the Role and leaves the configuration exactly as it stands. */
     onSelect: (roleId: AgentRoleId | null) => void;
+    /** Opens the Role editor seeded with what the composer is set to right now. */
+    onCreate?: () => void;
   };
 };
 
@@ -139,8 +141,11 @@ function permissionModeIcon(modeId: string | null): ReactNode {
 
 /* The picker carries strings, so "no Role" needs a value of its own. Not the
    empty string: an option with a falsy value is indistinguishable from "nothing
-   selected" in the picker's own comparisons. */
+   selected" in the picker's own comparisons. `__create__` is the same trick for
+   the one row that is an ACTION rather than a value — the desktop submenu ends
+   with the same entry. */
 const ROLE_NONE_VALUE = '__none__';
+const ROLE_CREATE_VALUE = '__create__';
 
 type MobileRunConfigSheetRowsProps = Omit<MobileRunConfigSheetProps, 'open' | 'onOpenChange'>;
 
@@ -218,6 +223,16 @@ function MobileRunConfigSheetRows({
             }
           : {}),
       })),
+      ...(agentRoles.onCreate
+        ? [
+            {
+              value: ROLE_CREATE_VALUE,
+              label: t('chat.runConfig.roles.create', 'New role'),
+              searchText: t('chat.runConfig.roles.create', 'New role'),
+              icon: <Plus className="h-3.5 w-3.5" aria-hidden="true" />,
+            },
+          ]
+        : []),
     ];
   }, [agentRoles, roleNoneLabel, t]);
   const selectedRole = agentRoles?.selectedRoleId
@@ -395,14 +410,21 @@ function MobileRunConfigSheetRows({
 
   return (
     <div className="flex flex-col gap-1">
-      {agentRoles && agentRoles.items.length > 0 ? (
+      {/* Rendered whenever the caller offers Roles at all, even with none to
+          list: the row then reads `None` and its list is the way to make the
+          first one, which is what the desktop row does too. */}
+      {agentRoles ? (
         <RunConfigRow label={roleRowLabel}>
           <MobileInlinePicker<string>
             id="run-config-role"
             value={agentRoles.selectedRoleId ?? ROLE_NONE_VALUE}
-            onChange={(value) =>
-              agentRoles.onSelect(value === ROLE_NONE_VALUE ? null : (value as AgentRoleId))
-            }
+            onChange={(value) => {
+              if (value === ROLE_CREATE_VALUE) {
+                agentRoles.onCreate?.();
+                return;
+              }
+              agentRoles.onSelect(value === ROLE_NONE_VALUE ? null : (value as AgentRoleId));
+            }}
             options={roleOptions}
             ariaLabel={roleRowLabel}
             searchable={roleOptions.length > 5}

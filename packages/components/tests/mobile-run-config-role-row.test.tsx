@@ -127,9 +127,28 @@ describe('MobileRunConfigSheet agent-role row', () => {
     });
   };
 
-  it('has no Role row when the caller passes no Roles', async () => {
+  it('has no Role row when the caller offers no Roles at all', async () => {
     const view = await render();
     expect(view.querySelector('button[aria-label="Role"]')).toBeNull();
+  });
+
+  /* An empty catalog is not "no Role control": the row reads `None`, and its
+     list is the way to make the first one — the same as the desktop row. */
+  it('still shows the row when the machine has no Roles yet', async () => {
+    const onCreate = vi.fn();
+    const view = await render({
+      agentRoles: { items: [], selectedRoleId: null, onSelect: () => undefined, onCreate },
+    });
+    expect(view.querySelector('button[aria-label="Role"]')?.textContent).toContain('None');
+
+    await openRolePicker(view);
+    const create = [...view.querySelectorAll('[role="dialog"] button:not([aria-label])')].find(
+      (node) => node.textContent?.includes('New role')
+    );
+    await act(async () => {
+      (create as HTMLElement).click();
+    });
+    expect(onCreate).toHaveBeenCalled();
   });
 
   it('puts Role above Agent, because a Role answers every row under it', async () => {

@@ -214,7 +214,12 @@ function StoryShell({
           onConfigOptionChange={(id, v) => setValues((p) => ({ ...p, [id]: v }))}
           agentRoles={
             agentRoles
-              ? { items: agentRoles, selectedRoleId: roleId, onSelect: setRoleId }
+              ? {
+                  items: agentRoles,
+                  selectedRoleId: roleId,
+                  onSelect: setRoleId,
+                  onCreate: fn(),
+                }
               : undefined
           }
         />
@@ -254,6 +259,20 @@ const makeRole = (overrides: Partial<AgentRole> & Pick<AgentRole, 'id' | 'name'>
   updatedAt: 1,
   ...overrides,
 });
+
+/**
+ * The machine has no Roles yet. The row still renders and reads `None`; its
+ * list is the way to make the first one, the same as the desktop row. Hiding it
+ * made the control look absent.
+ */
+export const NoAgentRolesYet: Story = {
+  args: {
+    session: codexSession,
+    modelOptions: codexModelOptions,
+    selectors: codexSelectors,
+    agentRoles: [],
+  },
+};
 
 /**
  * The Role row sits above Agent, because a Role answers every row under it.

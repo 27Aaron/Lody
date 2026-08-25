@@ -3992,6 +3992,7 @@ function WorkspaceChatLanding({
               items: composerAgentRoleItems,
               selectedRoleId: activeAgentRole?.id ?? null,
               onSelect: handleAgentRoleSelect,
+              onCreate: handleAgentRoleCreate,
             }}
           />
         </div>

@@ -137,24 +137,48 @@ export const AGENT_ROLE_UNAVAILABLE_REASON_KEYS = {
   agent_config_machine_mismatch: 'settings.agentRoles.unavailable.agentConfigMismatch',
 } as const satisfies Record<AgentRoleUnavailableReason, string>;
 
-export type ComposerRunConfigSelection = {
-  agentSelection: AgentSelection | null;
+export type ComposerRunConfigValues = {
   modeId: string | null;
   modelId: string | null;
   configOptionValues: Record<string, AcpConfigOptionValue | undefined>;
 };
 
+export type ComposerRunConfigSelection = ComposerRunConfigValues & {
+  agentSelection: AgentSelection | null;
+};
+
 /**
- * Whether the composer is currently configured as this Role says.
+ * Whether every value this Role PINS is what the composer is set to.
  *
- * The composer names a Role only while this holds, which is what keeps the
- * footer from claiming a Role that is not what will run. Three things end it,
- * and all three are cases where the Role's own promise was already broken:
- * the user moved a knob, the agent changed, or the agent no longer supports a
- * value the Role pins so the selection state fell back to the agent's own.
+ * Only the pinned values are compared: a Role deliberately leaves the rest on
+ * the agent's default, so an unpinned option is not a difference.
  *
- * Only the values the Role PINS are compared. A Role deliberately leaves the
- * rest on the agent's default, so an unpinned option is not a difference.
+ * This is the half that does NOT involve the agent, because the two surfaces
+ * disagree about the agent on purpose — see `isComposerAgentRoleApplied`.
+ */
+export function isAgentRoleRunConfigApplied(
+  role: AgentRole,
+  selection: ComposerRunConfigValues
+): boolean {
+  const { modeId, modelId, configOptionValues } = role.runConfig;
+  if (modeId && selection.modeId !== modeId) return false;
+  if (modelId && selection.modelId !== modelId) return false;
+  for (const [configId, value] of Object.entries(configOptionValues ?? {})) {
+    if (selection.configOptionValues[configId] !== value) return false;
+  }
+  return true;
+}
+
+/**
+ * Whether the composer is currently configured as this Role says — values AND
+ * the agent it binds.
+ *
+ * This is the NEW-CHAT rule. The chat landing can still move the agent, so
+ * picking a Role there authorizes the whole Role, and the footer names it only
+ * while that holds. Three things end it, and all three are cases where the
+ * Role's own promise was already broken: the user moved a knob, the agent
+ * changed, or the agent no longer supports a value the Role pins so the
+ * selection state fell back to the agent's own.
  */
 export function isComposerAgentRoleApplied(
   role: AgentRole,
@@ -164,12 +188,44 @@ export function isComposerAgentRoleApplied(
   if (!agentSelection) return false;
   if (agentSelection.agentId !== role.agentConfigId) return false;
   if (agentSelection.machineId !== role.machineId) return false;
+  return isAgentRoleRunConfigApplied(role, selection);
+}
 
-  const { modeId, modelId, configOptionValues } = role.runConfig;
-  if (modeId && selection.modeId !== modeId) return false;
-  if (modelId && selection.modelId !== modelId) return false;
-  for (const [configId, value] of Object.entries(configOptionValues ?? {})) {
-    if (selection.configOptionValues[configId] !== value) return false;
-  }
-  return true;
+/**
+ * The Roles an EXISTING session may reuse: those bound to an agent of the same
+ * type.
+ *
+ * A live session's agent is fixed — its machine, its config, its whole
+ * runtime — so a Role cannot be executed there the way the landing executes
+ * one. What DOES transfer is the run configuration: model, reasoning, and
+ * permission options are published per `cliType:agentType`, so a Role authored
+ * against another config of the same TYPE pins values this session's agent
+ * understands. That is the whole offer here, and it is why availability is not
+ * consulted: nothing is going to that Role's machine.
+ *
+ * The Role's instruction is NOT part of it. A Role's prompt prefix belongs to
+ * the FIRST turn of a session it creates; replaying it into an ongoing
+ * conversation would be a different feature.
+ */
+export function selectSessionAgentRoles({
+  roles,
+  agentType,
+  agentConfigs,
+}: {
+  roles: readonly AgentRole[];
+  /** The running session's agent type; roles bound to another type are dropped. */
+  agentType: string | null | undefined;
+  agentConfigs: readonly AgentConfigMeta[];
+}): ComposerAgentRoleItem[] {
+  if (!agentType) return [];
+  const configById = new Map(agentConfigs.map((config) => [config.id, config]));
+  return roles
+    .flatMap((role) => {
+      const agentConfig = configById.get(role.agentConfigId);
+      if (agentConfig?.agentType !== agentType) return [];
+      // Availability describes whether the Role could RUN on its own machine,
+      // which is not what is being asked of it here.
+      return [{ role, availability: { kind: 'available' } as const, agentConfig }];
+    })
+    .sort((left, right) => left.role.name.localeCompare(right.role.name));
 }

@@ -3630,7 +3630,7 @@
   "mention.agentRole.detailPrompt": "Prompt",
   "settings.tabs.agentRoles": "Agent 角色",
   "settings.categories.agentRoles.description": "用于创建会话的可复用预设，包含指定的 Agent、模型和 Prompt",
-  "settings.agentRoles.description": "Agent 角色保存了使用某个 Agent 配置的方式——机器、模型、思考等级和 Prompt 前缀，让你可以用 @ 直接提及，而不必每次重复描述。角色不会保存 API Key、MCP 选择或权限默认值。",
+  "settings.agentRoles.description": "Agent 角色保存了使用某个 Agent 配置的方式——机器、模型、推理强度、权限和默认指令，让你一键选中或用 @ 直接提及，而不必每次重复描述。角色不会保存 API Key 或 MCP 选择。",
   "settings.agentRoles.catalogTitle": "角色",
   "settings.agentRoles.add": "添加角色",
   "settings.agentRoles.addTitle": "新建 Agent 角色",

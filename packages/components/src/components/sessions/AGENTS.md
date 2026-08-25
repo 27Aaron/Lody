@@ -299,10 +299,24 @@ Session conversation page chain:
   explicit agent selection/machine scope rather than reading `SessionMeta`.
   Agent/Model/Reasoning option selection closes the dropdown and must not return
   keyboard focus to its trigger; Plan/Fast toggle rows intentionally stay open.
-  `DesktopRunConfigMenu` gains a **Role** row ONLY when the caller passes
-  `agentRoles` — currently the chat landing alone, because an in-session
-  composer cannot change the agent a Role binds. It sits ABOVE Agent, since a
-  Role answers every row under it at once. With Roles to pick it is a submenu of
+  `DesktopRunConfigMenu` gains a **Role** row when the caller passes
+  `agentRoles`. It sits ABOVE Agent, since a Role answers every row under it at
+  once. BOTH composers pass it, but they mean different things by it and the
+  difference is load-bearing:
+
+  - **Chat landing** authorizes the WHOLE Role — machine, agent config, run
+    config, instruction — because it can still move the agent.
+  - **An existing session** (`useSessionAgentRole`) can NOT: its agent, machine,
+    and runtime are fixed. So it offers only Roles bound to an agent of the same
+    TYPE and applies only their RUN CONFIG, which is exactly what transfers:
+    model / reasoning / permission are published per `cliType:agentType`, and
+    they are the values a session can still change every turn. Availability is
+    not consulted there — nothing is going to that Role's machine — and the
+    Role's INSTRUCTION is not applied, because a prompt prefix belongs to the
+    first turn of a session the Role creates. The row is NOT gated on
+    `isEmptyConversation`: those values stay changeable for the whole
+    conversation. `isAgentRoleRunConfigApplied` is the shared value rule;
+    `isComposerAgentRoleApplied` is that rule plus the landing's agent check. With Roles to pick it is a submenu of
   `None` + the Roles bound to the machine the chat will start on (a Role's
   `machineId + agentConfigId` are exact, so a Role from another machine could
   only move the chat or fall back) beside a pane stating what the highlighted
@@ -365,11 +379,18 @@ Session conversation page chain:
   even IS on a given agent, shared by the button and the face.
   Mobile (`MobileSessionRunConfig` → `MobileRunConfigSheet`) has the same Role
   row, in the same place — above Agent — as an ordinary `MobileInlinePicker`,
-  and NOTHING else: no detail pane, no create, no edit. A phone row cannot
-  carry the binding a Role authorizes, so mobile is the picker and the binding
-  is read on desktop or in Settings. `None` still leads the list and an
-  unavailable Role is still listed, disabled, with its reason (from the shared
-  `AGENT_ROLE_UNAVAILABLE_REASON_KEYS`). The collapsed
+  with no detail pane and no edit: a phone row cannot carry the binding a Role
+  authorizes, so the binding is read on desktop or in Settings. It DOES offer
+  create, as the last entry in the list. The row renders whenever the caller
+  passes `agentRoles`, even with none to list — the row then reads `None` and
+  its list is the way to make the first one, which is what the desktop row does
+  too; hiding it made the control look absent. `None` still leads the list and
+  an unavailable Role is still listed, disabled, with its reason (from the
+  shared `AGENT_ROLE_UNAVAILABLE_REASON_KEYS`).
+  The Role editor is a Dialog, so BOTH composers host it outside their menu /
+  drawer — and the in-session one mounts it only while OPEN, because it reads
+  machine visibility and the composer must stay renderable in hosts that do not
+  provide that context. The collapsed
   `MobileRunConfigButton` face is unchanged: it shows the agent icon + model +
   reasoning, which stays true whether or not a Role set them. Neither the Role pane nor
   the `@` mention pane shows a private/workspace badge: every Role offered is
