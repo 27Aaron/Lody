@@ -18,6 +18,21 @@ By submitting a pull request, patch, or other contribution to Lody, you agree to
 2. For substantial features, please open an issue first to discuss the approach with maintainers.
 3. Do not report security vulnerabilities in a public issue; follow the [security policy](./SECURITY.md) instead.
 
+## Get the Code
+
+The repository uses Git submodules for ACP runtimes, so clone it recursively:
+
+```bash
+git clone --recurse-submodules https://github.com/loro-dev/lody-oss.git
+cd lody-oss
+```
+
+For an existing checkout, initialise the submodules:
+
+```bash
+git submodule update --init --recursive
+```
+
 ## Local Development
 
 You need Node.js 22 or later and the pnpm version specified by this project.
@@ -27,13 +42,26 @@ pnpm install
 pnpm start:local
 ```
 
-Useful validation commands:
+This builds the local CLI and open-source desktop renderer, then launches Electron. The first run may take a while. Fully quit any existing Lody desktop process first because the app allows only one running instance.
+
+The open-source build is local-first: it needs no `.env` file, Lody account, or cloud environment variables. Cloud endpoints and telemetry variables are not used.
+
+## Isolate Local Data While Developing
+
+By default, the open-source desktop app stores data in `~/.lody-oss`. To avoid using existing data during development, set `LODY_DATA_DIR`:
 
 ```bash
-pnpm check:quick
-pnpm test
-pnpm format
+LODY_DATA_DIR="$(pwd)/.lody-dev-data" pnpm start:local
 ```
+
+PowerShell:
+
+```powershell
+$env:LODY_DATA_DIR = "$PWD/.lody-dev-data"
+pnpm start:local
+```
+
+This variable is optional. Never commit the generated data or credentials.
 
 ## Submitting Changes
 
@@ -54,6 +82,5 @@ pnpm format
 
 - Follow the existing code style and directory structure.
 - Do not commit secrets, access tokens, real user data, or user/agent transcripts. Test data must be synthetic.
-- Keep the public version local-first and do not introduce dependencies on private backend services.
 
 Thank you for contributing!
