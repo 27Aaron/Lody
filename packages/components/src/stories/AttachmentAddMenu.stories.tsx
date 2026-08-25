@@ -88,7 +88,7 @@ const NativeSessionFrame = ({ children }: { children: React.ReactNode }) => (
 );
 
 export const DesktopLight: Story = {
-  args: { isMobile: false, onAddImage: noop, onAddFile: noop },
+  args: { isMobile: false, onAddAttachment: noop },
   render: (args) => (
     <Frame>
       <AttachmentAddMenu {...args} />
@@ -97,7 +97,7 @@ export const DesktopLight: Story = {
 };
 
 export const DesktopDark: Story = {
-  args: { isMobile: false, onAddImage: noop, onAddFile: noop },
+  args: { isMobile: false, onAddAttachment: noop },
   render: (args) => (
     <Frame dark>
       <AttachmentAddMenu {...args} />
@@ -106,7 +106,7 @@ export const DesktopDark: Story = {
 };
 
 export const Mobile: Story = {
-  args: { isMobile: true, onAddImage: noop, onAddFile: noop },
+  args: { isMobile: true, onAddAttachment: noop },
   render: (args) => (
     <Frame>
       <AttachmentAddMenu {...args} />
@@ -115,7 +115,7 @@ export const Mobile: Story = {
 };
 
 export const NativeSession: Story = {
-  args: { isMobile: true, onAddImage: noop, onAddFile: noop },
+  args: { isMobile: true, onAddAttachment: noop },
   render: (args) => (
     <NativeSessionFrame>
       <AttachmentAddMenu {...args} />
@@ -124,7 +124,7 @@ export const NativeSession: Story = {
 };
 
 export const Disabled: Story = {
-  args: { isMobile: false, disabled: true, onAddImage: noop, onAddFile: noop },
+  args: { isMobile: false, disabled: true, onAddAttachment: noop },
   render: (args) => (
     <Frame>
       <AttachmentAddMenu {...args} />
@@ -135,8 +135,7 @@ export const Disabled: Story = {
 export const DesktopWithMcp: Story = {
   args: {
     isMobile: false,
-    onAddImage: noop,
-    onAddFile: noop,
+    onAddAttachment: noop,
     mcp: { servers: mcpServers, selectedIds: [], onSelectedIdsChange: noop },
   },
   render: (args) => (
@@ -149,8 +148,7 @@ export const DesktopWithMcp: Story = {
 export const MobileWithMcp: Story = {
   args: {
     isMobile: true,
-    onAddImage: noop,
-    onAddFile: noop,
+    onAddAttachment: noop,
     mcp: {
       servers: mcpServers,
       selectedIds: [],

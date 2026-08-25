@@ -433,9 +433,10 @@ Session conversation page chain:
   while either is uploading. Desktop same-machine uploads use
   `@/lib/electron-session-file-sender.ts` / `window.api.sendSessionFileLocal`, return
   a `transport:'local'` block into the same `pendingFiles[].uploaded` slot, and fall
-  back to cloud on handoff failure. Image + file inputs use the same plain hidden
+  back to cloud on handoff failure. The composer exposes one unfiltered hidden
   `<input type="file">` on every platform (Windows included — the renderer no
-  longer crashes once locale `.pak`s ship; see `apps/electron/AGENTS.md`).
+  longer crashes once locale `.pak`s ship; see `apps/electron/AGENTS.md`) and
+  routes each selection by MIME into the image or file state machine.
 - `floating-permission-request.tsx`: floating permissions + ask-user-question;
   hidden-composer mobile keyboard lift/scroll lives there.
   `notification-permission-prompt.tsx` and the inner content of `session-pin.tsx`

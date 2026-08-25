@@ -92,11 +92,7 @@ import {
 import { resolveEffectiveCodeCollabWorkspaceId } from '@/lib/code-collab-workspace-id';
 import { isImeComposingKeyboardEvent } from '@/lib/ime';
 import { toast } from 'sonner';
-import {
-  SESSION_IMAGE_ACCEPT,
-  uploadSessionImage,
-  validateSessionImageFile,
-} from '@/lib/session-image-upload';
+import { uploadSessionImage, validateSessionImageFile } from '@/lib/session-image-upload';
 import {
   computeSha256Hex,
   computeTextPreviewable,
@@ -523,7 +519,6 @@ export const SessionChatInputArea = memo(
     const isArchived = session.isArchived === true;
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const restoreFocusAfterRejectedMobileSendRef = useRef(false);
-    const fileInputRef = useRef<HTMLInputElement>(null);
     const attachmentInputRef = useRef<HTMLInputElement>(null);
     const activeSessionIdRef = useRef(session.id);
     activeSessionIdRef.current = session.id;
@@ -1362,25 +1357,6 @@ export const SessionChatInputArea = memo(
       ]
     );
 
-    const handleFileInputChange = useCallback(
-      (event: React.ChangeEvent<HTMLInputElement>) => {
-        const fileList = event.target.files;
-        if (!fileList) {
-          return;
-        }
-        handleAddFiles(Array.from(fileList), 'file_input');
-        event.target.value = '';
-      },
-      [handleAddFiles]
-    );
-
-    const handleImageAddClick = useCallback(() => {
-      if (isArchived) {
-        return;
-      }
-      fileInputRef.current?.click();
-    }, [isArchived]);
-
     const handleRemoveImage = useCallback(
       (localId: string) => {
         if (isArchived) {
@@ -1448,13 +1424,22 @@ export const SessionChatInputArea = memo(
 
     const handleAttachmentInputChange = useCallback(
       (event: React.ChangeEvent<HTMLInputElement>) => {
-        const fileList = event.target.files;
-        if (fileList) {
-          enqueueFileAttachments(Array.from(fileList));
+        const files = Array.from(event.target.files ?? []);
+        if (files.length > 0) {
+          const { images: selectedImages, attachments: selectedAttachments } =
+            splitImageAndFileAttachments(files);
+          const images = disableImageUpload ? [] : selectedImages;
+          const attachments = disableImageUpload ? files : selectedAttachments;
+          if (images.length > 0) {
+            handleAddFiles(images, 'file_input');
+          }
+          if (attachments.length > 0) {
+            enqueueFileAttachments(attachments);
+          }
         }
         event.target.value = '';
       },
-      [enqueueFileAttachments]
+      [disableImageUpload, enqueueFileAttachments, handleAddFiles]
     );
 
     const handleAttachmentAddClick = useCallback(() => {
@@ -1921,8 +1906,6 @@ export const SessionChatInputArea = memo(
       isArchived ||
       isExternalHistoryRefreshing ||
       Boolean(freeTurnLimitNotice && freeTurnLimitNotice.current >= freeTurnLimitNotice.limit);
-    const disableFileInput = isArchived || disableImageUpload;
-    const imageAddEnabled = !disableFileInput;
     const attachmentAddEnabled = !isArchived;
     const sessionLocalFileSource = useMemo(
       () =>
@@ -2311,11 +2294,7 @@ export const SessionChatInputArea = memo(
         onPromptChange={handleInputChange}
         onPromptKeyDown={handleKeyDown}
         onPromptPaste={handlePaste}
-        onImageDrop={
-          !submissionPending && (imageAddEnabled || attachmentAddEnabled)
-            ? handleImageDrop
-            : undefined
-        }
+        onImageDrop={!submissionPending && attachmentAddEnabled ? handleImageDrop : undefined}
         // The dropzone accepts files AND images, so it must NOT inherit the
         // image-only disable (which trips at 8 pending images). Per-type count
         // limits are enforced inside handleImageDrop's handlers. Drops are only
@@ -2346,23 +2325,17 @@ export const SessionChatInputArea = memo(
         // committed over the incoming draft.
         draftKey={session.id}
         imageItems={submissionPending ? [] : imageItems}
-        imageAddDisabled={
+        attachmentAddDisabled={
           submissionPending ||
           isArchived ||
           isMachineRemoved ||
-          pendingImages.length >= SESSION_IMAGE_MAX_COUNT
+          (pendingFiles.length >= SESSION_FILE_MAX_COUNT &&
+            (disableImageUpload || pendingImages.length >= SESSION_IMAGE_MAX_COUNT))
         }
-        onImageAddClick={imageAddEnabled ? handleImageAddClick : undefined}
+        onAttachmentAddClick={attachmentAddEnabled ? handleAttachmentAddClick : undefined}
         onImageRemove={submissionPending || isArchived ? undefined : handleRemoveImage}
         onImageRetry={submissionPending || isArchived ? undefined : handleRetryImage}
         fileItems={submissionPending ? [] : fileItems}
-        fileAddDisabled={
-          submissionPending ||
-          isArchived ||
-          isMachineRemoved ||
-          pendingFiles.length >= SESSION_FILE_MAX_COUNT
-        }
-        onFileAddClick={attachmentAddEnabled ? handleAttachmentAddClick : undefined}
         mcp={mcp}
         onFileRemove={submissionPending || isArchived ? undefined : handleRemoveFile}
         onFileRetry={submissionPending || isArchived ? undefined : handleRetryFile}
@@ -2400,16 +2373,6 @@ export const SessionChatInputArea = memo(
           {queueDisplay ? <div className="pb-2">{queueDisplay}</div> : null}
           {externalHistorySyncNode}
           {freeTurnLimitNoticeNode}
-          {!disableFileInput ? (
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept={SESSION_IMAGE_ACCEPT}
-              multiple
-              className="hidden"
-              onChange={handleFileInputChange}
-            />
-          ) : null}
           {attachmentAddEnabled ? (
             <input
               ref={attachmentInputRef}

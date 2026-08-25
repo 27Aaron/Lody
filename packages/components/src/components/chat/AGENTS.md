@@ -75,10 +75,9 @@
 - Landing attachment uploads use two sibling hooks in `hooks/`:
   `use-chat-landing-image-draft.ts` (images) and `use-chat-landing-file-draft.ts`
   (non-image files; cloud upload + Electron local-transport fast path, mirroring
-  `sessions/session-chat-input-area.tsx`). `chat-landing.tsx` wires BOTH
-  `onImageAddClick` and `onFileAddClick` into the desktop `ChatLandingView` and
-  the mobile new-chat sheet composer, and renders a second hidden file `<input>`
-  (no `accept`) next to the image input in every render branch.
+  `sessions/session-chat-input-area.tsx`). Every landing branch exposes ONE
+  unfiltered hidden file input and one `onAttachmentAddClick`; selected files
+  are split by MIME into those two state machines, just like paste and drop.
 
 ## Invariants
 

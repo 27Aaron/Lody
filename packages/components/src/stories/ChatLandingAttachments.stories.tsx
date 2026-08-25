@@ -138,13 +138,10 @@ function DesktopLandingDemo() {
         submitLabel="Send"
         submittingLabel="Sending…"
         imageItems={sampleImageItems}
-        imageAddAriaLabel="Add image"
-        onImageAddClick={noop}
+        onAttachmentAddClick={noop}
         onImageRemove={noop}
         onImageRetry={noop}
         fileItems={sampleFileItems}
-        fileAddAriaLabel="Add file"
-        onFileAddClick={noop}
         onFileRemove={noop}
         onFileRetry={noop}
       />
@@ -175,13 +172,10 @@ function MobileNewChatDemo() {
         promptPlaceholder="Describe the task, attach files or images…"
         promptRows={4}
         imageItems={sampleImageItems}
-        imageAddAriaLabel="Add image"
-        onImageAddClick={noop}
+        onAttachmentAddClick={noop}
         onImageRemove={noop}
         onImageRetry={noop}
         fileItems={sampleFileItems}
-        fileAddAriaLabel="Add file"
-        onFileAddClick={noop}
         onFileRemove={noop}
         onFileRetry={noop}
         footerSelector={

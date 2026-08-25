@@ -67,24 +67,16 @@ export interface ChatLandingViewProps {
   persistedMentions?: readonly PersistedMentionRange[];
   /** Pending image drafts shown above the textarea */
   imageItems?: ChatComposerImageItem[];
-  /** Whether add-image button should be disabled */
-  imageAddDisabled?: boolean;
-  /** Aria label for add-image button */
-  imageAddAriaLabel?: string;
-  /** Callback when add-image button is clicked */
-  onImageAddClick?: () => void;
+  /** Whether the unified attachment picker should be disabled */
+  attachmentAddDisabled?: boolean;
+  /** Callback when the unified attachment picker is clicked */
+  onAttachmentAddClick?: () => void;
   /** Callback when a pending image is removed */
   onImageRemove?: (id: string) => void;
   /** Callback when retrying a failed image upload */
   onImageRetry?: (id: string) => void;
   /** Pending file (non-image) drafts shown above the textarea */
   fileItems?: ChatComposerFileItem[];
-  /** Whether the add-file menu item should be disabled */
-  fileAddDisabled?: boolean;
-  /** Aria label for the add-file action */
-  fileAddAriaLabel?: string;
-  /** Callback when the add-file menu item is clicked */
-  onFileAddClick?: () => void;
   /** Callback when a pending file is removed */
   onFileRemove?: (id: string) => void;
   /** Callback when retrying a failed file upload */
@@ -210,15 +202,11 @@ export function ChatLandingView({
   onMentionRangesChange,
   persistedMentions,
   imageItems = [],
-  imageAddDisabled = false,
-  imageAddAriaLabel,
-  onImageAddClick,
+  attachmentAddDisabled = false,
+  onAttachmentAddClick,
   onImageRemove,
   onImageRetry,
   fileItems = [],
-  fileAddDisabled = false,
-  fileAddAriaLabel,
-  onFileAddClick,
   onFileRemove,
   onFileRetry,
   mcp,
@@ -454,15 +442,11 @@ export function ChatLandingView({
         mentionActionsRef={mentionActionsRef}
         persistedMentions={persistedMentions}
         imageItems={submissionPending ? [] : imageItems}
-        imageAddDisabled={submissionPending || imageAddDisabled}
-        imageAddAriaLabel={imageAddAriaLabel}
-        onImageAddClick={onImageAddClick}
+        attachmentAddDisabled={submissionPending || attachmentAddDisabled}
+        onAttachmentAddClick={onAttachmentAddClick}
         onImageRemove={submissionPending ? undefined : onImageRemove}
         onImageRetry={submissionPending ? undefined : onImageRetry}
         fileItems={submissionPending ? [] : fileItems}
-        fileAddDisabled={submissionPending || fileAddDisabled}
-        fileAddAriaLabel={fileAddAriaLabel}
-        onFileAddClick={onFileAddClick}
         onFileRemove={submissionPending ? undefined : onFileRemove}
         onFileRetry={submissionPending ? undefined : onFileRetry}
         mcp={mcp}

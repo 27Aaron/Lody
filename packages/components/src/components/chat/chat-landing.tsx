@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ChangeEvent,
   type ClipboardEvent,
   type KeyboardEvent,
   type ReactNode,
@@ -197,7 +198,6 @@ import { useChatLandingImageDraft } from '@/hooks/use-chat-landing-image-draft';
 import { useChatLandingFileDraft } from '@/hooks/use-chat-landing-file-draft';
 import { useChatLandingDraftSession } from '@/hooks/use-chat-landing-draft-session';
 import { useSessionPreparation } from '@/hooks/use-session-preparation';
-import { SESSION_IMAGE_ACCEPT } from '@/lib/session-image-upload';
 import { getCommandKeybindings, useCommand } from '@/lib/commands';
 import { isElectronRenderer } from '@/lib/electron';
 import { withGitHubTokenRetry } from '@/lib/github-token';
@@ -1263,15 +1263,13 @@ function WorkspaceChatLanding({
     ensureSessionId: ensureDraftSessionId,
     resetSessionId: resetDraftSessionId,
   } = useChatLandingDraftSession();
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
   const {
-    fileInputRef,
     imageItems,
     hasBlockingImages,
     hasUploadedImages,
     canAddMoreImages,
     addFiles,
-    handleOpenImagePicker,
-    handleFileInputChange,
     handlePromptPaste: handleImagePromptPaste,
     handleRemoveImage,
     handleRetryImage,
@@ -1286,14 +1284,11 @@ function WorkspaceChatLanding({
     ensureSessionId: ensureDraftSessionId,
   });
   const {
-    fileInputRef: fileAttachmentInputRef,
     fileItems,
     hasBlockingFiles,
     hasUploadedFiles,
     canAddMoreFiles,
     addFiles: addFileAttachments,
-    handleOpenFilePicker,
-    handleFileInputChange: handleFileAttachmentInputChange,
     handleRemoveFile,
     handleRetryFile,
     clearPendingFiles,
@@ -2743,6 +2738,19 @@ function WorkspaceChatLanding({
     },
     [addFileAttachments, addFiles]
   );
+  const handleAttachmentInputChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const files = Array.from(event.target.files ?? []);
+      if (files.length > 0) {
+        handleImageDrop(files);
+      }
+      event.target.value = '';
+    },
+    [handleImageDrop]
+  );
+  const handleOpenAttachmentPicker = useCallback(() => {
+    attachmentInputRef.current?.click();
+  }, []);
 
   const handleConnectGitRepo = useCallback(() => {
     openSettings('github');
@@ -5949,15 +5957,11 @@ function WorkspaceChatLanding({
             onMentionRangesChange={handleMentionRangesChange}
             persistedMentions={persistedMentionRanges}
             imageItems={submitting ? [] : imageItems}
-            imageAddDisabled={submitting || !canAddMoreImages}
-            imageAddAriaLabel={t('sessions.addImage', 'Add image')}
-            onImageAddClick={handleOpenImagePicker}
+            attachmentAddDisabled={submitting || (!canAddMoreImages && !canAddMoreFiles)}
+            onAttachmentAddClick={handleOpenAttachmentPicker}
             onImageRemove={submitting ? undefined : handleRemoveImage}
             onImageRetry={submitting ? undefined : handleRetryImage}
             fileItems={submitting ? [] : fileItems}
-            fileAddDisabled={submitting || !canAddMoreFiles}
-            fileAddAriaLabel={t('sessions.addFile', 'Add file')}
-            onFileAddClick={handleOpenFilePicker}
             onFileRemove={submitting ? undefined : handleRemoveFile}
             onFileRetry={submitting ? undefined : handleRetryFile}
             mcp={mcpSelection.menu}
@@ -6009,19 +6013,11 @@ function WorkspaceChatLanding({
     return (
       <>
         <input
-          ref={fileInputRef}
-          type="file"
-          accept={SESSION_IMAGE_ACCEPT}
-          multiple
-          className="hidden"
-          onChange={handleFileInputChange}
-        />
-        <input
-          ref={fileAttachmentInputRef}
+          ref={attachmentInputRef}
           type="file"
           multiple
           className="hidden"
-          onChange={handleFileAttachmentInputChange}
+          onChange={handleAttachmentInputChange}
         />
         {mobileNewChatSheetNode}
         <MobileProjectScreen
@@ -6125,19 +6121,11 @@ function WorkspaceChatLanding({
     return (
       <>
         <input
-          ref={fileInputRef}
-          type="file"
-          accept={SESSION_IMAGE_ACCEPT}
-          multiple
-          className="hidden"
-          onChange={handleFileInputChange}
-        />
-        <input
-          ref={fileAttachmentInputRef}
+          ref={attachmentInputRef}
           type="file"
           multiple
           className="hidden"
-          onChange={handleFileAttachmentInputChange}
+          onChange={handleAttachmentInputChange}
         />
         <MobileHomeScreen
           workspace={mobileHomeWorkspace}
@@ -6378,19 +6366,11 @@ function WorkspaceChatLanding({
   return (
     <>
       <input
-        ref={fileInputRef}
-        type="file"
-        accept={SESSION_IMAGE_ACCEPT}
-        multiple
-        className="hidden"
-        onChange={handleFileInputChange}
-      />
-      <input
-        ref={fileAttachmentInputRef}
+        ref={attachmentInputRef}
         type="file"
         multiple
         className="hidden"
-        onChange={handleFileAttachmentInputChange}
+        onChange={handleAttachmentInputChange}
       />
       <ChatLandingView
         tone={tone}
@@ -6413,15 +6393,11 @@ function WorkspaceChatLanding({
         onMentionRangesChange={handleMentionRangesChange}
         persistedMentions={persistedMentionRanges}
         imageItems={imageItems}
-        imageAddDisabled={submitting || !canAddMoreImages}
-        imageAddAriaLabel={t('sessions.addImage', 'Add image')}
-        onImageAddClick={handleOpenImagePicker}
+        attachmentAddDisabled={submitting || (!canAddMoreImages && !canAddMoreFiles)}
+        onAttachmentAddClick={handleOpenAttachmentPicker}
         onImageRemove={handleRemoveImage}
         onImageRetry={handleRetryImage}
         fileItems={fileItems}
-        fileAddDisabled={submitting || !canAddMoreFiles}
-        fileAddAriaLabel={t('sessions.addFile', 'Add file')}
-        onFileAddClick={handleOpenFilePicker}
         onFileRemove={handleRemoveFile}
         onFileRetry={handleRetryFile}
         mcp={mcpSelection.menu}

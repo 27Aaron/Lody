@@ -1,12 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ChangeEvent,
-  type ClipboardEvent,
-} from 'react';
+import { useCallback, useEffect, useMemo, useState, type ClipboardEvent } from 'react';
 import type { MessageTextSpan } from '@lody/shared';
 import {
   SESSION_IMAGE_MAX_COUNT,
@@ -74,7 +66,6 @@ export function useChatLandingImageDraft(args: {
     ensureSessionId,
   } = args;
   const postHog = usePostHog();
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const imageUploadFailedLabel = t('sessions.imageUploadFailed', 'Image upload failed');
   const imageUploadMissingAuthLabel = t(
@@ -298,18 +289,6 @@ export function useChatLandingImageDraft(args: {
     ]
   );
 
-  const handleFileInputChange = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => {
-      const fileList = event.target.files;
-      if (!fileList) {
-        return;
-      }
-      handleAddFiles(Array.from(fileList));
-      event.target.value = '';
-    },
-    [handleAddFiles]
-  );
-
   const handlePromptPaste = useCallback(
     (event: ClipboardEvent<HTMLTextAreaElement>) => {
       if (isMobile) {
@@ -329,10 +308,6 @@ export function useChatLandingImageDraft(args: {
     },
     [handleAddFiles, isMobile]
   );
-
-  const handleOpenImagePicker = useCallback(() => {
-    fileInputRef.current?.click();
-  }, []);
 
   const handleRemoveImage = useCallback((localId: string) => {
     // The landing owns the shared draft session id, so removing the last image
@@ -405,14 +380,11 @@ export function useChatLandingImageDraft(args: {
   );
 
   return {
-    fileInputRef,
     imageItems,
     hasBlockingImages,
     hasUploadedImages,
     canAddMoreImages: pendingImages.length < SESSION_IMAGE_MAX_COUNT,
     addFiles: handleAddFiles,
-    handleOpenImagePicker,
-    handleFileInputChange,
     handlePromptPaste,
     handleRemoveImage,
     handleRetryImage,

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ChevronLeft, ChevronRight, ImagePlus, Paperclip, Plug, Plus } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Paperclip, Plug, Plus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { describeMcpConnection, type McpServerId, type WorkspaceMcpServerMeta } from '@lody/shared';
 import { Button } from '@/ui/button';
@@ -35,41 +35,34 @@ export interface AttachmentAddMenuProps {
   isLanding?: boolean;
   /** Disables the whole trigger (e.g. the prompt is disabled). */
   disabled?: boolean;
-  /** Omit a callback to hide that menu item entirely. */
-  onAddImage?: () => void;
-  onAddFile?: () => void;
-  /** Per-item disabled (e.g. that type's pending-count limit is reached). */
-  imageDisabled?: boolean;
-  fileDisabled?: boolean;
+  /** Omit the callback to hide the attachment item entirely. The picker is
+   * intentionally unfiltered; its owner routes the selected files by MIME. */
+  onAddAttachment?: () => void;
+  attachmentDisabled?: boolean;
   /** Omit (or pass an empty catalog) to hide the MCP entry entirely. */
   mcp?: AttachmentAddMenuMcp;
 }
 
 /**
  * The single bottom-left "+" entry point for the composer. One rounded "+" that
- * opens an upward popover dropdown with "upload image" / "upload file" plus the
- * per-turn MCP selection. Same dropdown on desktop and mobile (mobile just gets
- * larger touch targets).
+ * opens an upward popover dropdown with one attachment picker plus the per-turn
+ * MCP selection. Same dropdown on desktop and mobile (mobile just gets larger
+ * touch targets).
  *
  * MCP is a second level, not a flat list, because a workspace can register many
  * servers and they are multi-select. Desktop opens it as a hover submenu;
  * touch has no hover, so mobile PUSHES the panel onto the same surface (a
  * back row returns) rather than flying a submenu out past the screen edge.
  *
- * Otherwise pure/presentational: the file pickers live in onAddImage/onAddFile
- * (image picker scopes to accept="image/*"; file is unfiltered). Drag/drop and
- * paste bypass this menu entirely. Items are hidden when their callback is
- * absent, so the menu degrades to a single action if a surface only allows one
- * type.
+ * Otherwise pure/presentational: the unfiltered file picker lives in
+ * onAddAttachment. Drag/drop and paste bypass this menu entirely.
  */
 export function AttachmentAddMenu({
   isMobile,
   isLanding,
   disabled,
-  onAddImage,
-  onAddFile,
-  imageDisabled,
-  fileDisabled,
+  onAddAttachment,
+  attachmentDisabled,
   mcp,
 }: AttachmentAddMenuProps) {
   const { t } = useTranslation();
@@ -77,12 +70,10 @@ export function AttachmentAddMenu({
   // Mobile's pushed panel. Desktop uses a real submenu and stays on 'root'.
   const [view, setView] = useState<'root' | 'mcp'>('root');
   const triggerLabel = t('sessions.addAttachmentMenu', 'Add attachment');
-  const imageLabel = t('sessions.uploadImage', 'Upload image');
-  const fileLabel = t('sessions.uploadFile', 'Upload file');
 
   const mcpServers = mcp?.servers ?? [];
   const hasMcp = mcpServers.length > 0;
-  if (!onAddImage && !onAddFile && !hasMcp) {
+  if (!onAddAttachment && !hasMcp) {
     return null;
   }
 
@@ -130,8 +121,8 @@ export function AttachmentAddMenu({
       <DropdownMenuContent
         align="start"
         side="top"
-        /* Size to the widest item (`w-max`) so short labels like "Upload
-           image" don't leave a wide blank gutter; a small floor keeps it from
+        /* Size to the widest item (`w-max`) so short attachment labels don't
+           leave a wide blank gutter; a small floor keeps it from
            collapsing too narrow. The pushed MCP panel needs room for server
            names, so it takes its own floor and ceiling. */
         className={cn(
@@ -159,25 +150,19 @@ export function AttachmentAddMenu({
           </div>
         ) : (
           <div key="root" className="animate-in fade-in-0 slide-in-from-left-2 duration-150">
-            {onAddImage ? (
+            {onAddAttachment ? (
               <DropdownMenuItem
-                onSelect={onAddImage}
-                disabled={imageDisabled}
+                onSelect={onAddAttachment}
+                disabled={attachmentDisabled}
                 className={itemClass}
               >
-                <ImagePlus className={iconClass} />
-                {imageLabel}
-              </DropdownMenuItem>
-            ) : null}
-            {onAddFile ? (
-              <DropdownMenuItem onSelect={onAddFile} disabled={fileDisabled} className={itemClass}>
                 <Paperclip className={iconClass} />
-                {fileLabel}
+                {triggerLabel}
               </DropdownMenuItem>
             ) : null}
             {hasMcp && mcp ? (
               <>
-                {onAddImage || onAddFile ? <DropdownMenuSeparator /> : null}
+                {onAddAttachment ? <DropdownMenuSeparator /> : null}
                 {isMobile ? (
                   <DropdownMenuItem
                     className={itemClass}

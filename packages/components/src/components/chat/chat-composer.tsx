@@ -135,19 +135,14 @@ export interface ChatComposerProps {
    */
   mentionActionsRef?: Ref<CombinedMentionTextareaHandle>;
   imageItems?: ChatComposerImageItem[];
-  imageAddAriaLabel?: string;
-  imageAddDisabled?: boolean;
-  onImageAddClick?: () => void;
+  attachmentAddDisabled?: boolean;
+  onAttachmentAddClick?: () => void;
   imageDropDisabled?: boolean;
   onImageDrop?: (files: File[]) => void;
   onImageRemove?: (id: string) => void;
   onImageRetry?: (id: string) => void;
   /** Pending file attachments (non-image), rendered as a chip strip. */
   fileItems?: ChatComposerFileItem[];
-  fileAddAriaLabel?: string;
-  fileAddDisabled?: boolean;
-  /** Shows the paperclip "add attachment" button when provided. */
-  onFileAddClick?: () => void;
   onFileRemove?: (id: string) => void;
   onFileRetry?: (id: string) => void;
   /** Per-turn MCP selection, rendered as a second level of the "+" menu. */
@@ -254,15 +249,13 @@ export function ChatComposer({
   draftKey,
   mentionActionsRef,
   imageItems = [],
-  imageAddDisabled = false,
-  onImageAddClick,
-  imageDropDisabled = imageAddDisabled,
+  attachmentAddDisabled = false,
+  onAttachmentAddClick,
+  imageDropDisabled = attachmentAddDisabled,
   onImageDrop,
   onImageRemove,
   onImageRetry,
   fileItems = [],
-  fileAddDisabled = false,
-  onFileAddClick,
   onFileRemove,
   onFileRetry,
   mcp,
@@ -937,10 +930,8 @@ export function ChatComposer({
                   isMobile={isMobile}
                   isLanding={isLanding}
                   disabled={promptDisabled}
-                  onAddImage={onImageAddClick}
-                  onAddFile={onFileAddClick}
-                  imageDisabled={imageAddDisabled}
-                  fileDisabled={fileAddDisabled}
+                  onAddAttachment={onAttachmentAddClick}
+                  attachmentDisabled={attachmentAddDisabled}
                   mcp={mcp}
                 />
 

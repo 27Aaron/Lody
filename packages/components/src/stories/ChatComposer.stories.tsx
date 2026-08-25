@@ -314,8 +314,7 @@ function DemoComposer({
       onPastedTextDraftsChange={setPastedTextDrafts}
       selector={selectorNode}
       primaryAction={primaryActionNode}
-      onImageAddClick={attachmentsEnabled ? () => undefined : undefined}
-      onFileAddClick={attachmentsEnabled ? () => undefined : undefined}
+      onAttachmentAddClick={attachmentsEnabled ? () => undefined : undefined}
       imageItems={resolvedImageItems}
       onImageRemove={attachmentsEnabled ? () => undefined : undefined}
       onImageRetry={attachmentsEnabled ? () => undefined : undefined}
