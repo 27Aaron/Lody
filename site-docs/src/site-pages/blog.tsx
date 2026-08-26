@@ -7,10 +7,7 @@ import { localeCode } from './shared';
 export function blogIndexHead(locale: BlogLocale): SiteHead {
   return pageHead({
     title: locale === 'zh' ? '博客' : 'Blog',
-    description:
-      locale === 'zh'
-        ? '来自 Lody 团队的产品公告、工程洞察和发布故事。'
-        : 'Product announcements, engineering insights, and release stories from the Lody team.',
+    description: locale === 'zh' ? 'Lody 博客' : 'The Lody blog',
     path: locale === 'zh' ? '/zh/blog' : '/blog',
     locale: localeCode(locale),
     alternates: [
