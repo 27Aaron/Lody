@@ -23,7 +23,7 @@ By submitting a pull request, patch, or other contribution to Lody, you agree to
 The repository uses Git submodules for ACP runtimes, so clone it recursively:
 
 ```bash
-git clone --recurse-submodules https://github.com/loro-dev/lody-oss.git
+git clone --recurse-submodules https://github.com/LodyAI/lody.git
 cd lody-oss
 ```
 
