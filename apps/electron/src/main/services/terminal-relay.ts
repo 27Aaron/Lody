@@ -265,7 +265,7 @@ export class TerminalRelay {
       const canReceiveTerminalEvent =
         !terminalId || this.senderTerminalIds.get(sender)?.has(terminalId) === true
       if (!sender.isDestroyed() && canReceiveTerminalEvent) {
-        sender.send('lodyTerminal:event', event)
+        sender.send('terminal.event', event)
       }
     }
     if (event.type === 'exit') {

@@ -411,7 +411,7 @@ export function openMainWindow(options: OpenMainWindowOptions): BrowserWindow {
         if (!target || target.isDestroyed()) {
           logDeepLinkDebug('pending deep link dropped because window reference is unavailable')
         } else {
-          target.webContents.send('lody:deep-link', pendingDeepLink)
+          target.webContents.send('app.deepLink', pendingDeepLink)
           logDeepLinkDebug('pending deep link sent to renderer after did-finish-load', {
             pendingDeepLink: describeDeepLinkForAuthDebug(pendingDeepLink)
           })
@@ -430,7 +430,7 @@ export function openMainWindow(options: OpenMainWindowOptions): BrowserWindow {
   // the lights are auto-hidden in native fullscreen.
   const sendFullscreenState = () => {
     if (!window.isDestroyed()) {
-      window.webContents.send('lody:window-fullscreen-changed', window.isFullScreen())
+      window.webContents.send('app.fullscreen', window.isFullScreen())
     }
   }
   window.on('enter-full-screen', sendFullscreenState)

@@ -8,6 +8,7 @@ import { activeWorkspaceRuntimeAtom } from '@/atoms/runtime';
 import { commands, getCommandKeybindings, useCommand } from '@/lib/commands';
 import { selectAndWriteLocalProject } from '@/lib/local-project-import';
 import { useOpenSettings } from '@/hooks/use-open-settings';
+import { getIpcServices, onIpcEvent } from '@/lib/electron-ipc-client';
 
 /**
  * Map menu-action IPC names to registry command ids. Electron menu accelerators are
@@ -73,19 +74,21 @@ export function ElectronMenuHandler() {
     title: t('commands.project.importLocal', 'Import Local Project'),
     category: 'Workspace',
     hidden: true,
-    when: () => Boolean(window.api?.selectLocalProjectDirectory) && Boolean(runtime),
+    when: () => Boolean(getIpcServices()) && Boolean(runtime),
     run: () => {
-      const importFn = window.api?.selectLocalProjectDirectory;
+      const services = getIpcServices();
+      const importFn = services
+        ? services.localProjects.selectDirectory.bind(services.localProjects)
+        : undefined;
       if (!importFn || !runtime) return;
       void selectAndWriteLocalProject({
         runtime,
         selectDirectory: importFn,
         timeoutMessage: t('localProjects.add.timeout', 'The machine did not respond in time.'),
-      })
-        .catch((error: unknown) => {
-          console.error('Failed to import local project', error);
-          toast.error(error instanceof Error ? error.message : String(error));
-        });
+      }).catch((error: unknown) => {
+        console.error('Failed to import local project', error);
+        toast.error(error instanceof Error ? error.message : String(error));
+      });
     },
   });
 
@@ -93,11 +96,7 @@ export function ElectronMenuHandler() {
     if (typeof window === 'undefined' || !window.__LODY_ELECTRON__) {
       return undefined;
     }
-    const subscribe = window.api?.onMenuAction;
-    if (!subscribe) {
-      return undefined;
-    }
-    return subscribe((action) => {
+    return onIpcEvent('app.menuAction', (action) => {
       const commandId = MENU_ACTION_TO_COMMAND_ID[action];
       if (!commandId) {
         console.warn(`[electron-menu] unhandled action "${action}"`);

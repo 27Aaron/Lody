@@ -62,6 +62,7 @@ import {
   type WorkdirMode,
 } from '@/components/shared';
 import { cn } from '@/lib/utils';
+import { getIpcServices, onIpcEvent, sendIpc } from '@/lib/electron-ipc-client';
 import {
   bugReportDialogOpenAtom,
   chatLandingSessionStateAtomFamily,
@@ -2388,12 +2389,8 @@ function WorkspaceChatLanding({
         let fastPathError: string | null = null;
         const canUseElectronFastPath = isElectron && visibleLocalMachineId === project.machineId;
 
-        if (
-          canUseElectronFastPath &&
-          window.__LODY_ELECTRON__ &&
-          window.api?.getLocalProjectGitState
-        ) {
-          const result = await window.api.getLocalProjectGitState(
+        if (canUseElectronFastPath && window.__LODY_ELECTRON__ && getIpcServices()) {
+          const result = await getIpcServices()!.localProjects.getGitState(
             targetWorkspaceId,
             project.localProjectId
           );
@@ -2584,23 +2581,34 @@ function WorkspaceChatLanding({
     /** Subscribe to CLI state changes and retry once CLI reaches 'running' phase. */
     const waitForCliReady = () => {
       if (cancelled || unsubscribeCliState) return;
-      const cliStateApi = window.api?.cliState;
-      if (!cliStateApi?.onState || !cliStateApi?.getState) {
+      const services = getIpcServices();
+      if (!services) {
         setLoadingLocalGitState(false);
         return;
       }
 
       const scheduleRetry = () => {
         if (cancelled) return;
-        // Delay before retrying to avoid tight loops when CLI is running but endpoint not ready
         const delay = Math.min(1000 * 2 ** (retryCount - 1), 5000);
         setTimeout(() => {
           if (!cancelled) void attemptLoad();
         }, delay);
       };
 
-      // Check current state first — CLI may already be running
-      void cliStateApi
+      const subscribeUntilRunning = () => {
+        if (cancelled || unsubscribeCliState) return;
+        sendIpc('cli.subscribe', null);
+        unsubscribeCliState = onIpcEvent('cli.state', (s) => {
+          if (cancelled) return;
+          if (s.phase === 'running') {
+            unsubscribeCliState?.();
+            unsubscribeCliState = null;
+            scheduleRetry();
+          }
+        });
+      };
+
+      void services.cli
         .getState()
         .then((state) => {
           if (cancelled) return;
@@ -2608,28 +2616,10 @@ function WorkspaceChatLanding({
             scheduleRetry();
             return;
           }
-          // Not running yet — subscribe to state changes
-          if (unsubscribeCliState) return;
-          unsubscribeCliState = cliStateApi.onState((s) => {
-            if (cancelled) return;
-            if (s.phase === 'running') {
-              unsubscribeCliState?.();
-              unsubscribeCliState = null;
-              scheduleRetry();
-            }
-          });
+          subscribeUntilRunning();
         })
         .catch(() => {
-          // getState failed — fall back to subscription
-          if (cancelled || unsubscribeCliState) return;
-          unsubscribeCliState = cliStateApi.onState((s) => {
-            if (cancelled) return;
-            if (s.phase === 'running') {
-              unsubscribeCliState?.();
-              unsubscribeCliState = null;
-              scheduleRetry();
-            }
-          });
+          subscribeUntilRunning();
         });
     };
 
@@ -5400,7 +5390,7 @@ function WorkspaceChatLanding({
   const mobileProjectUsesLocalIpc =
     mobileProjectContext?.kind === 'local' &&
     typeof window !== 'undefined' &&
-    Boolean(window.api) &&
+    Boolean(getIpcServices()) &&
     visibleLocalMachineId === mobileProjectContext.machineId;
 
   /* A stable identity key for the file provider. The raw memo inputs

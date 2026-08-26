@@ -44,6 +44,7 @@ import { usePostHog } from '@posthog/react';
 import { capturePostHogEvent } from '@/lib/posthog-analytics';
 import { QueuedMessageBehaviorControl } from '@/components/settings/queued-message-behavior-control';
 import { useAppCapability } from '@/lib/app-platform';
+import { getIpcServices } from '@/lib/electron-ipc-client';
 
 type ElectronPlatform = 'darwin' | 'win32' | 'linux' | 'unknown';
 
@@ -130,7 +131,9 @@ export function MobileGeneralSettings() {
         ? Notification.permission
         : 'default';
 
-      const reader = window.api?.getNotificationPermissionStatus;
+      const reader = getIpcServices()?.notifications.getPermissionStatus.bind(
+        getIpcServices()!.notifications
+      );
       if (reader) {
         try {
           const result = await reader();
@@ -341,7 +344,10 @@ export function MobileGeneralSettings() {
   }, [isElectron]);
 
   useEffect(() => {
-    const getAutoLaunchStatus = window.api?.getAutoLaunchStatus;
+    const services = getIpcServices();
+    const getAutoLaunchStatus = services
+      ? services.app.getAutoLaunchStatus.bind(services.app)
+      : undefined;
     if (!isElectron || typeof window === 'undefined' || !getAutoLaunchStatus) {
       setAutoLaunchSupported(false);
       setAutoLaunchEnabled(false);
@@ -369,7 +375,10 @@ export function MobileGeneralSettings() {
   }, [isElectron]);
 
   useEffect(() => {
-    const getPreventSleepEnabled = window.api?.getPreventSleepEnabled;
+    const services = getIpcServices();
+    const getPreventSleepEnabled = services
+      ? services.app.getPreventSleepEnabled.bind(services.app)
+      : undefined;
     if (!isElectron || typeof window === 'undefined' || !getPreventSleepEnabled) {
       return undefined;
     }
@@ -397,8 +406,8 @@ export function MobileGeneralSettings() {
           isElectron
             ? 'settings.notifications.permissionDeniedStatusDesktop'
             : isNative
-            ? 'settings.notifications.permissionDeniedStatusNative'
-            : 'settings.notifications.permissionDeniedStatus'
+              ? 'settings.notifications.permissionDeniedStatusNative'
+              : 'settings.notifications.permissionDeniedStatus'
         );
       default:
         return t('settings.notifications.permissionDefault');
@@ -425,7 +434,9 @@ export function MobileGeneralSettings() {
         return { opened: false, platform: 'unknown', error: 'Window is not available' };
       }
 
-      const opener = window.api?.openSystemNotificationSettings;
+      const opener = getIpcServices()?.notifications.openSystemSettings.bind(
+        getIpcServices()!.notifications
+      );
       if (!opener) {
         return {
           opened: false,
@@ -601,7 +612,7 @@ export function MobileGeneralSettings() {
       : t('settings.input.mobileKeyboardAction.newline');
 
   const handleToggleAutoLaunch = async (checked: boolean) => {
-    if (!isElectron || !window.api?.setAutoLaunchEnabled) {
+    if (!isElectron || !getIpcServices()) {
       return;
     }
 
@@ -609,7 +620,8 @@ export function MobileGeneralSettings() {
     setAutoLaunchEnabled(checked);
     setAutoLaunchLoading(true);
     try {
-      const result: SetElectronAutoLaunchResult = await window.api.setAutoLaunchEnabled(checked);
+      const result: SetElectronAutoLaunchResult =
+        await getIpcServices()!.app.setAutoLaunchEnabled(checked);
       if (!result.ok) {
         setAutoLaunchEnabled(previous);
         toast.error(t('settings.general.autoLaunch.toggleFailed', 'Failed to update auto launch'));
@@ -791,7 +803,7 @@ export function MobileGeneralSettings() {
                 onCheckedChange={(checked) => {
                   void (async () => {
                     setPreventSleepEnabled(checked);
-                    const result = await window.api?.setPreventSleepEnabled?.(checked);
+                    const result = await getIpcServices()?.app.setPreventSleepEnabled(checked);
                     if (typeof result?.enabled === 'boolean') {
                       setPreventSleepEnabled(result.enabled);
                     }

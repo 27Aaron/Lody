@@ -168,8 +168,9 @@ export function LocalTerminalPanel({
         if (isPasteShortcut(event)) {
           event.preventDefault();
           event.stopPropagation();
-          const text = channel.readClipboardText();
-          if (text) t.paste(text);
+          void Promise.resolve(channel.readClipboardText()).then((text) => {
+            if (text) t.paste(text);
+          });
           return false;
         }
         if (isKeyboardSelectionShortcut(event) && isKeyboardSelectionKey(event.key)) {
@@ -337,9 +338,10 @@ export function LocalTerminalPanel({
   const pasteClipboard = () => {
     const term = termRef.current;
     if (!term) return;
-    const text = channel.readClipboardText();
-    if (text) term.paste(text);
-    queueMicrotask(() => term.focus());
+    void Promise.resolve(channel.readClipboardText()).then((text) => {
+      if (text) term.paste(text);
+      queueMicrotask(() => term.focus());
+    });
   };
 
   const handleWindowsRightClick = (event: MouseEvent<HTMLDivElement>) => {
@@ -353,8 +355,9 @@ export function LocalTerminalPanel({
       term.clearSelection();
       return;
     }
-    const text = channel.readClipboardText();
-    if (text) term.paste(text);
+    void Promise.resolve(channel.readClipboardText()).then((text) => {
+      if (text) term.paste(text);
+    });
   };
 
   const host = (

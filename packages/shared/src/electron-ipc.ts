@@ -100,7 +100,7 @@ export type ElectronPublicBrowserResult =
   | { ok: true; state: ElectronPublicBrowserState }
   | { ok: false; error: string };
 
-export const ELECTRON_PUBLIC_BROWSER_STATE_CHANNEL = 'lodyPublicBrowser:state';
+export const ELECTRON_PUBLIC_BROWSER_STATE_CHANNEL = 'publicBrowser.state';
 
 const LocalPathLauncherStringSchema = z
   .string()
@@ -438,8 +438,7 @@ export type SendLocalSessionControlResult =
       error: string;
     };
 
-export const ELECTRON_LOCAL_SESSION_CONTROL_RESPONSE_CHANNEL =
-  'lodySessionControl:response' as const;
+export const ELECTRON_LOCAL_SESSION_CONTROL_RESPONSE_CHANNEL = 'sessionControl.response' as const;
 
 export type ElectronLocalSessionControlResponseEvent = {
   requestId: string;
@@ -607,7 +606,7 @@ export type SaveImageFileResult =
 /**
  * The single implicit workspace of the open-source local platform, read by the
  * Electron main process from the CLI-provisioned local workspace catalog
- * as part of `local-platform:get-snapshot`. Null until the CLI has provisioned
+ * as part of `localPlatform.getSnapshot`. Null until the CLI has provisioned
  * it — and always null on the cloud platform.
  */
 export type ElectronImplicitLocalWorkspace = {
@@ -628,7 +627,7 @@ export type ElectronLocalPlatformSnapshot = {
 };
 
 export type GlobalShortcutId = 'app.focus';
-export const GLOBAL_SHORTCUT_TRIGGERED_CHANNEL = 'lodyApp:globalShortcutTriggered';
+export const GLOBAL_SHORTCUT_TRIGGERED_CHANNEL = 'app.globalShortcut';
 
 /**
  * Default binding per global shortcut, in the renderer's binding-string syntax
@@ -764,3 +763,5 @@ export function bindingToElectronAccelerator(binding: string | null | undefined)
 
   return [...modifiers, key].join('+');
 }
+
+export * from './electron-ipc-contract';

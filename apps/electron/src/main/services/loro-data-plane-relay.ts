@@ -109,7 +109,7 @@ export class LoroDataPlaneRelay {
       sender.on('did-navigate', releasePeers)
       // Seed the newly-attached renderer with the current connection state so its
       // transport can join immediately when the daemon is already reachable.
-      sender.send('lodyLoroDataPlane:status', this.connected)
+      sender.send('loro.status', this.connected)
     }
     if (this.enabled) {
       void this.ensureConnected().catch(() => this.scheduleRedial())
@@ -363,7 +363,7 @@ export class LoroDataPlaneRelay {
   private publish(message: LocalLoroDataPlaneServerMessage): void {
     for (const sender of this.senders) {
       if (!sender.isDestroyed()) {
-        sender.send('lodyLoroDataPlane:event', message)
+        sender.send('loro.event', message)
       }
     }
   }
@@ -373,7 +373,7 @@ export class LoroDataPlaneRelay {
     this.connected = next
     for (const sender of this.senders) {
       if (!sender.isDestroyed()) {
-        sender.send('lodyLoroDataPlane:status', next)
+        sender.send('loro.status', next)
       }
     }
   }

@@ -37,6 +37,7 @@ import {
 import { toast } from 'sonner';
 import { writeTextToClipboard } from '@/lib/clipboard';
 import { isElectronRenderer } from '@/lib/electron';
+import { getPublicBrowserBridge } from '@/lib/electron-ipc-client';
 import { useSessionDoc } from '@/hooks/use-session-doc';
 import { hasUsableManagedPreviewUrl } from '@/lib/managed-preview-connection';
 import { buildManagedViewerUrl, samePreviewTargetOrigin } from '@/lib/session-browser-url';
@@ -693,9 +694,9 @@ function SessionBrowserPanelController({
     if (
       currentAddress?.engine === 'public-web' &&
       publicState?.canGoBack &&
-      window.api?.publicBrowser
+      getPublicBrowserBridge()
     ) {
-      void window.api.publicBrowser.back(`session-browser-${session.id}`).then(
+      void getPublicBrowserBridge()?.back(`session-browser-${session.id}`).then(
         (result) => {
           if (!result.ok) setError(result.error);
         },
@@ -721,9 +722,9 @@ function SessionBrowserPanelController({
     if (
       currentAddress?.engine === 'public-web' &&
       publicState?.canGoForward &&
-      window.api?.publicBrowser
+      getPublicBrowserBridge()
     ) {
-      void window.api.publicBrowser.forward(`session-browser-${session.id}`).then(
+      void getPublicBrowserBridge()?.forward(`session-browser-${session.id}`).then(
         (result) => {
           if (!result.ok) setError(result.error);
         },
@@ -746,8 +747,8 @@ function SessionBrowserPanelController({
   ]);
 
   const handleReload = useCallback(() => {
-    if (currentAddress?.engine === 'public-web' && window.api?.publicBrowser) {
-      void window.api.publicBrowser.reload(`session-browser-${session.id}`).then(
+    if (currentAddress?.engine === 'public-web' && getPublicBrowserBridge()) {
+      void getPublicBrowserBridge()?.reload(`session-browser-${session.id}`).then(
         (result) => {
           if (!result.ok) setError(result.error);
         },
@@ -769,8 +770,8 @@ function SessionBrowserPanelController({
   }, [currentAddress, openAddress, session.id, viewerUrl]);
 
   const handleStop = useCallback(() => {
-    if (currentAddress?.engine === 'public-web' && window.api?.publicBrowser) {
-      void window.api.publicBrowser.stop(`session-browser-${session.id}`).then(
+    if (currentAddress?.engine === 'public-web' && getPublicBrowserBridge()) {
+      void getPublicBrowserBridge()?.stop(`session-browser-${session.id}`).then(
         (result) => {
           if (!result.ok) setError(result.error);
         },

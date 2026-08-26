@@ -3,25 +3,26 @@ import type { ElectronCliState } from '@lody/shared';
 import { CliDaemonSetting } from '@/components/settings/cli-daemon-setting';
 import { CompactSection } from '@/components/settings/compact-layout';
 
-function installElectronApiMock(state: ElectronCliState): void {
+function installElectronIpcMock(state: ElectronCliState): void {
   if (typeof window === 'undefined') return;
   window.__LODY_ELECTRON__ = true;
-  window.api = {
-    ...(window.api ?? {}),
-    cliState: {
-      getState: async () => state,
-      restart: async () => ({ ok: true }),
-      terminate: async () => ({ ok: true }),
-      onState: (handler) => {
-        handler(state);
-        return () => {};
-      },
+  window.ipc = {
+    invoke: async (channel) => {
+      if (channel === 'cli.getState') return state;
+      if (channel === 'cli.restart') return { ok: true };
+      if (channel === 'cli.terminate') return { ok: true };
+      throw new Error(`unexpected invoke ${channel}`);
     },
+    on: (channel, listener) => {
+      if (channel === 'cli.state') listener(state);
+      return () => {};
+    },
+    send: () => {},
   };
 }
 
 function Harness({ cliState }: { cliState: ElectronCliState }) {
-  installElectronApiMock(cliState);
+  installElectronIpcMock(cliState);
   return (
     <div className="w-[640px] bg-background p-4">
       <CompactSection title="Startup">

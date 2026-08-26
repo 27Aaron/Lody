@@ -11,12 +11,13 @@ import {
 } from '@lody/platform';
 import { useStoreValue } from '@lody/platform/react';
 import { isLocalAppPlatform } from '@/lib/app-platform';
+import { getIpcServices } from '@/lib/electron-ipc-client';
 
 /**
  * Renderer-side assembly of the open-source local `PlatformProvider`
  * (specs/platform-providers.md). The CLI provisions the single implicit
  * workspace (D-O14) and the Electron main process surfaces it over
- * `window.api.localPlatform.getSnapshot()`; this module polls that bridge until
+ * `getIpcServices()?.localPlatform.getSnapshot()`; this module polls that bridge until
  * the CLI publishes one atomic identity/workspace snapshot. Both provider
  * stores transition together so renderer writes and CLI access checks use the
  * same durable synthetic installation identity.
@@ -49,7 +50,7 @@ function startLocalPlatformSnapshotPolling(
     }
     inFlight = true;
     try {
-      const snapshot = await window.api?.localPlatform?.getSnapshot();
+      const snapshot = await getIpcServices()?.localPlatform.getSnapshot();
       if (!snapshot) {
         return;
       }

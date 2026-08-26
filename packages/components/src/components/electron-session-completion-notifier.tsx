@@ -8,9 +8,13 @@ import {
   userAtom,
 } from '@/atoms';
 import { useVisibleSessionMetas } from '@/hooks/use-visible-session-metas';
-import { isAppForeground, shouldNotifySessionCompletion } from '@/lib/session-completion-notification';
+import {
+  isAppForeground,
+  shouldNotifySessionCompletion,
+} from '@/lib/session-completion-notification';
 import type { SessionListEntry } from '@/lib/session-visibility';
 import type { SessionLegacyMetaFields } from '@lody/shared';
+import { getIpcServices, onIpcEvent } from '@/lib/electron-ipc-client';
 
 type SessionStatusType = 'running' | 'initializing' | 'requestPermission' | 'idle';
 
@@ -69,7 +73,7 @@ export function ElectronSessionCompletionNotifier() {
       const body = sessionTitle
         ? t('notifications.desktopCompletion.bodyWithTitle', { title: sessionTitle })
         : t('notifications.desktopCompletion.body');
-      void window.api?.showSessionCompletionNotification?.({
+      void getIpcServices()?.notifications.showSessionCompletion({
         sessionId: session.id,
         workspaceSlug: workspaceSlug ?? undefined,
         title,
@@ -80,11 +84,10 @@ export function ElectronSessionCompletionNotifier() {
     const showPermissionRequestNotification = (session: SessionListEntry): void => {
       const sessionTitle = typeof session.title === 'string' ? session.title.trim() : '';
       const title = t('notifications.desktopPermissionRequest.title');
-      const body =
-        isNonEmptyString(sessionTitle)
-          ? t('notifications.desktopPermissionRequest.bodyWithSession', { sessionTitle })
-          : t('notifications.desktopPermissionRequest.body');
-      void window.api?.showSessionCompletionNotification?.({
+      const body = isNonEmptyString(sessionTitle)
+        ? t('notifications.desktopPermissionRequest.bodyWithSession', { sessionTitle })
+        : t('notifications.desktopPermissionRequest.body');
+      void getIpcServices()?.notifications.showSessionCompletion({
         sessionId: session.id,
         workspaceSlug: workspaceSlug ?? undefined,
         title,
@@ -189,12 +192,7 @@ export function ElectronSessionCompletionNotifier() {
     if (!isElectron || typeof window === 'undefined') {
       return undefined;
     }
-    const subscribe = window.api?.onSessionCompletionNotificationClick;
-    if (!subscribe) {
-      return undefined;
-    }
-
-    return subscribe((payload) => {
+    return onIpcEvent('app.sessionCompletionClick', (payload) => {
       const sessionId = payload?.sessionId?.trim();
       if (!isNonEmptyString(sessionId)) {
         return;

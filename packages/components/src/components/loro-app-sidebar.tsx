@@ -23,6 +23,7 @@ import { resolveWorkspaceIdentityLogo } from '@/lib/workspace-identity';
 import { cn } from '@/lib/utils';
 import { formatCompactRelativeTime } from '@/lib/format-relative-time';
 import { isElectronRenderer, useElectronFullscreen } from '@/lib/electron';
+import { getIpcServices } from '@/lib/electron-ipc-client';
 import { formatSessionTabSearch } from '@/lib/session-tab-url';
 import { openExternalUrl } from '@/lib/native-browser';
 import { getChangelogUrl, LODY_DISCORD_URL } from '@/lib/lody-urls';
@@ -1398,7 +1399,9 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
 
   const handleImportLocalProject = useCallback(async () => {
     if (!isElectron || !runtime) return;
-    const selectDirectory = window.api?.selectLocalProjectDirectory;
+    const selectDirectory = getIpcServices()?.localProjects.selectDirectory.bind(
+      getIpcServices()!.localProjects
+    );
     if (!selectDirectory) return;
 
     try {
@@ -2158,13 +2161,12 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
 
   const handleApplyDownloadedUpdate = useCallback(async () => {
     if (!isElectron || typeof window === 'undefined') return;
-    const updater = window.api?.updater;
-    if (!updater || typeof updater.quitAndInstall !== 'function') {
+    if (!getIpcServices()) {
       return;
     }
 
     setIsInstallingUpdate(true);
-    const result = await updater.quitAndInstall();
+    const result = await getIpcServices()!.updater.quitAndInstall();
     if (result.ok) {
       return;
     }

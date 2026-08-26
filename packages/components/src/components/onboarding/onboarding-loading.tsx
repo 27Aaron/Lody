@@ -3,6 +3,7 @@ import { Trans, useTranslation } from 'react-i18next';
 import { motion } from 'framer-motion';
 import type { CliRuntimeStartupStage, ElectronCliPhase, ElectronCliState } from '@lody/shared';
 import { cn } from '@/lib/utils';
+import { getIpcServices, onIpcEvent, sendIpc } from '@/lib/electron-ipc-client';
 import lodyLogo from '@/assets/lody-icon.png';
 
 const STARTUP_STAGES: CliRuntimeStartupStage[] = [
@@ -135,8 +136,7 @@ export function OnboardingLoading({ onReady, bypassAfterMs = 45_000 }: Onboardin
   const [bypassed, setBypassed] = useState(false);
 
   useEffect(() => {
-    const cliStateApi = window.api?.cliState;
-    if (!cliStateApi?.onState || !cliStateApi?.getState) {
+    if (!getIpcServices()) {
       onReady();
       return undefined;
     }
@@ -160,8 +160,9 @@ export function OnboardingLoading({ onReady, bypassAfterMs = 45_000 }: Onboardin
       onReady();
     };
 
-    void cliStateApi
-      .getState()
+    sendIpc('cli.subscribe', null);
+    void getIpcServices()!
+      .cli.getState()
       .then((s) => {
         if (cancelled) return;
         setState(s);
@@ -169,7 +170,7 @@ export function OnboardingLoading({ onReady, bypassAfterMs = 45_000 }: Onboardin
       })
       .catch(() => undefined);
 
-    const unsubscribe = cliStateApi.onState((s) => {
+    const unsubscribe = onIpcEvent('cli.state', (s) => {
       if (cancelled) return;
       setState(s);
       if (s.phase === 'running') resolveReady();

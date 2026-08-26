@@ -58,6 +58,7 @@ import {
 import { resolveSessionCreateRepoFullName } from '@/lib/session-repo';
 import { collectSessionLifecycleIds } from '@/lib/session-lifecycle';
 import { capturePostHogEvent } from '@/lib/posthog-analytics';
+import { sendIpc } from '@/lib/electron-ipc-client';
 import { useAuthenticatedConvex } from './use-authenticated-convex';
 
 const log = debug('lody:session-actions');
@@ -1113,7 +1114,7 @@ export function useSessionActions(): SessionActions {
       const lifecycleSessions = getSessionLifecycleMetas(sessionId, sessionMeta);
       for (const session of lifecycleSessions) {
         if (typeof window !== 'undefined') {
-          window.api?.terminal?.closeSession(session.id);
+          sendIpc('terminal.closeSession', { sessionId: session.id });
         }
         await runtime.writer.upsertDocMeta(getSessionRoomId(session.id), {
           isArchived: true,

@@ -1,6 +1,7 @@
 import { atom } from 'jotai';
 import { atomEffect } from 'jotai-effect';
 import type { ElectronCliState, MachineId } from '@lody/shared';
+import { getIpcServices, onIpcEvent, sendIpc } from '@/lib/electron-ipc-client';
 
 export type LocalProbeResult = {
   ok: boolean;
@@ -119,8 +120,7 @@ export const localProbeEffectAtom = atomEffect((_get, set) => {
     return undefined;
   }
 
-  const cliStateApi = window.api?.cliState;
-  if (!cliStateApi?.getState || !cliStateApi.onState) {
+  if (!getIpcServices()) {
     set(localProbeResultAtom, null);
     set(localProbeAttemptedAtom, true);
     set(localAgentEnabledAtom, false);
@@ -137,8 +137,9 @@ export const localProbeEffectAtom = atomEffect((_get, set) => {
     set(localCliStartingAtom, isLocalCliRuntimeStarting(state));
   };
 
-  void cliStateApi
-    .getState()
+  sendIpc('cli.subscribe', null);
+  void getIpcServices()!
+    .cli.getState()
     .then(applyState)
     .catch(() => {
       if (cancelled) return;
@@ -147,7 +148,7 @@ export const localProbeEffectAtom = atomEffect((_get, set) => {
       set(localAgentEnabledAtom, false);
       set(localCliStartingAtom, false);
     });
-  const unsubscribe = cliStateApi.onState(applyState);
+  const unsubscribe = onIpcEvent('cli.state', applyState);
 
   return () => {
     cancelled = true;

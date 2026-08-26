@@ -120,6 +120,7 @@ import { createLocalLoroDataPlaneConnection } from './local-loro-data-plane-conn
 import { createWorkspaceMachineRpcFacade } from './workspace-machine-rpc-facade';
 import { resyncMachineFlockRows } from '@/hooks/use-machine-flock-rows';
 import { createCodeCollabFileIndexCache } from '@/lib/code-collab-file-index-cache';
+import { getIpcServices, onIpcEvent, sendLocalSessionControl } from '@/lib/electron-ipc-client';
 
 declare global {
   interface Window {
@@ -296,7 +297,7 @@ const getBrowserLocalStorage = (): Storage | null => {
 const isElectronLocalDataPlaneEnabled = (): boolean => {
   if (typeof window === 'undefined') return false;
   if (!window.__LODY_ELECTRON__) return false;
-  if (typeof window.api?.loroDataPlane?.send !== 'function') return false;
+  if (!getIpcServices()) return false;
   if (import.meta.env.VITE_LODY_ELECTRON_LOCAL_DATA_PLANE === '0') return false;
   try {
     return globalThis.localStorage?.getItem('lody:electronLocalDataPlane') !== '0';
@@ -1059,8 +1060,8 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
         !message.success || message.status === 'error'
           ? 'error'
           : message.status === 'not-applicable'
-          ? 'installed'
-          : message.status,
+            ? 'installed'
+            : message.status,
       command: message.command,
       platformArch: message.platformArch,
       version: message.version,
@@ -2042,7 +2043,7 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
     if (!window.__LODY_ELECTRON__) {
       return false;
     }
-    if (!window.api?.sendLocalSessionControl) {
+    if (!getIpcServices()) {
       return false;
     }
     if (!isLocalSessionControlRequest(message)) {
@@ -2066,8 +2067,7 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
     if (typeof window === 'undefined') {
       return { ok: false, error: 'Local session control requires the Electron renderer' };
     }
-    const sendLocalSessionControl = window.api?.sendLocalSessionControl;
-    if (!sendLocalSessionControl) {
+    if (!getIpcServices()) {
       return { ok: false, error: 'Local session control bridge is not available' };
     }
 
@@ -2691,10 +2691,9 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
     // only what the local CLI itself authors and is authoritative for that
     // instance, while every remote origin reaches us through the cloud replica
     // alone — see `mergePresenceSnapshots`.
-    const presenceApi = window.api?.loroDataPlane;
-    if (presenceApi && deps.onPresenceSnapshot) {
+    if (getIpcServices() && deps.onPresenceSnapshot) {
       const presenceStore = new EphemeralStore(LODY_PRESENCE_TTL_MS);
-      localPresenceUnsubscribe = presenceApi.onEvent((message) => {
+      localPresenceUnsubscribe = onIpcEvent('loro.event', (message) => {
         if (message.type !== 'presence') return;
         if (message.workspaceId !== workspaceId) return;
         presenceStore.apply(base64ToBytes(message.dataBase64));

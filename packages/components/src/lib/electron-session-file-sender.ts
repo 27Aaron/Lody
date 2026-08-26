@@ -1,5 +1,6 @@
 import type { SessionFilePayload } from '@lody/shared';
 import { isElectronRenderer } from './electron';
+import { getIpcServices } from './electron-ipc-client';
 
 /**
  * Desktop local-transport file sender (renderer side).
@@ -16,7 +17,7 @@ import { isElectronRenderer } from './electron';
  */
 
 export const canUseElectronLocalFileSend = (): boolean =>
-  isElectronRenderer() && typeof window.api?.sendSessionFileLocal === 'function';
+  isElectronRenderer() && Boolean(getIpcServices());
 
 export type SendSessionFileLocalOutcome =
   | { ok: true; files: SessionFilePayload[]; message?: string }
@@ -38,12 +39,11 @@ export const sendSessionFileToLocalRuntime = async (args: {
   machineId: string;
   file: File;
 }): Promise<SendSessionFileLocalOutcome | null> => {
-  const send = window.api?.sendSessionFileLocal;
-  if (typeof send !== 'function') {
+  if (!getIpcServices()) {
     return null;
   }
   const bytes = await fileToArrayBuffer(args.file);
-  const result = await send({
+  const result = await getIpcServices()!.localProjects.sendSessionFileLocal({
     workspaceId: args.workspaceId,
     sessionId: args.sessionId,
     machineId: args.machineId,

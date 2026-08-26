@@ -14,6 +14,7 @@ import { useElectronUpdaterState } from '@/hooks/use-electron-updater-state';
 import { OpenSourceAttributionsDialog } from '@/components/settings/open-source-attributions-dialog';
 import { JoinCommunityDialog } from '@/components/settings/join-community-dialog';
 import { openExternalUrl } from '@/lib/native-browser';
+import { getIpcServices } from '@/lib/electron-ipc-client';
 import { getDownloadPageUrl, getWebsiteUrl } from '@/lib/lody-urls';
 import { LODY_APP_INFO_UPDATED_EVENT, readNativeAppInfo } from '@/lib/native-app-info';
 import {
@@ -141,16 +142,14 @@ export function MobileAboutSettings() {
   }, [i18n.resolvedLanguage]);
 
   const handleCheckForUpdates = useCallback(async () => {
-    const updater = window.api?.updater;
-    if (!updater || typeof updater.checkForUpdates !== 'function') return;
-    await updater.checkForUpdates();
+    if (!getIpcServices()) return;
+    await getIpcServices()!.updater.checkForUpdates();
   }, []);
 
   const handleQuitAndInstall = useCallback(async () => {
-    const updater = window.api?.updater;
-    if (!updater || typeof updater.quitAndInstall !== 'function') return;
+    if (!getIpcServices()) return;
     setIsInstalling(true);
-    const result = await updater.quitAndInstall();
+    const result = await getIpcServices()!.updater.quitAndInstall();
     if (!result.ok) {
       setIsInstalling(false);
     }
@@ -162,8 +161,7 @@ export function MobileAboutSettings() {
   const showStatus =
     phase === 'up_to_date' || phase === 'error' || phase === 'downloading' || phase === 'disabled';
   const aboutVersion = nativeAppVersion ?? updaterState?.currentVersion ?? APP_VERSION;
-  const showDeveloperModeSwitch =
-    developerModeEnabled || revealTaps >= DEVELOPER_MODE_REVEAL_TAPS;
+  const showDeveloperModeSwitch = developerModeEnabled || revealTaps >= DEVELOPER_MODE_REVEAL_TAPS;
 
   return (
     <>

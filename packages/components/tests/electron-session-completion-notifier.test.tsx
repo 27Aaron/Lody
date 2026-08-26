@@ -39,25 +39,34 @@ const showSessionCompletionNotification = vi.fn();
 const unsubscribeClick = vi.fn();
 const onSessionCompletionNotificationClick = vi.fn(() => unsubscribeClick);
 
-function installWindowApi() {
+function installWindowIpc() {
   Object.defineProperty(window, '__LODY_ELECTRON__', {
     configurable: true,
     value: true,
   });
-  Object.defineProperty(window, 'api', {
+  Object.defineProperty(window, 'ipc', {
     configurable: true,
     value: {
-      showSessionCompletionNotification,
-      onSessionCompletionNotificationClick,
+      invoke: async (channel: string, ...args: unknown[]) => {
+        if (channel === 'notifications.showSessionCompletion') {
+          return showSessionCompletionNotification(args[0]);
+        }
+        throw new Error(`unexpected invoke ${channel}`);
+      },
+      on: (channel: string, listener: (payload: unknown) => void) => {
+        if (channel === 'app.sessionCompletionClick') {
+          return onSessionCompletionNotificationClick(listener);
+        }
+        return () => {};
+      },
+      send: () => {},
     },
   });
 }
 
-function uninstallWindowApi() {
-  // @ts-expect-error removing test-only global
+function uninstallWindowIpc() {
   delete window.__LODY_ELECTRON__;
-  // @ts-expect-error removing test-only global
-  delete window.api;
+  delete window.ipc;
 }
 
 import { useVisibleSessionMetas } from '../src/hooks/use-visible-session-metas';
@@ -87,7 +96,7 @@ describe('ElectronSessionCompletionNotifier', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-    installWindowApi();
+    installWindowIpc();
     showSessionCompletionNotification.mockClear();
     onSessionCompletionNotificationClick.mockClear();
     unsubscribeClick.mockClear();
@@ -99,7 +108,7 @@ describe('ElectronSessionCompletionNotifier', () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    uninstallWindowApi();
+    uninstallWindowIpc();
     Object.defineProperty(document, 'visibilityState', {
       configurable: true,
       get: () => 'visible',

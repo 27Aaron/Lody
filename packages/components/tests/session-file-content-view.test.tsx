@@ -154,7 +154,7 @@ afterEach(() => {
   vi.mocked(writeTextToClipboard).mockClear();
   sharedCodeCollabTextState = createCodeCollabSessionFileProviderTextState();
   delete window.__LODY_ELECTRON__;
-  delete window.api;
+  delete window.ipc;
   vi.useRealTimers();
 });
 
@@ -417,9 +417,18 @@ describe('SessionFileContentView', () => {
       configurable: true,
       value: true,
     });
-    Object.defineProperty(window, 'api', {
+    Object.defineProperty(window, 'ipc', {
       configurable: true,
-      value: { readSessionWorktreeFile },
+      value: {
+        invoke: async (channel: string, ...args: unknown[]) => {
+          if (channel === 'localProjects.readSessionWorktreeFile') {
+            return readSessionWorktreeFile(...args);
+          }
+          throw new Error(`unexpected invoke ${channel}`);
+        },
+        on: () => () => {},
+        send: () => {},
+      },
     });
     const githubSession = {
       ...session,
@@ -1395,14 +1404,21 @@ describe('SessionFileContentView', () => {
       configurable: true,
       value: true,
     });
-    Object.defineProperty(window, 'api', {
+    Object.defineProperty(window, 'ipc', {
       configurable: true,
       value: {
-        readSessionWorktreeFile: vi.fn(async () => ({
-          path: 'large.html',
-          content: '<script>window.partial = true',
-          truncated: true,
-        })),
+        invoke: async (channel: string, ...args: unknown[]) => {
+          if (channel === 'localProjects.readSessionWorktreeFile') {
+            return {
+              path: 'large.html',
+              content: '<script>window.partial = true',
+              truncated: true,
+            };
+          }
+          throw new Error(`unexpected invoke ${channel}`);
+        },
+        on: () => () => {},
+        send: () => {},
       },
     });
     const githubSession = {

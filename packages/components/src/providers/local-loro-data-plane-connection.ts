@@ -1,12 +1,11 @@
 import type { LocalLoroDataPlaneConnection } from '@lody/shared/local-loro-transport';
+import { getIpcServices, onIpcEvent, sendIpc } from '@/lib/electron-ipc-client';
 
-/** Bridges Electron's preload push API to the local Loro transport. */
 export function createLocalLoroDataPlaneConnection(): {
   connection: LocalLoroDataPlaneConnection;
   dispose: () => void;
 } | null {
-  const api = window.api?.loroDataPlane;
-  if (!api) return null;
+  if (!getIpcServices()) return null;
 
   let connected = false;
   const statusListeners = new Set<(connected: boolean) => void>();
@@ -15,14 +14,14 @@ export function createLocalLoroDataPlaneConnection(): {
     connected = next;
     for (const listener of statusListeners) listener(next);
   };
-  api.subscribe();
-  const unsubscribeStatus = api.onStatus(setConnected);
-  void api.isConnected().then(setConnected);
+  sendIpc('loro.subscribe', null);
+  const unsubscribeStatus = onIpcEvent('loro.status', setConnected);
+  void getIpcServices()!.loro.isConnected().then(setConnected);
 
   return {
     connection: {
-      send: (message) => api.send(message),
-      onMessage: (listener) => api.onEvent(listener),
+      send: (message) => sendIpc('loro.send', message),
+      onMessage: (listener) => onIpcEvent('loro.event', listener),
       onStatusChange: (listener) => {
         statusListeners.add(listener);
         listener(connected);

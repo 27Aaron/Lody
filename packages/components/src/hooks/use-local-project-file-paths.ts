@@ -8,6 +8,7 @@ import {
   createLocalProjectIpcFileTransport,
   createLocalProjectRpcFileTransport,
 } from '@/lib/local-project-rpc-file-provider';
+import { getIpcServices } from '@/lib/electron-ipc-client';
 
 export type LocalProjectFilePathsEntry = {
   paths: string[];
@@ -117,8 +118,12 @@ export function useLocalProjectFilePaths(
       return undefined;
     }
 
-    const listLocalProjectFiles = window.api?.listLocalProjectFiles;
-    const listSessionWorktreeFiles = window.api?.listSessionWorktreeFiles;
+    const listLocalProjectFiles = getIpcServices()?.localProjects.listFiles.bind(
+      getIpcServices()!.localProjects
+    );
+    const listSessionWorktreeFiles = getIpcServices()?.localProjects.listSessionWorktreeFiles.bind(
+      getIpcServices()!.localProjects
+    );
     let cacheKey = '';
     let loadFiles: (() => Promise<LocalProjectFilePathsLoadResult>) | null = null;
 

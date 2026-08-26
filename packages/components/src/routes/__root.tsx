@@ -25,6 +25,7 @@ import { persistAuthToken, signOutWithoutRedirect } from '../lib/auth';
 import { setLoginHintCookie } from '../lib/login-hint-cookie';
 import i18next from 'i18next';
 import { getAppCurrentPathWithSearch } from '@/lib/app-location';
+import { onIpcEvent } from '@/lib/electron-ipc-client';
 import { useStableSession } from '@/hooks/useStableSession';
 import { normalizeCurrentUserFromSessionUser } from '@/lib/current-user';
 import { writeAuthBootstrapSnapshot } from '@/lib/auth-bootstrap';
@@ -486,11 +487,7 @@ function DesktopDeepLinkRouter() {
     if (typeof window === 'undefined' || window.__LODY_ELECTRON__ !== true) {
       return undefined;
     }
-    if (!window.api?.onDeepLink) {
-      return undefined;
-    }
-
-    return window.api.onDeepLink((url) => {
+    return onIpcEvent('app.deepLink', (url) => {
       const authCallbackToken = readElectronAuthCallbackToken(url);
       const isAuthCallback = authCallbackToken != null;
       const invitePath = resolveDesktopInviteDeepLinkPath(url);

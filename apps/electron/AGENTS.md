@@ -16,8 +16,11 @@ Root `AGENTS.md` also applies.
 - Electron main and preload code must not import runtime values from the
   `@lody/shared` root barrel. Use a narrow subpath so Node bundles do not pull in
   renderer modules or `loro-crdt` WASM.
-- Define or extend the shared IPC contract before adding an IPC handler. Validate all
-  foreign input at the process boundary.
+- Shared Electron IPC is `IpcServices` / `IpcPushMap` / `IpcSendMap` in
+  `@lody/shared/electron-ipc`. Main groups are `IpcService` classes with
+  `@IpcMethod()`; renderer uses `getIpcServices` / `onIpcEvent` / `sendIpc`.
+  Preload exposes only `{ invoke, on, send }` with allowlists. There is no
+  `window.api`. Validate foreign input at the IPC class boundary.
 - Preload runs under the renderer CSP. Zod schemas used there must pass
   `{ jitless: true }`; do not add `unsafe-eval` to accommodate Zod's JIT path.
 
@@ -40,7 +43,7 @@ Root `AGENTS.md` also applies.
 - Turning off **Run local agent** is an explicit cloud control-only mode: do not
   probe an embedded or externally started CLI, and keep the local Loro data-plane
   relay disconnected until the setting is enabled again.
-- `local-platform:get-snapshot` atomically supplies the persistent `local:*` user and
+- `localPlatform.getSnapshot` atomically supplies the persistent `local:*` user and
   the single `lw_*` workspace from the CLI catalog. Do not split this into independent
   fallbacks. A missing catalog means provisioning; malformed identities or multiple
   active workspaces are errors.
@@ -70,17 +73,16 @@ Root `AGENTS.md` also applies.
   never a timer or microtask guess.
 - Theme changes must also update the native window color in `window-theme.ts`.
   OS appearance changes while `themeSource` is `system` must retint chrome and
-  notify the renderer (`lodyApp:nativeThemeUpdated`). On macOS also subscribe
+  notify the renderer (`app.nativeTheme`). On macOS also subscribe
   to `AppleInterfaceThemeChangedNotification`; Chromium `matchMedia` and
   `nativeTheme.updated` often miss Control Center switches.
 - The onboarding window must be native Light before its first renderer paint; normal product windows start from the System theme source.
   Windows title-bar geometry must stay aligned across
   `MAIN_WINDOW_TITLE_BAR_OVERLAY_HEIGHT`, the `h-9` drag strip in
   `routes/__root.tsx`, and the `pt-9` offset in `web-workspace-layout.tsx`.
-- `lodySessionControl:send` streams intermediate responses on the fixed IPC event
-  channel keyed by request id. Preload subscribes before `invoke`, removes the
-  listener after settlement, accepts the legacy single-JSON response, and treats only
-  the final response as completion.
+- `sessionControl.send` streams intermediate responses on `sessionControl.response`
+  keyed by request id. The renderer subscribes before `invoke`, removes the
+  listener after settlement, and treats only the final response as completion.
 - Image preview export (`services/image-export-service.ts`) keeps the native
   menu, clipboard, and save dialog here because the renderer holds the only copy
   of the image (a `blob:` URL main cannot download). Bytes cross once, after the

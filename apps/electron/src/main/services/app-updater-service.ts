@@ -5,12 +5,13 @@ import type {
   ElectronUpdaterState,
   QuitAndInstallElectronUpdateResult
 } from '@lody/shared/electron-ipc'
+import { IPC_PUSH_CHANNELS } from '@lody/shared/electron-ipc'
 import { formatUnknownError } from '../utils'
 import { setAppQuitting } from '../window-state'
 import { readUpdaterReleaseMetadata } from './app-updater-metadata'
 
 const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000
-const LODY_UPDATER_STATE_EVENT = 'lodyUpdater:state'
+const LODY_UPDATER_STATE_EVENT = IPC_PUSH_CHANNELS.updaterState
 
 function readNonEmptyString(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined
