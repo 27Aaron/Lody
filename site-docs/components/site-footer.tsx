@@ -1,6 +1,6 @@
 /**
  * Shared site footer — same structure as the homepage underwater footer:
- * copyright + Loro credit, support / terms / privacy / GitHub / X.
+ * copyright, support / terms / privacy / GitHub / X.
  * Product nav lives in SiteNav only.
  */
 
@@ -40,12 +40,7 @@ export function SiteFooter({ locale }: { locale: SiteFooterLocale }) {
   return (
     <footer className="underwater-footer site-footer">
       <div className="underwater-footer__inner">
-        <p className="underwater-footer__rights">
-          {t.rights} · Powered by{' '}
-          <a href="https://loro.dev" rel="noreferrer" target="_blank">
-            Loro Stack
-          </a>
-        </p>
+        <p className="underwater-footer__rights">{t.rights}</p>
         <nav className="underwater-footer__links" aria-label="Footer">
           <a href={t.supportHref}>{t.support}</a>
           <a href={founderCallUrl('footer')} rel="noreferrer" target="_blank">

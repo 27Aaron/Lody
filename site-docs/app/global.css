@@ -10,6 +10,7 @@
 @import './download.css';
 @import './changelog.css';
 @import './blog.css';
+@import './reading-theme.css';
 
 @source '../../packages/components/src/**/*.{ts,tsx}';
 

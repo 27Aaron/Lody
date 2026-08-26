@@ -1,3 +1,5 @@
+import { blogReadingMinutes } from './blog-reading-time.generated';
+
 export type BlogLocale = 'en' | 'zh';
 
 type BlogFrontmatter = {
@@ -18,6 +20,8 @@ export type BlogSourceEntry = BlogFrontmatter & {
 };
 
 export type BlogEntry = Omit<BlogFrontmatter, 'date' | 'image'> & {
+  /** Estimated read time in minutes, computed from the MDX body at build time. */
+  readingMinutes?: number;
   locale: BlogLocale;
   slug: string;
   slugSegments: string[];
@@ -82,6 +86,7 @@ export function normalizeBlogEntries(locale: BlogLocale, entries: BlogSourceEntr
         slugSegments,
         date,
         image: normalizeImagePath(entry.image),
+        readingMinutes: blogReadingMinutes[locale]?.[slug],
         url: locale === 'zh' ? `/zh/blog/${slug}` : `/blog/${slug}`,
         docPath: entry.info.path,
       };
