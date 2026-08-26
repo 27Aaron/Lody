@@ -8,7 +8,6 @@ import {
   type ACPSessionId,
   type SessionTurnInputConfig,
 } from './ai';
-import { normalizeAgentRoleInvocationSnapshots } from './agent-role';
 import type { SessionId } from './ids';
 import { MAX_MESSAGE_TEXT_SPAN_MARK_LENGTH, MESSAGE_TEXT_SPAN_KINDS } from './message-text-spans';
 import { RpcSecretPublicKeySchema } from './rpc-secret';
@@ -356,7 +355,6 @@ export const ACPSessionConfigSchema = z
     configOptionValues: AcpConfigOptionValuesSchema.optional(),
     mcpServerIds: z.array(z.string()).optional(),
     taskToolsEnabled: z.boolean().optional(),
-    agentRoleInvocations: z.array(z.unknown()).optional(),
     issuePRMentions: z.array(IssuePRMentionSchema).optional(),
     resume: ACPSessionIdSchema.optional(),
     chainDepth: z.number().int().nonnegative().optional(),
@@ -376,7 +374,6 @@ const LooseSessionTurnInputConfigSchema = z
     configOptionValues: AcpConfigOptionValuesSchema.optional(),
     mcpServerIds: z.array(z.string()).optional(),
     taskToolsEnabled: z.boolean().optional(),
-    agentRoleInvocations: z.array(z.unknown()).optional(),
     issuePRMentions: z.array(IssuePRMentionSchema).optional(),
     resume: ACPSessionIdSchema.optional(),
     chainDepth: z.number().int().nonnegative().optional(),
@@ -472,14 +469,6 @@ export const normalizeSessionTurnInputConfig = (
   const taskToolsEnabled = maybeParseField(z.boolean(), record.taskToolsEnabled);
   if (taskToolsEnabled !== undefined) {
     normalized.taskToolsEnabled = taskToolsEnabled;
-  }
-
-  // Normalized rather than schema-parsed: the same reader that drops a
-  // secret-shaped option out of a Role row must drop it out of a Turn that
-  // recorded one, however that Turn was written.
-  const agentRoleInvocations = normalizeAgentRoleInvocationSnapshots(record.agentRoleInvocations);
-  if (agentRoleInvocations) {
-    normalized.agentRoleInvocations = agentRoleInvocations;
   }
 
   const issuePRMentions = maybeParseField(z.array(IssuePRMentionSchema), record.issuePRMentions);

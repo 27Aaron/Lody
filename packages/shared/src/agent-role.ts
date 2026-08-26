@@ -9,8 +9,8 @@ import { isSensitiveAcpConfigOptionId } from './session-preparation';
  * the reason for most of the rules below:
  *
  * - No secrets. A workspace Flock row is replicated to every member's client,
- *   so `private` means "other members cannot discover, mention, or execute it
- *   through the product" — it is not transport or storage confidentiality.
+ *   so `private` limits trusted UI discovery and editing; it is not transport
+ *   or storage confidentiality, and MCP creation may resolve an explicit id.
  *   V1 therefore refuses to persist anything secret-shaped in the first place
  *   (`isSensitiveAgentRoleConfigOptionKey`), rather than pretending a private
  *   row is a safe place to put one.
@@ -51,27 +51,10 @@ export type AgentRole = {
   runConfig: AgentRoleRunConfig;
   promptPrefix?: string;
 
-  /** Bumped on every effective edit; frozen into each invocation snapshot. */
+  /** Bumped on every effective edit; frozen when a create Operation accepts this Role. */
   revision: number;
   createdAt: number;
   updatedAt: number;
-};
-
-/**
- * What a user Turn actually authorized.
- *
- * Frozen when the Turn is sent, so editing or deleting the Role afterwards
- * cannot change an already-accepted operation, and an Operation retry never
- * re-reads the mutable catalog. Carries no provider secret or environment.
- */
-export type AgentRoleInvocationSnapshot = {
-  roleId: AgentRoleId;
-  roleRevision: number;
-  roleName: string;
-  machineId: MachineId;
-  agentConfigId: AgentConfigId;
-  runConfig: AgentRoleRunConfig;
-  promptPrefix?: string;
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -219,8 +202,7 @@ export const normalizeAgentRoleRunConfig = (value: unknown): AgentRoleRunConfig 
 /**
  * Stable serialization of a run config, so two configs that differ only in the
  * order their option keys were authored in do not read as an edit — which would
- * bump `revision` and make identical snapshots look like different
- * authorizations.
+ * bump `revision` even though the effective Role configuration is unchanged.
  */
 const serializeRunConfig = (value: AgentRoleRunConfig): string => {
   const normalized = normalizeAgentRoleRunConfig(value);
@@ -298,9 +280,8 @@ export const normalizeAgentRole = (value: unknown): AgentRole | undefined => {
 /**
  * Whether two Roles differ in anything worth a new revision.
  *
- * `revision` rides on every invocation snapshot, so bumping it for a write that
- * changed nothing would make identical snapshots look like different
- * authorizations.
+ * `revision` is recorded as Session provenance and in accepted Operations, so a
+ * write that changes nothing must not create a new revision.
  */
 export const isAgentRoleContentEqual = (left: AgentRole, right: AgentRole): boolean =>
   left.name === right.name &&
@@ -316,9 +297,7 @@ export const isAgentRoleContentEqual = (left: AgentRole, right: AgentRole): bool
 // ---------------------------------------------------------------------------
 
 /**
- * The one authoritative access rule. Settings, the mention menu, and any later
- * Role resolution must all call this — hiding a private Role in the UI only is
- * not an access check.
+ * The authoritative trusted-UI discovery rule for Settings and the mention menu.
  */
 export const canReadAgentRole = (role: AgentRole, userId: string | null | undefined): boolean =>
   role.visibility === 'workspace' || (Boolean(userId) && role.ownerUserId === userId);
@@ -436,61 +415,3 @@ export const selectMentionableAgentRoles = (
         options.getAvailability(role).kind === 'available'
     )
     .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
-
-// ---------------------------------------------------------------------------
-// Invocation snapshots
-// ---------------------------------------------------------------------------
-
-export const buildAgentRoleInvocationSnapshot = (role: AgentRole): AgentRoleInvocationSnapshot => ({
-  roleId: role.id,
-  roleRevision: role.revision,
-  roleName: role.name,
-  machineId: role.machineId,
-  agentConfigId: role.agentConfigId,
-  runConfig: normalizeAgentRoleRunConfig(role.runConfig),
-  ...(role.promptPrefix ? { promptPrefix: role.promptPrefix } : {}),
-});
-
-export const normalizeAgentRoleInvocationSnapshot = (
-  value: unknown
-): AgentRoleInvocationSnapshot | undefined => {
-  if (
-    !isRecord(value) ||
-    !isNonEmptyString(value.roleId) ||
-    !isNonEmptyString(value.roleName) ||
-    !isNonEmptyString(value.machineId) ||
-    !isNonEmptyString(value.agentConfigId) ||
-    !isFiniteNumber(value.roleRevision)
-  ) {
-    return undefined;
-  }
-  const promptPrefix = typeof value.promptPrefix === 'string' ? value.promptPrefix.trim() : '';
-  return {
-    roleId: value.roleId.trim() as AgentRoleId,
-    roleRevision: Math.max(1, Math.trunc(value.roleRevision)),
-    roleName: value.roleName.trim(),
-    machineId: value.machineId.trim() as MachineId,
-    agentConfigId: value.agentConfigId.trim() as AgentConfigId,
-    runConfig: normalizeAgentRoleRunConfig(value.runConfig),
-    ...(promptPrefix ? { promptPrefix } : {}),
-  };
-};
-
-/**
- * Read the snapshots off a persisted Turn input config.
- *
- * Returns `undefined` rather than `[]` so a Turn that authorized no Role does
- * not persist an empty array. Duplicates are collapsed on `roleId` — one Turn
- * authorizes a Role once, however many times it was mentioned.
- */
-export const normalizeAgentRoleInvocationSnapshots = (
-  value: unknown
-): AgentRoleInvocationSnapshot[] | undefined => {
-  if (!Array.isArray(value) || value.length === 0) return undefined;
-  const byRoleId = new Map<AgentRoleId, AgentRoleInvocationSnapshot>();
-  for (const entry of value) {
-    const snapshot = normalizeAgentRoleInvocationSnapshot(entry);
-    if (snapshot && !byRoleId.has(snapshot.roleId)) byRoleId.set(snapshot.roleId, snapshot);
-  }
-  return byRoleId.size > 0 ? [...byRoleId.values()] : undefined;
-};

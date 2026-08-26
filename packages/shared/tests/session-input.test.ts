@@ -571,7 +571,6 @@ describe('session-input helpers', () => {
       modelId: undefined,
       configOptionValues: undefined,
       mcpServerIds: undefined,
-      agentRoleInvocations: undefined,
       issuePRMentions: undefined,
       resume: undefined,
     });
@@ -593,7 +592,6 @@ describe('session-input helpers', () => {
       modelId: undefined,
       configOptionValues: undefined,
       mcpServerIds: undefined,
-      agentRoleInvocations: undefined,
       issuePRMentions: undefined,
       resume: undefined,
     });

@@ -13,7 +13,6 @@ import {
 } from '@lody/shared';
 import { buildAgentRoleCandidates } from '../src/components/mentions/mention-registry';
 import {
-  buildAgentRoleInvocationSnapshots,
   buildAgentRoleMentionContext,
   buildAgentRoleMentionItems,
   buildAgentRoleMentionPrompt,
@@ -210,63 +209,6 @@ describe('agent role before-send expansion', () => {
 
   it('leaves a role that is no longer offered as plain text', () => {
     expect(buildAgentRoleMentionRewrites(text, [mention], [])).toEqual([]);
-  });
-});
-
-describe('agent role invocation snapshots', () => {
-  it('freezes the role the turn authorized, without secrets', () => {
-    const snapshots = buildAgentRoleInvocationSnapshots(
-      [{ kind: 'agent_role', value: 'role-1' }],
-      items(
-        role({
-          promptPrefix: 'Be strict.',
-          runConfig: {
-            modelId: 'gpt-5.6',
-            configOptionValues: { thought_level: 'high', api_key: 'sk-live' },
-          },
-        })
-      )
-    );
-    expect(snapshots).toEqual([
-      {
-        roleId: 'role-1',
-        roleRevision: 3,
-        roleName: 'Code Reviewer',
-        machineId: 'machine-1',
-        agentConfigId: 'config-1',
-        runConfig: { modelId: 'gpt-5.6', configOptionValues: { thought_level: 'high' } },
-        promptPrefix: 'Be strict.',
-      },
-    ]);
-  });
-
-  it('is unaffected by a later edit to the role', () => {
-    const authored = role();
-    const snapshots = buildAgentRoleInvocationSnapshots(
-      [{ kind: 'agent_role', value: 'role-1' }],
-      items(authored)
-    );
-    const edited = { ...authored, name: 'Renamed', revision: 4, runConfig: { modelId: 'other' } };
-    expect(
-      buildAgentRoleInvocationSnapshots([{ kind: 'agent_role', value: 'role-1' }], items(edited))
-    ).not.toEqual(snapshots);
-    // The already-built snapshot is a value, not a view of the catalog.
-    expect(snapshots?.[0]).toMatchObject({ roleName: 'Code Reviewer', roleRevision: 3 });
-  });
-
-  it('collapses a role mentioned twice and authorizes nothing for an unknown one', () => {
-    expect(
-      buildAgentRoleInvocationSnapshots(
-        [
-          { kind: 'agent_role', value: 'role-1' },
-          { kind: 'agent_role', value: 'role-1' },
-          { kind: 'agent_role', value: 'gone' },
-          { kind: 'session', value: 'session-1' },
-        ],
-        items(role())
-      )
-    ).toHaveLength(1);
-    expect(buildAgentRoleInvocationSnapshots([], items(role()))).toBeUndefined();
   });
 });
 

@@ -6,7 +6,6 @@ import {
   ToolCallStatus,
 } from '@agentclientprotocol/sdk';
 import type { ToolCallContent as AcpToolCallContent, SessionMode } from '@agentclientprotocol/sdk';
-import type { AgentRoleInvocationSnapshot } from './agent-role';
 import type { PermissionOutcome } from './message';
 import type { AgentConfigId, McpServerId, SessionId } from './ids';
 import type { MessageTextSpan } from './message-text-spans';
@@ -1553,14 +1552,6 @@ export type ACPSessionConfig = {
   mcpServerIds?: McpServerId[];
   /** Whether the built-in Lody Task MCP tools are available to this Turn's Agent session. */
   taskToolsEnabled?: boolean;
-  /**
-   * Agent Roles this user Turn authorized, frozen at send time.
-   *
-   * Not a second Role catalog: it is the evidence of what this Turn actually
-   * allowed, so editing or deleting a Role afterwards cannot change an accepted
-   * operation and a retry never re-reads the mutable catalog.
-   */
-  agentRoleInvocations?: AgentRoleInvocationSnapshot[];
   issuePRMentions?: IssuePRMention[];
   // continue to chat
   resume?: ACPSessionId;

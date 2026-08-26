@@ -72,16 +72,16 @@ private service secrets, and the Web and mobile app sources.
   composer drops its separate permission button while such a Role is selected. A Role
   may therefore pin a warning-tone mode (full access / skip permissions), which every
   surface that hides the permission control must keep visibly marked; what stays out
-  of scope is a Role-level auto-approval POLICY. Access is
-  `canReadAgentRole`/`canManageAgentRole` everywhere; hiding a private Role in the UI is
-  not an access check.
+  of scope is a Role-level auto-approval POLICY. Settings and mention discovery use
+  `canReadAgentRole`/`canManageAgentRole`; MCP creation resolves an explicit Role id from
+  the workspace catalog without requiring a mention-scoped authorization record.
 - A Role never falls back. `machineId + agentConfigId` bind the execution site exactly;
   when the machine, config, or a stored model/mode is unavailable the Role stays listed
-  with the precise reason and stops being mentionable. What a user Turn authorized is
-  frozen into its input config as `agentRoleInvocations`, so a later Role edit or delete
-  cannot change an accepted operation or a retry. `SessionMeta.agentRoleId` /
-  `agentRoleRevision` record where a Session came from and are display-only; execution,
-  recovery, and retry read the already-frozen dispatch config, never the Role catalog.
+  with the precise reason and stops being mentionable. MCP creation resolves the current
+  workspace catalog row by `agentRoleId` before Operation acceptance; the canonical Prompt,
+  target, Role revision, and dispatch config are frozen into the accepted Operation so a
+  later edit or delete cannot change its recovery or retry. `SessionMeta.agentRoleId` /
+  `agentRoleRevision` record where a Session came from and are display-only.
 
 `pnpm check:public-boundary` is the executable repository boundary and must pass
 after changing package scope or cloud/local composition.

@@ -2972,8 +2972,6 @@ function WorkspaceChatLanding({
         issuePRMentions,
         mcpServerIds: mcpSelection.selectedIds,
         taskToolsEnabled: tasksFeatureEnabled,
-        // The first Turn of the new Session authorizes any Role it mentioned.
-        agentRoleInvocations: expandedPrompt.agentRoleInvocations,
       });
       const pendingHistoryEntry = buildPendingUserHistoryEntry({
         userId,

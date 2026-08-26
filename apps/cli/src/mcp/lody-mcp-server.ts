@@ -12,12 +12,15 @@ import {
   getActiveTaskSessionLinks,
   getMachineFlockAcpCapabilities,
   getMachineFlockDocId,
+  getWorkspaceFlockDocId,
   getServerNow,
   getSessionRoomId,
   hasAgentRunConfigSelection,
   isLoroRepoDocDeleted,
   isMachineDocRoomId,
   readMachineFlockRowsFromFlock,
+  readWorkspaceFlockRowsFromFlock,
+  listWorkspaceAgentRoles,
   summarizeAgentRunConfigCapabilities,
   type AcpCapabilityCacheEntry,
   type AgentRunConfigSelection,
@@ -39,7 +42,7 @@ import {
   type LodySessionPresenceState,
   type LocalSessionControlRequest,
   type AgentConfigMeta,
-  type AgentRoleInvocationSnapshot,
+  type AgentRole,
   type LocalProjectId,
   type LocalProjectMeta,
   type MachineId,
@@ -411,7 +414,7 @@ const SessionCreateCommandInputShape = {
     .min(1)
     .optional()
     .describe(
-      'Agent Role id authorized by an agent_role mention in the driving user turn. When set, machine, agent config, and run config come from that frozen mention.'
+      'Agent Role id from the workspace catalog. When set, machine, agent config, and run config come from the current Role row.'
     ),
   machineId: z.string().trim().min(1).optional().describe('Target machine id.'),
   agentConfigId: z.string().trim().min(1).optional().describe('Target agent config id.'),
@@ -605,7 +608,7 @@ const SessionCreateBatchItemShape = {
     .trim()
     .min(1)
     .optional()
-    .describe('Agent Role id authorized by the driving user turn.'),
+    .describe('Agent Role id from the workspace catalog.'),
   machineId: z.string().trim().min(1).optional(),
   agentConfigId: z.string().trim().min(1).optional(),
   ...SessionRunConfigInputShape,
@@ -1180,7 +1183,7 @@ type ResolvedMcpSessionCreate = {
   input: SessionCreateCommandInput;
   prompt: string;
   dispatchConfig: ResolvedTurnDispatchConfig;
-  role?: AgentRoleInvocationSnapshot;
+  role?: AgentRole;
 };
 
 const composeAgentRolePrompt = (promptPrefix: string | undefined, prompt: string): string => {
@@ -1188,35 +1191,29 @@ const composeAgentRolePrompt = (promptPrefix: string | undefined, prompt: string
   return prefix ? `${prefix}\n\n${prompt}` : prompt;
 };
 
-/**
- * The snapshot the driving Turn froze for this Role.
- *
- * The Turn's input config reached us through `normalizeSessionTurnInputConfig`,
- * so `agentRoleInvocations` is already validated, deduped on `roleId`, and
- * stripped of secret-shaped option keys. Re-declaring that schema here would be
- * a second definition of what a snapshot is, on the side that enforces it.
- */
-const readAgentRoleInvocationSnapshot = (
-  inputConfig: SessionTurnInputConfig | undefined,
-  agentRoleId: string
-): AgentRoleInvocationSnapshot => {
-  const snapshot = inputConfig?.agentRoleInvocations?.find(
-    (candidate) => candidate.roleId === agentRoleId
+const loadWorkspaceAgentRoleCatalog = async (
+  manager: LoroDocumentManager,
+  workspaceId: WorkspaceId
+): Promise<ReadonlyMap<string, AgentRole>> => {
+  const docId = getWorkspaceFlockDocId(workspaceId);
+  await manager.syncFlockDocOrThrow(docId, {
+    timeoutMs: 10_000,
+    reason: 'mcp-agent-role-read',
+  });
+  const handle = await manager.repo.openFlockDoc(docId);
+  return new Map(
+    listWorkspaceAgentRoles(readWorkspaceFlockRowsFromFlock(handle.flock)).map((role) => [
+      role.id,
+      role,
+    ])
   );
-  if (!snapshot) {
-    throw new LodyOperationStoreError(
-      'AGENT_ROLE_NOT_AUTHORIZED',
-      `Agent Role ${agentRoleId} was not mentioned in the driving user turn.`,
-      false
-    );
-  }
-  return snapshot;
 };
 
 const resolveMcpSessionCreate = (
   input: SessionCreateCommandInput,
   invoking: InvokingTurnContext | undefined,
-  requester: Pick<SessionMeta, 'machineId' | 'project'>
+  requester: Pick<SessionMeta, 'machineId' | 'project'>,
+  role: AgentRole | undefined
 ): ResolvedMcpSessionCreate => {
   if (!input.agentRoleId) {
     return {
@@ -1229,14 +1226,20 @@ const resolveMcpSessionCreate = (
     };
   }
 
-  const role = readAgentRoleInvocationSnapshot(invoking?.frozenInputConfig, input.agentRoleId);
+  if (!role || role.id !== input.agentRoleId) {
+    throw new LodyOperationStoreError(
+      'AGENT_ROLE_NOT_FOUND',
+      `Agent Role ${input.agentRoleId} does not exist in the workspace catalog.`,
+      false
+    );
+  }
   const project = requester.project;
   if (project?.kind !== 'github' && role.machineId !== requester.machineId) {
     throw new LodyOperationStoreError(
       'AGENT_ROLE_MACHINE_MISMATCH',
       project?.kind === 'local'
-        ? `Agent Role ${role.roleName} must run on the Local Project's Machine.`
-        : `Agent Role ${role.roleName} must run on the current Machine in a chat Session.`,
+        ? `Agent Role ${role.name} must run on the Local Project's Machine.`
+        : `Agent Role ${role.name} must run on the current Machine in a chat Session.`,
       false
     );
   }
@@ -1289,8 +1292,8 @@ const buildResolvedMcpCreateCanonicalCommand = (
   ...(resolved.input.agentConfigId ? { agentConfigId: resolved.input.agentConfigId } : {}),
   ...(resolved.role
     ? {
-        agentRoleId: resolved.role.roleId,
-        agentRoleRevision: resolved.role.roleRevision,
+        agentRoleId: resolved.role.id,
+        agentRoleRevision: resolved.role.revision,
         agentRoleRunConfig: resolved.role.runConfig,
       }
     : buildMcpRunConfigCanonicalCommand(resolved.input)),
@@ -1301,13 +1304,10 @@ const buildResolvedMcpCreateCanonicalCommand = (
   ...(deadlineSeconds !== undefined ? { deadlineSeconds } : {}),
 });
 
-const bindAgentRoleCreateOptions = (
-  options: CreateOptions,
-  role: AgentRoleInvocationSnapshot | undefined
-): void => {
+const bindAgentRoleCreateOptions = (options: CreateOptions, role: AgentRole | undefined): void => {
   if (!role) return;
-  options.agentRoleId = role.roleId;
-  options.agentRoleRevision = role.roleRevision;
+  options.agentRoleId = role.id;
+  options.agentRoleRevision = role.revision;
 };
 
 const buildMcpCreateOptions = (
@@ -2562,7 +2562,15 @@ const startSessionCreateOperation = async (args: SessionCreateCommandInput): Pro
       );
     }
     const invoking = await resolveInvokingTurnContext(manager, currentSession);
-    const resolved = resolveMcpSessionCreate(args, invoking, currentSession);
+    const roleCatalog = args.agentRoleId
+      ? await loadWorkspaceAgentRoleCatalog(manager, workspace.id as WorkspaceId)
+      : undefined;
+    const resolved = resolveMcpSessionCreate(
+      args,
+      invoking,
+      currentSession,
+      args.agentRoleId ? roleCatalog?.get(args.agentRoleId) : undefined
+    );
     const canonicalCommand = buildResolvedMcpCreateCanonicalCommand(resolved, args.deadlineSeconds);
     const retry = await withOperationStore((store) =>
       store.findMatchingRetry(
@@ -2872,6 +2880,9 @@ const startSessionCreateManyOperation = async (
     }
     const expanded = args.items.map((item) => ({ ...(args.defaults ?? {}), ...item }));
     const invoking = await resolveInvokingTurnContext(manager, requester);
+    const roleCatalog = expanded.some((item) => Boolean(item.agentRoleId))
+      ? await loadWorkspaceAgentRoleCatalog(manager, workspace.id as WorkspaceId)
+      : undefined;
     const resolvedItems = expanded.map((item) => {
       if (!item.prompt) return { resolved: undefined, error: undefined };
       try {
@@ -2888,7 +2899,12 @@ const startSessionCreateManyOperation = async (
           ...(item.workContext ? { workContext: item.workContext } : {}),
         } as SessionCreateCommandInput;
         return {
-          resolved: resolveMcpSessionCreate(single, invoking, requester),
+          resolved: resolveMcpSessionCreate(
+            single,
+            invoking,
+            requester,
+            item.agentRoleId ? roleCatalog?.get(item.agentRoleId) : undefined
+          ),
           error: undefined,
         };
       } catch (error) {
@@ -3742,7 +3758,7 @@ export const __lodyMcpServerInternals = {
   bindMcpCreateContext,
   buildMcpTurnDispatchConfig,
   composeAgentRolePrompt,
-  readAgentRoleInvocationSnapshot,
+  loadWorkspaceAgentRoleCatalog,
   resolveMcpSessionCreate,
   buildResolvedMcpCreateCanonicalCommand,
   summarizeAgentConfig,
@@ -4036,7 +4052,7 @@ export function buildLodyMcpServer(config: { taskToolsEnabled?: boolean } = {}):
     {
       title: 'Create a Lody session',
       description:
-        'Start durable asynchronous work that creates a Lody session. Supply operationId; the result arrives automatically as a continuation, so do not poll operation_get. To recover an already accepted create without resending its prompt, send only operationId with resume=true. When the driving user turn contains an Agent Role mention, pass its agentRoleId and do not pass machineId, agentConfigId, modelId, reasoningEffort, fastMode, or planMode; the frozen mention supplies them. useCurrentSessionAsParent=true and workContext are mutually exclusive schema branches. Machine/config ids and runConfig values for non-Role creates come from lody_session_create_options. The wait field is temporary legacy compatibility only.',
+        'Start durable asynchronous work that creates a Lody session. Supply operationId; the result arrives automatically as a continuation, so do not poll operation_get. To recover an already accepted create without resending its prompt, send only operationId with resume=true. To use an Agent Role, pass its agentRoleId and do not pass machineId, agentConfigId, modelId, reasoningEffort, fastMode, or planMode; the current workspace catalog row supplies them. useCurrentSessionAsParent=true and workContext are mutually exclusive schema branches. Machine/config ids and runConfig values for non-Role creates come from lody_session_create_options. The wait field is temporary legacy compatibility only.',
       inputSchema: SessionCreateToolInputSchema,
     },
     async (input) => {
@@ -4060,12 +4076,20 @@ export function buildLodyMcpServer(config: { taskToolsEnabled?: boolean } = {}):
           if (!currentSession) {
             throw new Error(`Session not found: ${ctx.sessionId}`);
           }
-          // Only a Role needs the driving Turn: reading it walks the whole
-          // transcript, and this path never persists the frozen config.
+          // Only a Role needs the driving Turn here, for the task-tool flag.
+          // This legacy path does not persist a continuation config.
           const invoking = args.agentRoleId
             ? await resolveInvokingTurnContext(manager, currentSession)
             : undefined;
-          const resolved = resolveMcpSessionCreate(args, invoking, currentSession);
+          const roleCatalog = args.agentRoleId
+            ? await loadWorkspaceAgentRoleCatalog(manager, workspace.id as WorkspaceId)
+            : undefined;
+          const resolved = resolveMcpSessionCreate(
+            args,
+            invoking,
+            currentSession,
+            args.agentRoleId ? roleCatalog?.get(args.agentRoleId) : undefined
+          );
           const options = buildMcpCreateOptions(resolved.input, ctx);
           bindMcpCreateContext(options, auth, currentSession);
           bindAgentRoleCreateOptions(options, resolved.role);
@@ -4177,7 +4201,7 @@ export function buildLodyMcpServer(config: { taskToolsEnabled?: boolean } = {}):
     {
       title: 'Create multiple Lody sessions',
       description:
-        'Start one durable batch Operation for 1-20 Session creates. defaults and items shallow-merge; nested objects replace wholesale. Each item may use an agentRoleId authorized by the driving user turn; Role items cannot also override machine, agent config, or run config. Non-Role items accept modelId, reasoningEffort, fastMode, and planMode. Ordered item failures are isolated. Completion arrives automatically as one continuation, so do not poll operation_get in a loop.',
+        'Start one durable batch Operation for 1-20 Session creates. defaults and items shallow-merge; nested objects replace wholesale. Each item may use an agentRoleId from the workspace catalog; Role items cannot also override machine, agent config, or run config. Non-Role items accept modelId, reasoningEffort, fastMode, and planMode. Ordered item failures are isolated. Completion arrives automatically as one continuation, so do not poll operation_get in a loop.',
       inputSchema: SessionCreateManyToolInputSchema,
     },
     async (input) => {

@@ -24,10 +24,10 @@ Root and `apps/cli/AGENTS.md` instructions apply.
   Serialize per-workspace Agent configuration writes before checking local name/count bounds;
   the shared CRDT is not a global CAS. Keep catalog writes locally durable while surfacing sync
   failures as unsynced.
-- `session_create` and `session_create_many` authorize an Agent Role id only through the
-  `agentRoleInvocations` snapshot on the driving turn. Resolve its target, Prompt prefix, and
-  concrete run config before Operation acceptance. Recovery uses the frozen canonical Prompt
-  and target dispatch config and must never reread the mutable Role catalog.
+- `session_create` and `session_create_many` resolve an explicit Agent Role id directly from
+  the workspace catalog; no driving-Turn mention authorization is required. Resolve its target,
+  Prompt prefix, revision, and concrete run config before Operation acceptance. Recovery uses
+  the frozen canonical Prompt and target dispatch config and never rereads the mutable catalog.
 - The driving Turn's frozen `taskToolsEnabled` gates the complete `lody_task_*` family for
   both stdio and HTTP transports. Missing means disabled. Do not merely hide creation: disabled
   servers publish no Task tools, and a still-resident Agent whose next Turn disables the feature

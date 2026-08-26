@@ -148,9 +148,8 @@ export const buildAgentRoleRunConfig = (value: AgentRoleFormValue): AgentRoleRun
 /**
  * Turn an authored form into the row to persist.
  *
- * `revision` only moves when something actually changed: it rides on every
- * invocation snapshot, so bumping it for a no-op save would make two identical
- * authorizations look like different ones.
+ * `revision` only moves when something actually changed: accepted Operations
+ * and Session provenance record it, so a no-op save must not invent a new one.
  */
 export const buildAgentRoleFromForm = (
   value: AgentRoleFormValue,

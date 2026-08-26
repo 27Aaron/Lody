@@ -56,7 +56,6 @@ import { useTranslation } from 'react-i18next';
 import { useRouter } from '@tanstack/react-router';
 import { toast } from 'sonner';
 import type {
-  AgentRoleInvocationSnapshot,
   LocalProjectId,
   MessageContent,
   MessageQueueItemInput,
@@ -1824,14 +1823,6 @@ export type DispatchInputBlocksOptions = {
   modeIdOverride?: string | null;
   modelIdOverride?: string | null;
   configOptionValuesOverride?: Record<string, AcpConfigOptionValue>;
-  /**
-   * Agent Roles this Turn authorized, already frozen by the composer.
-   *
-   * Carried on the Turn rather than re-resolved here: the snapshot is the
-   * evidence of what the user allowed, so a Role edited or deleted between send
-   * and dispatch cannot change it.
-   */
-  agentRoleInvocations?: readonly AgentRoleInvocationSnapshot[];
 };
 
 function buildEditedMessageQueueItem(
@@ -3483,7 +3474,6 @@ export const SessionChatInterface = memo(
           modeIdOverride?: string | null;
           modelIdOverride?: string | null;
           configOptionValuesOverride?: Record<string, AcpConfigOptionValue>;
-          agentRoleInvocations?: readonly AgentRoleInvocationSnapshot[];
         }
       ): Promise<boolean> => {
         try {
@@ -3507,7 +3497,6 @@ export const SessionChatInterface = memo(
             issuePRMentions,
             mcpServerIds: mcpSelection.selectedIds,
             taskToolsEnabled: tasksEnabled,
-            agentRoleInvocations: options?.agentRoleInvocations,
             resume: session.acpSessionId ?? undefined,
           });
 
@@ -3622,10 +3611,7 @@ export const SessionChatInterface = memo(
         inputBlocks: SessionInputBlock[],
         options?: Pick<
           DispatchInputBlocksOptions,
-          | 'modeIdOverride'
-          | 'modelIdOverride'
-          | 'configOptionValuesOverride'
-          | 'agentRoleInvocations'
+          'modeIdOverride' | 'modelIdOverride' | 'configOptionValuesOverride'
         >
       ): Promise<boolean> => {
         try {
@@ -3649,7 +3635,6 @@ export const SessionChatInterface = memo(
             issuePRMentions,
             mcpServerIds: mcpSelection.selectedIds,
             taskToolsEnabled: tasksEnabled,
-            agentRoleInvocations: options?.agentRoleInvocations,
             resume: session.acpSessionId ?? undefined,
           });
           const queuedInputConfig: MessageQueueItemInput['acpSessionConfig'] = {
@@ -3663,7 +3648,6 @@ export const SessionChatInterface = memo(
             issuePRMentions: inputConfig.issuePRMentions ?? undefined,
             mcpServerIds: [...mcpSelection.selectedIds],
             taskToolsEnabled: inputConfig.taskToolsEnabled,
-            agentRoleInvocations: inputConfig.agentRoleInvocations ?? undefined,
             resume: inputConfig.resume ?? undefined,
             chainDepth: 0,
           };
@@ -3790,7 +3774,6 @@ export const SessionChatInterface = memo(
             modeIdOverride: turnModeId,
             modelIdOverride: turnModelId,
             configOptionValuesOverride: turnConfigOptionValues,
-            agentRoleInvocations: options?.agentRoleInvocations,
           });
           captureSessionEvent(
             accepted ? 'session/message_queued' : 'session/message_submit_failed',
@@ -3875,11 +3858,8 @@ export const SessionChatInterface = memo(
     );
 
     const handleSendMessage = useCallback(
-      async (
-        inputBlocks: SessionInputBlock[],
-        options?: Pick<DispatchInputBlocksOptions, 'agentRoleInvocations'>
-      ): Promise<boolean> => {
-        return await dispatchInputBlocks(inputBlocks, options);
+      async (inputBlocks: SessionInputBlock[]): Promise<boolean> => {
+        return await dispatchInputBlocks(inputBlocks);
       },
       [dispatchInputBlocks]
     );

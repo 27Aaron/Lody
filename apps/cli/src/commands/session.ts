@@ -166,7 +166,7 @@ export type CreateOptions = CommonOptions &
     userTurnId?: string;
     /** Lody-originated execution-chain depth for the initial input. */
     chainDepth?: number;
-    /** Agent Role invocation provenance frozen by the driving user turn. */
+    /** Agent Role provenance frozen when the create Operation is accepted. */
     agentRoleId?: string;
     agentRoleRevision?: number;
     /**

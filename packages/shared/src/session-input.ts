@@ -10,16 +10,9 @@ import type {
   SessionTurnInputConfig,
   VisualAnnotationReferencePayload,
 } from './ai';
-import {
-  normalizeAgentRoleInvocationSnapshots,
-  type AgentRoleInvocationSnapshot,
-} from './agent-role';
 import type { SessionHistoryInput } from './schema';
 import type { McpServerId } from './ids';
-import {
-  reanchorMessageTextSpansForTrim,
-  sanitizeMessageTextSpans,
-} from './message-text-spans';
+import { reanchorMessageTextSpansForTrim, sanitizeMessageTextSpans } from './message-text-spans';
 import {
   AgentConfigCliTypeSchema,
   SessionInputBlocksSchema,
@@ -491,8 +484,6 @@ export const buildSessionTurnInputConfig = (args: {
   configOptionValues?: Record<string, AcpConfigOptionValue> | null;
   mcpServerIds?: readonly McpServerId[] | null;
   taskToolsEnabled?: boolean;
-  /** Roles this Turn authorized, already frozen by the composer. */
-  agentRoleInvocations?: readonly AgentRoleInvocationSnapshot[] | null;
   issuePRMentions?: IssuePRMention[];
   resume?: ACPSessionConfig['resume'];
   prompt?: string;
@@ -514,9 +505,6 @@ export const buildSessionTurnInputConfig = (args: {
     ...(args.taskToolsEnabled !== undefined
       ? { taskToolsEnabled: args.taskToolsEnabled === true }
       : {}),
-    // Re-normalized rather than copied: the snapshot is persisted evidence of
-    // an authorization, so it passes the same reader as a stored one.
-    agentRoleInvocations: normalizeAgentRoleInvocationSnapshots(args.agentRoleInvocations),
     issuePRMentions: args.issuePRMentions,
     resume: args.resume,
   };

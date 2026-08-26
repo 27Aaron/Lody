@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import {
   AGENT_ROLE_VERSION,
-  buildAgentRoleInvocationSnapshot,
   canManageAgentRole,
   canReadAgentRole,
   isAgentRoleContentEqual,
@@ -12,7 +11,6 @@ import {
   getAgentRoleMentionSlug,
   listAccessibleAgentRoles,
   normalizeAgentRole,
-  normalizeAgentRoleInvocationSnapshots,
   normalizeAgentRoleEmoji,
   normalizeAgentRoleMentionSlug,
   normalizeAgentRoleRunConfig,
@@ -255,42 +253,5 @@ describe('agent role mention scope', () => {
         getAvailability: () => ({ kind: 'unavailable', reason: 'machine_offline' }),
       })
     ).toEqual([]);
-  });
-});
-
-describe('agent role invocation snapshots', () => {
-  it('freezes the role fields the turn authorized and no secret', () => {
-    const snapshot = buildAgentRoleInvocationSnapshot(
-      role({
-        promptPrefix: 'Be strict.',
-        runConfig: {
-          modelId: 'gpt-5.6',
-          configOptionValues: { thought_level: 'high', api_key: 'sk-live' },
-        },
-      })
-    );
-    expect(snapshot).toEqual({
-      roleId: 'role-1',
-      roleRevision: 1,
-      roleName: 'Reviewer',
-      machineId: 'machine-1',
-      agentConfigId: 'config-1',
-      runConfig: { modelId: 'gpt-5.6', configOptionValues: { thought_level: 'high' } },
-      promptPrefix: 'Be strict.',
-    });
-  });
-
-  it('collapses repeated mentions of one role and drops malformed entries', () => {
-    const snapshot = buildAgentRoleInvocationSnapshot(role());
-    expect(
-      normalizeAgentRoleInvocationSnapshots([
-        snapshot,
-        { ...snapshot, roleName: 'Second mention' },
-        { roleId: '' },
-        null,
-      ])
-    ).toEqual([snapshot]);
-    expect(normalizeAgentRoleInvocationSnapshots([])).toBeUndefined();
-    expect(normalizeAgentRoleInvocationSnapshots('nope')).toBeUndefined();
   });
 });

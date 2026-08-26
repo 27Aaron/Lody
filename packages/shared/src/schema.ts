@@ -459,12 +459,6 @@ const acpSessionConfigSchema = schema
       mcpServerIds: schema.Any({ required: false }),
       /** Whether the built-in Lody Task MCP tools are mounted for this Turn. */
       taskToolsEnabled: schema.Boolean({ required: false }),
-      /**
-       * Agent Role snapshots this user Turn authorized. Declared so the field is
-       * a real column rather than catchall data, and read only through
-       * `normalizeAgentRoleInvocationSnapshots`.
-       */
-      agentRoleInvocations: schema.Any({ required: false }),
       chainDepth: schema.Number({ required: false }),
     },
     { required: false }
@@ -784,12 +778,11 @@ export type SessionMeta = {
   agentConfigId?: AgentConfigId;
   /**
    * Agent Role this session was created from, and the Role revision that was
-   * frozen into the driving Turn's invocation snapshot.
+   * resolved when its create Operation was accepted.
    *
    * Provenance only. Execution is governed by the already-frozen agent config
-   * and Turn input config, so nothing may re-read the mutable Role catalog from
-   * these: a Role edited or deleted afterwards must not change how this session
-   * runs, recovers, or retries.
+   * and dispatch config, so nothing may re-read the mutable Role catalog from
+   * these fields: a later Role edit or delete must not change execution.
    */
   agentRoleId?: AgentRoleId;
   agentRoleRevision?: number;

@@ -117,13 +117,10 @@ Product-level mention sources built on `src/ui/mention`.
   overlay vanish or stack on the wrong surface.
 - An Agent Role mention is the session mention's shape — a plain `@<token>` whose
   committed RANGE carries the stable Role id — with a different payload. The
-  rewrite asks the agent to CREATE a Session and carries the Role id ONLY; the
-  machine, agent config, model, reasoning, and prompt prefix are frozen into the
-  Turn's `agentRoleInvocations`. So the agent cannot restate the config
-  differently, and editing or deleting the Role cannot change an accepted
-  operation. Both come out of `useMentionPromptExpansion` in one pass from the
-  SAME ranges; a Role the composer no longer offers stays plain text and
-  authorizes nothing.
+  rewrite asks the agent to CREATE a Session and carries the Role id only. The
+  MCP create path resolves that id from the current workspace catalog before it
+  accepts and freezes the Operation. A Role the composer no longer offers stays
+  plain text and produces no create instruction.
 - A Role candidate's emoji REPLACES the category glyph (`MentionCandidate.iconEmoji`),
   defaulted through `getAgentRoleEmoji` so rows stay aligned and a Role with none
   does not read as half-authored. The category header above already says these
@@ -225,12 +222,11 @@ Product-level mention sources built on `src/ui/mention`.
 - `mention-session-source.ts` owns session slugs, candidates, the slug -> id
   cache, hydration, the drop-time insertion, and the before-send expansion.
 - `mention-agent-role-source.ts` owns the Agent Roles work-context rule,
-  candidates, hydration, the before-send rewrite, and the Turn's invocation
-  snapshots. `useAgentRoleMentionItems` is the single owner of the mentionable
-  list, like `useSessionMentionItems`: the menu and the expansion both read it,
-  so what the user picked from is what gets authorized. It reads the
-  visible-machine index, so a test that renders a composer stubs it the same way
-  it already stubs the session source.
+  candidates, hydration, and the before-send rewrite. `useAgentRoleMentionItems`
+  is the single owner of the mentionable list, like `useSessionMentionItems`:
+  the menu and expansion both read it. It reads the visible-machine index, so a
+  test that renders a composer stubs it the same way it already stubs the
+  session source.
 - `mention-expansion.ts` composes every before-send transform into one hook.
   Which kinds it rewrites is the short list (`REWRITTEN_SPAN_KINDS`); the
   verbatim ones are derived from `MESSAGE_TEXT_SPAN_KINDS` minus it, so a new

@@ -2,7 +2,6 @@ import * as React from 'react';
 import {
   applyTextRewrites,
   MESSAGE_TEXT_SPAN_KINDS,
-  type AgentRoleInvocationSnapshot,
   type MessageTextSpan,
   type MessageTextSpanKind,
   type TextRewrite,
@@ -14,7 +13,6 @@ import {
 } from '@/components/mentions/mention-skill-source';
 import { buildSessionMentionRewrites } from '@/components/mentions/mention-session-source';
 import {
-  buildAgentRoleInvocationSnapshots,
   buildAgentRoleMentionContext,
   buildAgentRoleMentionRewrites,
   useAgentRoleMentionItems,
@@ -60,14 +58,6 @@ export type MentionPromptExpansionArgs = {
 export type ExpandedMentionPrompt = {
   text: string;
   spans?: MessageTextSpan[];
-  /**
-   * The Roles this Turn authorized, frozen here rather than resolved later.
-   *
-   * Produced on the send path with the text so both come from the SAME committed
-   * ranges: the instruction the agent reads and the authorization the CLI will
-   * check can never describe different Roles.
-   */
-  agentRoleInvocations?: AgentRoleInvocationSnapshot[];
 };
 
 /**
@@ -147,7 +137,6 @@ export function useMentionPromptExpansion({
         ...buildAgentRoleMentionRewrites(text, mentions, agentRoleItems),
         ...buildVerbatimMentionRewrites(text, mentions),
       ]),
-      agentRoleInvocations: buildAgentRoleInvocationSnapshots(mentions, agentRoleItems),
     }),
     [agentRoleItems, skillRewrites]
   );

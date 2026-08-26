@@ -1,13 +1,10 @@
 import * as React from 'react';
 import { useAtomValue } from 'jotai';
 import {
-  buildAgentRoleInvocationSnapshot,
   getAgentRoleEmoji,
   getAgentRoleMentionSlug,
-  normalizeAgentRoleInvocationSnapshots,
   selectMentionableAgentRoles,
   type AgentRole,
-  type AgentRoleInvocationSnapshot,
   type AgentRoleMentionScope,
   type MachineId,
   type MachineViewMeta,
@@ -39,10 +36,9 @@ import {
  *
  * What differs is what the rewrite produces. A session mention asks the agent to
  * read a history; a Role mention asks it to CREATE a Session, and the Role's
- * actual configuration is not in that instruction at all. It is frozen into the
- * Turn's input config as an invocation snapshot, so the agent only has to pass
- * the Role id back and cannot widen, narrow, or mistranscribe what the user
- * authorized.
+ * actual configuration is not in that instruction at all. The agent passes the
+ * stable Role id back; the MCP create path resolves the current workspace row
+ * and freezes its concrete configuration when it accepts the Operation.
  */
 
 export type AgentRoleMentionItem = {
@@ -193,9 +189,9 @@ export function useAgentRoleMentionItems(context: AgentRoleMentionContext): Agen
  * The instruction the current agent receives in place of the chip.
  *
  * Carries the Role id and nothing else that matters: the machine, agent config,
- * model, reasoning, and prompt prefix are in the Turn's frozen snapshot, so the
- * agent cannot restate them differently — and a Role edited after this Turn was
- * sent cannot change what was authorized.
+ * model, reasoning, and prompt prefix come from the workspace catalog, so the
+ * agent cannot restate them differently. Operation acceptance freezes the
+ * resolved configuration for recovery and retry.
  */
 export const buildAgentRoleMentionPrompt = (role: { id: string; name: string }): string =>
   `use lody mcp to create a session with agent role[id: ${role.id}, name: ${role.name}]`;
@@ -231,28 +227,6 @@ export const buildAgentRoleMentionRewrites = (
     });
   }
   return rewrites;
-};
-
-/**
- * The snapshots a Turn's ranges authorize.
- *
- * Built from the ranges the composer actually holds, not from the text, and
- * only for Roles still offered to this user in this work context — the mention
- * menu's filter and the authorization are the same list, so a Role that became
- * unavailable while the draft sat open cannot be authorized by sending it.
- */
-export const buildAgentRoleInvocationSnapshots = (
-  mentions: readonly { kind?: string; value: string }[],
-  items: readonly AgentRoleMentionItem[]
-): AgentRoleInvocationSnapshot[] | undefined => {
-  const snapshots: AgentRoleInvocationSnapshot[] = [];
-  for (const mention of mentions) {
-    if (mention.kind !== 'agent_role' || !mention.value) continue;
-    const item = items.find((candidate) => candidate.role.id === mention.value);
-    if (!item) continue;
-    snapshots.push(buildAgentRoleInvocationSnapshot(item.role));
-  }
-  return normalizeAgentRoleInvocationSnapshots(snapshots);
 };
 
 /**
