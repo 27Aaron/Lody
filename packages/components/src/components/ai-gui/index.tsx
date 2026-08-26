@@ -10,6 +10,7 @@ import {
 } from 'react';
 import type {
   SessionDoc,
+  SessionFilePayload,
   SessionHistory,
   SessionHistoryParsed,
   SessionId,
@@ -83,6 +84,8 @@ export interface SessionChatStreamProps {
   agentActivityTone?: AgentActivityTone;
   onFileDiffClick?: (turnId: string, filePath: string) => void;
   onFilePathClick?: (filePath: string) => void;
+  /** Routes HTML attachment clicks to a live file or Browser surface. */
+  onOpenHtmlFile?: (file: SessionFilePayload) => boolean;
   messageFileDiffEntriesByTurn?: MessageFileDiffEntriesByTurn;
   assistantActions?: AssistantMessageAction[];
   assistantActionsMessageId?: string | null;
@@ -149,6 +152,7 @@ const SessionChatStreamImpl = forwardRef<SessionChatStreamHandle, SessionChatStr
       agentActivityTone = 'primary',
       onFileDiffClick,
       onFilePathClick,
+      onOpenHtmlFile,
       messageFileDiffEntriesByTurn,
       assistantActions,
       assistantActionsMessageId,
@@ -249,6 +253,7 @@ const SessionChatStreamImpl = forwardRef<SessionChatStreamHandle, SessionChatStr
         renderMessageRow={renderMessageRow}
         onFileDiffClick={hasFileDiffClick ? stableOnFileDiffClick : undefined}
         onFilePathClick={hasFilePathClick ? stableOnFilePathClick : undefined}
+        onOpenHtmlFile={onOpenHtmlFile}
         lastAssistantMessageId={lastAssistantMessageId}
         lastCompletedAssistantMessageId={lastCompletedAssistantMessageId}
         messageFileDiffEntriesByTurn={messageFileDiffEntriesByTurn}

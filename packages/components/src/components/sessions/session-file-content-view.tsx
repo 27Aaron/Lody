@@ -148,6 +148,8 @@ export type SessionFileContentViewProps = {
   startLine?: number;
   endLine?: number;
   focusRequestSeq?: number;
+  /** Explicit user request to enter rendered HTML for this open action. */
+  htmlPreviewRequestSeq?: number;
   saveRequestSeq?: number;
   copyMarkdownRequestSeq?: number;
   /**
@@ -204,6 +206,7 @@ function SessionFileContentViewImpl({
   startLine,
   endLine,
   focusRequestSeq,
+  htmlPreviewRequestSeq,
   saveRequestSeq,
   copyMarkdownRequestSeq,
   preferNativeMarkdownSelection = false,
@@ -297,6 +300,7 @@ function SessionFileContentViewImpl({
   const [markdownRenderMode, setMarkdownRenderMode] = useState<'rendered' | 'code'>('rendered');
   // HTML starts as source because entering preview executes its inline scripts.
   const [htmlRenderMode, setHtmlRenderMode] = useState<'rendered' | 'code'>('code');
+  const handledHtmlPreviewRequestSeqRef = useRef<number | undefined>(undefined);
   const [htmlAnnotationEnabled, setHtmlAnnotationEnabled] = useState(false);
   const [htmlAnnotationAvailable, setHtmlAnnotationAvailable] = useState(false);
   const [htmlPreviewLoading, setHtmlPreviewLoading] = useState(false);
@@ -304,6 +308,17 @@ function SessionFileContentViewImpl({
   const [htmlPreviewCommand, setHtmlPreviewCommand] = useState<
     { id: number; action: 'reload' } | undefined
   >(undefined);
+  useEffect(() => {
+    if (
+      htmlPreviewRequestSeq === undefined ||
+      handledHtmlPreviewRequestSeqRef.current === htmlPreviewRequestSeq
+    ) {
+      return;
+    }
+    handledHtmlPreviewRequestSeqRef.current = htmlPreviewRequestSeq;
+    setHtmlAnnotationEnabled(false);
+    setHtmlRenderMode('rendered');
+  }, [htmlPreviewRequestSeq]);
   // Incremented by the top-bar search button to open Monaco's find widget.
   const [findRequestSeq, setFindRequestSeq] = useState(0);
   // Soft refresh: keep the current body mounted; only the toolbar button spins.

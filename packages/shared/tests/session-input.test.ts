@@ -13,7 +13,7 @@ import {
   resolveSessionConversationConfig,
   resolveSessionTaskToolsEnabled,
 } from '../src/session-input';
-import { normalizeSessionTurnInputConfig } from '../src/message-schemas';
+import { normalizeSessionTurnInputConfig, SessionFileBlockSchema } from '../src/message-schemas';
 import { sessionDocSchema } from '../src/schema';
 import type {
   CommentReferencePayload,
@@ -96,6 +96,7 @@ const r2FilePayload: SessionFilePayload = {
   sizeBytes: 4096,
   sha256: 'a'.repeat(64),
   textPreview: false,
+  sourcePath: 'artifacts/report.pdf',
   transport: 'r2',
   uploadedAt: 1_700_000_000_000,
 };
@@ -370,6 +371,7 @@ describe('session-input helpers', () => {
         sizeBytes: 4096,
         sha256: 'a'.repeat(64),
         textPreview: false,
+        sourcePath: 'artifacts/report.pdf',
         transport: 'r2',
         uploadedAt: 1_700_000_000_000,
       },
@@ -377,6 +379,16 @@ describe('session-input helpers', () => {
 
     // r2 transport carries no machineId; it must not leak back in.
     expect(historyItemsToInputBlocks(historyItems)).toEqual(inputBlocks);
+  });
+
+  it('accepts only workspace-relative agent upload provenance', () => {
+    expect(SessionFileBlockSchema.safeParse(r2FilePayload).success).toBe(true);
+
+    for (const sourcePath of ['/tmp/report.pdf', '../report.pdf', 'C:\\tmp\\report.pdf']) {
+      expect(SessionFileBlockSchema.safeParse({ ...r2FilePayload, sourcePath }).success).toBe(
+        false
+      );
+    }
   });
 
   it('round-trips local file blocks (with machineId) through history items', () => {
@@ -449,9 +461,7 @@ describe('session-input helpers', () => {
             : {
                 ...turn,
                 items: turn.items?.map((item) =>
-                  item.type === 'file'
-                    ? { ...item, transport: 'r2', machineId: undefined }
-                    : item
+                  item.type === 'file' ? { ...item, transport: 'r2', machineId: undefined } : item
                 ),
               }
         ),

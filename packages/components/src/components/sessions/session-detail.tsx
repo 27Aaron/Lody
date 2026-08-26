@@ -290,6 +290,8 @@ type ViewerTab =
       startLine?: number;
       endLine?: number;
       focusRequestSeq?: number;
+      /** One-shot request to enter the executable HTML preview after opening. */
+      htmlPreviewRequestSeq?: number;
     }
   | {
       id: string;
@@ -305,12 +307,19 @@ type ViewerTab =
 
 type SessionDetailOpenFileOptions = {
   /** Analytics only. */
-  readonly source?: 'file_tree' | 'conversation_file_diff' | 'lsp' | 'diff_header';
+  readonly source?:
+    | 'file_tree'
+    | 'conversation_file_diff'
+    | 'lsp'
+    | 'diff_header'
+    | 'html_attachment';
   /** Defaults to `markdown-href`; see `lib/session-file-open-target.ts`. */
   readonly pathKind?: SessionFileOpenPathKind;
   /** Explicit 1-based anchor, for callers that have one without encoding it in the path. */
   readonly startLine?: number;
   readonly endLine?: number;
+  /** Enter rendered HTML after the file snapshot becomes available. */
+  readonly previewHtml?: boolean;
 };
 
 /** Mobile diff sheet state */
@@ -479,7 +488,8 @@ const areViewerTabsEquivalent = (prev: ViewerTab, next: ViewerTab): boolean => {
       prev.filePath === next.filePath &&
       prev.startLine === next.startLine &&
       prev.endLine === next.endLine &&
-      prev.focusRequestSeq === next.focusRequestSeq
+      prev.focusRequestSeq === next.focusRequestSeq &&
+      prev.htmlPreviewRequestSeq === next.htmlPreviewRequestSeq
     );
   }
 
@@ -3074,6 +3084,7 @@ const SessionDetail = ({
         );
         const resolvedFilePath = resolution.path;
 
+        const requestSeq = nextFocusRequestSeq();
         upsertViewerTab({
           id: getFileViewerTabId(resolvedFilePath, resolution.fileId),
           type: 'file',
@@ -3082,7 +3093,8 @@ const SessionDetail = ({
           label: getBasename(resolvedFilePath),
           startLine: target.startLine,
           endLine: target.endLine,
-          focusRequestSeq: nextFocusRequestSeq(),
+          focusRequestSeq: requestSeq,
+          ...(options.previewHtml ? { htmlPreviewRequestSeq: requestSeq } : {}),
         });
         captureSessionDetailEvent('session/viewer_file_opened', {
           source: target.fromMarkdownLink ? 'markdown_link' : (options.source ?? 'file_tree'),
@@ -3094,6 +3106,14 @@ const SessionDetail = ({
       })();
     }
   );
+
+  const handleOpenHtmlFile = useStableCallback((filePath: string) => {
+    handleOpenFile(filePath, {
+      pathKind: 'canonical',
+      source: 'html_attachment',
+      previewHtml: true,
+    });
+  });
 
   /**
    * Every entry point whose path came from the file index. Kept stable so the
@@ -4542,6 +4562,7 @@ const SessionDetail = ({
         startLine={tab.startLine}
         endLine={tab.endLine}
         focusRequestSeq={tab.focusRequestSeq}
+        htmlPreviewRequestSeq={tab.htmlPreviewRequestSeq}
         saveRequestSeq={viewerTabSaveStates[tab.id]?.saveRequestSeq ?? 0}
         copyMarkdownRequestSeq={viewerTabSaveStates[tab.id]?.copyMarkdownRequestSeq ?? 0}
         preferNativeMarkdownSelection={isMobile}
@@ -4956,6 +4977,7 @@ const SessionDetail = ({
                   }
                   onFileDiffClick={handleOpenFileDiffMobileForChat}
                   onFilePathClick={handleOpenFile}
+                  onOpenHtmlFile={handleOpenHtmlFile}
                   onNavigateToComment={handleNavigateToCommentMobile}
                   onCommentReferencesChange={getCommentReferencesChangeHandler(tabSession.id)}
                   onVisualAnnotationReferencesChange={getVisualAnnotationReferencesChangeHandler(
@@ -4967,6 +4989,7 @@ const SessionDetail = ({
                   onOpenPrTab={handleOpenPrTab}
                   onOpenAllChanges={handleOpenAllChanges}
                   onOpenBrowser={() => handleOpenBrowser(tabSession.id, true)}
+                  onOpenExistingBrowser={() => handleOpenBrowser(tabSession.id, false)}
                   changesDiffStat={changesDiffStat}
                   onForkLastAssistant={
                     canForkSession(tabSession)
@@ -5574,6 +5597,9 @@ const SessionDetail = ({
       isVisible,
       onFileDiffClick: handleOpenFileDiffForChat,
       onFilePathClick: handleOpenFile,
+      onOpenHtmlFile: handleOpenHtmlFile,
+      onOpenBrowser: () => handleOpenBrowser(chatSession.id, true),
+      onOpenExistingBrowser: () => handleOpenBrowser(chatSession.id, false),
       onNavigateToComment: handleNavigateToComment,
       onCommentReferencesChange: getCommentReferencesChangeHandler(chatSession.id),
       onVisualAnnotationReferencesChange: getVisualAnnotationReferencesChangeHandler(

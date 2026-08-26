@@ -7400,15 +7400,19 @@ export class MessageHandler {
 
     const uploadedFiles: UploadedSessionFile[] = [];
     const failures: string[] = [];
+    const canonicalWorkspaceRoot = await fs.promises.realpath(workspaceRoot);
     for (const file of validatedFiles) {
       try {
-        uploadedFiles.push(
-          await this.uploadValidatedSessionFile({
-            workspaceId: this.workspaceId,
-            sessionId,
-            file,
-          })
-        );
+        const uploaded = await this.uploadValidatedSessionFile({
+          workspaceId: this.workspaceId,
+          sessionId,
+          file,
+        });
+        // Validation above canonicalized the path and proved containment. Keep
+        // only the workspace-relative provenance in history so a local Lody
+        // client can reopen the live artifact without publishing a host path.
+        const sourcePath = path.relative(canonicalWorkspaceRoot, file.absolutePath);
+        uploadedFiles.push({ ...uploaded, sourcePath });
       } catch (error) {
         failures.push(`${file.fileName}: ${formatErrorMessage(error)}`);
       }

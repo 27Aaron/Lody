@@ -10,6 +10,7 @@ import type {
   SessionTurnInputConfig,
   VisualAnnotationReferencePayload,
 } from './ai';
+import { isSessionFileSourcePath } from './ai';
 import type { SessionHistoryInput } from './schema';
 import type { McpServerId } from './ids';
 import { reanchorMessageTextSpansForTrim, sanitizeMessageTextSpans } from './message-text-spans';
@@ -167,6 +168,10 @@ const toFilePayload = (
   // transport='local' requires machineId; the runtime validator enforces this,
   // but we still preserve whatever was provided so the pending state can render.
   const machineId = typeof block.machineId === 'string' ? block.machineId : undefined;
+  const sourcePath =
+    typeof block.sourcePath === 'string' && isSessionFileSourcePath(block.sourcePath)
+      ? block.sourcePath
+      : undefined;
   const storageSessionId =
     typeof block.storageSessionId === 'string' ? block.storageSessionId : undefined;
 
@@ -178,6 +183,7 @@ const toFilePayload = (
     sizeBytes: block.sizeBytes,
     sha256: block.sha256,
     textPreview: block.textPreview,
+    ...(sourcePath === undefined ? {} : { sourcePath }),
     transport: block.transport,
     ...(machineId === undefined ? {} : { machineId }),
     uploadedAt: block.uploadedAt,
@@ -416,10 +422,7 @@ export const historyItemsToInputBlocks = (
       // catchall — whatever wrote them, including an older or newer client,
       // never had its shape checked. Sanitize before anything downstream
       // indexes into the text with these offsets.
-      const spans = sanitizeMessageTextSpans(
-        item.text,
-        (item as { spans?: unknown }).spans
-      );
+      const spans = sanitizeMessageTextSpans(item.text, (item as { spans?: unknown }).spans);
       const normalizedTextBlock = normalizeTextInputBlock({
         type: 'text',
         text: item.text,

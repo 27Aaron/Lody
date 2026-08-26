@@ -5,6 +5,7 @@ import {
   SESSION_IMAGE_ALLOWED_MIME_TYPES,
   SESSION_IMAGE_MAX_COUNT,
   SESSION_IMAGE_MAX_SIZE_BYTES,
+  isSessionFileSourcePath,
   type ACPSessionId,
   type SessionTurnInputConfig,
 } from './ai';
@@ -129,6 +130,7 @@ const SessionFileBlockObjectSchema = z
     sizeBytes: z.number().int().nonnegative().max(SESSION_FILE_MAX_SIZE_BYTES),
     sha256: z.string(),
     textPreview: z.boolean(),
+    sourcePath: z.string().refine(isSessionFileSourcePath).optional(),
     transport: z.enum(['r2', 'local']),
     machineId: OptionalStringSchema,
     uploadedAt: z.number(),

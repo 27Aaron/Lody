@@ -170,6 +170,7 @@ import {
 } from './session-file-preview-dialog';
 import { downloadSessionFile, fetchSessionFilePreview } from '@/lib/session-file-download';
 import { getMachineMetaByIdAtomFamily } from '@/atoms/machines';
+import { isHtmlSessionFile } from '@/lib/session-file-presentation';
 import type {
   MachineId,
   MessageTextSpan,
@@ -387,6 +388,8 @@ export interface SessionChatStreamViewProps {
   renderMessageRow: (args: { message: SessionHistoryParsed; sessionId: SessionId }) => ReactNode;
   onFileDiffClick?: (turnId: string, filePath: string) => void;
   onFilePathClick?: (filePath: string) => void;
+  /** Returns true when an HTML attachment click was routed to a richer surface. */
+  onOpenHtmlFile?: (file: SessionFilePayload) => boolean;
   lastAssistantMessageId?: string | null;
   lastCompletedAssistantMessageId?: string | null;
   messageFileDiffEntriesByTurn?: MessageFileDiffEntriesByTurn;
@@ -408,7 +411,10 @@ export interface SessionChatStreamViewProps {
   suppressStickyAutoScrollRef?: React.RefObject<boolean>;
 }
 
-const SessionChatSendContext = createContext<((message: ClientToServer) => void) | null>(null);
+const SessionChatActionContext = createContext<{
+  sendMessage?: (message: ClientToServer) => void;
+  openHtmlFile?: (file: SessionFilePayload) => boolean;
+}>({});
 const SessionImagePreviewContext = createContext<{
   openImagePreview: (imageKey: string) => void;
 } | null>(null);
@@ -1130,6 +1136,7 @@ export const SessionChatStreamView = forwardRef<
       renderMessageRow,
       onFileDiffClick,
       onFilePathClick,
+      onOpenHtmlFile,
       lastAssistantMessageId = null,
       lastCompletedAssistantMessageId = null,
       messageFileDiffEntriesByTurn,
@@ -1567,12 +1574,18 @@ export const SessionChatStreamView = forwardRef<
       }),
       []
     );
-
+    const chatActionContextValue = useMemo(
+      () => ({
+        ...(sendMessage ? { sendMessage } : {}),
+        ...(onOpenHtmlFile ? { openHtmlFile: onOpenHtmlFile } : {}),
+      }),
+      [onOpenHtmlFile, sendMessage]
+    );
     const hasOnlyEmptyItem = items.length === 1 && items[0]?.type === 'empty';
 
     if ((!items.length || (hasOnlyEmptyItem && emptyState)) && leadingContent == null) {
       return (
-        <SessionChatSendContext.Provider value={sendMessage ?? null}>
+        <SessionChatActionContext.Provider value={chatActionContextValue}>
           <SessionImagePreviewContext.Provider value={imagePreviewContextValue}>
             <ContainerQueryProvider
               ref={scrollRootRef}
@@ -1585,12 +1598,12 @@ export const SessionChatStreamView = forwardRef<
               )}
             </ContainerQueryProvider>
           </SessionImagePreviewContext.Provider>
-        </SessionChatSendContext.Provider>
+        </SessionChatActionContext.Provider>
       );
     }
 
     return (
-      <SessionChatSendContext.Provider value={sendMessage ?? null}>
+      <SessionChatActionContext.Provider value={chatActionContextValue}>
         <SessionImagePreviewContext.Provider value={imagePreviewContextValue}>
           <ContainerQueryProvider
             ref={scrollRootRef}
@@ -1735,7 +1748,7 @@ export const SessionChatStreamView = forwardRef<
             />
           </ContainerQueryProvider>
         </SessionImagePreviewContext.Provider>
-      </SessionChatSendContext.Provider>
+      </SessionChatActionContext.Provider>
     );
   }
 );
@@ -2027,7 +2040,8 @@ const SystemNoticeView = ({
       break;
     case 'session_fork_origin': {
       const meta = notice.meta as
-        { sourceSessionId: SessionId; sourceTurnId: string; sourceTitle: string } | undefined;
+        | { sourceSessionId: SessionId; sourceTurnId: string; sourceTitle: string }
+        | undefined;
       if (!meta) return null;
       return (
         <div className="flex items-center gap-3 py-4 text-xs text-muted-foreground/75">
@@ -4467,6 +4481,7 @@ export const SessionFileGroup = ({
   const { t } = useTranslation();
   const workspaceId = useAtomValue(currentWorkspaceIdAtom) as WorkspaceId | null;
   const authToken = useAtomValue(authTokenAtom);
+  const { openHtmlFile } = useContext(SessionChatActionContext);
   const [previewFile, setPreviewFile] = useState<SessionFilePayload | null>(null);
   const [previewStatus, setPreviewStatus] = useState<SessionFilePreviewStatus>({ kind: 'loading' });
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
@@ -4494,6 +4509,9 @@ export const SessionFileGroup = ({
 
   const handlePreview = useCallback(
     (file: SessionFilePayload) => {
+      if (isHtmlSessionFile(file) && openHtmlFile?.(file)) {
+        return;
+      }
       setPreviewFile(file);
       setPreviewStatus({ kind: 'loading' });
       if (!workspaceId || !authToken) {
@@ -4530,7 +4548,7 @@ export const SessionFileGroup = ({
           });
         });
     },
-    [authToken, sessionId, t, workspaceId]
+    [authToken, openHtmlFile, sessionId, t, workspaceId]
   );
 
   // The send path caps at 8 files/message, but a block list synced from another

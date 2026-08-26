@@ -63,6 +63,7 @@ import type {
   ProjectRef,
   SessionHistory,
   SessionHistoryParsed,
+  SessionFilePayload,
   SessionId,
   SessionInputBlock,
   SessionLegacyMetaFields,
@@ -275,6 +276,17 @@ import {
   type SessionSearchResult,
 } from '@/lib/session-chat-search';
 import { useIncrementalSearchBlocks } from '@/hooks/use-incremental-search-blocks';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/ui/alert-dialog';
+import { resolveSessionHtmlAttachmentAction } from './session-html-attachment-action';
 
 function getErrorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
@@ -1701,6 +1713,8 @@ interface SessionChatInterfaceProps {
   hideHeader?: boolean;
   onFileDiffClick?: (turnId: string, filePath: string) => void;
   onFilePathClick?: (filePath: string) => void;
+  /** Opens an agent-uploaded HTML source path directly in rendered file preview. */
+  onOpenHtmlFile?: (filePath: string) => void;
   messageFileDiffEntriesByTurn?: MessageFileDiffEntriesByTurn;
   /** Optional replacement for the GitHub badge area in the header. */
   headerActionsSlot?: React.ReactNode;
@@ -1763,6 +1777,8 @@ interface SessionChatInterfaceProps {
   browserActionSession?: SessionMeta | null;
   /** Called when the user wants to open the Browser panel. */
   onOpenBrowser?: () => void;
+  /** Opens Browser without forcing a newly reported candidate navigation. */
+  onOpenExistingBrowser?: () => void;
   /**
    * 'page' renders the classic full header row. 'toolbar' (desktop
    * `hideMessageArea` instance) renders ONLY the compact right-side controls
@@ -1877,6 +1893,7 @@ export const SessionChatInterface = memo(
       hideHeader = false,
       onFileDiffClick,
       onFilePathClick,
+      onOpenHtmlFile,
       messageFileDiffEntriesByTurn,
       headerActionsSlot,
       headerEndSlot,
@@ -1904,6 +1921,7 @@ export const SessionChatInterface = memo(
       onOpenPrTab,
       browserActionSession,
       onOpenBrowser,
+      onOpenExistingBrowser,
       headerVariant = 'page',
       paintSessionMentionOverlay = true,
       changesDiffStat,
@@ -2006,6 +2024,7 @@ export const SessionChatInterface = memo(
     const liveSessionPresence = useAtomValue(sessionLivePresenceAtomFamily(session.id));
     const liveSessionStatus = liveSessionPresence?.status ?? null;
     const isLocalSession = !!localMachineId && session.machineId === localMachineId;
+    const [pendingRemoteHtmlFileName, setPendingRemoteHtmlFileName] = useState<string | null>(null);
     const {
       selectedModeId,
       selectedModelId,
@@ -5115,6 +5134,30 @@ export const SessionChatInterface = memo(
     const handleFilePathClick = useStableCallback((filePath: string) => {
       onFilePathClick?.(filePath);
     });
+    const handleOpenHtmlAttachment = useStableCallback((file: SessionFilePayload): boolean => {
+      const action = resolveSessionHtmlAttachmentAction({
+        isLocalSession,
+        sourcePath: file.sourcePath,
+        connectionStatus: session.previewConnection?.status,
+        candidateStatus: session.previewCandidate?.status,
+      });
+      switch (action.kind) {
+        case 'open-local-file':
+          if (!onOpenHtmlFile) return false;
+          onOpenHtmlFile(action.sourcePath);
+          return true;
+        case 'open-existing-browser':
+          if (!onOpenExistingBrowser) return false;
+          onOpenExistingBrowser();
+          return true;
+        case 'confirm-reported-port':
+          if (!onOpenBrowser) return false;
+          setPendingRemoteHtmlFileName(file.fileName);
+          return true;
+        case 'fallback':
+          return false;
+      }
+    });
     const openInIdeTarget = useMemo(
       () =>
         resolveSessionOpenInIdePathTarget({
@@ -5567,6 +5610,7 @@ export const SessionChatInterface = memo(
                           agentActivityTone={agentActivityTone}
                           onFileDiffClick={onFileDiffClick}
                           onFilePathClick={onFilePathClick ? handleFilePathClick : undefined}
+                          onOpenHtmlFile={handleOpenHtmlAttachment}
                           messageFileDiffEntriesByTurn={messageFileDiffEntriesByTurn}
                           assistantActions={assistantQuickActions}
                           assistantActionsMessageId={latestCompletedProposedPlan?.entryId}
@@ -5770,6 +5814,38 @@ export const SessionChatInterface = memo(
             target={renameDialogTarget}
             onClose={() => setRenameDialogTarget(null)}
           />
+          <AlertDialog
+            open={pendingRemoteHtmlFileName !== null}
+            onOpenChange={(open) => {
+              if (!open) setPendingRemoteHtmlFileName(null);
+            }}
+          >
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>
+                  {t('sessions.htmlAttachment.openReportedPortTitle', 'Open the reported port?')}
+                </AlertDialogTitle>
+                <AlertDialogDescription>
+                  {t(
+                    'sessions.htmlAttachment.openReportedPortDescription',
+                    'To preview {{name}}, Lody will connect to the local port reported by the Agent and open it in Browser.',
+                    { name: pendingRemoteHtmlFileName ?? '' }
+                  )}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>{t('common.cancel', 'Cancel')}</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => {
+                    setPendingRemoteHtmlFileName(null);
+                    onOpenBrowser?.();
+                  }}
+                >
+                  {t('sessions.htmlAttachment.openReportedPortAction', 'Connect and open')}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </SessionConversationPage>
       </PrLinkProvider>
     );

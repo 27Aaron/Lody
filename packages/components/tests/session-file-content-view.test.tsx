@@ -1251,6 +1251,29 @@ describe('SessionFileContentView', () => {
     expect(view.querySelector('[data-testid="monaco-viewer"]')).not.toBeNull();
   });
 
+  it('enters rendered HTML for an explicit attachment preview request', async () => {
+    const provider = createFakeSessionFileProvider({
+      files: [{ path: 'artifacts/result.html', kind: 'text', sourceState: 'live-readonly' }],
+      snapshots: {
+        'artifacts/result.html': { kind: 'text', text: '<!doctype html><h1>Artifact</h1>' },
+      },
+    });
+    const view = await render(
+      createElement(SessionFileContentView, {
+        sessionId: session.id,
+        session,
+        filePath: 'artifacts/result.html',
+        fileProvider: provider,
+        fileProviderPending: false,
+        htmlPreviewRequestSeq: 1,
+      })
+    );
+    await flushMicrotasks();
+
+    expect(view.querySelector('[data-testid="managed-html-preview"]')).not.toBeNull();
+    expect(view.querySelector('[data-testid="monaco-viewer"]')).toBeNull();
+  });
+
   it('previews the latest editor text instead of the opened HTML snapshot', async () => {
     const provider = createFakeSessionFileProvider({
       files: [
