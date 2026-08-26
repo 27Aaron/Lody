@@ -501,7 +501,7 @@ describe('session MCP input schemas', () => {
     ).toBe(false);
   });
 
-  it('accepts Agent Role creates and rejects manual Role-owned overrides', () => {
+  it('accepts Agent Role creates even when callers include Role-owned overrides', () => {
     expect(
       SessionCreateToolInputSchema.safeParse({
         operationId: 'role-review-1',
@@ -516,14 +516,14 @@ describe('session MCP input schemas', () => {
         agentRoleId: 'reviewer',
         modelId: 'opus',
       }).success
-    ).toBe(false);
+    ).toBe(true);
     expect(
       SessionCreateManyToolInputSchema.safeParse({
         operationId: 'role-review-many-1',
         defaults: { agentRoleId: 'reviewer' },
         items: [{ prompt: 'one' }, { prompt: 'two', reasoningEffort: 'high' }],
       }).success
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it('resolves an Agent Role directly from the workspace catalog', () => {
@@ -541,6 +541,10 @@ describe('session MCP input schemas', () => {
         operationId: 'role-review-1',
         prompt: 'Review the current diff.',
         agentRoleId: 'reviewer',
+        machineId: 'manual-machine',
+        agentConfigId: 'manual-agent',
+        modelId: 'manual-model',
+        reasoningEffort: 'high',
         useCurrentSessionAsParent: false,
       },
       { chainDepth: 0, frozenInputConfig },
@@ -563,6 +567,8 @@ describe('session MCP input schemas', () => {
         branch: 'feature/roles',
       },
     });
+    expect(resolved.input).not.toHaveProperty('modelId');
+    expect(resolved.input).not.toHaveProperty('reasoningEffort');
     expect(resolved.dispatchConfig).toEqual({
       modeId: 'default',
       modelId: 'opus',

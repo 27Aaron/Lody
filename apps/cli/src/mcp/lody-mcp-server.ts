@@ -478,46 +478,33 @@ const sessionCreateCommandSchemas = [
     .strict(),
 ] as const;
 
-/**
- * A Role owns the whole execution site, so nothing that would restate it may
- * ride along. Derived from the run-config shape itself: a field added there is
- * a field the guard rejects, rather than one silently accepted and dropped.
- */
 const AGENT_ROLE_MANUAL_OVERRIDE_FIELDS = [
   'machineId',
   'agentConfigId',
-  ...Object.keys(SessionRunConfigInputShape),
+  ...(Object.keys(SessionRunConfigInputShape) as Array<keyof typeof SessionRunConfigInputShape>),
 ] as const;
 
-const addAgentRoleOverrideIssues = (
-  value: Record<string, unknown>,
-  ctx: z.RefinementCtx,
-  pathPrefix: Array<string | number> = []
-): void => {
-  if (value.agentRoleId === undefined) return;
+const omitAgentRoleManualOverrides = (
+  input: SessionCreateCommandInput
+): SessionCreateCommandInput => {
+  const normalized = { ...input };
   for (const field of AGENT_ROLE_MANUAL_OVERRIDE_FIELDS) {
-    if (value[field] === undefined) continue;
-    ctx.addIssue({
-      code: 'custom',
-      path: [...pathPrefix, field],
-      message: `${field} cannot be combined with agentRoleId.`,
-    });
+    delete normalized[field];
   }
+  return normalized;
 };
 
-const SessionCreateRuntimeInputSchema = z
-  .xor([
-    z
-      .object({
-        operationId: LodyOperationIdSchema.describe(
-          'Operation id to resume without resending input.'
-        ),
-        resume: z.literal(true),
-      })
-      .strict(),
-    ...sessionCreateCommandSchemas,
-  ])
-  .superRefine((value, ctx) => addAgentRoleOverrideIssues(value, ctx));
+const SessionCreateRuntimeInputSchema = z.xor([
+  z
+    .object({
+      operationId: LodyOperationIdSchema.describe(
+        'Operation id to resume without resending input.'
+      ),
+      resume: z.literal(true),
+    })
+    .strict(),
+  ...sessionCreateCommandSchemas,
+]);
 
 // The MCP SDK only publishes schemas whose outermost Zod type is an object.
 // Keep the complete object shape visible to clients, then delegate the
@@ -675,61 +662,54 @@ const BatchCommandEnvelopeSchema = {
     .optional(),
 };
 
-const SessionCreateManyRuntimeInputSchema = z
-  .xor([
-    z
-      .object({
-        ...BatchCommandEnvelopeSchema,
-        defaults: z.never().optional(),
-        items: z.array(SessionCreateBatchItemSchema).max(1_000),
-      })
-      .strict(),
-    z
-      .object({
-        ...BatchCommandEnvelopeSchema,
-        defaults: z
-          .object({
-            ...SessionCreateBatchItemShape,
-            useCurrentSessionAsParent: z.literal(true),
-            workContext: z.never().optional(),
-          })
-          .strict(),
-        items: z.array(SessionCreateBatchItemWithInheritedParentSchema).max(1_000),
-      })
-      .strict(),
-    z
-      .object({
-        ...BatchCommandEnvelopeSchema,
-        defaults: z
-          .object({
-            ...SessionCreateBatchItemShape,
-            useCurrentSessionAsParent: z.literal(false).optional(),
-            workContext: z.never().optional(),
-          })
-          .strict(),
-        items: z.array(SessionCreateBatchItemSchema).max(1_000),
-      })
-      .strict(),
-    z
-      .object({
-        ...BatchCommandEnvelopeSchema,
-        defaults: z
-          .object({
-            ...SessionCreateBatchItemShape,
-            useCurrentSessionAsParent: z.literal(false).optional(),
-            workContext: SessionWorkContextInputSchema,
-          })
-          .strict(),
-        items: z.array(SessionCreateBatchItemWithInheritedWorkContextSchema).max(1_000),
-      })
-      .strict(),
-  ])
-  .superRefine((value, ctx) => {
-    value.items.forEach((item, index) => {
-      const expanded = { ...(value.defaults ?? {}), ...item };
-      addAgentRoleOverrideIssues(expanded, ctx, ['items', index]);
-    });
-  });
+const SessionCreateManyRuntimeInputSchema = z.xor([
+  z
+    .object({
+      ...BatchCommandEnvelopeSchema,
+      defaults: z.never().optional(),
+      items: z.array(SessionCreateBatchItemSchema).max(1_000),
+    })
+    .strict(),
+  z
+    .object({
+      ...BatchCommandEnvelopeSchema,
+      defaults: z
+        .object({
+          ...SessionCreateBatchItemShape,
+          useCurrentSessionAsParent: z.literal(true),
+          workContext: z.never().optional(),
+        })
+        .strict(),
+      items: z.array(SessionCreateBatchItemWithInheritedParentSchema).max(1_000),
+    })
+    .strict(),
+  z
+    .object({
+      ...BatchCommandEnvelopeSchema,
+      defaults: z
+        .object({
+          ...SessionCreateBatchItemShape,
+          useCurrentSessionAsParent: z.literal(false).optional(),
+          workContext: z.never().optional(),
+        })
+        .strict(),
+      items: z.array(SessionCreateBatchItemSchema).max(1_000),
+    })
+    .strict(),
+  z
+    .object({
+      ...BatchCommandEnvelopeSchema,
+      defaults: z
+        .object({
+          ...SessionCreateBatchItemShape,
+          useCurrentSessionAsParent: z.literal(false).optional(),
+          workContext: SessionWorkContextInputSchema,
+        })
+        .strict(),
+      items: z.array(SessionCreateBatchItemWithInheritedWorkContextSchema).max(1_000),
+    })
+    .strict(),
+]);
 
 const SessionCreateBatchPublishedItemSchema = z
   .object({
@@ -1265,7 +1245,7 @@ const resolveMcpSessionCreate = (
   }
 
   const resolvedInput = {
-    ...input,
+    ...omitAgentRoleManualOverrides(input),
     machineId: role.machineId,
     agentConfigId: role.agentConfigId,
     ...(useCurrentSessionAsParent !== undefined ? { useCurrentSessionAsParent } : {}),
@@ -4052,7 +4032,7 @@ export function buildLodyMcpServer(config: { taskToolsEnabled?: boolean } = {}):
     {
       title: 'Create a Lody session',
       description:
-        'Start durable asynchronous work that creates a Lody session. Supply operationId; the result arrives automatically as a continuation, so do not poll operation_get. To recover an already accepted create without resending its prompt, send only operationId with resume=true. To use an Agent Role, pass its agentRoleId and do not pass machineId, agentConfigId, modelId, reasoningEffort, fastMode, or planMode; the current workspace catalog row supplies them. useCurrentSessionAsParent=true and workContext are mutually exclusive schema branches. Machine/config ids and runConfig values for non-Role creates come from lody_session_create_options. The wait field is temporary legacy compatibility only.',
+        'Start durable asynchronous work that creates a Lody session. Supply operationId; the result arrives automatically as a continuation, so do not poll operation_get. To use an Agent Role, pass agentRoleId; the current workspace catalog row supplies the exact Machine, Agent config, model, reasoning, and permission mode. If manual machine or run-config fields are also present, the Role takes precedence and those fields are ignored. To recover an already accepted create without resending its prompt, send only operationId with resume=true. useCurrentSessionAsParent=true and workContext are mutually exclusive schema branches. Machine/config ids and runConfig values for non-Role creates come from lody_session_create_options. The wait field is temporary legacy compatibility only.',
       inputSchema: SessionCreateToolInputSchema,
     },
     async (input) => {
@@ -4201,7 +4181,7 @@ export function buildLodyMcpServer(config: { taskToolsEnabled?: boolean } = {}):
     {
       title: 'Create multiple Lody sessions',
       description:
-        'Start one durable batch Operation for 1-20 Session creates. defaults and items shallow-merge; nested objects replace wholesale. Each item may use an agentRoleId from the workspace catalog; Role items cannot also override machine, agent config, or run config. Non-Role items accept modelId, reasoningEffort, fastMode, and planMode. Ordered item failures are isolated. Completion arrives automatically as one continuation, so do not poll operation_get in a loop.',
+        'Start one durable batch Operation for 1-20 Session creates. defaults and items shallow-merge; nested objects replace wholesale. Each item may use an agentRoleId from the workspace catalog. When a Role item also includes manual machine, agent config, or run-config fields, the Role takes precedence and those fields are ignored. Non-Role items accept modelId, reasoningEffort, fastMode, and planMode. Ordered item failures are isolated. Completion arrives automatically as one continuation, so do not poll operation_get in a loop.',
       inputSchema: SessionCreateManyToolInputSchema,
     },
     async (input) => {
