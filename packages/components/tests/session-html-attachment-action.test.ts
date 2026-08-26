@@ -9,6 +9,12 @@ describe('resolveSessionHtmlAttachmentAction', () => {
         sourcePath: 'artifacts/result.html',
       })
     ).toEqual({ kind: 'open-local-file', sourcePath: 'artifacts/result.html' });
+    expect(
+      resolveSessionHtmlAttachmentAction({
+        isLocalSession: true,
+        sourcePath: 'artifacts\\result.html',
+      })
+    ).toEqual({ kind: 'open-local-file', sourcePath: 'artifacts/result.html' });
   });
 
   it('opens an existing remote Browser connection without reconnecting', () => {
@@ -32,7 +38,16 @@ describe('resolveSessionHtmlAttachmentAction', () => {
   });
 
   it('keeps the attachment preview when provenance or a reported port is missing', () => {
-    for (const sourcePath of ['', '/tmp/result.html', '../result.html', 'C:\\tmp\\result.html']) {
+    for (const sourcePath of [
+      '',
+      '/tmp/result.html',
+      '../result.html',
+      'C:\\tmp\\result.html',
+      '..\\result.html',
+      'artifacts\\..\\result.html',
+      '\\tmp\\result.html',
+      '\\\\server\\share\\result.html',
+    ]) {
       expect(resolveSessionHtmlAttachmentAction({ isLocalSession: true, sourcePath })).toEqual({
         kind: 'fallback',
       });

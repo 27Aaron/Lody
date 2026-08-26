@@ -697,6 +697,17 @@ type ValidatedUploadFile = {
 
 type UploadedSessionFile = SessionFilePayload & { downloadUrl: string };
 
+/**
+ * Persist workspace-relative attachment provenance with one cross-platform
+ * separator convention so downstream canonical-path consumers can open it.
+ */
+export function normalizeSessionFileSourcePath(
+  sourcePath: string,
+  separator: string = path.sep
+): string {
+  return separator === '/' ? sourcePath : sourcePath.split(separator).join('/');
+}
+
 const SESSION_FILE_MAX_PART_RETRIES = 3;
 
 // Best-effort MIME type from a file extension for the agent-send path. The
@@ -7411,7 +7422,9 @@ export class MessageHandler {
         // Validation above canonicalized the path and proved containment. Keep
         // only the workspace-relative provenance in history so a local Lody
         // client can reopen the live artifact without publishing a host path.
-        const sourcePath = path.relative(canonicalWorkspaceRoot, file.absolutePath);
+        const sourcePath = normalizeSessionFileSourcePath(
+          path.relative(canonicalWorkspaceRoot, file.absolutePath)
+        );
         uploadedFiles.push({ ...uploaded, sourcePath });
       } catch (error) {
         failures.push(`${file.fileName}: ${formatErrorMessage(error)}`);

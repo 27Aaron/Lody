@@ -18,7 +18,7 @@ export function resolveSessionHtmlAttachmentAction(args: {
   readonly connectionStatus?: string;
   readonly candidateStatus?: string;
 }): SessionHtmlAttachmentAction {
-  const sourcePath = args.sourcePath;
+  const sourcePath = args.sourcePath?.replace(/\\/g, '/');
   if (args.isLocalSession) {
     return sourcePath && isSessionFileSourcePath(sourcePath)
       ? { kind: 'open-local-file', sourcePath }

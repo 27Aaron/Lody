@@ -5157,6 +5157,7 @@ export const SessionChatInterface = memo(
         case 'fallback':
           return false;
       }
+      return false;
     });
     const openInIdeTarget = useMemo(
       () =>
