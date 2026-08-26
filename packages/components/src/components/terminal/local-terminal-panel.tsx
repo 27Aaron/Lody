@@ -49,6 +49,8 @@ import {
 export interface LocalTerminalPanelProps {
   channel: TerminalChannel;
   terminalId: string;
+  /** Called once per submitted shell line. Command text is never exposed. */
+  onCommandSubmitted?: () => void;
   onTitleChange?: (title: string) => void;
   onExit?: (exitCode: number) => void;
   className?: string;
@@ -78,6 +80,7 @@ function waitForTerminalFont(fontFamily: string, fontSize: number): Promise<unkn
 export function LocalTerminalPanel({
   channel,
   terminalId,
+  onCommandSubmitted,
   onTitleChange,
   onExit,
   className,
@@ -100,8 +103,10 @@ export function LocalTerminalPanel({
   // [channel, terminalId] and not tear down xterm when a parent re-renders.
   const onTitleChangeRef = useRef(onTitleChange);
   const onExitRef = useRef(onExit);
+  const onCommandSubmittedRef = useRef(onCommandSubmitted);
   onTitleChangeRef.current = onTitleChange;
   onExitRef.current = onExit;
+  onCommandSubmittedRef.current = onCommandSubmitted;
   // Drive a re-theme (without tearing down xterm) when the mode or VS Code theme
   // changes; these come from the same ThemeProvider that paints the rest of the UI.
   const resolvedTheme = useResolvedTheme();
@@ -212,6 +217,9 @@ export function LocalTerminalPanel({
         t.onData((data) => {
           if (replayWrites > 0) return;
           channel.input(terminalId, data);
+          for (const char of data) {
+            if (char === '\r') onCommandSubmittedRef.current?.();
+          }
         }).dispose
       );
       disposers.push(

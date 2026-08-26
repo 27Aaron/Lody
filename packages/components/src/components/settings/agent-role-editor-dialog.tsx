@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useAtomValue } from 'jotai';
+import { usePostHog } from '@posthog/react';
 import { useTranslation } from 'react-i18next';
 import { getServerNow, type AgentRole, type AgentRoleId, type MachineId } from '@lody/shared';
 
@@ -20,6 +21,7 @@ import {
   type AgentRoleFormValue,
 } from '@/lib/agent-role-form';
 import { cn } from '@/lib/utils';
+import { capturePostHogEvent } from '@/lib/posthog-analytics';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/ui/dialog';
 import { AgentRoleForm } from './agent-role-form';
 
@@ -62,6 +64,7 @@ export function AgentRoleEditorDialog({
   onChange,
   onClose,
   onSaved,
+  source,
 }: {
   editor: AgentRoleEditorState | null;
   /** Roles this user can see, for the mention-token uniqueness check. */
@@ -75,8 +78,11 @@ export function AgentRoleEditorDialog({
    * edit.
    */
   onSaved?: (role: AgentRole, meta: { created: boolean }) => void;
+  /** Entry point that opened the editor; used only for product analytics. */
+  source: 'settings' | 'chat_landing' | 'session_composer';
 }) {
   const { t } = useTranslation();
+  const postHog = usePostHog();
   const isMobile = useIsMobile();
   const currentUserId = useAtomValue(userAtom)?.id ?? null;
   const onlineMachineIds = useAtomValue(onlineMachineIdsAtom);
@@ -176,6 +182,14 @@ export function AgentRoleEditorDialog({
       // upload runs on its own and is deliberately not reported — a deferred
       // upload is not a failed save and there is nothing to act on.
       await upsert(role);
+      if (editor.mode === 'add') {
+        capturePostHogEvent(postHog, 'settings/agent_role_created', {
+          source,
+          visibility: role.visibility,
+          has_prompt_prefix: Boolean(role.promptPrefix),
+          run_config_option_count: Object.keys(role.runConfig.configOptionValues ?? {}).length,
+        });
+      }
       onSaved?.(role, { created: editor.mode === 'add' });
       close();
     } catch (cause) {

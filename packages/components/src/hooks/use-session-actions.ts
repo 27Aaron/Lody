@@ -35,6 +35,7 @@ import {
   isLoroRepoDocDeleted,
   normalizeSessionTurnInputConfig,
   readMachineFlockRowsFromFlock,
+  sanitizeMessageTextSpans,
   shouldQueueMachineDeleteSession,
 } from '@lody/shared';
 import { useAtomValue, useSetAtom, useStore } from 'jotai';
@@ -69,6 +70,67 @@ type CreateSessionResult = {
 type StartSessionResult = CreateSessionResult & {
   historyEntry: SessionHistory;
 };
+
+export type SessionChatType = 'regular' | 'side_chat';
+
+export function resolveSessionChatType(
+  session: Pick<SessionMeta, 'childSessionPlacement'> | null | undefined
+): SessionChatType {
+  return session?.childSessionPlacement === 'side-panel' ? 'side_chat' : 'regular';
+}
+
+const TRACKED_MENTION_KINDS = [
+  'file',
+  'dir',
+  'issue',
+  'pr',
+  'skill',
+  'session',
+  'command',
+  'agent_role',
+] as const;
+
+export type SessionMentionCounts = {
+  mention_count: number;
+  mention_types: (typeof TRACKED_MENTION_KINDS)[number][];
+  mention_file_count: number;
+  mention_dir_count: number;
+  mention_issue_count: number;
+  mention_pr_count: number;
+  mention_skill_count: number;
+  mention_session_count: number;
+  mention_command_count: number;
+  mention_agent_role_count: number;
+};
+
+export function countSessionMentions(items: SessionHistoryInput['items']): SessionMentionCounts {
+  const counts = Object.fromEntries(TRACKED_MENTION_KINDS.map((kind) => [kind, 0])) as Record<
+    (typeof TRACKED_MENTION_KINDS)[number],
+    number
+  >;
+
+  for (const item of items ?? []) {
+    if (item.type !== 'text' || typeof item.text !== 'string') continue;
+    for (const span of sanitizeMessageTextSpans(item.text, item.spans) ?? []) {
+      if (span.kind === 'pasted_text') continue;
+      counts[span.kind] += 1;
+    }
+  }
+
+  const mentionTypes = TRACKED_MENTION_KINDS.filter((kind) => counts[kind] > 0);
+  return {
+    mention_count: mentionTypes.reduce((total, kind) => total + counts[kind], 0),
+    mention_types: mentionTypes,
+    mention_file_count: counts.file,
+    mention_dir_count: counts.dir,
+    mention_issue_count: counts.issue,
+    mention_pr_count: counts.pr,
+    mention_skill_count: counts.skill,
+    mention_session_count: counts.session,
+    mention_command_count: counts.command,
+    mention_agent_role_count: counts.agent_role,
+  };
+}
 
 function buildSessionCreateResult(payload: SessionToCreate): CreateSessionResult {
   const sessionId = payload.sessionId ?? (uuidv4() as SessionId);
@@ -497,6 +559,8 @@ export function useSessionActions(): SessionActions {
         agent_type: sessionMeta.agentType,
         project_kind: sessionMeta.project?.kind ?? null,
         is_first_message: true,
+        session_type: resolveSessionChatType(sessionMeta),
+        ...countSessionMentions(history.items),
       });
       return { sessionId, sessionMeta, historyEntry };
     },
@@ -578,6 +642,8 @@ export function useSessionActions(): SessionActions {
           agent_type: sessionMeta?.agentType,
           project_kind: sessionMeta?.project?.kind ?? null,
           is_first_message: false,
+          session_type: resolveSessionChatType(sessionMeta),
+          ...countSessionMentions(history.items),
         });
       }
       return entry;

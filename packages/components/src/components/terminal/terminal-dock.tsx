@@ -6,7 +6,9 @@ import {
 import { ChevronDown, Plus, TerminalSquare, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type PointerEvent } from 'react';
 import { useSetAtom } from 'jotai';
+import { usePostHog } from '@posthog/react';
 
+import { capturePostHogEvent } from '@/lib/posthog-analytics';
 import { cn } from '@/lib/utils';
 import { LocalTerminalPanel } from './local-terminal-panel';
 import {
@@ -114,6 +116,7 @@ export function TerminalDock({
   defaultView,
   className,
 }: TerminalDockProps) {
+  const postHog = usePostHog();
   const [terminals, setTerminals] = useState<TerminalSnapshot[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [view, setView] = useState<DockView>(() => {
@@ -562,6 +565,11 @@ export function TerminalDock({
                 key={activeId}
                 channel={channel}
                 terminalId={activeId}
+                onCommandSubmitted={() => {
+                  capturePostHogEvent(postHog, 'session/terminal_command_sent', {
+                    session_id: sessionId,
+                  });
+                }}
                 onTitleChange={updateActiveTitle}
                 className="px-2 py-1"
               />
@@ -572,7 +580,8 @@ export function TerminalDock({
                   terminalError ? 'text-destructive' : 'text-muted-foreground'
                 )}
               >
-                {terminalError ?? (isLoadingTerminals ? 'Loading terminals...' : 'No terminal open')}
+                {terminalError ??
+                  (isLoadingTerminals ? 'Loading terminals...' : 'No terminal open')}
               </div>
             )}
           </div>

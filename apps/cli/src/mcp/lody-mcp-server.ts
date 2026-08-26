@@ -142,6 +142,8 @@ import {
   WorkspaceMcpConfigureToolInputSchema,
   type WorkspaceMcpConfigureToolInput,
 } from '@/mcp/workspace-mcp-configure';
+import { captureSessionCommandEvent } from '@/commands/analytics-events';
+import { captureCli, initCliAnalytics } from '@/lib/analytics/posthog';
 
 const PREVIEW_TOOL_NAME = 'lody_report_preview_candidate';
 const IMAGE_UPLOAD_TOOL_NAME = 'lody_upload_images';
@@ -2652,6 +2654,17 @@ const startSessionCreateOperation = async (args: SessionCreateCommandInput): Pro
           materializationClaimToken
         )
       );
+      captureSessionCommandEvent(
+        'session_create_succeeded',
+        {
+          created_via: 'mcp',
+          mcp_create_mode: 'single',
+          session_id: result.sessionId,
+          has_agent_role: Boolean(resolved.role),
+          is_child_session: Boolean(result.parentSessionId),
+        },
+        { distinctId: auth.machineId }
+      );
     }
     return snapshotOperation(ctx.sessionId as SessionId, args.operationId!);
   });
@@ -3071,7 +3084,7 @@ const startSessionCreateManyOperation = async (
           options.chainDepth = invoking.chainDepth + 1;
           options.bypassSessionQuota = shouldBypassSessionQuota('session_create_many');
           options.workspaceMetaPrewriteSatisfied = true;
-          await createSessionResult(
+          const result = await createSessionResult(
             auth,
             workspace,
             manager,
@@ -3086,6 +3099,17 @@ const startSessionCreateManyOperation = async (
               index,
               materializationClaimToken
             )
+          );
+          captureSessionCommandEvent(
+            'session_create_succeeded',
+            {
+              created_via: 'mcp',
+              mcp_create_mode: 'batch',
+              session_id: result.sessionId,
+              has_agent_role: Boolean(resolved.role),
+              is_child_session: Boolean(result.parentSessionId),
+            },
+            { distinctId: auth.machineId }
           );
           return markOperationItemInputDurable(storedItem);
         } catch {
@@ -3762,6 +3786,10 @@ export const __lodyMcpServerInternals = {
 };
 
 export function buildLodyMcpServer(config: { taskToolsEnabled?: boolean } = {}): McpServer {
+  // The HTTP host is long-lived and the stdio server normally lives for the
+  // Agent session. Initialization is idempotent and local-platform telemetry
+  // remains hard-disabled inside the analytics layer.
+  initCliAnalytics();
   const server = new McpServer({
     name: 'lody',
     version: '0.1.0',
@@ -3812,6 +3840,14 @@ export function buildLodyMcpServer(config: { taskToolsEnabled?: boolean } = {}):
             auth.userId,
             args
           );
+          captureCli('workspace/mcp_created', {
+            workspace_id: workspace.id,
+            source: 'mcp',
+            transport: result.server.transport,
+            enabled_by_default: result.server.enabledByDefault === true,
+            has_description: Boolean(result.server.description),
+            synced: result.synced,
+          });
           return jsonTextResult({
             ok: true,
             ...result,
@@ -4082,6 +4118,17 @@ export function buildLodyMcpServer(config: { taskToolsEnabled?: boolean } = {}):
             options,
             resolved.dispatchConfig,
             buildStructuredOutputOptions(args)
+          );
+          captureSessionCommandEvent(
+            'session_create_succeeded',
+            {
+              created_via: 'mcp',
+              mcp_create_mode: 'legacy_single',
+              session_id: result.sessionId,
+              has_agent_role: Boolean(resolved.role),
+              is_child_session: Boolean(result.parentSessionId),
+            },
+            { distinctId: auth.machineId }
           );
           const response = {
             ok: true,

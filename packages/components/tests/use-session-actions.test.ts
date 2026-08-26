@@ -81,7 +81,9 @@ import { runtimeAtom, type WorkspaceRuntime } from '../src/atoms/runtime';
 import { docMetaCacheReadyAtom, sessionMetaCacheAtom } from '../src/atoms/doc-meta';
 import { currentWorkspaceIdAtom, currentWorkspaceSlugAtom } from '../src/atoms/workspace-context';
 import {
+  countSessionMentions,
   SessionCreateBillingError,
+  resolveSessionChatType,
   useSessionActions,
   type SessionActions,
 } from '../src/hooks/use-session-actions';
@@ -1170,5 +1172,59 @@ describe('useSessionActions', () => {
       })
     );
     expect(deleteDoc).toHaveBeenCalledWith(getSessionRoomId(sessionId));
+  });
+});
+
+describe('resolveSessionChatType', () => {
+  it('distinguishes side chats from regular sessions', () => {
+    expect(resolveSessionChatType({ childSessionPlacement: 'side-panel' })).toBe('side_chat');
+    expect(resolveSessionChatType({})).toBe('regular');
+    expect(resolveSessionChatType(undefined)).toBe('regular');
+  });
+});
+
+describe('countSessionMentions', () => {
+  it('counts each sent mention kind and ignores pasted-text spans', () => {
+    expect(
+      countSessionMentions([
+        {
+          type: 'text',
+          text: '@src @dir #12 $review /test @session @role pasted',
+          spans: [
+            { start: 0, end: 4, kind: 'file', label: '@src' },
+            { start: 5, end: 9, kind: 'dir', label: '@dir' },
+            { start: 10, end: 13, kind: 'issue', label: '#12' },
+            { start: 14, end: 21, kind: 'skill', label: '$review' },
+            { start: 22, end: 27, kind: 'command', label: '/test' },
+            { start: 28, end: 36, kind: 'session', label: '@session' },
+            { start: 37, end: 42, kind: 'agent_role', label: '@role' },
+            { start: 43, end: 49, kind: 'pasted_text', label: 'pasted' },
+          ],
+        },
+        {
+          type: 'text',
+          text: '#34 pull request',
+          spans: [{ start: 0, end: 3, kind: 'pr', label: '#34' }],
+        },
+      ])
+    ).toEqual({
+      mention_count: 8,
+      mention_types: ['file', 'dir', 'issue', 'pr', 'skill', 'session', 'command', 'agent_role'],
+      mention_file_count: 1,
+      mention_dir_count: 1,
+      mention_issue_count: 1,
+      mention_pr_count: 1,
+      mention_skill_count: 1,
+      mention_session_count: 1,
+      mention_command_count: 1,
+      mention_agent_role_count: 1,
+    });
+  });
+
+  it('returns zero counts when the message has no mentions', () => {
+    expect(countSessionMentions(undefined)).toMatchObject({
+      mention_count: 0,
+      mention_types: [],
+    });
   });
 });

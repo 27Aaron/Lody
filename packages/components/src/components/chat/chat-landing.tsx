@@ -6485,6 +6485,7 @@ function WorkspaceChatLanding({
         onChange={setAgentRoleEditor}
         onClose={() => setAgentRoleEditor(null)}
         onSaved={handleAgentRoleSaved}
+        source="chat_landing"
       />
     </>
   );

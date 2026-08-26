@@ -1234,6 +1234,13 @@ const SessionDetail = ({
         toast.error(response?.error?.message ?? t('sessions.forkFailed', 'Unable to fork session'));
         return;
       }
+      capturePostHogEvent(postHog, 'session/fork_succeeded', {
+        workspace_id: currentWorkspaceId ?? null,
+        source_session_id: source.id,
+        source_is_child: Boolean(source.parentSessionId),
+        destination: placement,
+        partial: response.partial,
+      });
       setPendingForks((current) => {
         const pending = current[source.id];
         if (!pending || pending.targetSessionId !== targetSessionId) return current;
@@ -1253,7 +1260,7 @@ const SessionDetail = ({
         );
       }
     },
-    [canForkSession, pendingForks, runtime, t, user?.id]
+    [canForkSession, currentWorkspaceId, pendingForks, postHog, runtime, t, user?.id]
   );
   const pendingForkSourceByTargetSessionId = useMemo(() => {
     const sourceByTarget = new Map<SessionId, string>();

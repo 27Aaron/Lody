@@ -32,6 +32,7 @@ import type { LoroDocumentManager } from '@/lib/loro/doc';
 import { parseEnvAssignments } from './agent-config';
 import { renderTerminalTable } from '@/lib/terminal-table';
 import { formatErrorMessage } from '@/utils/format-error';
+import { captureCli } from '@/lib/analytics/posthog';
 
 type ConnectionOptions = {
   command?: string;
@@ -327,6 +328,13 @@ const addCommand = addConnectionOptions(
         createdBy: userId,
       };
       const result = await upsertWorkspaceMcpCatalogEntry(repo, workspaceId, entry, writeOptions);
+      captureCli('workspace/mcp_created', {
+        workspace_id: workspaceId,
+        source: 'cli',
+        transport: entry.transport,
+        enabled_by_default: entry.enabledByDefault === true,
+        has_description: Boolean(entry.description),
+      });
       reportWrite(
         options,
         { workspaceId, server: entry },

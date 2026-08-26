@@ -2385,6 +2385,7 @@ export const SessionChatInputArea = memo(
             accessibleRoles={accessibleAgentRoles}
             onChange={setAgentRoleEditor}
             onClose={() => setAgentRoleEditor(null)}
+            source="session_composer"
           />
         ) : null}
         <ConversationColumn>

@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
     selectionRange?: { start: { x: number; y: number }; end: { x: number; y: number } };
     customKeyEventHandler?: (event: KeyboardEvent) => boolean;
     selectionChangeHandler?: () => void;
+    dataHandler?: (data: string) => void;
   }>,
   fit: vi.fn(),
 }));
@@ -54,6 +55,7 @@ vi.mock('@xterm/xterm', () => ({
       },
     };
     customKeyEventHandler?: (event: KeyboardEvent) => boolean;
+    dataHandler?: (data: string) => void;
 
     constructor(options: Record<string, unknown>) {
       this.options = { ...options };
@@ -105,7 +107,8 @@ vi.mock('@xterm/xterm', () => ({
     write(_data: string, callback?: () => void) {
       callback?.();
     }
-    onData() {
+    onData(handler: (data: string) => void) {
+      this.dataHandler = handler;
       return { dispose: vi.fn() };
     }
     onResize() {
@@ -220,6 +223,31 @@ describe('LocalTerminalPanel', () => {
     expect(terminal.options.fontFamily).toContain('"Maple Mono"');
     expect(terminal.options.fontSize).toBe(16);
     expect(mocks.fit.mock.calls.length).toBeGreaterThan(initialFitCount);
+  });
+
+  it('reports each submitted shell line without exposing command text', async () => {
+    const channel = createChannel();
+    const onCommandSubmitted = vi.fn();
+
+    await act(async () => {
+      root?.render(
+        <LocalTerminalPanel
+          channel={channel}
+          terminalId="terminal-1"
+          onCommandSubmitted={onCommandSubmitted}
+        />
+      );
+      await Promise.resolve();
+    });
+
+    const terminal = mocks.terminalInstances[0];
+    terminal.dataHandler?.('pnpm test\r');
+    terminal.dataHandler?.('first\rsecond\r');
+
+    expect(channel.input).toHaveBeenNthCalledWith(1, 'terminal-1', 'pnpm test\r');
+    expect(channel.input).toHaveBeenNthCalledWith(2, 'terminal-1', 'first\rsecond\r');
+    expect(onCommandSubmitted).toHaveBeenCalledTimes(3);
+    expect(onCommandSubmitted).toHaveBeenCalledWith();
   });
 
   it('copies the active selection with Ctrl+Shift+C without changing Ctrl+C', async () => {

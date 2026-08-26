@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useAtomValue } from 'jotai';
+import { usePostHog } from '@posthog/react';
 import { Loader2, Plug, Plus, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -15,6 +16,7 @@ import {
   useWorkspaceMcpCatalogActions,
 } from '@/hooks/use-workspace-mcp-catalog';
 import { cn } from '@/lib/utils';
+import { capturePostHogEvent } from '@/lib/posthog-analytics';
 import { MCP_TRANSPORT_LABELS, McpTransportIcon } from '@/components/shared/mcp-transport';
 import {
   AlertDialog,
@@ -38,6 +40,7 @@ type EditorState = { mode: 'add' } | { mode: 'edit'; entry: WorkspaceMcpServerMe
 
 export function McpSetting() {
   const { t } = useTranslation();
+  const postHog = usePostHog();
   const isMobile = useIsMobile();
   const user = useAtomValue(userAtom);
   const { servers, synced } = useWorkspaceMcpCatalog();
@@ -83,6 +86,14 @@ export function McpSetting() {
       // Resolves on durability: the row exists, so the editor is done. The
       // upload runs on its own and is deliberately not reported.
       await upsert(entry);
+      if (editor?.mode === 'add') {
+        capturePostHogEvent(postHog, 'workspace/mcp_created', {
+          source: 'settings',
+          transport: entry.transport,
+          enabled_by_default: entry.enabledByDefault,
+          has_description: Boolean(entry.description),
+        });
+      }
       setEditor(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
