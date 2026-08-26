@@ -17,6 +17,7 @@ import {
 } from '@/atoms/runtime';
 import { browserOnlineAtom } from '@/atoms/control-connection';
 import type { RoomSyncState } from '@/lib/room-sync-state';
+import { subscribeLatestOnAnimationFrame } from '@/lib/latest-frame-subscription';
 
 declare global {
   interface Window {
@@ -86,6 +87,18 @@ export function sessionMetaSuggestsHistory(session: SessionHistoryHint | null | 
     typeof session?.lastMessageAt === 'number'
   );
 }
+
+const updateOnlyChangesHistory = (
+  previous: SessionDocState | undefined,
+  next: SessionDocState
+): boolean =>
+  previous !== undefined &&
+  previous.history !== next.history &&
+  previous.session === next.session &&
+  previous.mq === next.mq &&
+  previous.forkOperation === next.forkOperation &&
+  previous.preview === next.preview &&
+  previous.externalHistoryCursor === next.externalHistoryCursor;
 
 export function useSessionDoc(
   sessionId: SessionId,
@@ -162,12 +175,18 @@ export function useSessionDoc(
             setSyncState((prev) => (prev === nextState ? prev : nextState));
           }
         });
-        unsubscribe = store.subscribe((nextState) => {
-          setState((prev) => (prev === nextState ? prev : nextState));
-          if (import.meta.env.DEV) {
-            debugSessionState = nextState;
-            window.sessionState = nextState;
-          }
+        unsubscribe = subscribeLatestOnAnimationFrame<SessionDocState>({
+          subscribe: (listener) => store.subscribe(listener),
+          initialValue: initialState,
+          shouldDefer: updateOnlyChangesHistory,
+          onValue: (nextState) => {
+            if (cancelled) return;
+            setState((prev) => (prev === nextState ? prev : nextState));
+            if (import.meta.env.DEV) {
+              debugSessionState = nextState;
+              window.sessionState = nextState;
+            }
+          },
         });
       } catch (error) {
         console.error('Failed to load session doc', { sessionId, error });
@@ -209,7 +228,7 @@ export function useSessionDoc(
   }, [enabled, loadedStore, syncEnabled]);
 
   const withStore = useCallback(
-    async <T,>(fn: (store: SessionDocStore) => Promise<T> | T): Promise<T> => {
+    async <T>(fn: (store: SessionDocStore) => Promise<T> | T): Promise<T> => {
       if (!runtime) {
         throw new Error('Runtime not ready');
       }
@@ -238,12 +257,16 @@ export function useSessionDoc(
         if (!userId || !timestamp || !inputConfig) {
           throw new Error(`Cannot dispatch invalid user history entry (sessionId=${sessionId})`);
         }
-        await runtime.writer.appendSessionTurn(sessionId, entry as unknown as Record<string, unknown>, {
-          userTurnId: entry.id,
-          userId,
-          timestamp,
-          inputConfig: inputConfig as unknown as Record<string, unknown>,
-        });
+        await runtime.writer.appendSessionTurn(
+          sessionId,
+          entry as unknown as Record<string, unknown>,
+          {
+            userTurnId: entry.id,
+            userId,
+            timestamp,
+            inputConfig: inputConfig as unknown as Record<string, unknown>,
+          }
+        );
       } else {
         await runtime.writer.appendSessionHistory(
           sessionId,

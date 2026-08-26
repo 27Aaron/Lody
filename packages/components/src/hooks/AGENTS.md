@@ -65,3 +65,11 @@ this file; edit `AGENTS.md` only.
   updates with no new outcome must not synchronously rewrite local storage. Its
   idle timer depends on the stable candidate turn id, not the derived outcomes
   array, so an identity-only history update cannot consume and cancel the prompt.
+- `use-session-doc.ts` publishes the initial mirror snapshot immediately, then
+  coalesces history-only mirror bursts to the latest snapshot once per animation
+  frame through `lib/latest-frame-subscription.ts`. Session history snapshots are
+  state, not an event log: rendering every intermediate ACP/CRDT snapshot can
+  queue minutes of React work behind a long active turn and retain every obsolete
+  history tree. Control state (`session`, message queue, fork, preview, external
+  cursor) stays synchronous; do not delay it behind transcript rendering or
+  restore a direct `setState` for history-only mirror events.
