@@ -1637,6 +1637,7 @@
   "sessions.messageQueue.imageOnly": "[仅图片消息]",
   "sessions.messageQueue.queuedCount": "{{count}} 条待发送",
   "sessions.messageQueue.remove": "从队列移除",
+  "sessions.messageQueue.saveEdit": "保存修改（回车）",
   "sessions.messageQueue.title": "排队中的消息",
   "sessions.messageQueue.upNext": "接下来",
   "sessions.messageStatus.pendingApply": "引导中",

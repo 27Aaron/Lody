@@ -1640,6 +1640,7 @@
   "sessions.messageQueue.queuedCount": "{{count}} queued",
   "sessions.messageQueue.queuedCount_other": "{{count}} queued",
   "sessions.messageQueue.remove": "Remove from queue",
+  "sessions.messageQueue.saveEdit": "Save changes (Enter)",
   "sessions.messageQueue.title": "Queued messages",
   "sessions.messageQueue.upNext": "Up next",
   "sessions.messageStatus.pendingApply": "Steering",
