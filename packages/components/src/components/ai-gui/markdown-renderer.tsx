@@ -1,5 +1,6 @@
 import {
   type ComponentPropsWithoutRef,
+  type CSSProperties,
   type ReactNode,
   useState,
   useCallback,
@@ -32,7 +33,7 @@ import { Check, Copy } from 'lucide-react';
 import { useAtomValue } from 'jotai';
 import { useTranslation } from 'react-i18next';
 import { parseTaskImageMarkdownUrl } from '@lody/shared';
-import { tasksFeatureEnabledAtom } from '@/atoms/settings';
+import { DEFAULT_CONVERSATION_FONT_SIZE, tasksFeatureEnabledAtom } from '@/atoms/settings';
 import { FileIcon } from '@/components/icons/file-icons';
 import {
   isMarkdownAgentFileHref,
@@ -129,14 +130,30 @@ const MARKDOWN_BASE_CLASSNAME =
   '[&_tbody_td:first-child]:font-medium [&_tbody_td:first-child]:text-foreground/75 ' +
   '[&_table_code]:!bg-muted/55 [&_table_code]:!ring-0';
 
-const MARKDOWN_SIZE_CLASSNAMES: Record<ConversationFontSize, string> = {
-  small:
-    'text-xs [&_h1]:text-base [&_h2]:text-sm [&_h3]:text-xs [&_h4]:text-xs [&_h5]:text-[11px] [&_h6]:text-[11px]',
-  default:
-    'text-sm [&_h1]:text-lg [&_h2]:text-base [&_h3]:text-sm [&_h4]:text-sm [&_h5]:text-xs [&_h6]:text-xs',
-  large:
-    'text-base [&_h1]:text-xl [&_h2]:text-lg [&_h3]:text-base [&_h4]:text-base [&_h5]:text-sm [&_h6]:text-sm',
+const MARKDOWN_SIZE_CLASSNAME =
+  '[&_h1]:text-[length:var(--markdown-h1-font-size)] ' +
+  '[&_h2]:text-[length:var(--markdown-h2-font-size)] ' +
+  '[&_h3]:text-[length:var(--markdown-body-font-size)] ' +
+  '[&_h4]:text-[length:var(--markdown-body-font-size)] ' +
+  '[&_h5]:text-[length:var(--markdown-small-heading-font-size)] ' +
+  '[&_h6]:text-[length:var(--markdown-small-heading-font-size)]';
+
+type MarkdownFontSizeStyle = CSSProperties & {
+  '--markdown-body-font-size': string;
+  '--markdown-h1-font-size': string;
+  '--markdown-h2-font-size': string;
+  '--markdown-small-heading-font-size': string;
 };
+
+function markdownFontSizeStyle(fontSize: ConversationFontSize): MarkdownFontSizeStyle {
+  return {
+    fontSize: `${fontSize}px`,
+    '--markdown-body-font-size': `${fontSize}px`,
+    '--markdown-h1-font-size': `${fontSize + 4}px`,
+    '--markdown-h2-font-size': `${fontSize + 2}px`,
+    '--markdown-small-heading-font-size': `${Math.max(1, fontSize - 2)}px`,
+  };
+}
 
 const ensureLinkRel = (rel?: string) => {
   const parts = new Set((rel ?? '').split(/\s+/).filter(Boolean));
@@ -1059,17 +1076,24 @@ function TaskMarkdownImage(props: MarkdownImageProps) {
   );
 }
 
-export type MarkdownRendererSize = ConversationFontSize | 'sm' | 'base';
+export type MarkdownRendererSize =
+  | ConversationFontSize
+  | 'small'
+  | 'default'
+  | 'large'
+  | 'sm'
+  | 'base';
 
 function normalizeMarkdownRendererSize(size: MarkdownRendererSize): ConversationFontSize {
-  if (size === 'sm') return 'default';
-  if (size === 'base') return 'large';
+  if (size === 'small') return 12;
+  if (size === 'default' || size === 'sm') return DEFAULT_CONVERSATION_FONT_SIZE;
+  if (size === 'large' || size === 'base') return 16;
   return size;
 }
 
 export const MarkdownRenderer = memo(function MarkdownRenderer({
   text,
-  size = 'default',
+  size = DEFAULT_CONVERSATION_FONT_SIZE,
   className,
   allowHtml = false,
   isStreaming = false,
@@ -1265,7 +1289,8 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
     <div
       ref={containerRef}
       data-search-block-id={searchBlockId}
-      className={cn(MARKDOWN_BASE_CLASSNAME, MARKDOWN_SIZE_CLASSNAMES[normalizedSize], className)}
+      className={cn(MARKDOWN_BASE_CLASSNAME, MARKDOWN_SIZE_CLASSNAME, className)}
+      style={markdownFontSizeStyle(normalizedSize)}
     >
       <Streamdown
         // Streamdown's memo comparator does not include every rendering prop;

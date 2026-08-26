@@ -26,6 +26,7 @@ function AppearanceHarness({ isElectron }: { isElectron: boolean }) {
   const [theme, setTheme] = useState<Theme>('light');
   const [interfaceFontFamily, setInterfaceFontFamily] = useState('Atkinson Hyperlegible');
   const [terminalFontFamily, setTerminalFontFamily] = useState('Maple Mono');
+  const [conversationFontSize, setConversationFontSize] = useState(14);
   const [fontSize, setFontSize] = useState(13);
 
   return (
@@ -34,8 +35,8 @@ function AppearanceHarness({ isElectron }: { isElectron: boolean }) {
       onThemePreview={setTheme}
       onThemeCommit={setTheme}
       onThemeCancel={vi.fn()}
-      conversationFontSize="default"
-      onConversationFontSizeChange={vi.fn()}
+      conversationFontSize={conversationFontSize}
+      onConversationFontSizeChange={setConversationFontSize}
       isElectron={isElectron}
       interfaceFontFamily={interfaceFontFamily}
       onInterfaceFontFamilyChange={setInterfaceFontFamily}
@@ -113,6 +114,21 @@ describe('AppearanceSettingsView', () => {
     expect(container?.textContent).toContain('Language');
     expect(container?.textContent).not.toContain('Interface font');
     expect(container?.textContent).not.toContain('Terminal');
+  });
+
+  it('lets the user enter a custom conversation font size', async () => {
+    await act(async () => root?.render(<AppearanceHarness isElectron={false} />));
+
+    const sizeInput = container?.querySelector<HTMLInputElement>(
+      'input[aria-label="Conversation font size"]'
+    );
+    expect(sizeInput?.value).toBe('14');
+
+    await act(async () => {
+      setInputValue(sizeInput!, '24');
+    });
+
+    expect(sizeInput?.value).toBe('24');
   });
 
   it('shows theme and language in mobile appearance settings without terminal settings', async () => {

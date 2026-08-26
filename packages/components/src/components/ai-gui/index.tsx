@@ -15,7 +15,7 @@ import type {
   SessionId,
   WorkspaceId,
 } from '@lody/shared';
-import type { ConversationFontSize } from '@/atoms/settings';
+import { DEFAULT_CONVERSATION_FONT_SIZE, type ConversationFontSize } from '@/atoms/settings';
 import { cloudOperations } from '@/lib/cloud-api-operations';
 import type { AgentActivityTone } from '@/components/shared';
 import {
@@ -159,7 +159,7 @@ const SessionChatStreamImpl = forwardRef<SessionChatStreamHandle, SessionChatStr
       onNavigateSession,
       onEditLastUser,
       onLastCompletedAssistantMessageIdChange,
-      conversationFontSize = 'default',
+      conversationFontSize = DEFAULT_CONVERSATION_FONT_SIZE,
       skipNextViewportResizeAutoScrollRef,
       suppressStickyAutoScrollRef,
     },

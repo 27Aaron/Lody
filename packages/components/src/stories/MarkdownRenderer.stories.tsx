@@ -11,8 +11,7 @@ const meta = {
   tags: ['autodocs'],
   argTypes: {
     size: {
-      control: { type: 'radio' },
-      options: ['small', 'default', 'large'],
+      control: { type: 'number', min: 9, max: 32, step: 1 },
     },
   },
 } satisfies Meta<typeof MarkdownRenderer>;
@@ -395,7 +394,7 @@ function StreamingMarkdownDemo() {
 
   return (
     <MarkdownRenderer
-      size="large"
+      size={24}
       text={streamdownDemoChunks.slice(0, chunkCount).join('')}
       isStreaming={chunkCount < streamdownDemoChunks.length}
     />
@@ -404,7 +403,7 @@ function StreamingMarkdownDemo() {
 
 export const MermaidLatexAndAnimation: Story = {
   args: {
-    size: 'large',
+    size: 24,
     text: streamdownDemoChunks.join(''),
   },
   parameters: {

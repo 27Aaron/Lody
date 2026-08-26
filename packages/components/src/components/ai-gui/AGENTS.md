@@ -173,6 +173,9 @@ context/message-flow.md.
     with no reply, CJK and degenerate titles) is what surfaces the jump and
     tolerance behaviour; the comfortable stories do not.
 - `markdown-renderer.tsx` — assistant markdown (story: `MarkdownRenderer.stories.tsx`).
+  Conversation font size is a bounded integer pixel value, not a preset name; keep body,
+  headings, dense monospace output, terminal output, and collapsed-text height scaling
+  through `conversation-font-size-classes.ts`, with legacy preset migration in settings.
   Keep Streamdown in streaming mode for incomplete Markdown, but do not enable its
   word-level `animated` option: it wraps every word in an opacity-animated span and can
   explode Chromium compositor-layer count during long turns.

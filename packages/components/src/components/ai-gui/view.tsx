@@ -193,11 +193,11 @@ import { shouldRenderSystemRowItem } from './message-content-guards';
 import { getChatFailedDiagnosticCopy } from './chat-failed-diagnostic-copy';
 import { extractReadableChatFailedMessage } from './chat-failed-error-report';
 import { ChatFailedDetailDialog } from './chat-failed-detail-dialog';
-import type { ConversationFontSize } from '@/atoms/settings';
+import { DEFAULT_CONVERSATION_FONT_SIZE, type ConversationFontSize } from '@/atoms/settings';
 import {
-  CONVERSATION_TEXT_FONT_SIZE_CLASSES,
-  CONVERSATION_MONO_FONT_SIZE_CLASSES,
-  USER_TEXT_COLLAPSED_HEIGHT_BY_FONT_SIZE,
+  conversationMonoFontSizeStyle,
+  conversationTextFontSizeStyle,
+  userTextCollapsedHeight,
 } from './conversation-font-size-classes';
 import { useSessionPin } from '@/components/sessions/session-pin-context';
 import { useIsMobile } from '@/hooks/use-mobile';
@@ -1141,7 +1141,7 @@ export const SessionChatStreamView = forwardRef<
       forkingAssistantMessageId,
       agentActivityLabel = null,
       agentActivityTone = 'primary',
-      conversationFontSize = 'default',
+      conversationFontSize = DEFAULT_CONVERSATION_FONT_SIZE,
       skipNextViewportResizeAutoScrollRef,
       suppressStickyAutoScrollRef,
     },
@@ -1748,7 +1748,7 @@ export const MessageRowView = memo(function MessageRowView({
   user,
   onNavigateSession,
   onEdit,
-  conversationFontSize = 'default',
+  conversationFontSize = DEFAULT_CONVERSATION_FONT_SIZE,
 }: {
   message: SessionHistoryParsed;
   sessionId: SessionId;
@@ -3736,7 +3736,6 @@ const AssistantChatItem = memo(function AssistantChatItem({
         <div
           className={cn(
             'max-w-[800px] break-words',
-            CONVERSATION_TEXT_FONT_SIZE_CLASSES[conversationFontSize],
             /* Same inset the old process rail used, without the border. */
             isWorkedDetail && 'pl-2.5 sm:pl-3',
             /* L4 result: full contrast. Process: muted so answer pops. */
@@ -3747,6 +3746,7 @@ const AssistantChatItem = memo(function AssistantChatItem({
                 : 'text-foreground',
             hasWideContent && 'min-w-[480px]'
           )}
+          style={conversationTextFontSizeStyle(conversationFontSize)}
           data-native-selection-allow
         >
           {rowBody}
@@ -3968,7 +3968,7 @@ const renderAssistantContent = (
 ) => {
   const messageId = options?.messageId ?? 'assistant';
   const itemIndex = options?.itemIndex ?? 0;
-  const conversationFontSize = options?.conversationFontSize ?? 'default';
+  const conversationFontSize = options?.conversationFontSize ?? DEFAULT_CONVERSATION_FONT_SIZE;
 
   switch (content.type) {
     case 'text':
@@ -4743,7 +4743,7 @@ const ToolTitleWithHighlight = ({ title, className }: { title: string; className
 // stability (via `useStableCallback`) and non-reaction to unrelated state.
 export const MarkdownBlock = memo(function MarkdownBlock({
   text,
-  size = 'default',
+  size = DEFAULT_CONVERSATION_FONT_SIZE,
   isStreaming = false,
   onFilePathClick,
   coveredFilePaths,
@@ -4814,14 +4814,14 @@ const UserPlainTextBlock = ({
             // wraps visually but does NOT shrink min-content, so it must not be set here —
             // it would win by source order and let the bubble overflow its column on every engine.
             'min-w-0 max-w-full whitespace-pre-wrap text-foreground [overflow-wrap:anywhere]',
-            CONVERSATION_TEXT_FONT_SIZE_CLASSES[fontSize],
             isLong && !isFullTextVisible ? 'overflow-hidden' : ''
           )}
-          style={
-            isLong && !isFullTextVisible
-              ? { maxHeight: USER_TEXT_COLLAPSED_HEIGHT_BY_FONT_SIZE[fontSize] }
-              : undefined
-          }
+          style={{
+            ...conversationTextFontSizeStyle(fontSize),
+            ...(isLong && !isFullTextVisible
+              ? { maxHeight: userTextCollapsedHeight(fontSize) }
+              : {}),
+          }}
           data-search-block-id={searchBlockId}
         >
           {/* Search wins over chips: both want to split the same string, and a
@@ -5004,7 +5004,7 @@ export const ProposedPlanBlock = ({
   messageId,
   itemIndex,
   onFilePathClick,
-  fontSize = 'default',
+  fontSize = DEFAULT_CONVERSATION_FONT_SIZE,
 }: {
   plan: ProposedPlanMessage;
   messageId: string;
@@ -5167,10 +5167,8 @@ const PlanEntryRow = ({
     <div className="flex flex-col gap-1 rounded-md border border-border/60 bg-background/60 p-2.5">
       <div className="flex items-center justify-between gap-1.5">
         <div
-          className={cn(
-            'flex items-center gap-1.5 font-medium',
-            CONVERSATION_TEXT_FONT_SIZE_CLASSES[fontSize]
-          )}
+          className="flex items-center gap-1.5 font-medium"
+          style={conversationTextFontSizeStyle(fontSize)}
         >
           <StatusIcon className={cn('h-4 w-4 flex-none shrink-0', statusMeta.className)} />
           <span className="break-words">{entry.content}</span>
@@ -5551,9 +5549,9 @@ const ToolCallCard = memo(function ToolCallCard({
               <pre
                 className={cn(
                   'rounded-md bg-muted/40 p-2',
-                  inlineOutput ? 'overflow-x-auto' : 'max-h-60 overflow-auto',
-                  CONVERSATION_MONO_FONT_SIZE_CLASSES[fontSize]
+                  inlineOutput ? 'overflow-x-auto' : 'max-h-60 overflow-auto'
                 )}
+                style={conversationMonoFontSizeStyle(fontSize)}
               >
                 {formatJsonValue(toolCall.rawOutput)}
               </pre>
@@ -5624,10 +5622,8 @@ const ToolCallContentRenderer = ({
   if (block.type === 'terminal') {
     return (
       <div
-        className={cn(
-          'flex items-center gap-2 rounded-md border border-border/60 bg-muted/30 p-3 text-muted-foreground',
-          CONVERSATION_TEXT_FONT_SIZE_CLASSES[fontSize]
-        )}
+        className="flex items-center gap-2 rounded-md border border-border/60 bg-muted/30 p-3 text-muted-foreground"
+        style={conversationTextFontSizeStyle(fontSize)}
       >
         <Terminal className="h-4 w-4" />
         Terminal output is streaming in your CLI
@@ -5751,10 +5747,8 @@ const StandardToolContentBlock = ({
       if (!href) {
         return (
           <div
-            className={cn(
-              'flex items-center gap-2 rounded-md border border-border/60 bg-muted/20 p-3 text-muted-foreground',
-              CONVERSATION_TEXT_FONT_SIZE_CLASSES[fontSize]
-            )}
+            className="flex items-center gap-2 rounded-md border border-border/60 bg-muted/20 p-3 text-muted-foreground"
+            style={conversationTextFontSizeStyle(fontSize)}
           >
             <FileText className="h-4 w-4" />
             {content.title || content.name}
@@ -5766,10 +5760,8 @@ const StandardToolContentBlock = ({
           href={href}
           target="_blank"
           rel="noopener noreferrer"
-          className={cn(
-            'flex items-center gap-2 rounded-md border border-border/60 bg-muted/20 p-3 text-primary',
-            CONVERSATION_TEXT_FONT_SIZE_CLASSES[fontSize]
-          )}
+          className="flex items-center gap-2 rounded-md border border-border/60 bg-muted/20 p-3 text-primary"
+          style={conversationTextFontSizeStyle(fontSize)}
         >
           <FileText className="h-4 w-4" />
           {content.title || content.name}
@@ -5795,7 +5787,8 @@ const StandardToolContentBlock = ({
             href={href}
             target="_blank"
             rel="noopener noreferrer"
-            className={cn('text-primary', CONVERSATION_TEXT_FONT_SIZE_CLASSES[fontSize])}
+            className="text-primary"
+            style={conversationTextFontSizeStyle(fontSize)}
           >
             Download blob
           </a>
@@ -5887,7 +5880,7 @@ const StructuredObject = ({
   value,
   dense = false,
   unbounded = false,
-  fontSize = 'default',
+  fontSize = DEFAULT_CONVERSATION_FONT_SIZE,
 }: {
   label: string;
   value: Record<string, unknown>;
@@ -5904,11 +5897,11 @@ const StructuredObject = ({
         className={cn(
           'rounded-md bg-muted/40',
           unbounded ? 'overflow-x-auto' : 'max-h-60 overflow-auto',
-          dense ? 'p-2' : 'p-3',
-          dense
-            ? CONVERSATION_MONO_FONT_SIZE_CLASSES[fontSize]
-            : CONVERSATION_TEXT_FONT_SIZE_CLASSES[fontSize]
+          dense ? 'p-2' : 'p-3'
         )}
+        style={
+          dense ? conversationMonoFontSizeStyle(fontSize) : conversationTextFontSizeStyle(fontSize)
+        }
       >
         {formatJsonValue(value)}
       </pre>

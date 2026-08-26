@@ -5,7 +5,10 @@ import { Monitor, Moon, SquareTerminal, Sun } from 'lucide-react';
 
 import {
   conversationFontSizeAtom,
+  CONVERSATION_FONT_SIZE_MAX,
+  CONVERSATION_FONT_SIZE_MIN,
   interfaceFontFamilyAtom,
+  normalizeConversationFontSize,
   normalizeTerminalFontSize,
   terminalFontFamilyAtom,
   terminalFontSizeAtom,
@@ -113,21 +116,6 @@ export function AppearanceSettingsView({
           <span>{t('settings.theme.system')}</span>
         </div>
       ),
-    },
-  ];
-
-  const conversationFontSizeOptions: PreviewSelectOption<ConversationFontSize>[] = [
-    {
-      value: 'small',
-      label: t('settings.conversationFontSize.small', 'Small'),
-    },
-    {
-      value: 'default',
-      label: t('settings.conversationFontSize.default', 'Default'),
-    },
-    {
-      value: 'large',
-      label: t('settings.conversationFontSize.large', 'Large'),
     },
   ];
 
@@ -242,11 +230,21 @@ export function AppearanceSettingsView({
             'Adjusts message body text in conversations.'
           )}
         >
-          <PreviewSelect
+          <Input
+            type="number"
+            min={CONVERSATION_FONT_SIZE_MIN}
+            max={CONVERSATION_FONT_SIZE_MAX}
+            step={1}
             value={conversationFontSize}
-            options={conversationFontSizeOptions}
-            onCommit={onConversationFontSizeChange}
-            triggerClassName="w-full sm:w-[220px]"
+            aria-label={t('settings.conversationFontSize.label', 'Conversation font size')}
+            className="w-24"
+            onChange={(event) => {
+              if (Number.isFinite(event.target.valueAsNumber)) {
+                onConversationFontSizeChange(
+                  normalizeConversationFontSize(event.target.valueAsNumber)
+                );
+              }
+            }}
           />
         </CompactRow>
       </CompactSection>

@@ -27,7 +27,7 @@ const user = {
 const StaticMessageRow = ({
   message,
   sessionId: sid,
-  conversationFontSize = 'default',
+  conversationFontSize = 14,
 }: {
   message: SessionHistoryParsed;
   sessionId: SessionId;

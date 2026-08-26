@@ -3,7 +3,7 @@ import type { Meta, StoryObj } from '@storybook/react';
 import { MessageTextWithChips } from '@/components/mentions/message-text-chips';
 import { applyTextRewrites, type MessageTextSpan } from '@lody/shared';
 import { cn } from '@/lib/utils';
-import { USER_TEXT_COLLAPSED_HEIGHT_BY_FONT_SIZE } from '@/components/ai-gui/conversation-font-size-classes';
+import { userTextCollapsedHeight } from '@/components/ai-gui/conversation-font-size-classes';
 import { getUserTextRenderSlice } from '@/components/ai-gui/message-copy';
 
 /**
@@ -97,9 +97,7 @@ function Bubble({
             'min-w-0 max-w-full whitespace-pre-wrap text-sm [overflow-wrap:anywhere]',
             collapsed && 'overflow-hidden'
           )}
-          style={
-            collapsed ? { maxHeight: USER_TEXT_COLLAPSED_HEIGHT_BY_FONT_SIZE.default } : undefined
-          }
+          style={collapsed ? { maxHeight: userTextCollapsedHeight(14) } : undefined}
         >
           <MessageTextWithChips text={slice?.text ?? text} spans={slice ? slice.spans : spans} />
         </div>
