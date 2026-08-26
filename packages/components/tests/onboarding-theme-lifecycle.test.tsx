@@ -54,9 +54,19 @@ describe('desktop onboarding theme lifecycle', () => {
         dispatchEvent: () => true,
       }),
     });
-    Object.defineProperty(window, 'api', {
+    Object.defineProperty(window, 'ipc', {
       configurable: true,
-      value: { setNativeTheme },
+      value: {
+        invoke: async (channel: string, ...args: unknown[]) => {
+          if (channel === 'app.setNativeTheme') {
+            setNativeTheme(args[0]);
+            return;
+          }
+          throw new Error(`unexpected invoke ${channel}`);
+        },
+        on: () => () => {},
+        send: () => {},
+      },
     });
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -70,7 +80,7 @@ describe('desktop onboarding theme lifecycle', () => {
     document.documentElement.classList.remove('light', 'dark');
     document.documentElement.removeAttribute('style');
     delete document.documentElement.dataset.lodyVscodeTheme;
-    Reflect.deleteProperty(window, 'api');
+    Reflect.deleteProperty(window, 'ipc');
     Reflect.deleteProperty(window, 'matchMedia');
     vi.clearAllMocks();
   });

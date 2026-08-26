@@ -61,6 +61,7 @@ import {
   type AgentConfigSubmitPayload,
 } from '@/components/settings/agent-config-dialog';
 import { labelForAgent } from '@/components/settings/provider-row';
+import { getIpcServices } from '@/lib/electron-ipc-client';
 import { ProviderSetupRow } from '@/components/settings/provider-setup-row';
 import { AcpAuthenticationPanel } from '@/components/settings/acp-authentication-panel';
 import { OnboardingShell, OnboardingBackButton, OnboardingNextButton } from '../onboarding-shell';
@@ -641,7 +642,8 @@ export function ProvidersScreen({
     if (!localMachine && localProbeAttempted) {
       firstTimeoutId = window.setTimeout(() => {
         if (cancelled) return;
-        const restart = window.api?.cliState?.restart;
+        const services = getIpcServices();
+        const restart = services ? services.cli.restart.bind(services.cli) : undefined;
         if (!restart) {
           toast.error(
             t(

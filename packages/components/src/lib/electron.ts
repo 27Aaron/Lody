@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react';
+import { getIpcServices, onIpcEvent } from '@/lib/electron-ipc-client';
 
 export const isElectronRenderer = (): boolean => {
   return typeof window !== 'undefined' && window.__LODY_ELECTRON__ === true;
@@ -13,7 +14,7 @@ export const isWindowsElectronRenderer = (): boolean => {
 };
 
 // Native fullscreen state of the Electron window. The main process pushes
-// `lody:window-fullscreen-changed` on enter/leave; the renderer uses it to
+// `app.fullscreen` on enter/leave; the renderer uses it to
 // collapse the macOS traffic-light insets while the lights are auto-hidden.
 let fullscreenSnapshot = false;
 let fullscreenBridgeStarted = false;
@@ -31,11 +32,9 @@ const ensureFullscreenBridge = (): void => {
   if (fullscreenBridgeStarted) return;
   fullscreenBridgeStarted = true;
   if (!isElectronRenderer()) return;
-  const api = window.api;
-  if (!api?.onWindowFullscreenChanged) return;
-  api.onWindowFullscreenChanged(setFullscreenSnapshot);
-  void api
-    .getWindowFullscreen?.()
+  onIpcEvent('app.fullscreen', setFullscreenSnapshot);
+  void getIpcServices()
+    ?.app.getFullscreen()
     .then(setFullscreenSnapshot)
     .catch(() => undefined);
 };

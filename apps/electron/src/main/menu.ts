@@ -45,12 +45,12 @@ function sendMenuAction(action: string): void {
   if (contents.isLoading()) {
     contents.once('did-finish-load', () => {
       if (!contents.isDestroyed()) {
-        contents.send('lody:menu-action', action)
+        contents.send('app.menuAction', action)
       }
     })
     return
   }
-  contents.send('lody:menu-action', action)
+  contents.send('app.menuAction', action)
 }
 
 function buildAndSetMenu(): void {

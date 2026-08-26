@@ -6,6 +6,7 @@ import {
   createShortcutUsagePayload,
   type GlobalShortcutTriggeredPayload,
 } from '@/lib/commands';
+import { onIpcEvent } from '@/lib/electron-ipc-client';
 
 export function ShortcutAnalyticsTracker() {
   const postHog = usePostHog();
@@ -24,7 +25,7 @@ export function ShortcutAnalyticsTracker() {
       return undefined;
     }
 
-    return window.api?.globalShortcuts?.onTriggered?.((payload: GlobalShortcutTriggeredPayload) => {
+    return onIpcEvent('app.globalShortcut', (payload: GlobalShortcutTriggeredPayload) => {
       captureShortcutUsage(
         postHog,
         createShortcutUsagePayload({

@@ -6,6 +6,7 @@ import { useAtom } from 'jotai';
 import type { SupportedLanguage } from '@lody/shared';
 import { cn } from '@/lib/utils';
 import { languageAtom } from '@/atoms/settings';
+import { getIpcServices } from '@/lib/electron-ipc-client';
 import { useTheme, type Theme } from '../../../theme-provider';
 import { OnboardingShell, OnboardingBackButton, OnboardingNextButton } from '../onboarding-shell';
 import { playHover, playSelect } from '../ceremony/ui-sounds';
@@ -207,9 +208,7 @@ export function AppearanceScreen({ onBack, onNext }: AppearanceScreenProps) {
   const handleLanguage = (next: SupportedLanguage) => {
     setLanguage(next);
     void i18n.changeLanguage(next);
-    if (typeof window !== 'undefined' && window.api?.setLanguage) {
-      window.api.setLanguage(next);
-    }
+    void getIpcServices()?.app.setLanguage(next);
   };
 
   return (

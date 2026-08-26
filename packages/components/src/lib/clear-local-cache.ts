@@ -23,6 +23,7 @@ import { workspaceInfoCache } from './local-storage-cache';
 import { EAGER_SYNC_HIGH_WATER_DB_NAME } from './eager-sync-high-water-cache';
 import { replaceAppWindowLocation } from './app-location';
 import { getRegisteredAuthClient } from './auth-client-singleton';
+import { getIpcServices } from './electron-ipc-client';
 
 /**
  * Prefix for the per-workspace meta remote-cursor startup-bypass marker.
@@ -438,12 +439,8 @@ export function resetBootClearMemoForTests(): void {
 export function reloadApp(): void {
   if (typeof window === 'undefined') return;
   if (window.__LODY_ELECTRON__ === true) {
-    const api = window.api as
-      | (typeof window.api & { requestRendererReload?: () => void })
-      | undefined;
-    const requestRendererReload = api?.requestRendererReload;
-    if (typeof requestRendererReload === 'function') {
-      requestRendererReload();
+    if (getIpcServices()) {
+      void getIpcServices()!.app.requestRendererReload();
       return;
     }
   }

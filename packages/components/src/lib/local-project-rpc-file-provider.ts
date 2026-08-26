@@ -16,6 +16,7 @@ import {
   toFileEntry,
 } from './lazy-directory-file-provider';
 import { base64ToBytes } from './base64';
+import { getIpcServices } from './electron-ipc-client';
 import type {
   FileWorkspaceOpenResult,
   FileWorkspaceProviderEntry,
@@ -63,7 +64,7 @@ export function createLocalProjectIpcFileTransport(args: {
 }): LocalProjectFileTransport {
   return {
     listDir: async ({ relativePath, limit }) => {
-      const result = await window.api?.listLocalProjectDir?.(
+      const result = await getIpcServices()?.localProjects.listDir(
         args.workspaceId,
         args.localProjectId,
         relativePath,
@@ -75,7 +76,7 @@ export function createLocalProjectIpcFileTransport(args: {
       return result;
     },
     listFiles: async ({ maxFiles } = {}) => {
-      const result = await window.api?.listLocalProjectFiles?.(
+      const result = await getIpcServices()?.localProjects.listFiles(
         args.workspaceId,
         args.localProjectId,
         { maxFiles }
@@ -86,11 +87,15 @@ export function createLocalProjectIpcFileTransport(args: {
       return result;
     },
     readFile: async ({ relativePath, maxBytes }) => {
-      const reader = window.api?.readLocalProjectFile;
-      if (!reader) {
+      if (!getIpcServices()) {
         throw new Error('Local project file IPC is unavailable.');
       }
-      return await reader(args.workspaceId, args.localProjectId, relativePath, { maxBytes });
+      return await getIpcServices()!.localProjects.readFile(
+        args.workspaceId,
+        args.localProjectId,
+        relativePath,
+        { maxBytes }
+      );
     },
   };
 }

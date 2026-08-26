@@ -12,6 +12,7 @@ import { useElectronUpdaterState } from '@/hooks/use-electron-updater-state';
 import { OpenSourceAttributionsDialog } from './open-source-attributions-dialog';
 import { JoinCommunityDialog } from './join-community-dialog';
 import { openExternalUrl } from '@/lib/native-browser';
+import { getIpcServices } from '@/lib/electron-ipc-client';
 import { getDownloadPageUrl, getWebsiteUrl } from '@/lib/lody-urls';
 import { developerModeEnabledAtom } from '@/atoms/settings';
 import { useIsMobile } from '@/hooks/use-mobile';
@@ -101,16 +102,14 @@ export function AboutSettingsComponent() {
   }, [i18n.resolvedLanguage]);
 
   const handleCheckForUpdates = useCallback(async () => {
-    const updater = window.api?.updater;
-    if (!updater || typeof updater.checkForUpdates !== 'function') return;
-    await updater.checkForUpdates();
+    if (!getIpcServices()) return;
+    await getIpcServices()!.updater.checkForUpdates();
   }, []);
 
   const handleQuitAndInstall = useCallback(async () => {
-    const updater = window.api?.updater;
-    if (!updater || typeof updater.quitAndInstall !== 'function') return;
+    if (!getIpcServices()) return;
     setIsInstalling(true);
-    const result = await updater.quitAndInstall();
+    const result = await getIpcServices()!.updater.quitAndInstall();
     if (!result.ok) {
       setIsInstalling(false);
     }

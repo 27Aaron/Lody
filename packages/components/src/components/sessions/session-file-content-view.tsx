@@ -22,6 +22,7 @@ import {
 } from '@lody/shared';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { cn } from '@/lib/utils';
+import { getIpcServices } from '@/lib/electron-ipc-client';
 import { writeTextToClipboard } from '@/lib/clipboard';
 import { useActiveVSCodeTheme, useResolvedTheme } from '../../theme-provider';
 import {
@@ -425,7 +426,7 @@ function SessionFileContentViewImpl({
             localFileSourceKind === 'local-project' && localProjectWorkspaceId && localProjectId
               ? (() => {
                   const canUseIpc =
-                    Boolean(window.api?.readLocalProjectFile) &&
+                    Boolean(getIpcServices()) &&
                     (!localProjectMachineId || localProjectMachineId === localMachineId);
                   if (canUseIpc) {
                     return createLocalProjectIpcFileTransport({
@@ -451,7 +452,9 @@ function SessionFileContentViewImpl({
                   }).readFile({ relativePath: normalizedPath });
                 })()
               : (() => {
-                  const reader = window.api?.readSessionWorktreeFile;
+                  const reader = getIpcServices()?.localProjects.readSessionWorktreeFile.bind(
+                    getIpcServices()!.localProjects
+                  );
                   if (!reader) {
                     throw new Error(
                       tRef.current(

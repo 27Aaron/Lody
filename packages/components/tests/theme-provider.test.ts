@@ -144,7 +144,7 @@ describe('ThemeProvider', () => {
     document.documentElement.removeAttribute('style');
     delete document.documentElement.dataset.lodyVscodeTheme;
     document.documentElement.classList.remove('light', 'dark');
-    Reflect.deleteProperty(window, 'api');
+    Reflect.deleteProperty(window, 'ipc');
     if (originalMatchMediaDescriptor) {
       Object.defineProperty(window, 'matchMedia', originalMatchMediaDescriptor);
     } else {
@@ -398,15 +398,20 @@ describe('ThemeProvider', () => {
   it('follows Electron native theme updates while theme mode is system', () => {
     installMatchMediaMock(false);
     const nativeThemeHandlers = new Set<(resolved: 'light' | 'dark') => void>();
-    Object.defineProperty(window, 'api', {
+    Object.defineProperty(window, 'ipc', {
       configurable: true,
       value: {
-        onNativeThemeUpdated: (handler: (resolved: 'light' | 'dark') => void) => {
-          nativeThemeHandlers.add(handler);
-          return () => {
-            nativeThemeHandlers.delete(handler);
-          };
+        invoke: async () => undefined,
+        on: (channel: string, listener: (payload: unknown) => void) => {
+          if (channel === 'app.nativeTheme') {
+            nativeThemeHandlers.add(listener as (resolved: 'light' | 'dark') => void);
+            return () => {
+              nativeThemeHandlers.delete(listener as (resolved: 'light' | 'dark') => void);
+            };
+          }
+          return () => {};
         },
+        send: () => {},
       },
     });
 

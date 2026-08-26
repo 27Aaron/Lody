@@ -55,23 +55,33 @@ import { TestCloudPlatformProvider } from './test-platform';
 const workspaceId = 'workspace-1' as WorkspaceId;
 const machineId = 'machine-1' as MachineId;
 
-function installElectronWindowApi() {
+function installElectronWindowIpc() {
   mocks.getCliState.mockReturnValue(new Promise(() => undefined));
   mocks.onCliState.mockReturnValue(() => undefined);
 
   Object.defineProperty(window, '__LODY_ELECTRON__', { configurable: true, value: true });
-  Object.defineProperty(window, 'api', {
+  Object.defineProperty(window, 'ipc', {
     configurable: true,
     value: {
-      cliState: { getState: mocks.getCliState, onState: mocks.onCliState },
-      selectLocalProjectDirectory: mocks.selectLocalProjectDirectory,
+      invoke: async (channel: string, ...args: unknown[]) => {
+        if (channel === 'cli.getState') return mocks.getCliState();
+        if (channel === 'localProjects.selectDirectory') {
+          return mocks.selectLocalProjectDirectory(...args);
+        }
+        throw new Error(`unexpected invoke ${channel}`);
+      },
+      on: (channel: string, listener: (payload: unknown) => void) => {
+        if (channel === 'cli.state') return mocks.onCliState(listener);
+        return () => {};
+      },
+      send: () => {},
     },
   });
 }
 
-function uninstallElectronWindowApi() {
-  delete (window as unknown as { __LODY_ELECTRON__?: boolean }).__LODY_ELECTRON__;
-  delete (window as unknown as { api?: unknown }).api;
+function uninstallElectronWindowIpc() {
+  delete window.__LODY_ELECTRON__;
+  delete window.ipc;
 }
 
 function findButton(container: HTMLElement, label: string): HTMLButtonElement {
@@ -94,7 +104,7 @@ describe('desktop onboarding flow', () => {
     mocks.createGitHubInstallState.mockResolvedValue({ state: 'github-state-1' });
     mocks.openExternalUrl.mockResolvedValue(true);
     mocks.useVisibleLocalProjects.mockReturnValue({ projects: new Map() });
-    installElectronWindowApi();
+    installElectronWindowIpc();
 
     store = createStore();
     store.set(currentWorkspaceIdAtom, workspaceId);
@@ -114,7 +124,7 @@ describe('desktop onboarding flow', () => {
     act(() => root?.unmount());
     container.remove();
     document.body.innerHTML = '';
-    uninstallElectronWindowApi();
+    uninstallElectronWindowIpc();
     vi.clearAllMocks();
   });
 

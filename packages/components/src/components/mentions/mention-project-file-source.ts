@@ -14,6 +14,7 @@ import {
   createLocalProjectIpcFileTransport,
   createLocalProjectRpcFileTransport,
 } from '@/lib/local-project-rpc-file-provider';
+import { getIpcServices } from '@/lib/electron-ipc-client';
 import {
   captureMentionFileLocalFetchError,
   type MentionLocalFetchErrorCode,
@@ -434,8 +435,7 @@ export function useMentionProjectFiles(source?: MentionProjectSource) {
 
       if (sourceKind === 'local' && localWorkspaceId && localProjectId) {
         const canUseIpc =
-          Boolean(window.api?.readLocalProjectFile) &&
-          (!localMachineId || localMachineId === localDaemonMachineId);
+          Boolean(getIpcServices()) && (!localMachineId || localMachineId === localDaemonMachineId);
         if (canUseIpc) {
           return await createLocalProjectIpcFileTransport({
             workspaceId: localWorkspaceId,
@@ -456,7 +456,9 @@ export function useMentionProjectFiles(source?: MentionProjectSource) {
       }
 
       if (useLocalWorktreeSource && localWorktreeSessionId && localWorktreeRepoKey) {
-        const reader = window.api?.readSessionWorktreeFile;
+        const reader = getIpcServices()?.localProjects.readSessionWorktreeFile.bind(
+          getIpcServices()!.localProjects
+        );
         if (!reader) {
           throw new Error('Local worktree file API is unavailable.');
         }

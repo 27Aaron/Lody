@@ -43,6 +43,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/ui/button';
 import { isMacOSElectronRenderer, useElectronFullscreen } from '@/lib/electron';
+import { getIpcServices } from '@/lib/electron-ipc-client';
 import { isMac } from '@/lib/commands/platform';
 import { matchesKeyboardEvent, parseBinding } from '@/lib/commands/key-matcher';
 import { isSessionContextCompacting } from '@/lib/session-context-compaction';
@@ -5256,7 +5257,7 @@ export const SessionChatInterface = memo(
 
           // Launchers run entirely through the desktop bridge now (CLI spawn with
           // native protocol fallbacks); web no longer probes local apps.
-          if (!window.api?.launchLocalPath) {
+          if (!getIpcServices()) {
             captureSessionEvent('session/open_in_ide_failed', {
               ...analyticsProperties,
               reason: 'native_bridge_unavailable',
@@ -5270,7 +5271,7 @@ export const SessionChatInterface = memo(
             return;
           }
 
-          const result = await window.api.launchLocalPath(request);
+          const result = await getIpcServices()!.app.launchLocalPath(request);
           if (!result.launched) {
             captureSessionEvent('session/open_in_ide_failed', {
               ...analyticsProperties,

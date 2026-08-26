@@ -456,7 +456,7 @@ Session conversation page chain:
   (files; cloud upload via `@/lib/session-file-upload.ts` with sha256/textPreview,
   abort + part retry). Oversize images (>5 MiB) auto-degrade to files. Send blocks
   while either is uploading. Desktop same-machine uploads use
-  `@/lib/electron-session-file-sender.ts` / `window.api.sendSessionFileLocal`, return
+  `@/lib/electron-session-file-sender.ts` / `localProjects.sendSessionFileLocal`, return
   a `transport:'local'` block into the same `pendingFiles[].uploaded` slot, and fall
   back to cloud on handoff failure. The composer exposes one unfiltered hidden
   `<input type="file">` on every platform (Windows included — the renderer no

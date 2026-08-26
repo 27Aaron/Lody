@@ -6,6 +6,7 @@ import '@lody/components/tailwind/index.css'
 import { jotaiStore } from '@lody/components/lib'
 import { collectBootDiagnostics, renderBootFailure } from '@lody/components/lib/boot-failure'
 import { installResizeObserverLoopErrorHandler } from '@lody/components/lib/resize-observer'
+import { getIpcServices } from '@lody/components/lib/electron-ipc-client'
 import { Provider } from 'jotai'
 
 import { ErrorBoundary } from '@/components/error-boundary'
@@ -42,7 +43,7 @@ const buildInfo: Record<string, string> = {
 function reportFatalToMain(error: unknown, scope: RendererFatalScope, copied = false): void {
   try {
     const diag = collectBootDiagnostics(error, { buildInfo })
-    window.api?.reportRendererFatalError?.({
+    void getIpcServices()?.app.reportRendererFatalError({
       scope,
       message: diag.message,
       details: diag.details,
@@ -55,9 +56,8 @@ function reportFatalToMain(error: unknown, scope: RendererFatalScope, copied = f
 
 function requestReloadViaMain(): boolean {
   try {
-    const reloader = window.api?.requestRendererReload
-    if (typeof reloader === 'function') {
-      void reloader()
+    if (getIpcServices()) {
+      void getIpcServices()!.app.requestRendererReload()
       return true
     }
   } catch (e) {
@@ -86,7 +86,7 @@ function markRendererCommitted(): void {
   if (rendererMounted) return
   rendererMounted = true
   try {
-    window.api?.notifyRendererMounted?.()
+    void getIpcServices()?.app.notifyRendererMounted()
   } catch (e) {
     console.warn('[Lody] notifyRendererMounted bridge failed', e)
   }

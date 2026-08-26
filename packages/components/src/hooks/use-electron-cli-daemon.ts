@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import type { ElectronCliState } from '@lody/shared';
 import { isElectronRenderer } from '@/lib/electron';
+import { getIpcServices, onIpcEvent, sendIpc } from '@/lib/electron-ipc-client';
 
 export type ElectronCliDaemon = {
   /** Latest daemon state, or null before the first snapshot (or outside Electron). */
@@ -31,26 +32,18 @@ export function useElectronCliDaemon(): ElectronCliDaemon {
 
   useEffect(() => {
     if (!isElectronRenderer()) return undefined;
-    const cliStateApi = window.api?.cliState;
-    if (
-      !cliStateApi ||
-      typeof cliStateApi.getState !== 'function' ||
-      typeof cliStateApi.onState !== 'function'
-    ) {
-      return undefined;
-    }
+    if (!getIpcServices()) return undefined;
 
     let active = true;
-    void cliStateApi
-      .getState()
+    sendIpc('cli.subscribe', null);
+    void getIpcServices()!
+      .cli.getState()
       .then((next) => {
         if (active) setState(next);
       })
-      .catch(() => {
-        // ignore
-      });
+      .catch(() => undefined);
 
-    const unsubscribe = cliStateApi.onState((next) => {
+    const unsubscribe = onIpcEvent('cli.state', (next) => {
       if (active) setState(next);
     });
 
@@ -61,11 +54,10 @@ export function useElectronCliDaemon(): ElectronCliDaemon {
   }, []);
 
   const restart = useCallback(async () => {
-    const cliStateApi = window.api?.cliState;
-    if (typeof cliStateApi?.restart !== 'function') return;
+    if (!getIpcServices()) return;
     setIsRestarting(true);
     try {
-      const result = await cliStateApi.restart();
+      const result = await getIpcServices()!.cli.restart();
       if (!result.ok) {
         toast.error(result.error ?? t('sidebar.cli.restartFailed', 'Failed to restart CLI.'));
       }
@@ -75,11 +67,10 @@ export function useElectronCliDaemon(): ElectronCliDaemon {
   }, [t]);
 
   const terminate = useCallback(async () => {
-    const cliStateApi = window.api?.cliState;
-    if (typeof cliStateApi?.terminate !== 'function') return;
+    if (!getIpcServices()) return;
     setIsTerminating(true);
     try {
-      const result = await cliStateApi.terminate();
+      const result = await getIpcServices()!.cli.terminate();
       if (!result.ok) {
         toast.error(result.error ?? t('sidebar.cli.terminateFailed', 'Failed to terminate CLI.'));
       }

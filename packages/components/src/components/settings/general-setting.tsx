@@ -40,6 +40,7 @@ import { PathLaunchersSettings } from './path-launchers-setting';
 import { QueuedMessageBehaviorControl } from './queued-message-behavior-control';
 import { CliDaemonSetting } from './cli-daemon-setting';
 import { useAppCapability } from '@/lib/app-platform';
+import { getIpcServices } from '@/lib/electron-ipc-client';
 
 type ElectronPlatform = 'darwin' | 'win32' | 'linux' | 'unknown';
 
@@ -79,10 +80,14 @@ function useElectronEnabledSetting(
     if (typeof window === 'undefined') {
       return undefined;
     }
-    const getter = window.api?.[apiMethod];
-    if (!isElectron || !getter) {
+    const services = getIpcServices();
+    if (!isElectron || !services) {
       return undefined;
     }
+    const getter =
+      apiMethod === 'getPreventSleepEnabled'
+        ? services.app.getPreventSleepEnabled.bind(services.app)
+        : services.cli.getAutoStartEnabled.bind(services.cli);
 
     let active = true;
     void getter().then((result) => {
@@ -158,7 +163,10 @@ export function GeneralSettingsComponent() {
         ? Notification.permission
         : 'default';
 
-      const reader = window.api?.getNotificationPermissionStatus;
+      const services = getIpcServices();
+      const reader = services
+        ? services.notifications.getPermissionStatus.bind(services.notifications)
+        : undefined;
       if (reader) {
         try {
           const result = await reader();
@@ -369,7 +377,10 @@ export function GeneralSettingsComponent() {
   }, [isElectron]);
 
   useEffect(() => {
-    const getAutoLaunchStatus = window.api?.getAutoLaunchStatus;
+    const services = getIpcServices();
+    const getAutoLaunchStatus = services
+      ? services.app.getAutoLaunchStatus.bind(services.app)
+      : undefined;
     if (!isElectron || typeof window === 'undefined' || !getAutoLaunchStatus) {
       setAutoLaunchSupported(false);
       setAutoLaunchEnabled(false);
@@ -411,8 +422,8 @@ export function GeneralSettingsComponent() {
           isElectron
             ? 'settings.notifications.permissionDeniedStatusDesktop'
             : isNative
-            ? 'settings.notifications.permissionDeniedStatusNative'
-            : 'settings.notifications.permissionDeniedStatus'
+              ? 'settings.notifications.permissionDeniedStatusNative'
+              : 'settings.notifications.permissionDeniedStatus'
         );
       default:
         return t('settings.notifications.permissionDefault');
@@ -439,7 +450,10 @@ export function GeneralSettingsComponent() {
         return { opened: false, platform: 'unknown', error: 'Window is not available' };
       }
 
-      const opener = window.api?.openSystemNotificationSettings;
+      const services = getIpcServices();
+      const opener = services
+        ? services.notifications.openSystemSettings.bind(services.notifications)
+        : undefined;
       if (!opener) {
         return {
           opened: false,
@@ -604,7 +618,7 @@ export function GeneralSettingsComponent() {
   };
 
   const handleToggleAutoLaunch = async (checked: boolean) => {
-    if (!isElectron || !window.api?.setAutoLaunchEnabled) {
+    if (!isElectron || !getIpcServices()) {
       return;
     }
 
@@ -612,7 +626,8 @@ export function GeneralSettingsComponent() {
     setAutoLaunchEnabled(checked);
     setAutoLaunchLoading(true);
     try {
-      const result: SetElectronAutoLaunchResult = await window.api.setAutoLaunchEnabled(checked);
+      const result: SetElectronAutoLaunchResult =
+        await getIpcServices()!.app.setAutoLaunchEnabled(checked);
       if (!result.ok) {
         setAutoLaunchEnabled(previous);
         toast.error(t('settings.general.autoLaunch.toggleFailed', 'Failed to update auto launch'));
@@ -628,7 +643,7 @@ export function GeneralSettingsComponent() {
   };
 
   const handleToggleCliAutoStart = async (checked: boolean) => {
-    if (!isElectron || !window.api?.setCliAutoStartEnabled) {
+    if (!isElectron || !getIpcServices()) {
       return;
     }
 
@@ -636,7 +651,7 @@ export function GeneralSettingsComponent() {
     setCliAutoStartEnabled(checked);
     setCliAutoStartLoading(true);
     try {
-      const result = await window.api.setCliAutoStartEnabled(checked);
+      const result = await getIpcServices()!.cli.setAutoStartEnabled(checked);
       if (result?.ok && typeof result.enabled === 'boolean') {
         setCliAutoStartEnabled(result.enabled);
       } else {
@@ -808,7 +823,7 @@ export function GeneralSettingsComponent() {
                   onCheckedChange={(checked) => {
                     void (async () => {
                       setPreventSleepEnabled(checked);
-                      const result = await window.api?.setPreventSleepEnabled?.(checked);
+                      const result = await getIpcServices()?.app.setPreventSleepEnabled(checked);
                       if (typeof result?.enabled === 'boolean') {
                         setPreventSleepEnabled(result.enabled);
                       }

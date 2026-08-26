@@ -33,7 +33,7 @@ export interface TerminalChannel {
   /** Close and kill every terminal owned by the session. */
   closeSession(sessionId: string): void;
   /** Read plain text from the host system clipboard. */
-  readClipboardText(): string;
+  readClipboardText(): string | Promise<string>;
   /** Write plain text to the host system clipboard. */
   writeClipboardText(text: string): void;
 

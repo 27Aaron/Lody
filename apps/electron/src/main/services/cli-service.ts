@@ -562,7 +562,7 @@ export class CliService {
       })
     }
 
-    sender.send('lodyCliState:state', this.cliState)
+    sender.send('cli.state', this.cliState)
   }
 
   async restartAutoStart(): Promise<RestartCliResult> {
@@ -889,7 +889,7 @@ export class CliService {
     }
 
     if (!sender || sender.isDestroyed()) return
-    sender.send('lodyCli:output', event)
+    sender.send('cli.output', event)
   }
 
   private sendCliMeta(sender: WebContents | undefined, chunk: string): void {
@@ -1102,7 +1102,7 @@ export class CliService {
         this.cliStateSenders.delete(sender)
         continue
       }
-      sender.send('lodyCliState:state', nextState)
+      sender.send('cli.state', nextState)
     }
   }
 

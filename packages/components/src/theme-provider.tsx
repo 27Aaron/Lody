@@ -8,6 +8,7 @@ import {
   useState,
 } from 'react';
 import { ThemeProvider as NextThemesProvider, useTheme as useNextTheme } from 'next-themes';
+import { getIpcServices, onIpcEvent } from '@/lib/electron-ipc-client';
 import {
   DEFAULT_VSCODE_THEME_SELECTION,
   applyVSCodeThemeCssVariables,
@@ -135,7 +136,7 @@ function LodyThemeProvider({
   const resolvedTheme = theme === 'system' ? (nativeSystemTheme ?? browserResolvedTheme) : theme;
 
   useEffect(() => {
-    return window.api?.onNativeThemeUpdated?.((resolved) => {
+    return onIpcEvent('app.nativeTheme', (resolved) => {
       setNativeSystemTheme(resolved);
     });
   }, []);
@@ -151,7 +152,7 @@ function LodyThemeProvider({
   // On Electron, keep the OS-drawn window chrome (notably the Windows title bar)
   // matching the in-app theme. Preserve `system` as the native source.
   useEffect(() => {
-    window.api?.setNativeTheme?.(theme);
+    void getIpcServices()?.app.setNativeTheme(theme);
   }, [theme]);
 
   useIsomorphicLayoutEffect(() => {

@@ -74,7 +74,7 @@ export function handleDeepLink(url: string): void {
     deepLink: describeDeepLinkForAuthDebug(parsedDeepLink),
     currentUrl: describeUrlForAuthDebug(currentUrl)
   })
-  contents.send('lody:deep-link', parsedDeepLink)
+  contents.send('app.deepLink', parsedDeepLink)
   setPendingDeepLink(null)
 }
 

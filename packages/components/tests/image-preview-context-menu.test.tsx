@@ -5,20 +5,35 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
 
 import { ZoomableImageViewer } from '../src/components/shared/zoomable-image-viewer';
-import { resolveExportFileName } from '../src/lib/image-preview-export';
+import {
+  resolveExportFileName,
+  type ImagePreviewExportBridge,
+} from '../src/lib/image-preview-export';
 import { initI18n } from '../src/i18n';
 
 const PNG_BYTES = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3, 4]);
 const IMAGE_SRC = 'blob:lody/preview-image';
-
-type ImagePreviewBridge = NonNullable<NonNullable<Window['api']>['imagePreview']>;
 
 function createBridge(action: 'copy' | 'save' | null) {
   return {
     showMenu: vi.fn(async () => ({ action })),
     copyToClipboard: vi.fn(async () => ({ copied: true })),
     saveAs: vi.fn(async () => ({ saved: true as const, path: '/tmp/shot.png' })),
-  } satisfies ImagePreviewBridge;
+  } satisfies ImagePreviewExportBridge;
+}
+
+function installImageIpc(bridge: ImagePreviewExportBridge) {
+  window.ipc = {
+    invoke: async (channel, ...args) => {
+      const input = args[0];
+      if (channel === 'image.showPreviewMenu') return bridge.showMenu(input as never);
+      if (channel === 'image.copyToClipboard') return bridge.copyToClipboard(input as never);
+      if (channel === 'image.saveAs') return bridge.saveAs(input as never);
+      throw new Error(`unexpected invoke ${channel}`);
+    },
+    on: () => () => {},
+    send: () => {},
+  };
 }
 
 /**
@@ -78,7 +93,7 @@ describe('image preview context menu', () => {
     container?.remove();
     container = undefined;
     delete window.__LODY_ELECTRON__;
-    delete window.api;
+    delete window.ipc;
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -122,7 +137,7 @@ describe('image preview context menu', () => {
 
   it('copies the previewed image when the menu returns copy', async () => {
     const bridge = createBridge('copy');
-    window.api = { imagePreview: bridge };
+    installImageIpc(bridge);
     stubImageFetch('image/png');
 
     const photo = renderViewer();
@@ -142,7 +157,7 @@ describe('image preview context menu', () => {
 
   it('saves under the source file name when the menu returns save', async () => {
     const bridge = createBridge('save');
-    window.api = { imagePreview: bridge };
+    installImageIpc(bridge);
     stubImageFetch('image/png');
 
     const photo = renderViewer();
@@ -155,7 +170,7 @@ describe('image preview context menu', () => {
 
   it('does nothing further when the menu is dismissed', async () => {
     const bridge = createBridge(null);
-    window.api = { imagePreview: bridge };
+    installImageIpc(bridge);
     stubImageFetch('image/png');
 
     const photo = renderViewer();
@@ -167,7 +182,7 @@ describe('image preview context menu', () => {
   });
 
   it('leaves the browser context menu alone without the desktop bridge', async () => {
-    // No `window.api`: web and older preload builds keep their own menu.
+    // No `window.ipc`: web and older preload builds keep their own menu.
     stubImageFetch('image/png');
 
     const photo = renderViewer();

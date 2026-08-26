@@ -10,6 +10,7 @@ import type {
   WorkspaceId,
 } from '@lody/shared';
 import type { WorkspaceRuntime } from '@/atoms/runtime';
+import { getIpcServices } from '@/lib/electron-ipc-client';
 
 const HISTORY_CONTROL_TIMEOUT_MS = 120_000;
 
@@ -61,17 +62,14 @@ function hasElectronHistoryApi(): boolean {
   if (typeof window === 'undefined') {
     return false;
   }
-  return (
-    typeof window.api?.syncLocalProjectHistory === 'function' &&
-    typeof window.api?.importLocalProjectHistory === 'function'
-  );
+  return Boolean(getIpcServices());
 }
 
 function hasElectronResolveHistoryApi(): boolean {
   if (typeof window === 'undefined') {
     return false;
   }
-  return typeof window.api?.resolveLocalProjectHistoryConflict === 'function';
+  return Boolean(getIpcServices());
 }
 
 export function canUseProjectHistoryProjectControl(args: {
@@ -149,11 +147,10 @@ export async function syncProjectHistoryForLocalProject(args: {
   requestedByUserId: string;
 }): Promise<LocalProjectHistoryCatalogResult> {
   if (typeof window !== 'undefined' && isLocalElectronProject(args) && hasElectronHistoryApi()) {
-    const syncLocalProjectHistory = window.api?.syncLocalProjectHistory;
-    if (!syncLocalProjectHistory) {
+    if (!getIpcServices()) {
       throw new Error('Electron history API is not available.');
     }
-    const result = await syncLocalProjectHistory(
+    const result = await getIpcServices()!.localProjects.syncHistory(
       args.provider,
       args.workspaceId,
       args.localProjectId
@@ -205,11 +202,10 @@ async function executeImportBatch(
   acpSessionIds: string[]
 ): Promise<LocalProjectHistoryImportResult> {
   if (typeof window !== 'undefined' && isLocalElectronProject(args) && hasElectronHistoryApi()) {
-    const importLocalProjectHistory = window.api?.importLocalProjectHistory;
-    if (!importLocalProjectHistory) {
+    if (!getIpcServices()) {
       throw new Error('Electron history API is not available.');
     }
-    const result = await importLocalProjectHistory(
+    const result = await getIpcServices()!.localProjects.importHistory(
       args.provider,
       args.workspaceId,
       args.localProjectId,
@@ -280,11 +276,10 @@ export async function resolveProjectHistoryConflictForLocalProject(args: {
     isLocalElectronProject(args) &&
     hasElectronResolveHistoryApi()
   ) {
-    const resolveLocalProjectHistoryConflict = window.api?.resolveLocalProjectHistoryConflict;
-    if (!resolveLocalProjectHistoryConflict) {
+    if (!getIpcServices()) {
       throw new Error('Electron history conflict API is not available.');
     }
-    const result = await resolveLocalProjectHistoryConflict(
+    const result = await getIpcServices()!.localProjects.resolveHistoryConflict(
       args.provider,
       args.workspaceId,
       args.localProjectId,

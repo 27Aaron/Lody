@@ -1,9 +1,10 @@
 import { renderBootFailure } from '@lody/components/lib/boot-failure'
+import { getIpcServices } from '@lody/components/lib/electron-ipc-client'
 
 // Entry script for `recovery.html`. The main process loads this page after a
 // renderer failure (did-fail-load, render-process-gone, preload-error). Error
 // context arrives via the URL hash because the same BrowserWindow + preload
-// is reused, so this page also has access to the `window.api` bridge.
+// is reused, so this page also has access to the `window.ipc` bridge.
 const rootElement = document.getElementById('root')
 if (!rootElement) {
   throw new Error('Missing #root element on recovery page.')
@@ -33,10 +34,9 @@ renderBootFailure(rootElement, reconstructed, {
   buildInfo,
   hint: 'Lody could not load the main window. Click Reload to try again, or Copy error and share it with the team.',
   onReload: () => {
-    const reloader = window.api?.requestRendererReload
-    if (typeof reloader === 'function') {
+    if (getIpcServices()) {
       try {
-        reloader()
+        void getIpcServices()!.app.requestRendererReload()
         return
       } catch (error) {
         console.warn('[Lody] requestRendererReload bridge threw', error)
@@ -46,7 +46,7 @@ renderBootFailure(rootElement, reconstructed, {
   },
   onCopy: () => {
     try {
-      window.api?.reportRendererFatalError?.({
+      void getIpcServices()?.app.reportRendererFatalError({
         scope: `recovery:${source}`,
         message,
         details,

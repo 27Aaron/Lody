@@ -3,19 +3,19 @@ import type {
   GlobalShortcutId,
   SetGlobalShortcutResult,
 } from '@lody/shared';
+import { getIpcServices } from './electron-ipc-client';
 
 /**
  * Renderer-side bridge to the Electron main process's global-shortcut registry
- * (`window.api.globalShortcuts`). Null-safe: on web / mobile / an older preload the
+ * (`getIpcServices()?.app`). Null-safe: on web / mobile / an older preload the
  * bridge is absent, so reads return `[]` and writes report a benign failure — callers
  * gate the whole feature behind `getRuntime() === 'electron'` anyway.
  */
 export async function getGlobalShortcuts(): Promise<GlobalShortcutBinding[]> {
   if (typeof window === 'undefined') return [];
-  const api = window.api?.globalShortcuts;
-  if (!api) return [];
+  if (!getIpcServices()) return [];
   try {
-    return await api.getAll();
+    return await getIpcServices()!.app.getGlobalShortcuts();
   } catch (error) {
     console.error('Failed to read global shortcuts', error);
     return [];
@@ -30,7 +30,7 @@ export async function getGlobalShortcuts(): Promise<GlobalShortcutBinding[]> {
 export function setGlobalShortcutsSuspended(suspended: boolean): void {
   if (typeof window === 'undefined') return;
   try {
-    window.api?.globalShortcuts?.setSuspended?.(suspended);
+    void getIpcServices()?.app.setGlobalShortcutsSuspended(suspended);
   } catch (error) {
     console.error('Failed to suspend global shortcuts', error);
   }
@@ -41,10 +41,9 @@ export async function setGlobalShortcut(
   binding: string | null
 ): Promise<SetGlobalShortcutResult> {
   if (typeof window === 'undefined') return { ok: false, error: 'invalid' };
-  const api = window.api?.globalShortcuts;
-  if (!api) return { ok: false, error: 'invalid' };
+  if (!getIpcServices()) return { ok: false, error: 'invalid' };
   try {
-    return await api.set({ id, binding });
+    return await getIpcServices()!.app.setGlobalShortcut({ id, binding });
   } catch (error) {
     console.error('Failed to set global shortcut', error);
     return { ok: false, error: 'invalid' };

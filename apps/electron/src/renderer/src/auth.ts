@@ -13,6 +13,7 @@ import { getAppWindowLocation } from '@lody/components/lib'
 import { readStoredAuthToken } from '@lody/components/lib/auth-bootstrap'
 import { capturePostHogSingleton } from '@lody/components/lib/mobile-resume-analytics'
 import { persistNativeAuthSessionResult as persistAuthSessionResult } from '@lody/components/lib/native-auth-session-sync'
+import { getIpcServices } from '@lody/components/lib/electron-ipc-client'
 import { createAuthCallbackTransaction } from './auth-callback-transaction'
 import { createAuthQueryGeneration } from './auth-query-generation'
 
@@ -131,11 +132,39 @@ async function withAuthQueryTimeout<T>(label: string, promise: Promise<T>): Prom
 }
 
 function getAuthApi() {
-  const authApi = window.api?.auth
-  if (!authApi) {
+  if (!getIpcServices()) {
     throw new Error('Electron auth bridge is not available')
   }
-  return authApi
+  const auth = getIpcServices()!.auth
+  return {
+    completeCallback: auth.completeCallback.bind(auth),
+    signInWithDevEmailPassword: auth.signInWithDevEmailPassword.bind(auth),
+    signOut: auth.signOut.bind(auth),
+    getSession: auth.getSession.bind(auth),
+    listOrganizations: auth.listOrganizations.bind(auth),
+    getActiveOrganization: auth.getActiveOrganization.bind(auth),
+    changeEmail: auth.changeEmail.bind(auth),
+    listAccounts: auth.listAccounts.bind(auth),
+    updateUser: auth.updateUser.bind(auth),
+    changePassword: auth.changePassword.bind(auth),
+    requestPasswordReset: auth.requestPasswordReset.bind(auth),
+    convexToken: auth.convexToken.bind(auth),
+    crossDomainVerifyOneTimeToken: auth.crossDomainVerifyOneTimeToken.bind(auth),
+    organization: {
+      getInvitation: auth.getInvitation.bind(auth),
+      acceptInvitation: auth.acceptInvitation.bind(auth),
+      listInvitations: auth.listInvitations.bind(auth),
+      inviteMember: auth.inviteMember.bind(auth),
+      cancelInvitation: auth.cancelInvitation.bind(auth),
+      removeMember: auth.removeMember.bind(auth),
+      updateMemberRole: auth.updateMemberRole.bind(auth),
+      setActive: auth.setActive.bind(auth),
+      update: auth.updateOrganization.bind(auth),
+      create: auth.createOrganization.bind(auth),
+      delete: auth.deleteOrganization.bind(auth),
+      leave: auth.leaveOrganization.bind(auth)
+    }
+  }
 }
 
 function getRequestAuthBridge() {
@@ -496,9 +525,11 @@ const authCallbackTransaction = createAuthCallbackTransaction(
         .catch((error) => console.warn('[Auth] Failed to roll back authentication', error))
     },
     restartCli: () => {
-      void window.api?.cliState?.restart().catch((error) => {
-        console.warn('[Auth] Failed to restart CLI after authentication', error)
-      })
+      void getIpcServices()
+        ?.cli.restart()
+        .catch((error) => {
+          console.warn('[Auth] Failed to restart CLI after authentication', error)
+        })
     }
   },
   30_000
@@ -650,7 +681,7 @@ function createElectronAuthClientAdapter() {
         await getAuthApi().signOut()
       } finally {
         try {
-          await window.api?.cliState?.terminate()
+          await getIpcServices()?.cli.terminate()
         } catch (error) {
           console.warn('[Auth] Failed to terminate CLI after sign-out', error)
         }
@@ -793,7 +824,7 @@ function hasElectronAuthBridge() {
   return (
     typeof window.requestAuth === 'function' &&
     typeof window.onUserUpdated === 'function' &&
-    Boolean(window.api?.auth)
+    Boolean(getIpcServices())
   )
 }
 

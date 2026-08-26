@@ -1,3 +1,4 @@
+import { getIpcServices, onIpcEvent, sendIpc } from '@/lib/electron-ipc-client';
 import type {
   TerminalChannel,
   TerminalDataEvent,
@@ -9,61 +10,62 @@ import type {
   Unsubscribe,
 } from './terminal-channel';
 
-type ElectronTerminalApi = NonNullable<NonNullable<Window['api']>['terminal']>;
-
 export class ElectronTerminalChannel implements TerminalChannel {
-  constructor(private readonly api: ElectronTerminalApi) {}
-
   list(sessionId: string): Promise<TerminalSnapshot[]> {
-    return this.api.list(sessionId);
+    return getIpcServices()!.terminal.list(sessionId);
   }
 
   open(params: TerminalOpenParams): Promise<TerminalOpenResult> {
-    return this.api.open(params);
+    return getIpcServices()!.terminal.open(params);
   }
 
   attach(terminalId: string, cols: number, rows: number): void {
-    this.api.attach(terminalId, cols, rows);
+    sendIpc('terminal.attach', { terminalId, cols, rows });
   }
 
   input(terminalId: string, data: string): void {
-    this.api.input(terminalId, data);
+    sendIpc('terminal.input', { terminalId, data });
   }
 
   resize(terminalId: string, cols: number, rows: number): void {
-    this.api.resize(terminalId, cols, rows);
+    sendIpc('terminal.resize', { terminalId, cols, rows });
   }
 
   close(terminalId: string): void {
-    this.api.close(terminalId);
+    sendIpc('terminal.close', { terminalId });
   }
 
   closeSession(sessionId: string): void {
-    this.api.closeSession(sessionId);
+    sendIpc('terminal.closeSession', { sessionId });
   }
 
-  readClipboardText(): string {
-    return this.api.readClipboardText();
+  async readClipboardText(): Promise<string> {
+    return await getIpcServices()!.terminal.readClipboardText();
   }
 
   writeClipboardText(text: string): void {
-    this.api.writeClipboardText(text);
+    void getIpcServices()!.terminal.writeClipboardText(text);
   }
 
   onData(handler: (event: TerminalDataEvent) => void): Unsubscribe {
-    return this.api.onData(handler);
+    return onIpcEvent('terminal.event', (event) => {
+      if (event.type === 'data') handler(event);
+    });
   }
 
   onExit(handler: (event: TerminalExitEvent) => void): Unsubscribe {
-    return this.api.onExit(handler);
+    return onIpcEvent('terminal.event', (event) => {
+      if (event.type === 'exit') handler(event);
+    });
   }
 
   onTitle(handler: (event: TerminalTitleEvent) => void): Unsubscribe {
-    return this.api.onTitle(handler);
+    return onIpcEvent('terminal.event', (event) => {
+      if (event.type === 'title') handler(event);
+    });
   }
 }
 
 export function createElectronTerminalChannel(): ElectronTerminalChannel | null {
-  const terminalApi = typeof window === 'undefined' ? undefined : window.api?.terminal;
-  return terminalApi ? new ElectronTerminalChannel(terminalApi) : null;
+  return getIpcServices() ? new ElectronTerminalChannel() : null;
 }

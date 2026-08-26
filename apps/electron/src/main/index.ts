@@ -4,8 +4,7 @@ import dns from 'node:dns'
 import icon from '../../resources/icon.png?asset'
 import { acquireSingleInstanceLock, registerOpenUrlHandler } from './deep-link'
 import { registerLodyProtocolClient } from './protocol-client'
-import { registerIpcHandlers } from './ipc/register-handlers'
-import { registerPublicBrowserHandlers } from './ipc/public-browser-handlers'
+import { registerIpcServices } from './ipc/register-services'
 import { openMainWindow, openOrFocusMainWindow, setMainWindowProductReloadTarget } from './window'
 import { getMainWindow, setAppQuitting, setWindowsTrayAvailable } from './window-state'
 import { CliService } from './services/cli-service'
@@ -27,7 +26,7 @@ import {
   flushElectronMainErrorReporting,
   installElectronMainErrorReporting
 } from './posthog-error-reporting'
-import { GLOBAL_SHORTCUT_TRIGGERED_CHANNEL } from '@lody/shared/electron-ipc'
+import { IPC_PUSH_CHANNELS } from '@lody/shared/electron-ipc'
 import { PublicBrowserService } from './services/public-browser-service'
 import { desktopInstallationProfile, isLocalPlatform } from './platform'
 import { mainPlatformKind } from './platform'
@@ -126,7 +125,7 @@ function createGlobalShortcutsService(iconPath: string): GlobalShortcutsService 
       onTriggered: (payload) => {
         const target =
           getMainWindow() ?? BrowserWindow.getAllWindows().find((window) => !window.isDestroyed())
-        target?.webContents.send(GLOBAL_SHORTCUT_TRIGGERED_CHANNEL, payload)
+        target?.webContents.send(IPC_PUSH_CHANNELS.appGlobalShortcut, payload)
       }
     }
   )
@@ -206,22 +205,23 @@ if (hasSingleInstanceLock) {
       })
     })
 
-    registerIpcHandlers({
+    const completeOnboarding = (window: BrowserWindow) => {
+      markOnboardingCompleted()
+      setMainWindowProductReloadTarget(window)
+    }
+    registerIpcServices({
       cliService,
-      terminalRelay,
-      loroDataPlaneRelay,
       appUpdaterService,
-      notificationService,
       authService,
+      notificationService,
+      terminalRelay,
+      publicBrowserService,
+      loroDataPlaneRelay,
       windowBadgeService,
       globalShortcutsService,
       getMainWindow,
-      completeOnboarding: (window) => {
-        markOnboardingCompleted()
-        setMainWindowProductReloadTarget(window)
-      }
+      completeOnboarding
     })
-    registerPublicBrowserHandlers({ service: publicBrowserService, getMainWindow })
 
     setupApplicationMenu({
       appUpdaterService,

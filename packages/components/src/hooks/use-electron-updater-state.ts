@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { ElectronUpdaterState } from '@lody/shared';
+import { getIpcServices, onIpcEvent } from '@/lib/electron-ipc-client';
 
 export function useElectronUpdaterState(): ElectronUpdaterState | null {
   const [state, setState] = useState<ElectronUpdaterState | null>(null);
@@ -7,26 +8,17 @@ export function useElectronUpdaterState(): ElectronUpdaterState | null {
   useEffect(() => {
     if (typeof window === 'undefined' || !window.__LODY_ELECTRON__) return undefined;
 
-    const updater = window.api?.updater;
-    if (
-      !updater ||
-      typeof updater.getState !== 'function' ||
-      typeof updater.onState !== 'function'
-    ) {
-      return undefined;
-    }
+    if (!getIpcServices()) return undefined;
 
     let active = true;
-    void updater
-      .getState()
+    void getIpcServices()!
+      .updater.getState()
       .then((s) => {
         if (active) setState(s);
       })
-      .catch(() => {
-        // Ignore updater read errors in renderer; main process tracks failures.
-      });
+      .catch(() => undefined);
 
-    const unsubscribe = updater.onState((s) => {
+    const unsubscribe = onIpcEvent('updater.state', (s) => {
       if (active) setState(s);
     });
 

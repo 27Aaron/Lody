@@ -20,6 +20,7 @@ import { useVisibleLocalProjects } from '@/hooks/use-visible-local-projects';
 import { useCloudQuery } from '@lody/platform/react';
 import { useConvexErrorMessage } from '@/hooks/use-convex-error-message';
 import { isElectronRenderer } from '@/lib/electron';
+import { getIpcServices } from '@/lib/electron-ipc-client';
 import { selectAndWriteLocalProject } from '@/lib/local-project-import';
 import { openExternalUrl } from '@/lib/native-browser';
 import { OnboardingShell, OnboardingBackButton, OnboardingNextButton } from '../onboarding-shell';
@@ -260,8 +261,9 @@ export function ProjectsScreen({ onBack, onComplete }: ProjectsScreenProps) {
   }, [localProjectList, repoList, selectedProject]);
 
   const isElectron = isElectronRenderer();
-  const selectLocalProjectDirectory = isElectron
-    ? window.api?.selectLocalProjectDirectory
+  const localProjects = isElectron ? getIpcServices()?.localProjects : undefined;
+  const selectLocalProjectDirectory = localProjects
+    ? localProjects.selectDirectory.bind(localProjects)
     : undefined;
   const canImportLocal =
     isElectron &&

@@ -1,5 +1,10 @@
-import type { ImagePreviewMenuAction, ShowImagePreviewMenuInput } from '@lody/shared/electron-ipc';
+import type {
+  ImagePreviewMenuAction,
+  IpcServices,
+  ShowImagePreviewMenuInput,
+} from '@lody/shared/electron-ipc';
 import { isElectronRenderer } from '@/lib/electron';
+import { getIpcServices } from '@/lib/electron-ipc-client';
 
 /**
  * Copy / save for the image preview's right-click menu.
@@ -25,7 +30,11 @@ const EXTENSION_BY_MIME_TYPE: Record<string, string> = {
   'image/svg+xml': 'svg',
 };
 
-export type ImagePreviewExportBridge = NonNullable<NonNullable<Window['api']>['imagePreview']>;
+export type ImagePreviewExportBridge = {
+  showMenu: IpcServices['image']['showPreviewMenu'];
+  copyToClipboard: IpcServices['image']['copyToClipboard'];
+  saveAs: IpcServices['image']['saveAs'];
+};
 
 /**
  * Null on web, on mobile, and on an older preload build. Every caller must treat
@@ -36,7 +45,13 @@ export function getImagePreviewExportBridge(): ImagePreviewExportBridge | null {
   if (typeof window === 'undefined' || !isElectronRenderer()) {
     return null;
   }
-  return window.api?.imagePreview ?? null;
+  const services = getIpcServices();
+  if (!services) return null;
+  return {
+    showMenu: services.image.showPreviewMenu.bind(services.image),
+    copyToClipboard: services.image.copyToClipboard.bind(services.image),
+    saveAs: services.image.saveAs.bind(services.image),
+  };
 }
 
 /**

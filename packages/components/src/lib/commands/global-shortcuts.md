@@ -21,9 +21,9 @@ them with `globalShortcut.register`, so they can run while the app is unfocused.
     unregisters everything during disposal. `binding: null` is an explicit unbind.
   - `createGlobalShortcutsService` in main injects the behavior handlers; the service
     owns registration/persistence rather than window behavior.
-  - `lodyApp:getGlobalShortcuts` and `lodyApp:setGlobalShortcut` handlers validate IPC
-    input. A trigger sends `GLOBAL_SHORTCUT_TRIGGERED_CHANNEL` to an available renderer,
-    which owns any analytics event.
+  - `app.getGlobalShortcuts` and `app.setGlobalShortcut` validate IPC input. A trigger
+    sends `app.globalShortcut` (`GLOBAL_SHORTCUT_TRIGGERED_CHANNEL`) to an available
+    renderer, which owns any analytics event.
 
 - **Renderer:** `lib/native-global-shortcuts.ts` provides a null-safe API wrapper,
   `hooks/use-global-shortcuts.ts` loads and updates bindings, and

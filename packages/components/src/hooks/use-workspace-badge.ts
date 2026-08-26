@@ -4,23 +4,10 @@ import { sessionListAtom } from '@/atoms/doc-meta';
 import { userAtom, currentWorkspaceIdAtom } from '@/atoms';
 import { lodyPresenceNowMsAtom, lodyPresenceStatesAtom } from '@/atoms/presence';
 import { isElectronRenderer } from '@/lib/electron';
+import { getIpcServices } from '@/lib/electron-ipc-client';
 import { findFreshSessionPresenceState } from '@lody/shared';
 
 type WindowBadge = { unread: number; waiting: number };
-
-type ElectronBadgeBridge = {
-  setWindowBadge?: (badge: WindowBadge) => void;
-};
-
-function getElectronBridge(): ElectronBadgeBridge | null {
-  if (!isElectronRenderer()) return null;
-  const candidate: unknown = (window as { api?: unknown }).api;
-  if (!candidate || typeof candidate !== 'object') return null;
-  const setWindowBadge = (candidate as { setWindowBadge?: unknown }).setWindowBadge;
-  return typeof setWindowBadge === 'function'
-    ? (candidate as ElectronBadgeBridge)
-    : null;
-}
 
 const DEBOUNCE_MS = 150;
 const ZERO: WindowBadge = { unread: 0, waiting: 0 };
@@ -69,11 +56,11 @@ export function useWorkspaceBadge(): void {
 
   const { unread, waiting } = badge;
   useEffect(() => {
-    const bridge = getElectronBridge();
-    if (!bridge) return undefined;
+    const services = getIpcServices();
+    if (!isElectronRenderer() || !services) return undefined;
 
     const handle = window.setTimeout(() => {
-      bridge.setWindowBadge?.({ unread, waiting });
+      void services.app.setWindowBadge({ unread, waiting });
     }, DEBOUNCE_MS);
 
     return () => {
@@ -84,7 +71,7 @@ export function useWorkspaceBadge(): void {
   // Clear our contribution when the hook unmounts (workspace switch / logout).
   useEffect(() => {
     return () => {
-      getElectronBridge()?.setWindowBadge?.(ZERO);
+      void getIpcServices()?.app.setWindowBadge(ZERO);
     };
   }, []);
 }

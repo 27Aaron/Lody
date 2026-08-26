@@ -8,6 +8,7 @@ import { currentWorkspaceSlugAtom } from '@/atoms/workspace-context';
 import { OnboardingOverlay, type DesktopOnboardingCompletion } from '@/components/onboarding';
 import { useOnboardingThemeLifecycle } from '@/components/onboarding/use-onboarding-theme-lifecycle';
 import { isElectronRenderer } from '@/lib/electron';
+import { getIpcServices } from '@/lib/electron-ipc-client';
 
 export const Route = createFileRoute('/onboarding')({
   component: DesktopOnboardingRoute,
@@ -27,7 +28,7 @@ function DesktopOnboardingRoute() {
       if (completionPending.current) return;
       completionPending.current = true;
       void (async () => {
-        const result = await window.api?.completeOnboarding?.();
+        const result = await getIpcServices()?.app.completeOnboarding();
         if (!result?.ok) {
           completionPending.current = false;
           toast.error(

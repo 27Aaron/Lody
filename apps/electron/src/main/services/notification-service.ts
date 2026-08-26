@@ -149,7 +149,7 @@ export class NotificationService {
         return
       }
 
-      contents.send('lodyNotifications:sessionCompletionClick', {
+      contents.send('app.sessionCompletionClick', {
         sessionId: input.sessionId,
         workspaceSlug: input.workspaceSlug
       })

@@ -59,6 +59,7 @@ import {
   sessionEditAndResendFailure,
 } from '@lody/shared';
 import { createAsyncConcurrencyGate } from '@/lib/async-concurrency-gate';
+import { getIpcServices } from '@/lib/electron-ipc-client';
 import type { WorkspaceTargetRouter } from './workspace-target-router';
 
 const LOCAL_MACHINE_ID_READY_TIMEOUT_MS = 2_000;
@@ -1000,13 +1001,15 @@ export function createWorkspaceMachineRpcFacade(deps: WorkspaceMachineRpcFacadeD
   ): Promise<LocalProjectGitStateRpcResponse | null> => {
     try {
       await waitForMachineRoute(machineId);
-      const getLocalProjectGitState = window.api?.getLocalProjectGitState;
       if (
         window.__LODY_ELECTRON__ &&
-        getLocalProjectGitState &&
+        getIpcServices() &&
         targetRouter.getPlaneForMachine(machineId) === 'local'
       ) {
-        const state = await getLocalProjectGitState(workspaceId, localProjectId);
+        const state = await getIpcServices()!.localProjects.getGitState(
+          workspaceId,
+          localProjectId
+        );
         if ('error' in state) {
           return {
             type: 'local-project/git-state_response',
@@ -1054,13 +1057,12 @@ export function createWorkspaceMachineRpcFacade(deps: WorkspaceMachineRpcFacadeD
   ): Promise<LocalProjectControlResponse | null> => {
     try {
       await waitForMachineRoute(request.machineId);
-      const sendLocalProjectControl = window.api?.sendLocalProjectControl;
       if (
         window.__LODY_ELECTRON__ &&
-        sendLocalProjectControl &&
+        getIpcServices() &&
         targetRouter.getPlaneForMachine(request.machineId) === 'local'
       ) {
-        return await sendLocalProjectControl(request);
+        return await getIpcServices()!.localProjects.control(request);
       }
       const response = await (
         await getMachineRpcClient(request.machineId)

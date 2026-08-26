@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import type { ElectronPublicBrowserBounds, ElectronPublicBrowserState } from '@lody/shared';
 
 import { isElectronRenderer } from '@/lib/electron';
+import { getPublicBrowserBridge } from '@/lib/electron-ipc-client';
 import { observeResizeOnAnimationFrame } from '@/lib/resize-observer';
 import { cn } from '@/lib/utils';
 
@@ -47,7 +48,7 @@ export function PublicBrowserSurface({
   const [phase, setPhase] = useState<ElectronPublicBrowserState['phase']>('idle');
   const [surfaceReady, setSurfaceReady] = useState(false);
   const [blockingOverlayOpen, setBlockingOverlayOpen] = useState(false);
-  const bridge = typeof window === 'undefined' ? undefined : window.api?.publicBrowser;
+  const bridge = typeof window === 'undefined' ? undefined : getPublicBrowserBridge() ?? undefined;
   const electron = isElectronRenderer();
   const nativeViewVisible = active && !blockingOverlayOpen;
 

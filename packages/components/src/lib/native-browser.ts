@@ -1,4 +1,5 @@
 import { isElectronRenderer } from './electron';
+import { getIpcServices } from './electron-ipc-client';
 import { isNativeAppShell } from './native-platform';
 
 export async function openExternalUrl(url: string): Promise<boolean> {
@@ -7,9 +8,9 @@ export async function openExternalUrl(url: string): Promise<boolean> {
   }
 
   const isElectron = isElectronRenderer();
-  if (isElectron && window.api?.openExternalUrl) {
+  if (isElectron && getIpcServices()) {
     try {
-      const result = await window.api.openExternalUrl(url);
+      const result = await getIpcServices()!.app.openExternalUrl(url);
       if (result.opened) {
         return true;
       }

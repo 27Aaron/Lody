@@ -7,6 +7,7 @@ import { commands, registerBuiltInCommands } from '../lib/commands';
 import { rehydrateAvatarMemoryCacheFromPersistent } from '../lib/avatar-cache';
 import { languageAtom } from '../atoms/settings';
 import { maybeClearLodyCacheOnBoot } from '../lib/clear-local-cache';
+import { getIpcServices } from '../lib/electron-ipc-client';
 import { useSetAtom } from 'jotai';
 import {
   detectBrowserLanguage,
@@ -61,7 +62,7 @@ const AppInitializer = ({ children }: { children: React.ReactNode }) => {
 
   useEffect(() => {
     const syncLanguage = (language: string) => {
-      window.api?.setLanguage?.(language);
+      void getIpcServices()?.app.setLanguage(language);
     };
 
     if (typeof window === 'undefined' || !window.__LODY_ELECTRON__) return undefined;

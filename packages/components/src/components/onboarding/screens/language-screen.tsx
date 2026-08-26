@@ -5,6 +5,7 @@ import { useAtom } from 'jotai';
 import type { SupportedLanguage } from '@lody/shared';
 import { cn } from '@/lib/utils';
 import { languageAtom } from '@/atoms/settings';
+import { getIpcServices } from '@/lib/electron-ipc-client';
 import { OnboardingShell, OnboardingNextButton } from '../onboarding-shell';
 
 interface LanguageOption {
@@ -107,9 +108,7 @@ export function LanguageScreen({ onNext }: LanguageScreenProps) {
   const handleSelect = (next: SupportedLanguage) => {
     setLanguage(next);
     void i18n.changeLanguage(next);
-    if (typeof window !== 'undefined' && window.api?.setLanguage) {
-      window.api.setLanguage(next);
-    }
+    void getIpcServices()?.app.setLanguage(next);
   };
 
   return <LanguageScreenView value={language} onChange={handleSelect} onNext={onNext} />;
