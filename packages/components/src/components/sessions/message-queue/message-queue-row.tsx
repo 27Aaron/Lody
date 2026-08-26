@@ -184,8 +184,13 @@ function RowBody(props: MessageQueueRowProps & EditCommitProps) {
             value={editValue}
             rows={3}
             className={cn(
-              'block w-full resize-none bg-transparent',
-              'px-2 pt-1 text-xs leading-snug text-foreground outline-none'
+              'block w-full resize-none border-transparent bg-transparent',
+              'px-2 pt-1 text-xs leading-snug text-foreground',
+              // The base layer paints `box-shadow: inset 0 0 0 1px` on any focused
+              // textarea. That used to land exactly on this field's own border; now
+              // that the shell owns the border, it would draw a second rectangle
+              // inside the box. The composer suppresses it the same way.
+              'outline-none focus-visible:outline-hidden focus-visible:ring-0 focus-visible:ring-offset-0'
             )}
             autoFocus
             disabled={isPending}
