@@ -11,7 +11,7 @@ aside: false
 
 # Lody Is Now Open Source: A Shared Workspace for Teams and Coding Agents
 
-Today, we’re open-sourcing Lody.
+Today, we’re open-sourcing Lody’s CLI and desktop client. The source is available at [github.com/loro-dev/lody-oss](https://github.com/loro-dev/lody-oss).
 
 Lody is a collaborative workspace for teams and coding agents. Team members can follow an Agent’s work across machines, open one another’s conversations, and continue from the context already there.
 
@@ -19,27 +19,27 @@ But seeing what an Agent did is only part of the problem.
 
 Imagine finding a strange compatibility branch in a module you are about to change. The code tells you what the system does, but not whether it exists because of a business rule, a production incident, an important customer, or a technical limitation that disappeared years ago. The answer may be scattered across a PR, a meeting, an Agent conversation, and the memory of someone who has already left the team.
 
-That background is spread across design docs, pull requests, issues, meetings, agent conversations, and people's memory. When someone picks up a module, reviews a change, or prepares a refactor, the hard part is often not reading the code. It is reconstructing the business rules, domain concepts, design tradeoffs, and historical decisions behind it.
+When someone picks up a module, reviews a change, or prepares a refactor, the hard part is often not reading the code. It is reconstructing the business rules, domain concepts, design tradeoffs, and historical decisions behind it.
 
 We want Lody to be a shared understanding layer for software teams and coding agents: connecting conversations, code, tasks, documents, and past decisions, so a team can trace why the system became this way, and see which existing constraints a new change will touch.
 
 Conversation is only the starting point for understanding a project. Lody will grow task management, documentation, and code review around that understanding. Later, we want to explore plugins so teams can define tools that fit how they work.
 
-These tools may take different forms, but they all add to the same project context. That context should outlast any single interface, Agent, or app—and ultimately remain under the team’s control. This requirement shapes how Lody syncs data.
+These tools may take different forms, but they all add to the same team context. Keeping that context connected—and ultimately putting it under the team’s control—shapes how Lody syncs data.
 
 ## How Lody syncs
 
-Lody's local-first sync engine is built on the Loro Stack. Most collaboration state is represented with [Loro](https://loro.dev/) and [Flock](https://www.npmjs.com/package/@loro-dev/flock-wasm), and synced across devices through Loro Streams. They are based on CRDTs: replicas can change on their own, then merge when they reconnect.
+Lody’s sync layer is built on the Loro Stack. Most collaboration state is represented with [Loro](https://loro.dev/) and [Flock](https://www.npmjs.com/package/@loro-dev/flock-wasm), and synced across devices through Loro Streams. Loro and Flock are based on CRDTs: replicas can change independently and later merge.
 
-We chose CRDTs first because we want project context to be [local-first](https://www.inkandswitch.com/essay/local-first/): each device holds a copy it can actually use, and changes sync when the network returns.
+We chose CRDTs because they provide a foundation for the direction we want: team context that is [local-first](https://www.inkandswitch.com/essay/local-first/), available as a usable copy on each device, and able to sync after reconnecting.
 
-Apps can be replaced. Data should outlast the app. Agents and tools will keep changing; the project context a team has accumulated should not disappear with them. Open formats and implementations also make it harder for that context to get trapped in a single application.
+Apps can be replaced. Data should outlast the app. Agents and tools will keep changing; the context a team has accumulated should not disappear with them. Open formats and implementations also make it harder for that context to get trapped in a single application.
 
 Loro's general-purpose data structures can also represent the collaborative state that comments, rich-text documents, and whiteboards need. The same sync engine can then carry different kinds of interaction, and give future community plugins a shared data foundation.
 
-Lody does not yet support end-to-end encryption. Collaboration across devices still depends on Lody's hosted sync service. We have finished the first design of end-to-end encrypted workspaces.
+Lody is not fully local-first today. Offline use is still limited, and collaboration across devices still depends on Lody’s hosted sync service. End-to-end encryption is not yet supported, though we have completed an initial design for encrypted workspaces.
 
-The direction is for the project context that teams and agents accumulate together to end up under the team's control.
+These are steps toward the same goal: context accumulated by teams and agents should ultimately be under the team’s control.
 
 ## Get started
 
