@@ -51,14 +51,26 @@
   `scripts/generate-sitemap.mjs` writes `public/sitemap.xml` from the same path
   source. `scripts/generate-llms.mjs` validates docs title/description
   frontmatter and generates root `public/llms.txt` + `public/llms-full.txt` from
-  the ordered English docs and public blog content. Root `public/robots.txt` is
-  also owned here; the App build must not overwrite public-site SEO files.
+  the ordered English docs and public blog content. `scripts/generate-rss.mjs`
+  writes `public/rss.xml` (en) and `public/rss-zh.xml` (zh) from the same blog
+  frontmatter, skipping drafts; both feeds are linked from every blog `head()`.
+  Root `public/robots.txt` is also owned here; the App build must not overwrite
+  public-site SEO files.
 - `prebuild` runs `scripts/clean-output.mjs` before content generation. Keep this:
   stale Next/static prerender files in `out/` can create Vite preview redirect
   loops during TanStack prerender. Downstream deployments that immediately run
   `build` may set `LODY_SKIP_SITE_DOCS_POSTINSTALL=1` to avoid generating the same
   content during install; never use the switch unless a later build/generate step
   is guaranteed.
+- `app/reading-theme.css` owns the dark **reading** palette (`--ink-*`) shared by
+  blog and docs, and is the single source of truth for both: `blog.css` maps the
+  `--landing-*` tokens onto it and the same file remaps Fumadocs' `--color-fd-*`.
+  It exists because the stock grounds (marketing `222 55% 9.6%`, Fumadocs ocean
+  `220 60% 8%`) are too saturated for long-form reading. It also cancels the
+  ocean preset's `.dark body` blue glow. Light mode intentionally keeps stock
+  values. Marketing pages (landing/pricing/changelog/download) must stay on
+  `--landing-*` / `--mkt-*` and reference no `fd-` token, which is what keeps
+  this override off them — check that before moving a component between them.
 - SEO lives in `lib/metadata.ts` and TanStack route `head()` functions. Canonical
   page URLs should match Cloudflare Pages' directory form (`/`, `/zh/`,
   `/docs/.../`, `/zh/docs/.../`); file URLs keep their extension. `/home` and
@@ -66,10 +78,11 @@
 - `vite.config.ts` is the build integration point. Keep TanStack Start, Fumadocs
   MDX, Tailwind, React, and preview-only aliases there. The deployable static
   build output is `site-docs/out/client`; do not publish the SSR server bundle.
-- `src/routeTree.gen.ts`, `public/sitemap.xml`, `public/llms.txt`, and
-  `public/llms-full.txt` are generated and ignored. `pretypecheck` runs
-  `tsr generate`; `generate` writes the SEO files. Do not edit or format the
-  generated route tree or generated public SEO files.
+- `src/routeTree.gen.ts`, `public/sitemap.xml`, `public/llms.txt`,
+  `public/llms-full.txt`, `public/rss.xml`, and `public/rss-zh.xml` are
+  generated and ignored. `pretypecheck` runs `tsr generate`; `generate` writes
+  the SEO files. Do not edit or format the generated route tree or generated
+  public SEO files.
 - The public site imports real workspace components through the `@/*` alias to
   `packages/components/src`. Exact aliases in `vite.config.ts` redirect app-only
   modules to `components/app-preview-shims/`. A `forceSingletonDeps` Vite plugin

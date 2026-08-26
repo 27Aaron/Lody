@@ -4,7 +4,7 @@ import { createFileRoute } from '@tanstack/react-router';
 
 export const Route = createFileRoute('/zh/blog/')({
   loader: () => loadBlogIndexRoute({ data: { locale: 'zh' } }),
-  head: () => blogIndexHead('zh'),
+  head: ({ loaderData }) => blogIndexHead('zh', loaderData),
   component: BlogIndex,
 });
 

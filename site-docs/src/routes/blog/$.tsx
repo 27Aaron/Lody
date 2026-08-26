@@ -6,16 +6,19 @@ import { createFileRoute } from '@tanstack/react-router';
 export const Route = createFileRoute('/blog/$')({
   loader: async ({ params }) => {
     const data = await loadBlogPostRoute({ data: { locale: 'en', splat: params._splat } });
-    await preloadBlogContent('en', data.docPath);
+    await preloadBlogContent('en', data.entry.docPath);
 
     return data;
   },
-  head: ({ loaderData }) => (loaderData ? blogPostHead('en', loaderData) : blogIndexHead('en')),
+  head: ({ loaderData }) =>
+    loaderData ? blogPostHead('en', loaderData.entry) : blogIndexHead('en'),
   component: BlogPost,
 });
 
 function BlogPost() {
   const data = Route.useLoaderData();
 
-  return <BlogPostRoutePage entry={data} locale="en" />;
+  return (
+    <BlogPostRoutePage entry={data.entry} locale="en" next={data.next} previous={data.previous} />
+  );
 }
