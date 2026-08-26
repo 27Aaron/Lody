@@ -767,7 +767,7 @@ export const SessionTabBar = memo(function SessionTabBar({
               isActive={!hasActiveViewerTab && parentSession.id === activeTabSessionId}
               isEditing={editingTabId === parentSession.id}
               isParent={true}
-              html5MentionDrag
+              html5MentionDrag={!soloTab}
               {...sharedTabProps}
             />
           </AdaptiveTabStripItem>

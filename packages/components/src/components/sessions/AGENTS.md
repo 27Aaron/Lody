@@ -33,6 +33,10 @@ Session conversation page chain:
     in-flight store from the strip's dnd-kit pointer drag. Dropping onto the
     conversation inserts a mention of that tab; dropping onto another tab
     still reorders. Pointer-over-conversation wins over closest-tab collision.
+    A lone parent Session tab is not draggable; enable tab drag only once a
+    second visible tab exists. On desktop, Cmd/Ctrl+W closes the focused side
+    panel or child tab; when the parent is the only conversation tab, it leaves
+    the Session view for Chat Landing without archiving the Session.
     Desktop tabs share width equally whenever all can reach `ACTIVE_TAB_MIN_WIDTH`;
     below that threshold the active tab keeps that width and the others share the remainder.
     **The tab pills' top border shares one line with the sidebar and side-panel

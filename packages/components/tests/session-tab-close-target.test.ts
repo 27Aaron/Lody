@@ -7,6 +7,7 @@ const BASE_INPUT = {
   activeSidePanelTabId: 'changes',
   activeConversationTabId: 'child-session',
   parentConversationTabId: 'parent-session',
+  conversationTabCount: 2,
 };
 
 describe('getSessionTabCloseTarget', () => {
@@ -53,5 +54,15 @@ describe('getSessionTabCloseTarget', () => {
         activeConversationTabId: 'parent-session',
       })
     ).toBeNull();
+  });
+
+  it('returns to the chat landing when the parent is the only conversation tab', () => {
+    expect(
+      getSessionTabCloseTarget({
+        ...BASE_INPUT,
+        activeConversationTabId: 'parent-session',
+        conversationTabCount: 1,
+      })
+    ).toEqual({ kind: 'landing' });
   });
 });

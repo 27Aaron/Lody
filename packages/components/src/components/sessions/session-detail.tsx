@@ -4025,8 +4025,15 @@ const SessionDetail = ({
         activeSidePanelTabId,
         activeConversationTabId: activeTabSessionId,
         parentConversationTabId: sessionId,
+        conversationTabCount: orderedSessionTabIds.length,
       }),
-    [activeSidePanelTabId, activeTabSessionId, isSidebarOpen, sessionId]
+    [
+      activeSidePanelTabId,
+      activeTabSessionId,
+      isSidebarOpen,
+      orderedSessionTabIds.length,
+      sessionId,
+    ]
   );
 
   useCommand({
@@ -4034,14 +4041,18 @@ const SessionDetail = ({
     title: t('commands.session.closeFocusedTab', 'Close Focused Tab'),
     category: 'Session',
     keybindings: getCommandKeybindings('session.closeFocusedTab'),
-    // Consume the native close-window chord anywhere on a desktop session page, including
-    // the non-closeable parent tab. `run` remains a no-op when there is no closeable target.
+    // Consume the native close-window chord anywhere on a desktop session page. The lone
+    // parent tab returns to chat landing; a parent with siblings remains non-closeable.
     when: () => !isMobile && Boolean(activeSession),
     // Cmd/Ctrl+W is a tab-management command even while the composer or editor owns focus.
     allowInTextInput: true,
     run: () => {
       const target = resolveFocusedTabCloseTarget();
       if (!target) return;
+      if (target.kind === 'landing') {
+        handleBackToList();
+        return;
+      }
       if (target.kind === 'side-panel') {
         handleSidePanelTabClose(target.tabId);
         return;
