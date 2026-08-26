@@ -56,7 +56,9 @@ export type CodexResetStatus = {
 // `stats` is ignored on purpose, so an additive server change cannot break the
 // dialog.
 const sourceSchema = z.object({
-  author: z.string(),
+  // Source attribution is ancillary. The endpoint occasionally omits the
+  // author, which must not make the forecast status itself unusable.
+  author: z.string().optional(),
   url: z.string(),
 });
 
@@ -99,7 +101,7 @@ function parseSource(
   raw: z.infer<typeof sourceSchema> | null | undefined
 ): CodexResetSource | null {
   const url = sanitizeExternalUrl(raw?.url);
-  if (!raw || !url) return null;
+  if (!raw?.author || !url) return null;
   return { author: raw.author, url };
 }
 

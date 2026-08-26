@@ -130,6 +130,28 @@ describe('parseCodexResetStatusResponse', () => {
     expect(status?.latestReset?.announcedAtMs).toBe(Date.parse('2026-08-13T01:01:37.000Z'));
   });
 
+  it('keeps the latest reset when its source omits the author', () => {
+    const status = parseCodexResetStatusResponse({
+      data: {
+        latest_reset: {
+          announced_at: '2026-08-25T14:30:00.000Z',
+          text: 'A reset was observed.',
+          source: {
+            type: 'observed',
+            url: 'https://x.com/thsottiaux/status/2092311059197808936',
+          },
+        },
+        active_watch: null,
+      },
+    });
+
+    expect(status).not.toBeNull();
+    expect(status?.latestReset).toMatchObject({
+      text: 'A reset was observed.',
+      source: null,
+    });
+  });
+
   it('keeps a watch without a numeric probability', () => {
     const status = parseCodexResetStatusResponse(watchResponse({ reset_chance_percent: null }));
 
