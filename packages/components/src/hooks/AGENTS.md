@@ -73,3 +73,17 @@ this file; edit `AGENTS.md` only.
   history tree. Control state (`session`, message queue, fork, preview, external
   cursor) stays synchronous; do not delay it behind transcript rendering or
   restore a direct `setState` for history-only mirror events.
+- Code Collab file-index hooks borrow owner-session resources from the
+  workspace-owned Effect `ScopedCache`; do not open, scan, subscribe, or join
+  the same Flock once per React mount. The resource subscribes before its cold
+  scan, advances by batch events, and compares the Flock version before any
+  remote catch-up rescan. Each cache entry holds a loro-repo Flock lease; LRU
+  eviction closes its room and Flock subscriptions, releases the lease, then
+  unloads the replica; a room that finishes joining after eviction is
+  unsubscribed and gets a second best-effort unload. Failed opens are not
+  cached, and a failed room resource is invalidated after its last borrower
+  releases. Workspace disposal closes every borrower Scope before destroying
+  the repo. Cache-resource identity is part of provider memoization because a
+  recreated resource restarts its local revision counter. Local-machine RPC
+  snapshots seed the shared resource before it becomes visible, so first paint
+  stays local while later Flock events remain deduplicated across mounts.

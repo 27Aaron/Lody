@@ -67,6 +67,7 @@ import type {
 } from '@lody/shared';
 import type { LocalProjectGitStateRpcResponse } from '@lody/loro-streams-rpc';
 import type { WorkspaceWriter } from '../providers/workspace-writer';
+import type { CodeCollabFileIndexCache } from '@/lib/code-collab-file-index-cache';
 import { readStoredAuthToken } from '@/lib/auth-bootstrap';
 import type { RoomSyncState } from '@/lib/room-sync-state';
 import { currentWorkspaceIdAtom, currentWorkspaceSlugAtom } from './workspace-context';
@@ -154,6 +155,8 @@ export type WorkspaceRuntime = {
    */
   readonly workspaceId: WorkspaceId;
   readonly repo: LoroRepo;
+  /** Workspace-owned, scoped LRU for owner-session file-index Flock resources. */
+  readonly codeCollabFileIndexCache: CodeCollabFileIndexCache;
   /**
    * The authored-write seam. Every durable repo mutation the renderer performs
    * goes through this instead of calling `repo.*` / `sessionStore.setState`

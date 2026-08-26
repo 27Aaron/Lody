@@ -119,6 +119,7 @@ import { runStartupAcpCapabilitiesRefresh } from './startup-acp-capabilities-ref
 import { createLocalLoroDataPlaneConnection } from './local-loro-data-plane-connection';
 import { createWorkspaceMachineRpcFacade } from './workspace-machine-rpc-facade';
 import { resyncMachineFlockRows } from '@/hooks/use-machine-flock-rows';
+import { createCodeCollabFileIndexCache } from '@/lib/code-collab-file-index-cache';
 
 declare global {
   interface Window {
@@ -1058,8 +1059,8 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
         !message.success || message.status === 'error'
           ? 'error'
           : message.status === 'not-applicable'
-            ? 'installed'
-            : message.status,
+          ? 'installed'
+          : message.status,
       command: message.command,
       platformArch: message.platformArch,
       version: message.version,
@@ -4359,6 +4360,12 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
       await sessionStoreCache.disposeAll();
       await previewVisualCommentStoreCache.disposeAll();
       await taskStoreCache.disposeAll();
+      let codeCollabFileIndexCacheDisposeError: unknown = null;
+      try {
+        await codeCollabFileIndexCache.dispose();
+      } catch (error) {
+        codeCollabFileIndexCacheDisposeError = error;
+      }
 
       let teardownTransportError: unknown = null;
       try {
@@ -4383,6 +4390,9 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
       }
       if (teardownTransportError) {
         throw teardownTransportError;
+      }
+      if (codeCollabFileIndexCacheDisposeError) {
+        throw codeCollabFileIndexCacheDisposeError;
       }
     })();
 
@@ -4453,10 +4463,12 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
   }, RECONNECT_BACKSTOP_INTERVAL_MS);
 
   window.repo = repo;
+  const codeCollabFileIndexCache = createCodeCollabFileIndexCache(repo);
   return {
     workspaceSlug: deps.workspaceSlug,
     workspaceId,
     repo,
+    codeCollabFileIndexCache,
     writer: workspaceWriter,
     prepareSessionTarget: (sessionId, machineId) =>
       targetRouter.prepareSessionTarget(sessionId, machineId),

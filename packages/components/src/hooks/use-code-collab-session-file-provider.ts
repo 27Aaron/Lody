@@ -1,21 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useAtomValue } from 'jotai';
 import { selectAtom } from 'jotai/utils';
-import type { Flock } from '@loro-dev/flock-wasm';
-import type { RepoRoomSubscription } from 'loro-repo';
 import {
   getSessionRoomId,
   getCodeCollabFileIndexFlockDocId,
-  getServerNow,
-  applyCodeCollabFileIndexFlockEvents,
   codeCollabFileIndexToSharedState,
-  codeCollabFileIndexStatesEqual,
-  readCodeCollabFileIndexFromFlock,
-  type CodeCollabV2Error,
-  type CodeCollabV2FileIndexSnapshot,
   type CodeCollabFileSourceState,
   type CodeCollabRole,
   type CodeCollabV2AllChangesState,
+  type CodeCollabV2Error,
+  type CodeCollabV2FileIndexSnapshot,
   type CodeCollabV2FileIndexState,
   type CodeCollabV2FileTreeState,
   type MachineId,
@@ -25,10 +19,11 @@ import {
 import { activeWorkspaceRuntimeAtom } from '@/atoms/runtime';
 import { sessionMetaAtomFamily } from '@/atoms/doc-meta';
 import {
-  describeCodeCollabError,
-  logCodeCollabInfo,
-  warnCodeCollab,
-} from '@/lib/code-collab-debug';
+  type CodeCollabFileIndexCache,
+  type CodeCollabFileIndexLoadState,
+  type CodeCollabFileIndexResource,
+} from '@/lib/code-collab-file-index-cache';
+import { describeCodeCollabError, warnCodeCollab } from '@/lib/code-collab-debug';
 import {
   CodeCollabSessionFileProvider,
   codeCollabFileTreeToSessionFileEntries,
@@ -37,7 +32,6 @@ import {
   type CodeCollabSessionFileProviderRuntime,
   type CodeCollabSessionFileProviderTextState,
 } from '@/lib/code-collab-session-file-provider';
-import { readinessBinding } from '@/lib/room-readiness';
 import type { SessionFileProvider, SessionFileProviderEntry } from '@/lib/session-file-provider';
 
 export type CodeCollabSessionFileProviderStatus =
@@ -147,26 +141,28 @@ type ProviderTextStateRef = {
 
 type ProviderSharedStateRef = {
   readonly key: string;
+  readonly resourceKey: object | null;
   readonly state: CodeCollabV2MaterializedSharedState | null;
 };
 
-type CodeCollabFileIndexSnapshot = {
-  readonly sourceId: string;
-  readonly fileIndex: CodeCollabV2FileIndexState;
-  readonly revision: number;
-  readonly updatedAtMs: number;
+const IDLE_FILE_INDEX_STATE = Object.freeze({ status: 'idle' as const });
+const LOADING_FILE_INDEX_STATE = Object.freeze({ status: 'loading' as const });
+
+type HookFileIndexLoadState = typeof IDLE_FILE_INDEX_STATE | CodeCollabFileIndexLoadState;
+
+type FileIndexTargetPlane = 'local' | 'cloud';
+
+type AcquiredFileIndexResource = {
+  readonly requestKey: object;
+  readonly cache: CodeCollabFileIndexCache;
+  readonly flockDocId: string;
+  readonly targetPlane: FileIndexTargetPlane;
+  readonly resource: CodeCollabFileIndexResource;
 };
 
-type CodeCollabFileIndexLoadState =
-  | { readonly status: 'idle' | 'loading' }
-  | { readonly status: 'ready'; readonly snapshot: CodeCollabFileIndexSnapshot }
-  | { readonly status: 'error'; readonly error: unknown };
-
-type CodeCollabFileIndexRuntimeRepo = {
-  openFlockDoc: (flockDocId: string) => Promise<{
-    readonly flock: Flock;
-    readonly joinRoom: () => Promise<RepoRoomSubscription>;
-  }>;
+type KeyedFileIndexLoadState = {
+  readonly requestKey: object;
+  readonly state: HookFileIndexLoadState;
 };
 
 type LocalCodeCollabFileIndexSnapshot = CodeCollabV2FileIndexSnapshot | CodeCollabV2Error | null;
@@ -180,194 +176,152 @@ function codeCollabFileIndexErrorMessage(error: unknown): string {
   return error instanceof Error
     ? error.message
     : typeof codeCollabError.message === 'string'
-      ? codeCollabError.message
-      : CODE_COLLAB_UNSUPPORTED_SESSION_MESSAGE;
+    ? codeCollabError.message
+    : CODE_COLLAB_UNSUPPORTED_SESSION_MESSAGE;
 }
 
 function useCodeCollabFileIndexLoadState(args: {
   readonly enabled: boolean;
-  readonly runtimeRepo: CodeCollabFileIndexRuntimeRepo | null;
+  readonly cache: CodeCollabFileIndexCache | null;
   readonly workspaceId: WorkspaceId | string | null | undefined;
   readonly ownerSessionId: SessionId;
-  readonly prepareTarget?: () => Promise<'local' | 'cloud'>;
+  readonly prepareTarget?: () => Promise<FileIndexTargetPlane>;
   readonly loadLocalSnapshot?: () => Promise<LocalCodeCollabFileIndexSnapshot>;
-}): CodeCollabFileIndexLoadState {
-  const [state, setState] = useState<CodeCollabFileIndexLoadState>({ status: 'idle' });
-  const { enabled, runtimeRepo, workspaceId, ownerSessionId, prepareTarget, loadLocalSnapshot } =
-    args;
+}): HookFileIndexLoadState {
+  const [acquired, setAcquired] = useState<AcquiredFileIndexResource | null>(null);
+  const [fallbackState, setFallbackState] = useState<KeyedFileIndexLoadState | null>(null);
+  const [acquireError, setAcquireError] = useState<KeyedFileIndexLoadState | null>(null);
+  const { enabled, cache, workspaceId, ownerSessionId, prepareTarget, loadLocalSnapshot } = args;
+  const flockDocId =
+    enabled && workspaceId
+      ? getCodeCollabFileIndexFlockDocId(workspaceId as WorkspaceId, ownerSessionId)
+      : null;
+  const requestKey = useMemo<object>(
+    () => ({ cache, flockDocId, loadLocalSnapshot, prepareTarget }),
+    [cache, flockDocId, loadLocalSnapshot, prepareTarget]
+  );
 
   useEffect(() => {
-    if (!enabled || !workspaceId || (!runtimeRepo && !loadLocalSnapshot)) {
-      setState({ status: 'idle' });
+    setAcquired(null);
+    setAcquireError(null);
+    if (!flockDocId || (!cache && !loadLocalSnapshot)) {
+      setFallbackState({ requestKey, state: IDLE_FILE_INDEX_STATE });
       return undefined;
     }
 
-    const flockDocId = getCodeCollabFileIndexFlockDocId(workspaceId as WorkspaceId, ownerSessionId);
     let cancelled = false;
-    let revision = 0;
-    let lastPublishedFileIndex: CodeCollabV2FileIndexState | null = null;
-    let currentFileIndex: CodeCollabV2FileIndexState = {};
-    let unsubscribeFlock: (() => void) | null = null;
-    let roomSub: { readonly unsubscribe: () => void } | null = null;
-    let remoteSynced = false;
-    const localSnapshotSourceId = `local-machine-rpc:${workspaceId}:${ownerSessionId}`;
-
-    const publishSnapshot = (
-      fileIndex: CodeCollabV2FileIndexState,
-      options: {
-        readonly allowEmpty: boolean;
-        readonly sourceId?: string;
-        readonly updatedAtMs?: number;
+    let release: (() => Promise<void>) | null = null;
+    let targetPlane: FileIndexTargetPlane = 'cloud';
+    let localSnapshotPublished = false;
+    const releaseSafely = async (releaseLease: () => Promise<void>): Promise<void> => {
+      try {
+        await releaseLease();
+      } catch (error) {
+        warnCodeCollab('file-index cache lease release failed', {
+          flockDocId,
+          error: describeCodeCollabError(error),
+        });
       }
-    ): void => {
-      currentFileIndex = fileIndex;
-      if (!options.allowEmpty && Object.keys(fileIndex).length === 0) {
-        return;
-      }
-      if (
-        lastPublishedFileIndex !== null &&
-        codeCollabFileIndexStatesEqual(lastPublishedFileIndex, fileIndex)
-      ) {
-        return;
-      }
-      lastPublishedFileIndex = fileIndex;
-      revision += 1;
-      setState({
-        status: 'ready',
-        snapshot: {
-          sourceId: options.sourceId ?? flockDocId,
-          fileIndex,
-          revision,
-          updatedAtMs: options.updatedAtMs ?? getServerNow(),
-        },
-      });
     };
 
-    setState({ status: 'loading' });
+    setFallbackState({ requestKey, state: LOADING_FILE_INDEX_STATE });
     void (async () => {
-      const targetPlane = await prepareTarget?.();
-      if (cancelled) {
-        return;
-      }
+      targetPlane = (await prepareTarget?.()) ?? 'cloud';
+      if (cancelled) return;
+
+      let localSnapshot: CodeCollabV2FileIndexSnapshot | null = null;
       if (targetPlane === 'local') {
-        const snapshot = await loadLocalSnapshot?.();
+        const result = await loadLocalSnapshot?.();
         if (cancelled) return;
-        if (snapshot == null) {
+        if (result == null) {
           throw new Error('Local Code Collab file-index snapshot is unavailable.');
         }
-        if (!isCodeCollabFileIndexSnapshot(snapshot)) {
-          throw new Error(codeCollabFileIndexErrorMessage(snapshot));
+        if (!isCodeCollabFileIndexSnapshot(result)) {
+          throw new Error(codeCollabFileIndexErrorMessage(result));
         }
-        // Do not await the Flock here. The local CLI owns this snapshot and
-        // returns its file tree plus current All Changes over Electron IPC.
-        publishSnapshot(snapshot.fileIndex, {
-          allowEmpty: true,
-          sourceId: localSnapshotSourceId,
-          updatedAtMs: snapshot.updatedAtMs,
+        localSnapshot = result;
+        localSnapshotPublished = true;
+        setFallbackState({
+          requestKey,
+          state: {
+            status: 'ready',
+            snapshot: {
+              resourceKey: requestKey,
+              fileIndex: result.fileIndex,
+              revision: 1,
+              updatedAtMs: result.updatedAtMs,
+            },
+          },
         });
-        // The IPC result owns first paint, but subsequent local CLI publications
-        // still arrive as Flock events. Subscribe without awaiting Flock readiness
-        // so a delayed data-plane join can never block the local file surface.
-        if (runtimeRepo) {
-          void (async () => {
-            logCodeCollabInfo('file-index local flock subscribe', {
-              workspaceId,
-              ownerSessionId,
-              flockDocId,
-            });
-            const handle = await runtimeRepo.openFlockDoc(flockDocId);
-            if (cancelled) {
-              return;
-            }
-            unsubscribeFlock = handle.flock.subscribe((batch) => {
-              if (!cancelled) {
-                publishSnapshot(
-                  applyCodeCollabFileIndexFlockEvents(currentFileIndex, batch.events),
-                  { allowEmpty: true }
-                );
-              }
-            });
-            const joined = await handle.joinRoom();
-            if (cancelled) {
-              joined.unsubscribe();
-              return;
-            }
-            roomSub = joined;
-          })().catch((error: unknown) => {
-            // The local snapshot remains usable if the best-effort live update
-            // subscription cannot start.
-            warnCodeCollab('file-index local flock subscription failed', {
-              workspaceId,
-              ownerSessionId,
-              flockDocId,
-              error: describeCodeCollabError(error),
-            });
-          });
-        }
-        return;
       }
-      if (!runtimeRepo) {
+
+      if (!cache) {
+        if (targetPlane === 'local') return;
         throw new Error('Code Collab shared file state is unavailable.');
       }
-      logCodeCollabInfo('file-index flock open', {
-        workspaceId,
-        ownerSessionId,
-        flockDocId,
-      });
-      const handle = await runtimeRepo.openFlockDoc(flockDocId);
+
+      const lease = await cache.acquire(flockDocId);
+      release = lease.release;
       if (cancelled) {
+        await releaseSafely(lease.release);
         return;
       }
-      const refreshFromFlock = (options: { readonly allowEmpty: boolean }): void => {
-        publishSnapshot(readCodeCollabFileIndexFromFlock(handle.flock), options);
-      };
-      const refreshFromRemoteThenFlock = async (): Promise<void> => {
-        const joined = await handle.joinRoom();
-        if (cancelled) {
-          joined.unsubscribe();
-          return;
-        }
-        roomSub = joined;
-        // Dual-homed rooms reject the merged `firstSyncedWithRemote`;
-        // readiness is the selected binding's first sync.
-        await readinessBinding(joined).firstSyncedWithRemote;
-        if (cancelled) return;
-        remoteSynced = true;
-        refreshFromFlock({ allowEmpty: true });
-      };
-      refreshFromFlock({ allowEmpty: false });
-      void refreshFromRemoteThenFlock().catch((error: unknown) => {
-        warnCodeCollab('file-index flock sync failed', {
+      if (localSnapshot) {
+        lease.resource.seed(localSnapshot.fileIndex, localSnapshot.updatedAtMs);
+      }
+      setAcquired({ requestKey, cache, flockDocId, targetPlane, resource: lease.resource });
+    })().catch(async (error: unknown) => {
+      if (release) {
+        const releaseLease = release;
+        release = null;
+        await releaseSafely(releaseLease);
+      }
+      if (cancelled) return;
+      if (targetPlane === 'local' && localSnapshotPublished) {
+        warnCodeCollab('file-index local flock subscription failed', {
           workspaceId,
           ownerSessionId,
           flockDocId,
           error: describeCodeCollabError(error),
         });
-        if (!cancelled) {
-          setState({ status: 'error', error });
-        }
-      });
-      unsubscribeFlock = handle.flock.subscribe((batch) => {
-        if (!cancelled) {
-          publishSnapshot(applyCodeCollabFileIndexFlockEvents(currentFileIndex, batch.events), {
-            allowEmpty: remoteSynced,
-          });
-        }
-      });
-    })().catch((error: unknown) => {
-      if (!cancelled) {
-        setState({ status: 'error', error });
+        return;
       }
+      setAcquireError({ requestKey, state: { status: 'error', error } });
     });
 
     return () => {
       cancelled = true;
-      unsubscribeFlock?.();
-      roomSub?.unsubscribe();
+      if (release) void releaseSafely(release);
     };
-  }, [enabled, loadLocalSnapshot, ownerSessionId, prepareTarget, runtimeRepo, workspaceId]);
+  }, [
+    cache,
+    flockDocId,
+    loadLocalSnapshot,
+    ownerSessionId,
+    prepareTarget,
+    requestKey,
+    workspaceId,
+  ]);
 
-  return state;
+  const activeResource = acquired?.requestKey === requestKey ? acquired : null;
+  const subscribe = useCallback(
+    (listener: () => void) => activeResource?.resource.subscribe(listener) ?? (() => undefined),
+    [activeResource]
+  );
+  const getSnapshot = useCallback<() => HookFileIndexLoadState>(() => {
+    if (!flockDocId) return IDLE_FILE_INDEX_STATE;
+    const fallback =
+      fallbackState?.requestKey === requestKey ? fallbackState.state : LOADING_FILE_INDEX_STATE;
+    if (acquireError?.requestKey === requestKey) return acquireError.state;
+    if (!activeResource) return fallback;
+    const resourceState = activeResource.resource.getSnapshot();
+    if (activeResource.targetPlane === 'local' && resourceState.status !== 'ready') {
+      return fallback;
+    }
+    return resourceState;
+  }, [acquireError, activeResource, fallbackState, flockDocId, requestKey]);
+
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
 export function useCodeCollabSessionFileProvider(
@@ -420,7 +374,7 @@ export function useCodeCollabSessionFileProvider(
   );
   const fileIndexLoadState = useCodeCollabFileIndexLoadState({
     enabled: options.enabled !== false && !!machineId,
-    runtimeRepo: runtime?.repo ?? null,
+    cache: runtime?.codeCollabFileIndexCache ?? null,
     workspaceId,
     ownerSessionId,
     prepareTarget: prepareFileIndexTarget,
@@ -428,15 +382,14 @@ export function useCodeCollabSessionFileProvider(
   });
   const fileIndexSnapshot =
     fileIndexLoadState.status === 'ready' ? fileIndexLoadState.snapshot : null;
-  const sharedStateKey = [
-    workspaceId ?? '',
-    machineId ?? '',
-    ownerSessionId,
-    sourceState,
-    fileIndexSnapshot?.sourceId ?? '',
-  ].join('\u0000');
+  const sharedStateKey = [workspaceId ?? '', machineId ?? '', ownerSessionId, sourceState].join(
+    '\u0000'
+  );
   const previousSharedState =
-    sharedStateRef.current?.key === sharedStateKey ? sharedStateRef.current.state : null;
+    sharedStateRef.current?.key === sharedStateKey &&
+    sharedStateRef.current.resourceKey === (fileIndexSnapshot?.resourceKey ?? null)
+      ? sharedStateRef.current.state
+      : null;
   const materializedSharedState = materializeCodeCollabV2FileIndexForFileProvider({
     fileIndex: fileIndexSnapshot?.fileIndex ?? null,
     revision: fileIndexSnapshot?.revision ?? 0,
@@ -446,6 +399,7 @@ export function useCodeCollabSessionFileProvider(
   });
   sharedStateRef.current = {
     key: sharedStateKey,
+    resourceKey: fileIndexSnapshot?.resourceKey ?? null,
     state: materializedSharedState,
   };
 
