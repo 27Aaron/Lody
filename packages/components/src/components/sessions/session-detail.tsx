@@ -5494,7 +5494,7 @@ const SessionDetail = ({
   /* Right-side window controls for the merged top bar: the parent session's
      header toolbar (IDE launcher / preview / "…" menu) + the sidebar toggle.
      Rendered by SessionChatInterface (headerVariant="toolbar") so the menu
-     keeps its internal handlers (rename dialog, copy history, search). */
+     keeps root-scoped presentation while selected-tab actions are delegated. */
   const desktopHeaderToolbar = (
     <SessionChatInterface
       session={activeSession}
@@ -5514,6 +5514,7 @@ const SessionDetail = ({
       onDeleteSession={handleRequestDeleteCurrentSession}
       onOpenSearch={handleOpenSearch}
       onCopyConversationHistory={handleCopyConversationHistory}
+      onRequestRename={!activeDraftTab ? handleRenameCurrentSession : undefined}
       onForkSession={
         !activeDraftTab && activeTabSession && canForkSession(activeTabSession)
           ? handleForkCurrentSession

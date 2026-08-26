@@ -1765,6 +1765,8 @@ interface SessionChatInterfaceProps {
   onOpenSearch?: () => void | Promise<void>;
   /** External callback for copying conversation history (used when header and message area are split) */
   onCopyConversationHistory?: () => void | Promise<void>;
+  /** External rename request for split header/message layouts. */
+  onRequestRename?: () => void | Promise<void>;
   /** External latest-assistant fork callback for split header/message layouts. */
   onForkSession?: (destination?: SessionForkDestination) => void | Promise<void>;
   /** Effective team/private visibility for the session shown in the header menu. */
@@ -1915,6 +1917,7 @@ export const SessionChatInterface = memo(
       onDeleteSession,
       onOpenSearch: onOpenSearchExternal,
       onCopyConversationHistory: onCopyConversationHistoryExternal,
+      onRequestRename,
       onForkSession: onForkSessionExternal,
       sharing,
       onShareWithTeam,
@@ -5461,12 +5464,16 @@ export const SessionChatInterface = memo(
         isForking={forkingAssistantMessageId !== null && forkingAssistantMessageId !== undefined}
         forkWorktreeAvailability={forkWorktreeAvailability}
         onForkMenuOpen={onForkWorktreeMenuOpen}
-        onRename={() => {
-          setRenameDialogTarget({
-            sessionId: session.id,
-            initialTitle: session.title ?? '',
-          });
-        }}
+        onRename={
+          headerVariant === 'toolbar'
+            ? onRequestRename
+            : () => {
+                setRenameDialogTarget({
+                  sessionId: session.id,
+                  initialTitle: session.title ?? '',
+                });
+              }
+        }
         onOpenReviewSettings={() => openSettings('preferences')}
         owner={ownerMenuState}
         openedByRelations={openedByRelations}

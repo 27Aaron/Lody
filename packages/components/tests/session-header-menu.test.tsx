@@ -1,16 +1,25 @@
 // @vitest-environment jsdom
 
-import { act } from 'react';
+import { act, type ComponentProps, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { createStore, Provider } from 'jotai';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { PlatformContext } from '@lody/platform/react';
+import { createLocalPlatformProvider, createStaticStore } from '@lody/platform';
 import type { SessionMeta } from '@lody/shared';
 
 import {
   experimentalFeaturesEnabledAtom,
   reviewAgentExperimentEnabledAtom,
 } from '../src/atoms/settings';
-import { SessionHeaderMenu } from '../src/components/sessions/session-chat-interface';
+import {
+  SessionChatInterface,
+  SessionHeaderMenu,
+} from '../src/components/sessions/session-chat-interface';
+import { initI18n } from '../src/i18n';
+import { AuthenticatedConvexContext } from '../src/hooks/use-authenticated-convex';
+import type { LodyAuthClient } from '../src/lib/auth';
+import { LocalPlatformConvexProvider } from '../src/providers/convex-provider';
 
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -34,12 +43,46 @@ const session = {
 } as SessionMeta;
 
 const translate = (_key: string, fallback: string) => fallback;
+const localPlatform = createLocalPlatformProvider({
+  session: createStaticStore({ status: 'unauthenticated' }),
+  workspaces: createStaticStore({
+    status: 'ready',
+    workspaces: [],
+    activeWorkspaceId: null,
+  }),
+});
+const localAuthClient = {
+  useActiveOrganization: () => ({ data: null }),
+} as unknown as LodyAuthClient;
 
-describe('SessionHeaderMenu fork action', () => {
+function SessionChatTestProviders({ children }: { children: ReactNode }) {
+  return (
+    <PlatformContext.Provider value={localPlatform}>
+      <LocalPlatformConvexProvider authClient={localAuthClient}>
+        <AuthenticatedConvexContext.Provider
+          value={{
+            authSessionId: null,
+            confirmedUnauthenticated: true,
+            isAuthenticated: false,
+            isLoading: false,
+            isRecovering: false,
+            claimAutomaticCommand: () => false,
+            requestAuthRecovery: () => {},
+          }}
+        >
+          <Provider store={createStore()}>{children}</Provider>
+        </AuthenticatedConvexContext.Provider>
+      </LocalPlatformConvexProvider>
+    </PlatformContext.Provider>
+  );
+}
+
+describe('Session header actions', () => {
   let root: Root | undefined;
   let container: HTMLDivElement | undefined;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await initI18n('en');
     Object.defineProperty(globalThis, 'PointerEvent', {
       configurable: true,
       value: TestPointerEvent,
@@ -74,6 +117,18 @@ describe('SessionHeaderMenu fork action', () => {
     });
   }
 
+  async function renderSessionChatInterface(
+    props: ComponentProps<typeof SessionChatInterface>
+  ): Promise<void> {
+    await act(async () => {
+      root?.render(
+        <SessionChatTestProviders>
+          <SessionChatInterface {...props} />
+        </SessionChatTestProviders>
+      );
+    });
+  }
+
   it('forks from the action immediately above Rename Chat', async () => {
     const onFork = vi.fn();
     await act(async () => {
@@ -98,6 +153,60 @@ describe('SessionHeaderMenu fork action', () => {
     await act(async () => forkItem?.click());
     expect(onFork).toHaveBeenCalledTimes(1);
     expect(onFork).toHaveBeenCalledWith('shared');
+  });
+
+  it('delegates toolbar rename instead of opening a dialog for its root session', async () => {
+    const onRequestRename = vi.fn();
+    await renderSessionChatInterface({
+      session,
+      workspaceSession: session,
+      headerVariant: 'toolbar',
+      hideMessageArea: true,
+      onRequestRename,
+    });
+    await openMenu();
+
+    const renameItem = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find(
+      (item) => item.textContent?.includes('Rename Chat')
+    );
+    await act(async () => renameItem?.click());
+
+    expect(onRequestRename).toHaveBeenCalledTimes(1);
+    expect(document.querySelector<HTMLElement>('[role="dialog"]')).toBeNull();
+  });
+
+  it('hides toolbar rename when the active tab owner provides no request', async () => {
+    await renderSessionChatInterface({
+      session,
+      workspaceSession: session,
+      headerVariant: 'toolbar',
+      hideMessageArea: true,
+    });
+    await openMenu();
+
+    const labels = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).map(
+      (item) => item.textContent?.trim()
+    );
+    expect(labels).not.toContain('Rename Chat');
+  });
+
+  it('keeps page-header rename inline for its own session', async () => {
+    await renderSessionChatInterface({
+      session,
+      workspaceSession: session,
+      headerVariant: 'page',
+      hideMessageArea: true,
+    });
+    await openMenu();
+
+    const renameItem = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find(
+      (item) => item.textContent?.includes('Rename Chat')
+    );
+    await act(async () => renameItem?.click());
+
+    expect(document.querySelector<HTMLTextAreaElement>('[role="dialog"] textarea')?.value).toBe(
+      session.title
+    );
   });
 
   it('turns the fork action into a submenu when a worktree destination is available', async () => {
