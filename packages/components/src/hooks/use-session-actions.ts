@@ -35,6 +35,7 @@ import {
   isLoroRepoDocDeleted,
   normalizeSessionTurnInputConfig,
   readMachineFlockRowsFromFlock,
+  sanitizeMessageTextSpans,
   shouldQueueMachineDeleteSession,
 } from '@lody/shared';
 import { useAtomValue, useSetAtom, useStore } from 'jotai';
@@ -55,6 +56,7 @@ import {
   rpcDeliveredTurnsAtom,
 } from '@/atoms/session-dispatch-delivery';
 import { resolveSessionCreateRepoFullName } from '@/lib/session-repo';
+import { collectSessionLifecycleIds } from '@/lib/session-lifecycle';
 import { capturePostHogEvent } from '@/lib/posthog-analytics';
 import { useAuthenticatedConvex } from './use-authenticated-convex';
 
@@ -68,6 +70,67 @@ type CreateSessionResult = {
 type StartSessionResult = CreateSessionResult & {
   historyEntry: SessionHistory;
 };
+
+export type SessionChatType = 'regular' | 'side_chat';
+
+export function resolveSessionChatType(
+  session: Pick<SessionMeta, 'childSessionPlacement'> | null | undefined
+): SessionChatType {
+  return session?.childSessionPlacement === 'side-panel' ? 'side_chat' : 'regular';
+}
+
+const TRACKED_MENTION_KINDS = [
+  'file',
+  'dir',
+  'issue',
+  'pr',
+  'skill',
+  'session',
+  'command',
+  'agent_role',
+] as const;
+
+export type SessionMentionCounts = {
+  mention_count: number;
+  mention_types: (typeof TRACKED_MENTION_KINDS)[number][];
+  mention_file_count: number;
+  mention_dir_count: number;
+  mention_issue_count: number;
+  mention_pr_count: number;
+  mention_skill_count: number;
+  mention_session_count: number;
+  mention_command_count: number;
+  mention_agent_role_count: number;
+};
+
+export function countSessionMentions(items: SessionHistoryInput['items']): SessionMentionCounts {
+  const counts = Object.fromEntries(TRACKED_MENTION_KINDS.map((kind) => [kind, 0])) as Record<
+    (typeof TRACKED_MENTION_KINDS)[number],
+    number
+  >;
+
+  for (const item of items ?? []) {
+    if (item.type !== 'text' || typeof item.text !== 'string') continue;
+    for (const span of sanitizeMessageTextSpans(item.text, item.spans) ?? []) {
+      if (span.kind === 'pasted_text') continue;
+      counts[span.kind] += 1;
+    }
+  }
+
+  const mentionTypes = TRACKED_MENTION_KINDS.filter((kind) => counts[kind] > 0);
+  return {
+    mention_count: mentionTypes.reduce((total, kind) => total + counts[kind], 0),
+    mention_types: mentionTypes,
+    mention_file_count: counts.file,
+    mention_dir_count: counts.dir,
+    mention_issue_count: counts.issue,
+    mention_pr_count: counts.pr,
+    mention_skill_count: counts.skill,
+    mention_session_count: counts.session,
+    mention_command_count: counts.command,
+    mention_agent_role_count: counts.agent_role,
+  };
+}
 
 function buildSessionCreateResult(payload: SessionToCreate): CreateSessionResult {
   const sessionId = payload.sessionId ?? (uuidv4() as SessionId);
@@ -114,6 +177,14 @@ function buildSessionCreateResult(payload: SessionToCreate): CreateSessionResult
   }
   if (payload.parentSessionId) {
     sessionMeta.parentSessionId = payload.parentSessionId;
+  }
+  // Where this session came from, not how it runs: the launch config above is
+  // already frozen, so nothing re-reads the mutable Role catalog from these.
+  if (payload.agentRoleId) {
+    sessionMeta.agentRoleId = payload.agentRoleId;
+    if (typeof payload.agentRoleRevision === 'number') {
+      sessionMeta.agentRoleRevision = payload.agentRoleRevision;
+    }
   }
   return { sessionId, sessionMeta };
 }
@@ -372,13 +443,18 @@ export function useSessionActions(): SessionActions {
     [isConvexAuthenticated, recordMyWorkspaceDailyActiveUser, requestAuthRecovery]
   );
 
-  /** Find all child session IDs for a given parent session. */
-  const getChildSessionIds = useCallback(
-    (parentId: SessionId): SessionId[] => {
+  const getSessionLifecycleMetas = useCallback(
+    (sessionId: SessionId, rootMeta: SessionMeta): SessionMeta[] => {
       const cache = store.get(sessionMetaCacheAtom);
-      return Object.values(cache)
-        .filter((meta): meta is SessionMeta => !!meta && meta.parentSessionId === parentId)
-        .map((meta) => meta.id);
+      const sessionsById = new Map(
+        Object.values(cache).map((session) => [session.id, session] as const)
+      );
+      sessionsById.set(sessionId, { ...rootMeta, id: rootMeta.id ?? sessionId });
+      return collectSessionLifecycleIds(sessionId, [...sessionsById.values()]).map((id) => {
+        const session = sessionsById.get(id);
+        if (!session) throw new Error(`Session metadata missing for lifecycle child ${id}`);
+        return session;
+      });
     },
     [store]
   );
@@ -483,6 +559,8 @@ export function useSessionActions(): SessionActions {
         agent_type: sessionMeta.agentType,
         project_kind: sessionMeta.project?.kind ?? null,
         is_first_message: true,
+        session_type: resolveSessionChatType(sessionMeta),
+        ...countSessionMentions(history.items),
       });
       return { sessionId, sessionMeta, historyEntry };
     },
@@ -564,6 +642,8 @@ export function useSessionActions(): SessionActions {
           agent_type: sessionMeta?.agentType,
           project_kind: sessionMeta?.project?.kind ?? null,
           is_first_message: false,
+          session_type: resolveSessionChatType(sessionMeta),
+          ...countSessionMentions(history.items),
         });
       }
       return entry;
@@ -994,11 +1074,11 @@ export function useSessionActions(): SessionActions {
       if (!runtime) {
         throw new Error('Runtime not ready');
       }
-      // Collect child session IDs for cascade deletion
+      const sessions = Object.values(store.get(sessionMetaCacheAtom));
       const allIds = new Set(sessionIds);
       for (const id of sessionIds) {
-        for (const childId of getChildSessionIds(id)) {
-          allIds.add(childId);
+        for (const lifecycleId of collectSessionLifecycleIds(id, sessions)) {
+          allIds.add(lifecycleId);
         }
       }
       const uniqueIds = Array.from(allIds);
@@ -1008,7 +1088,7 @@ export function useSessionActions(): SessionActions {
         })
       );
     },
-    [runtime, getChildSessionIds, deleteSessionDocuments]
+    [runtime, store, deleteSessionDocuments]
   );
 
   const archiveSession = useCallback(
@@ -1018,75 +1098,59 @@ export function useSessionActions(): SessionActions {
         throw new Error('Runtime not ready');
       }
 
-      if (typeof window !== 'undefined') {
-        window.api?.terminal?.closeSession(sessionId);
-      }
-
       const sessionRoomId = getSessionRoomId(sessionId);
       const sessionMeta = (await runtime.repo.getDocMeta(sessionRoomId))?.meta as
         | SessionMeta
         | undefined;
+      if (!sessionMeta) {
+        throw new Error(`Session metadata missing for ${sessionId}`);
+      }
       log('[session-archive] session meta loaded', {
         sessionId,
-        machineId: sessionMeta?.machineId,
+        machineId: sessionMeta.machineId,
       });
 
-      await runtime.writer.upsertDocMeta(sessionRoomId, {
-        isArchived: true,
-        status: SessionStatusFactory.idle(),
-      } as Partial<SessionMeta>);
-      log('[session-archive] session meta archived', { sessionId });
+      const lifecycleSessions = getSessionLifecycleMetas(sessionId, sessionMeta);
+      for (const session of lifecycleSessions) {
+        if (typeof window !== 'undefined') {
+          window.api?.terminal?.closeSession(session.id);
+        }
+        await runtime.writer.upsertDocMeta(getSessionRoomId(session.id), {
+          isArchived: true,
+          status: SessionStatusFactory.idle(),
+        } as Partial<SessionMeta>);
 
-      // Cascade: archive all child sessions first (before any early returns)
-      const childIds = getChildSessionIds(sessionId);
-      if (childIds.length > 0) {
-        await Promise.all(
-          childIds.map(async (childId) => {
-            const childRoomId = getSessionRoomId(childId);
-            await runtime.writer.upsertDocMeta(childRoomId, {
-              isArchived: true,
-              status: SessionStatusFactory.idle(),
-            } as Partial<SessionMeta>);
-          })
+        // Child tabs share the owning Session's workspace and machine command.
+        if (session.parentSessionId) continue;
+
+        const machineId = session.machineId;
+        const requestedAt = getServerNow();
+        await writeMachineFlockRowBestEffort(
+          runtime,
+          machineId,
+          {
+            key: machineFlockKeys.archiveSessionCommand(session.id),
+            value: buildMachineArchiveSessionCommand({ requestedAt }),
+          },
+          'archiveSession'
         );
-        log('[session-archive] archived child sessions', { sessionId, childIds });
+        const machineRoomId = getMachineRoomId(machineId);
+        const machineMeta = (await runtime.repo.getDocMeta(machineRoomId))?.meta as
+          | MachineLegacyMetaFields
+          | undefined;
+        await runtime.writer.upsertDocMeta(machineRoomId, {
+          needToArchiveSessions: {
+            ...(machineMeta?.needToArchiveSessions ?? {}),
+            [session.id]: true,
+          },
+        } as unknown as RepoDocMetaPatch);
       }
-
-      // Child sessions share parent's worktree — skip machine queue
-      if (sessionMeta?.parentSessionId) {
-        log('[session-archive] child session, skip machine queue', { sessionId });
-        return;
-      }
-
-      const machineId = sessionMeta?.machineId;
-      if (!machineId) {
-        log('[session-archive] missing machineId, skip queue', { sessionId });
-        return;
-      }
-
-      const requestedAt = getServerNow();
-      await writeMachineFlockRowBestEffort(
-        runtime,
-        machineId,
-        {
-          key: machineFlockKeys.archiveSessionCommand(sessionId),
-          value: buildMachineArchiveSessionCommand({ requestedAt }),
-        },
-        'archiveSession'
-      );
-      const machineRoomId = getMachineRoomId(machineId);
-      const machineMeta = (await runtime.repo.getDocMeta(machineRoomId))?.meta as
-        | MachineLegacyMetaFields
-        | undefined;
-      await runtime.writer.upsertDocMeta(machineRoomId, {
-        needToArchiveSessions: {
-          ...(machineMeta?.needToArchiveSessions ?? {}),
-          [sessionId]: true,
-        },
-      } as unknown as RepoDocMetaPatch);
-      log('[session-archive] archive queued on machine Flock doc', { sessionId, machineId });
+      log('[session-archive] lifecycle archived', {
+        sessionId,
+        lifecycleSessionIds: lifecycleSessions.map((session) => session.id),
+      });
     },
-    [runtime, getChildSessionIds]
+    [runtime, getSessionLifecycleMetas]
   );
 
   const restoreSession = useCallback(
@@ -1097,131 +1161,55 @@ export function useSessionActions(): SessionActions {
       }
 
       const sessionRoomId = getSessionRoomId(sessionId);
-      await runtime.writer.upsertDocMeta(sessionRoomId, {
-        isArchived: false,
-      } as Partial<SessionMeta>);
-      log('[session-restore] session meta restored', { sessionId });
-
-      // Cascade: restore all child sessions first (before any early returns)
-      const childIds = getChildSessionIds(sessionId);
-      if (childIds.length > 0) {
-        await Promise.all(
-          childIds.map(async (childId) => {
-            const childRoomId = getSessionRoomId(childId);
-            await runtime.writer.upsertDocMeta(childRoomId, {
-              isArchived: false,
-            } as Partial<SessionMeta>);
-          })
-        );
-        log('[session-restore] restored child sessions', { sessionId, childIds });
-      }
-
-      // Remove from machine queues if present
       const sessionMeta = (await runtime.repo.getDocMeta(sessionRoomId))?.meta as
         | SessionMeta
         | undefined;
-      const machineId = sessionMeta?.machineId;
-      if (!machineId) {
-        log('[session-restore] missing machineId, skip queue cleanup', { sessionId });
-        return;
+      if (!sessionMeta) {
+        throw new Error(`Session metadata missing for ${sessionId}`);
       }
+      const lifecycleSessions = getSessionLifecycleMetas(sessionId, sessionMeta);
 
-      const machineRoomId = getMachineRoomId(machineId);
-      const machineMeta = (await runtime.repo.getDocMeta(machineRoomId))?.meta as
-        | MachineLegacyMetaFields
-        | undefined;
-      const needToArchiveSessions = machineMeta?.needToArchiveSessions ?? {};
-      const needToDeleteSessions = machineMeta?.needToDeleteSessions ?? {};
-
-      let nextNeedToArchiveSessions: typeof needToArchiveSessions | undefined;
-      let nextNeedToDeleteSessions: typeof needToDeleteSessions | undefined;
-
-      if (needToArchiveSessions[sessionId] !== undefined) {
-        const { [sessionId]: _, ...rest } = needToArchiveSessions;
-        nextNeedToArchiveSessions = rest;
+      for (const session of lifecycleSessions) {
+        await runtime.writer.upsertDocMeta(getSessionRoomId(session.id), {
+          isArchived: false,
+        } as Partial<SessionMeta>);
+        if (!session.parentSessionId) {
+          await cleanupMachineSessionCommandQueues(
+            runtime,
+            session.machineId,
+            session.id,
+            'restoreSession'
+          );
+        }
       }
-
-      if (needToDeleteSessions[sessionId] !== undefined) {
-        const { [sessionId]: _, ...rest } = needToDeleteSessions;
-        nextNeedToDeleteSessions = rest;
-      }
-
-      if (nextNeedToArchiveSessions !== undefined || nextNeedToDeleteSessions !== undefined) {
-        await runtime.writer.upsertDocMeta(machineRoomId, {
-          ...(nextNeedToArchiveSessions !== undefined
-            ? { needToArchiveSessions: nextNeedToArchiveSessions }
-            : {}),
-          ...(nextNeedToDeleteSessions !== undefined
-            ? { needToDeleteSessions: nextNeedToDeleteSessions }
-            : {}),
-        } as unknown as RepoDocMetaPatch);
-      }
-
-      await deleteMachineFlockRowsBestEffort(
-        runtime,
-        machineId,
-        [
-          machineFlockKeys.archiveSessionCommand(sessionId),
-          machineFlockKeys.deleteSessionCommand(sessionId),
-        ],
-        'restoreSession'
-      );
-
-      if (nextNeedToArchiveSessions !== undefined) {
-        log('[session-restore] removed from archive queue', { sessionId, machineId });
-      }
-      if (nextNeedToDeleteSessions !== undefined) {
-        log('[session-restore] removed from delete queue', { sessionId, machineId });
-      }
+      log('[session-restore] lifecycle restored', {
+        sessionId,
+        lifecycleSessionIds: lifecycleSessions.map((session) => session.id),
+      });
     },
-    [runtime, getChildSessionIds]
+    [runtime, getSessionLifecycleMetas]
   );
 
-  const deleteArchivedSession = useCallback(
-    async (sessionId: SessionId) => {
-      log('[session-delete] start', { sessionId });
-      if (!runtime) {
-        throw new Error('Runtime not ready');
-      }
-      const sessionRoomId = getSessionRoomId(sessionId);
-      const sessionMeta = (await runtime.repo.getDocMeta(sessionRoomId))?.meta as
-        | SessionMeta
-        | undefined;
+  const deleteArchivedSessionMeta = useCallback(
+    async (sessionMeta: SessionMeta) => {
+      if (!runtime) throw new Error('Runtime not ready');
+      const sessionId = sessionMeta.id;
+      const shouldQueueMachineCleanup = shouldQueueMachineDeleteSession(sessionMeta);
 
-      // Cascade: delete all child sessions first (before any early returns)
-      const childIds = getChildSessionIds(sessionId);
-      if (childIds.length > 0) {
-        await Promise.all(
-          childIds.map(async (childId) => {
-            await deleteSessionDocuments(childId);
-          })
-        );
-        log('[session-delete] deleted child sessions', { sessionId, childIds });
-      }
-
-      const shouldQueueMachineCleanup =
-        sessionMeta !== undefined && shouldQueueMachineDeleteSession(sessionMeta);
-
-      // Sessions without machine-owned disk resources can be deleted directly.
       if (!shouldQueueMachineCleanup) {
-        log('[session-delete] chat session, deleting directly', { sessionId });
-        const machineId = sessionMeta?.machineId;
-        if (machineId) {
-          await cleanupMachineSessionCommandQueues(runtime, machineId, sessionId, 'deleteSession');
+        if (sessionMeta.machineId) {
+          await cleanupMachineSessionCommandQueues(
+            runtime,
+            sessionMeta.machineId,
+            sessionId,
+            'deleteSession'
+          );
         }
         await deleteSessionDocuments(sessionId);
-        log('[session-delete] chat session deleted', { sessionId });
         return;
       }
 
-      // For code sessions, queue deletion on machine to clean up worktree/disk
-      const machineId = sessionMeta?.machineId;
-      if (machineId === undefined || machineId.length === 0) {
-        log('[session-delete] missing machineId, deleting directly', { sessionId });
-        await deleteSessionDocuments(sessionId);
-        return;
-      }
-
+      const machineId = sessionMeta.machineId;
       const machineRoomId = getMachineRoomId(machineId);
       const machineMeta = (await runtime.repo.getDocMeta(machineRoomId))?.meta as
         | MachineLegacyMetaFields
@@ -1248,7 +1236,6 @@ export function useSessionActions(): SessionActions {
         nextNeedToArchiveSessions = rest;
       }
 
-      const deleteAlreadyQueued = needToDeleteSessions[sessionId] !== undefined;
       const deleteCommand = buildMachineDeleteSessionCommand({
         session: sessionMeta,
         machineMeta: machineMetaForCleanup,
@@ -1256,54 +1243,53 @@ export function useSessionActions(): SessionActions {
         existing: needToDeleteSessions[sessionId],
       });
 
-      if (nextNeedToArchiveSessions !== undefined) {
-        log('[session-delete] removed from archive queue', { sessionId, machineId });
-      }
-      if (deleteAlreadyQueued) {
-        log('[session-delete] delete already queued', { sessionId, machineId });
-      } else {
-        log('[session-delete] delete queued on machine', { sessionId, machineId });
-      }
-
       await deleteMachineFlockRowsBestEffort(
         runtime,
         machineId,
         [machineFlockKeys.archiveSessionCommand(sessionId)],
         'deleteSession'
       );
-      const legacyDeletePatch =
-        nextNeedToArchiveSessions !== undefined || deleteCommand
+      await runtime.writer.upsertDocMeta(machineRoomId, {
+        ...(nextNeedToArchiveSessions !== undefined
+          ? { needToArchiveSessions: nextNeedToArchiveSessions }
+          : {}),
+        ...(deleteCommand
           ? {
-              ...(nextNeedToArchiveSessions !== undefined
-                ? { needToArchiveSessions: nextNeedToArchiveSessions }
-                : {}),
-              ...(deleteCommand
-                ? {
-                    needToDeleteSessions: {
-                      ...needToDeleteSessions,
-                      [sessionId]: machineDeleteCommandToQueueItem(deleteCommand),
-                    },
-                  }
-                : {}),
+              needToDeleteSessions: {
+                ...needToDeleteSessions,
+                [sessionId]: machineDeleteCommandToQueueItem(deleteCommand),
+              },
             }
-          : null;
-      if (legacyDeletePatch) {
-        await runtime.writer.upsertDocMeta(
-          machineRoomId,
-          legacyDeletePatch as unknown as RepoDocMetaPatch
-        );
-      }
+          : {}),
+      } as unknown as RepoDocMetaPatch);
       if (deleteCommand) {
         await writeMachineFlockRowRequired(runtime, machineId, {
           key: machineFlockKeys.deleteSessionCommand(sessionId),
           value: deleteCommand,
         });
       }
-
-      // Optimistically delete the doc now; CLI will clean up worktree/disk later from the queue.
       await deleteSessionDocuments(sessionId, { cleanupLaunchConfig: false });
     },
-    [runtime, getChildSessionIds, deleteSessionDocuments]
+    [runtime, deleteSessionDocuments]
+  );
+
+  const deleteArchivedSession = useCallback(
+    async (sessionId: SessionId) => {
+      log('[session-delete] start', { sessionId });
+      if (!runtime) throw new Error('Runtime not ready');
+      const loadedMeta = (await runtime.repo.getDocMeta(getSessionRoomId(sessionId)))?.meta as
+        | SessionMeta
+        | undefined;
+      if (!loadedMeta) throw new Error(`Session metadata missing for ${sessionId}`);
+      const rootMeta = { ...loadedMeta, id: loadedMeta.id ?? sessionId };
+      const lifecycleSessions = getSessionLifecycleMetas(sessionId, rootMeta);
+
+      for (const session of lifecycleSessions.reverse()) {
+        await deleteArchivedSessionMeta(session);
+      }
+      log('[session-delete] lifecycle deleted', { sessionId });
+    },
+    [runtime, getSessionLifecycleMetas, deleteArchivedSessionMeta]
   );
 
   const setSessionPinned = useCallback(

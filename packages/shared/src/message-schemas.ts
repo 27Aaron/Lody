@@ -5,13 +5,16 @@ import {
   SESSION_IMAGE_ALLOWED_MIME_TYPES,
   SESSION_IMAGE_MAX_COUNT,
   SESSION_IMAGE_MAX_SIZE_BYTES,
+  isSessionFileSourcePath,
   type ACPSessionId,
   type SessionTurnInputConfig,
 } from './ai';
 import type { SessionId } from './ids';
+import { MAX_MESSAGE_TEXT_SPAN_MARK_LENGTH, MESSAGE_TEXT_SPAN_KINDS } from './message-text-spans';
 import { RpcSecretPublicKeySchema } from './rpc-secret';
 import { LodyOperationIdSchema } from './session-orchestration';
 import { isSensitiveAcpConfigOptionId } from './session-preparation';
+import { normalizeMcpServerIdSelection } from './workspace-mcp';
 
 // ============================================
 // BASE ID TYPE SCHEMAS
@@ -45,7 +48,7 @@ export const WorktreeCleanupScriptConfigSchema = WorktreeSetupScriptConfigSchema
 // ACP SESSION CONFIG SCHEMAS
 // ============================================
 
-export const CliTypeSchema = z.enum(['kimi', 'claude', 'codex']);
+export const CliTypeSchema = z.enum(['kimi', 'grok', 'claude', 'codex']);
 export const AgentConfigCliTypeSchema = z.enum(['builtin', 'registry', 'custom']);
 
 /** Launch spec for `cliType: 'custom'` agents (see `CustomAcpLaunchSpec`). */
@@ -61,6 +64,7 @@ export const BuiltinRuntimeOverridesSchema = z
     codexPath: z.string().optional(),
     claudeCodeExecutable: z.string().optional(),
     kimiPath: z.string().optional(),
+    grokPath: z.string().optional(),
   })
   .strict();
 
@@ -126,6 +130,7 @@ const SessionFileBlockObjectSchema = z
     sizeBytes: z.number().int().nonnegative().max(SESSION_FILE_MAX_SIZE_BYTES),
     sha256: z.string(),
     textPreview: z.boolean(),
+    sourcePath: z.string().refine(isSessionFileSourcePath).optional(),
     transport: z.enum(['r2', 'local']),
     machineId: OptionalStringSchema,
     uploadedAt: z.number(),
@@ -154,10 +159,31 @@ export const SessionFileBlockSchema = SessionFileBlockObjectSchema.superRefine((
   refineSessionFileBlock(block, ctx)
 );
 
+const MessageTextSpanSchema = z
+  .object({
+    start: z.number().int().nonnegative(),
+    end: z.number().int().nonnegative(),
+    kind: z.enum(MESSAGE_TEXT_SPAN_KINDS),
+    label: z.string().min(1),
+    target: z.string().optional(),
+    // The same bar `sanitizeMessageTextSpans` applies. This object is `.strict()`,
+    // and a rejected span fails the whole block list — which surfaces as an empty
+    // prompt, not as a missing chip — so a field one side knows must be declared
+    // on both.
+    mark: z.string().min(1).max(MAX_MESSAGE_TEXT_SPAN_MARK_LENGTH).optional(),
+  })
+  .strict();
+
 const SessionTextInputBlockSchema = z
   .object({
     type: z.literal('text'),
     text: z.string(),
+    // Optional so every text block written before spans existed still parses.
+    // Offsets are NOT checked against `text` here — only the shape is. The
+    // range check belongs to `sanitizeMessageTextSpans`, which also runs on the
+    // read path, where spans arrive through the session document's untyped
+    // catchall and never see this schema at all.
+    spans: z.array(MessageTextSpanSchema).optional(),
   })
   .strict();
 
@@ -329,6 +355,8 @@ export const ACPSessionConfigSchema = z
     modeId: z.string().optional(),
     modelId: z.string().optional(),
     configOptionValues: AcpConfigOptionValuesSchema.optional(),
+    mcpServerIds: z.array(z.string()).optional(),
+    taskToolsEnabled: z.boolean().optional(),
     issuePRMentions: z.array(IssuePRMentionSchema).optional(),
     resume: ACPSessionIdSchema.optional(),
     chainDepth: z.number().int().nonnegative().optional(),
@@ -346,6 +374,8 @@ const LooseSessionTurnInputConfigSchema = z
     modeId: z.string().optional(),
     modelId: z.string().optional(),
     configOptionValues: AcpConfigOptionValuesSchema.optional(),
+    mcpServerIds: z.array(z.string()).optional(),
+    taskToolsEnabled: z.boolean().optional(),
     issuePRMentions: z.array(IssuePRMentionSchema).optional(),
     resume: ACPSessionIdSchema.optional(),
     chainDepth: z.number().int().nonnegative().optional(),
@@ -431,6 +461,16 @@ export const normalizeSessionTurnInputConfig = (
   );
   if (configOptionValues) {
     normalized.configOptionValues = configOptionValues;
+  }
+
+  const mcpServerIds = normalizeMcpServerIdSelection(record.mcpServerIds);
+  if (mcpServerIds) {
+    normalized.mcpServerIds = mcpServerIds;
+  }
+
+  const taskToolsEnabled = maybeParseField(z.boolean(), record.taskToolsEnabled);
+  if (taskToolsEnabled !== undefined) {
+    normalized.taskToolsEnabled = taskToolsEnabled;
   }
 
   const issuePRMentions = maybeParseField(z.array(IssuePRMentionSchema), record.issuePRMentions);
@@ -627,10 +667,15 @@ export const SessionForkErrorCodeSchema = z.enum([
   'SOURCE_SESSION_ARCHIVED',
   'SOURCE_SESSION_BUSY',
   'SOURCE_TURN_NOT_FORKABLE',
+  'SOURCE_PROJECT_NOT_WORKTREE_CAPABLE',
+  'SOURCE_WORKTREE_DIRTY',
+  'SOURCE_HEAD_UNAVAILABLE',
   'FORK_UNAVAILABLE',
   'TARGET_SESSION_CONFLICT',
   'MACHINE_ACCESS_DENIED',
   'ACP_FORK_FAILED',
+  'WORKTREE_CREATE_FAILED',
+  'WORKTREE_SETUP_FAILED',
   'HISTORY_CLONE_FAILED',
   'TARGET_WRITE_FAILED',
   'INTERNAL_ERROR',
@@ -695,9 +740,24 @@ export const SessionForkSpecSchema = z
     sourceTurnId: z.string().trim().min(1),
     targetSessionId: SessionIdSchema,
     requestedByUserId: z.string().trim().min(1),
+    targetContext: z
+      .discriminatedUnion('kind', [
+        z.object({ kind: z.literal('shared') }).strict(),
+        z
+          .object({
+            kind: z.literal('new-worktree'),
+            acknowledgeDirtySource: z.literal(true).optional(),
+          })
+          .strict(),
+      ])
+      .optional(),
     targetPlacement: z.literal('side-panel').optional(),
   })
-  .strict();
+  .strict()
+  .refine((spec) => !(spec.targetContext?.kind === 'new-worktree' && spec.targetPlacement), {
+    message: 'A new-worktree fork cannot use child-session placement.',
+    path: ['targetPlacement'],
+  });
 
 export const SessionForkResponseSchema = z
   .object({
@@ -705,6 +765,9 @@ export const SessionForkResponseSchema = z
     sourceSessionId: SessionIdSchema,
     targetSessionId: SessionIdSchema,
     success: z.boolean(),
+    disposition: z.enum(['accepted', 'confirmation-required', 'completed', 'failed']).optional(),
+    operationId: z.string().trim().min(1).optional(),
+    reason: z.literal('SOURCE_WORKTREE_DIRTY').optional(),
     partial: z.boolean(),
     warnings: z.array(
       z
@@ -724,10 +787,39 @@ export const SessionForkResponseSchema = z
   })
   .strict();
 
+export const SessionForkOperationSchema = z
+  .object({
+    id: z.string().trim().min(1),
+    sourceSessionId: SessionIdSchema,
+    sourceTurnId: z.string().trim().min(1),
+    requestedByUserId: z.string().trim().min(1),
+    targetContext: z.enum(['shared', 'new-worktree']),
+    capturedHeadSha: z
+      .string()
+      .regex(/^[0-9a-f]{40,64}$/u)
+      .optional(),
+    sourceWasDirty: z.boolean().optional(),
+    state: z.enum(['preparing', 'failed']),
+    phase: z
+      .enum(['preparing-worktree', 'running-setup', 'starting-agent', 'committing'])
+      .optional(),
+    error: z
+      .object({
+        code: SessionForkErrorCodeSchema,
+        message: z.string().trim().min(1),
+      })
+      .strict()
+      .optional(),
+    createdAt: z.string().trim().min(1),
+    updatedAt: z.string().trim().min(1),
+  })
+  .strict();
+
 export type SessionForkSpec = z.infer<typeof SessionForkSpecSchema>;
 export type SessionForkResponse = z.infer<typeof SessionForkResponseSchema>;
 export type SessionForkErrorCode = z.infer<typeof SessionForkErrorCodeSchema>;
 export type SessionForkWarningCode = z.infer<typeof SessionForkWarningCodeSchema>;
+export type SessionForkOperation = z.infer<typeof SessionForkOperationSchema>;
 export type SessionEditAndResendSpec = z.infer<typeof SessionEditAndResendSpecSchema>;
 export type SessionEditAndResendResponse = z.infer<typeof SessionEditAndResendResponseSchema>;
 export type SessionEditAndResendErrorCode = z.infer<typeof SessionEditAndResendErrorCodeSchema>;
@@ -795,6 +887,11 @@ export const SessionPreparationRunConfigSchema = z
         Object.entries(values).filter(([configId]) => !isSensitiveAcpConfigOptionId(configId))
       )
     ).optional(),
+    mcpServerIds: z
+      .array(z.string())
+      .transform((ids) => normalizeMcpServerIdSelection(ids) ?? [])
+      .optional(),
+    taskToolsEnabled: z.boolean().optional(),
   })
   .strict();
 
@@ -2726,7 +2823,7 @@ export const ResumeFromExternalChatHistoryMetaSchema = z.object({
 // carried structured via ACP session_info_update `_meta` instead of agent text.
 export const AgentWarningMetaSchema = z.object({
   message: z.string(),
-  source: z.enum(['warning', 'configWarning']).optional(),
+  source: z.string().optional(),
 });
 
 // Who authored a history item; agent-authored content cannot use turn-level userId.
@@ -2756,12 +2853,14 @@ export const ChatFailedReasonSchema = z.enum([
   'memory_pressure',
   'acp_not_ready',
   'agent_disconnected',
+  'agent_no_output',
   'turn_pre_prompt_failed',
   'message_delivery_failed',
   'machine_access_denied',
   'acp_auth_required',
   'acp_internal_error',
   'acp_upstream_api_error',
+  'acp_session_storage_incompatible',
   'acp_resource_not_found',
   'acp_request_cancelled',
   'acp_method_not_found',
@@ -2835,6 +2934,8 @@ export const NonSystemNoticeMessageContentSchema = z.discriminatedUnion('type', 
     rawInput: z.record(z.string(), z.unknown()).optional(),
     rawOutput: z.record(z.string(), z.unknown()).optional(),
     activityKind: z.enum(['context_compaction', 'codex_retry']).optional(),
+    // Canonical tool name, when the agent published one (ACP `title` is human-facing).
+    toolName: z.string().optional(),
     // IANA timezone of the machine that ran a scheduling tool (cron is local-time to it).
     schedulingTimeZone: z.string().optional(),
     permissionRequest: PermissionRequestInfoSchema.optional(),

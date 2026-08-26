@@ -22,6 +22,10 @@ export type FetchAcpCapabilitiesOptions = {
   signal?: AbortSignal;
 };
 
+export type FetchedAcpCapabilities = AcpCapabilitiesResult & {
+  capabilitySourceVersion?: string;
+};
+
 /**
  * Spawns a temporary ACP agent to discover the capabilities returned by session/new.
  * The agent is killed as soon as the NewSessionResponse has been normalized.
@@ -34,7 +38,7 @@ export async function fetchAcpCapabilities(
   customAcp?: CustomAcpLaunchSpec,
   runtimeOverrides?: BuiltinRuntimeOverrides,
   options: FetchAcpCapabilitiesOptions = {}
-): Promise<AcpCapabilitiesResult> {
+): Promise<FetchedAcpCapabilities> {
   options.signal?.throwIfAborted();
   const workdir = process.cwd();
   const mergedProbeEnv: NodeJS.ProcessEnv = env ? { ...process.env, ...env } : process.env;
@@ -66,26 +70,30 @@ export async function fetchAcpCapabilities(
     waitForTerminalExit: async () => ({ exitCode: null, signal: null }),
     killTerminal: async () => {},
   };
-  const { agentProcess, client, acpSessionId, sessionResponse } = await startLocalAcpAgent({
-    cliType,
-    agentType,
-    customAcp,
-    runtimeOverrides,
-    workdir,
-    env: probeEnv,
-    onManagedRuntimeProgress: options.onManagedRuntimeProgress,
-    signal: options.signal,
-    logger,
-    terminalManager: noopTerminalManager,
-    terminalEnabled: false,
-    onUpdateMessage: () => {},
-    onRequestPermission: async () => ({ outcome: { outcome: 'cancelled' } }),
-  });
+  const { agentProcess, client, acpSessionId, sessionResponse, capabilitySourceVersion } =
+    await startLocalAcpAgent({
+      cliType,
+      agentType,
+      customAcp,
+      runtimeOverrides,
+      workdir,
+      env: probeEnv,
+      onManagedRuntimeProgress: options.onManagedRuntimeProgress,
+      signal: options.signal,
+      logger,
+      terminalManager: noopTerminalManager,
+      terminalEnabled: false,
+      onUpdateMessage: () => {},
+      onRequestPermission: async () => ({ outcome: { outcome: 'cancelled' } }),
+    });
 
   try {
-    return normalizeAcpSessionCapabilities(sessionResponse, {
-      sessionFork: client.supportsSessionFork?.() === true,
-    });
+    return {
+      ...normalizeAcpSessionCapabilities(sessionResponse, {
+        sessionFork: client.supportsSessionFork?.() === true,
+      }),
+      capabilitySourceVersion,
+    };
   } finally {
     await shutdownLocalAcpAgent({
       agentProcess,

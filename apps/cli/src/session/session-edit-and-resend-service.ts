@@ -5,9 +5,11 @@ import {
   isSessionGoalActive,
   normalizeSessionInputBlocks,
   resolveLatestSessionGoalFromHistory,
+  resolveSessionMcpSelection,
   sessionEditAndResendFailure,
   SessionStatusFactory,
   type ACPSessionId,
+  type McpServerId,
   type SessionEditAndResendResponse,
   type SessionEditAndResendSpec,
   type SessionHistoryInput,
@@ -188,7 +190,12 @@ export class SessionEditAndResendService {
     let commitEditable = editable;
     let commitMeta = meta;
     try {
-      runtime = await this.getOrRestoreRuntime(meta, spec.requestedByUserId);
+      runtime = await this.getOrRestoreRuntime(
+        meta,
+        spec.requestedByUserId,
+        resolveSessionMcpSelection(history),
+        spec.inputConfig.taskToolsEnabled === true
+      );
       const agentClient = runtime.agentClient;
       oldAcpSessionId = runtime.acpSessionId;
       if (!agentClient || !oldAcpSessionId) {
@@ -488,7 +495,9 @@ export class SessionEditAndResendService {
 
   private async getOrRestoreRuntime(
     meta: SessionMeta,
-    requestedByUserId: string
+    requestedByUserId: string,
+    mcpServerIds: McpServerId[],
+    taskToolsEnabled: boolean
   ): Promise<ISession> {
     const existing = this.deps.sessionManager.getSession(meta.id);
     if (existing) return existing;
@@ -510,6 +519,8 @@ export class SessionEditAndResendService {
         agentConfigId: meta.agentConfigId,
         agentCliType: meta.cliType,
         agentType: meta.agentType,
+        mcpServerIds,
+        taskToolsEnabled,
         customAcp: agentConfig.customAcp,
         runtimeOverrides: agentConfig.runtimeOverrides,
         env: agentConfig.env,

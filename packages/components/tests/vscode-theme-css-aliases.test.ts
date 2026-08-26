@@ -124,6 +124,26 @@ describe('VSCode theme aliases', () => {
     expect(variables['--input-foreground']).toBe(hexColorToHslChannel('#EEEEEE'));
     expect(variables['--input-placeholder']).toBe(hexColorToHslChannel('#777777'));
     expect(variables['--input-border']).toBe(hexColorToHslChannel('#3A3A3A'));
+    expect(variables['--input-field']).toBe(hexColorToHslChannel('#1A1A1A'));
+  });
+
+  it('lifts a form field fill that the theme recesses below the page', () => {
+    const variables = createLodyThemeCssVariables({
+      ...themeFixture,
+      type: 'light',
+      colors: {
+        ...themeFixture.colors,
+        'editor.background': '#FFFFFF',
+        'input.background': '#E8EAED',
+        'input.border': '#D8DBE2',
+      },
+    });
+
+    // `--input` keeps the theme's recessed slab (composer, muted chips) while
+    // the editable field sits on the page so it cannot read as disabled.
+    expect(variables['--input']).toBe(hexColorToHslChannel('#E8EAED'));
+    expect(variables['--input-field']).toBe(hexColorToHslChannel('#FFFFFF'));
+    expect(variables['--input-border']).toBe(hexColorToHslChannel('#D8DBE2'));
   });
 
   it('falls back to widget backgrounds and borders when input tokens are absent', () => {

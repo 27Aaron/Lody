@@ -10,12 +10,12 @@ import {
   getMachineMonitorObserverKey,
   getServerNow,
   parseMachineMonitorStates,
-  type LocalLoroDataPlaneConnection,
   type MachineId,
   type MachineMonitorObserverState,
   type MachineMonitorSnapshot,
   type WorkspaceId,
 } from '@lody/shared';
+import type { LocalLoroDataPlaneConnection } from '@lody/shared/local-loro-transport';
 
 type SnapshotListener = (snapshot: MachineMonitorSnapshot | null) => void;
 

@@ -6,7 +6,7 @@ import { acquireSingleInstanceLock, registerOpenUrlHandler } from './deep-link'
 import { registerLodyProtocolClient } from './protocol-client'
 import { registerIpcHandlers } from './ipc/register-handlers'
 import { registerPublicBrowserHandlers } from './ipc/public-browser-handlers'
-import { openMainWindow, openOrFocusMainWindow } from './window'
+import { openMainWindow, openOrFocusMainWindow, setMainWindowProductReloadTarget } from './window'
 import { getMainWindow, setAppQuitting, setWindowsTrayAvailable } from './window-state'
 import { CliService } from './services/cli-service'
 import { TerminalRelay } from './services/terminal-relay'
@@ -33,6 +33,7 @@ import { desktopInstallationProfile, isLocalPlatform } from './platform'
 import { mainPlatformKind } from './platform'
 import { getLocalLoroDataPlaneSocketPath } from '@lody/shared/node/local-ipc'
 import { getLocalTerminalSocketPath } from '@lody/shared/node/local-terminal'
+import { getInitialDesktopPath, markOnboardingCompleted } from './onboarding-state'
 
 // On Linux, Electron/Chromium auto-detects the keyring backend for GNOME and KDE
 // desktops, but falls back to basic-text (unencrypted) on other desktops like
@@ -65,6 +66,7 @@ if (
 
 const LODY_PROTOCOL = desktopInstallationProfile.desktopProtocol
 const PRODUCT_NAME = desktopInstallationProfile.desktopProductName
+const DESKTOP_FILE_NAME = `${desktopInstallationProfile.desktopAppId}.desktop`
 const DEEP_LINK_DEBUG_PREFIX = '[electron-auth-debug]'
 
 function logDeepLinkDebug(message: string, meta?: Record<string, unknown>): void {
@@ -76,6 +78,14 @@ function logDeepLinkDebug(message: string, meta?: Record<string, unknown>): void
 }
 
 app.setName(PRODUCT_NAME)
+if (process.platform === 'linux') {
+  // KDE resolves task-manager icons through the desktop file whose basename
+  // matches the Wayland app_id / X11 WM_CLASS. Keep this dynamic because the
+  // cloud and local desktop compositions intentionally use different IDs.
+  // Electron 39 implements this API, but its bundled declaration omits it.
+  const linuxApp = app as typeof app & { setDesktopName(name: string): void }
+  linuxApp.setDesktopName(DESKTOP_FILE_NAME)
+}
 if (!isLocalPlatform()) {
   installElectronMainErrorReporting()
 }
@@ -125,6 +135,8 @@ function createGlobalShortcutsService(iconPath: string): GlobalShortcutsService 
 registerLodyProtocolClient({
   protocol: LODY_PROTOCOL,
   productName: PRODUCT_NAME,
+  desktopFileName: DESKTOP_FILE_NAME,
+  iconPath: icon,
   log: logDeepLinkDebug
 })
 
@@ -150,6 +162,7 @@ if (hasSingleInstanceLock) {
     const loroDataPlaneRelay = new LoroDataPlaneRelay(
       getLocalLoroDataPlaneSocketPath(mainPlatformKind)
     )
+    loroDataPlaneRelay.setEnabled(cliService.getCliAutoStartEnabled())
 
     const appUpdaterService = new AppUpdaterService({ enabled: !isLocalPlatform() })
     const notificationService = new NotificationService(() => getMainWindow())
@@ -179,7 +192,9 @@ if (hasSingleInstanceLock) {
     globalShortcutsService.registerAll()
     app.once('will-quit', () => globalShortcutsService.dispose())
     app.on('browser-window-created', (_, window) => {
-      optimizer.watchWindowShortcuts(window)
+      // Keep Electron's native Cmd/Ctrl zoom shortcuts available. The toolkit
+      // blocks Minus and shifted Equal by default when zoom is not enabled.
+      optimizer.watchWindowShortcuts(window, { zoom: true })
       // electron-toolkit deliberately blocks the production reload shortcut.
       // Restore the normal desktop-app behavior requested by the user while
       // leaving Cmd/Ctrl+Shift+R and DevTools handling unchanged.
@@ -200,7 +215,11 @@ if (hasSingleInstanceLock) {
       authService,
       windowBadgeService,
       globalShortcutsService,
-      getMainWindow
+      getMainWindow,
+      completeOnboarding: (window) => {
+        markOnboardingCompleted()
+        setMainWindowProductReloadTarget(window)
+      }
     })
     registerPublicBrowserHandlers({ service: publicBrowserService, getMainWindow })
 
@@ -209,7 +228,9 @@ if (hasSingleInstanceLock) {
       getMainWindow,
       openOrFocusMainWindow: () => openOrFocusMainWindow({ icon })
     })
-    openMainWindow({ icon })
+    const initialPath = getInitialDesktopPath()
+    openMainWindow({ icon, initialPath })
+    console.info('[Electron] Initial desktop surface selected', { initialPath })
     setWindowsTrayAvailable(windowsTrayService.start())
     cliService.autoStart(getMainWindow()?.webContents ?? undefined)
     appUpdaterService.start()

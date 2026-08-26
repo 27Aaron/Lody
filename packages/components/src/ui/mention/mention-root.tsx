@@ -17,12 +17,20 @@ import {
 import type { VirtualElement } from '@floating-ui/react';
 import * as React from 'react';
 import type { ContentElement } from './mention-content';
+import {
+  applyMentionSplice,
+  resolveMentionInsertPrefix,
+  type MentionSplice,
+} from './mention-input-core';
 import type { InputElement } from './mention-input';
 import type { ItemElement } from './mention-item';
 
 function getDataState(open: boolean) {
   return open ? 'open' : 'closed';
 }
+
+/** Stable empty list for the range-less splice run; never mutated. */
+const EMPTY_MENTIONS: Mention[] = [];
 
 const ROOT_NAME = 'MentionRoot';
 
@@ -33,6 +41,8 @@ interface ItemData {
   value: string;
   disabled: boolean;
   onMentionSelect?: () => void;
+  /** Called synchronously when this item is used as a navigation step. */
+  onMentionNavigate?: () => void;
 
   /**
    * Literal text written into the input when this item is committed.
@@ -72,6 +82,78 @@ interface Mention extends Omit<ItemData, 'label' | 'disabled'> {
   kind?: MentionKind;
 }
 
+/**
+ * A chip decoration for a committed mention range.
+ *
+ * The highlighter mirrors the textarea character for character, so the caret
+ * only stays aligned while every rendered range keeps the *same advance width*
+ * as the raw text underneath it. A chip therefore may only paint — background,
+ * colour, and an icon drawn over characters the range already contains. It may
+ * not add horizontal padding, margin, or border, nor change font size, weight,
+ * family, or letter spacing.
+ *
+ * `iconSlots` and `trailingSlots` are how a chip buys room without buying
+ * width: those leading/trailing characters of the range keep their exact boxes
+ * and are simply not painted, so the icon sits over the trigger character and
+ * the trailing character reads as right padding.
+ */
+interface MentionChip {
+  /** Painted over the range's first `iconSlots` characters. */
+  icon?: React.ReactNode;
+  /**
+   * Chip body classes — colour only, per the width rule above.
+   *
+   * The primitive supplies the opaque cover that hides the textarea's own
+   * glyphs, painted in `--mention-chip-surface`. That variable must be set on
+   * whatever container actually paints the background behind the textarea, or
+   * the cover reads as a rectangle instead of disappearing into the surface.
+   */
+  className?: string;
+  /** Leading characters of the range surrendered to the icon. @default 1 */
+  iconSlots?: number;
+  /** Trailing characters of the range left blank as right padding. @default 0 */
+  trailingSlots?: number;
+}
+
+/**
+ * Resolves the chip for a range, or `null` to keep the plain highlight. Product
+ * code owns this: the primitive never learns which kinds look like chips.
+ */
+type MentionChipResolver = (
+  mention: Mention,
+  /** The range's current text, so a resolver can size its slots from it. */
+  text: string
+) => MentionChip | null | undefined;
+
+/**
+ * A mention written by something other than the menu.
+ *
+ * The menu is not the only way a mention is born — a drop, or any other gesture
+ * that happens outside the input, has to produce the SAME artefact: text plus a
+ * committed range. Nothing downstream reconstructs a range from text, so a
+ * caller that only appends text writes a mention that silently stops being one.
+ *
+ * `prefix`/`suffix` are written into the text but stay outside the range, which
+ * is how a caller adds separating whitespace without widening the mention.
+ */
+interface MentionInsertRequest {
+  /** Exactly what the committed range covers, marker included (`@fix-ci`). */
+  text: string;
+  /** Payload recorded on the range. */
+  value: string;
+  kind?: MentionKind;
+  /** Insertion index. @default end of the current value */
+  at?: number;
+  /**
+   * Prefix a single space unless the text already ends in whitespace (or the
+   * insert lands at the very start). Resolved against the input's own value, so
+   * a caller holding a stale copy of it cannot glue the mention to the previous
+   * word.
+   */
+  separate?: boolean;
+  suffix?: string;
+}
+
 interface MentionSelectionRange {
   start: number;
   end: number;
@@ -109,6 +191,14 @@ interface MentionContextValue {
   onMentionsChange: React.Dispatch<React.SetStateAction<Mention[]>>;
   onMentionAdd: (value: string, triggerIndex: number, options?: { commit?: boolean }) => void;
   /**
+   * Write a mention the menu did not produce, and take focus.
+   *
+   * Product-neutral by construction: the caller supplies the text, the payload,
+   * and the kind, so reaching this from a new mention category does not touch
+   * this package.
+   */
+  onMentionInsert: (request: MentionInsertRequest) => void;
+  /**
    * Pop the text between the trigger and the caret back to the bare trigger,
    * undoing one drill-down step. Returns false when there is no trigger to pop
    * back to. The caller decides *when* this applies (Backspace on a namespace
@@ -118,6 +208,7 @@ interface MentionContextValue {
   onNavigateBack: () => boolean;
   onMentionsRemove: (mentionsToRemove: Mention[]) => void;
   onMentionClick?: (mention: Mention) => void;
+  getMentionChip?: MentionChipResolver;
   pendingSelection: MentionSelectionRange | null;
   onPendingSelectionChange: React.Dispatch<React.SetStateAction<MentionSelectionRange | null>>;
   dir: Direction;
@@ -174,6 +265,12 @@ interface MentionRootProps extends Omit<
 
   /** Event handler called when a rendered mention range is clicked. */
   onMentionClick?: (mention: Mention) => void;
+
+  /**
+   * Resolves the chip decoration for a rendered range. Ranges without a chip
+   * keep the plain inline highlight.
+   */
+  getMentionChip?: MentionChipResolver;
 
   /**
    * Characters that activate the mention menu when typed.
@@ -239,6 +336,38 @@ interface MentionRootProps extends Omit<
   name?: string;
 }
 
+/**
+ * A functional setter whose `prev` is the last value *written*, not the last
+ * value rendered.
+ *
+ * `useControllableState` resolves an updater against the controlled prop, and
+ * that prop only moves when the owner re-renders. So two updates in one commit
+ * — the hydrators, which all run their effects in the same flush — each see the
+ * pre-flush value, and the last one silently replaces the others instead of
+ * merging with them. A draft holding a `@file` and an `@session` came back from
+ * a remount with whichever hydrator happened to render last.
+ *
+ * The ref carries the pending value across that gap and is re-synced from the
+ * rendered value on every render, so an owner that rejects or rewrites an
+ * update still wins the next frame.
+ */
+function useFlushConsistentState<T>(
+  current: T,
+  setState: (next: T) => void
+): React.Dispatch<React.SetStateAction<T>> {
+  const pendingRef = React.useRef(current);
+  pendingRef.current = current;
+  return React.useCallback(
+    (next) => {
+      const resolved =
+        typeof next === 'function' ? (next as (prev: T) => T)(pendingRef.current) : next;
+      pendingRef.current = resolved;
+      setState(resolved);
+    },
+    [setState]
+  );
+}
+
 const MentionRoot = React.forwardRef<RootElement, MentionRootProps>((props, forwardedRef) => {
   const {
     children,
@@ -251,6 +380,7 @@ const MentionRoot = React.forwardRef<RootElement, MentionRootProps>((props, forw
     defaultMentions = [],
     onMentionsChange: onMentionsChangeProp,
     onMentionClick,
+    getMentionChip,
     value: valueProp,
     defaultValue,
     onValueChange,
@@ -300,11 +430,12 @@ const MentionRoot = React.forwardRef<RootElement, MentionRootProps>((props, forw
     defaultProp: defaultOpen,
     onChange: onOpenChangeProp,
   });
-  const [value = [], setValue] = useControllableState({
+  const [value = [], setValueState] = useControllableState({
     prop: valueProp,
     defaultProp: defaultValue,
     onChange: onValueChange,
   });
+  const setValue = useFlushConsistentState<string[] | undefined>(value, setValueState);
   const [inputValue = '', setInputValue] = useControllableState({
     prop: inputValueProp,
     defaultProp: '',
@@ -344,15 +475,7 @@ const MentionRoot = React.forwardRef<RootElement, MentionRootProps>((props, forw
     onChange: onMentionsChangeProp,
   });
   const mentions = mentionsState ?? [];
-  const setMentions = React.useCallback<React.Dispatch<React.SetStateAction<Mention[]>>>(
-    (next) => {
-      setMentionsState((prev) => {
-        const currentMentions = prev ?? [];
-        return typeof next === 'function' ? next(currentMentions) : next;
-      });
-    },
-    [setMentionsState]
-  );
+  const setMentions = useFlushConsistentState(mentions, setMentionsState);
   const [pendingSelection, setPendingSelection] = React.useState<MentionSelectionRange | null>(
     null
   );
@@ -429,41 +552,36 @@ const MentionRoot = React.forwardRef<RootElement, MentionRootProps>((props, forw
         navigateText ??
         selectedItem?.insertText ??
         `${trigger}${selectedItem?.label ?? payloadValue}`;
-      const suffix = isNavigating ? '' : ' ';
       const sourceValue = input?.value ?? inputValue;
-      const beforeTrigger = sourceValue.slice(0, triggerIndex);
       const insertionPoint = input?.selectionStart ?? triggerIndex;
-      const afterSearchText = sourceValue.slice(insertionPoint);
-      const newValue = `${beforeTrigger}${mentionText}${suffix}${afterSearchText}`;
-
-      const replacedLength = insertionPoint - triggerIndex;
-      const insertionLength = mentionText.length + suffix.length;
-      const delta = insertionLength - replacedLength;
-
-      const newMention: Mention = {
+      const splice: MentionSplice = {
+        replaceStart: triggerIndex,
+        replaceEnd: insertionPoint,
+        text: mentionText,
+        suffix: isNavigating ? '' : ' ',
         value: payloadValue,
-        start: triggerIndex,
-        end: triggerIndex + mentionText.length,
-        kind: selectedItem?.kind ?? 'mention',
+        kind: selectedItem?.kind,
+        commitRange: !isNavigating,
       };
 
-      setMentions((prev) => {
-        const updatedMentions = prev.map((mention) => {
-          if (mention.start >= insertionPoint) {
-            return {
-              ...mention,
-              start: mention.start + delta,
-              end: mention.end + delta,
-            };
-          }
-          return mention;
-        });
-        if (isNavigating) return updatedMentions;
-        return [...updatedMentions, newMention].sort((a, b) => a.start - b.start);
-      });
+      // The text and caret do not depend on the existing ranges, so they are
+      // read from a range-less run rather than smuggled out of the updater —
+      // the updater stays pure, and `setMentions` keeps the functional form its
+      // flush-consistency contract requires.
+      const { value: newValue, caret: newCursorPosition } = applyMentionSplice(
+        sourceValue,
+        EMPTY_MENTIONS,
+        splice
+      );
+      setMentions((prev) => applyMentionSplice(sourceValue, prev, splice).mentions);
 
       setInputValue(newValue);
-      if (!isNavigating) {
+      if (isNavigating) {
+        // Start work required by the destination before React commits the
+        // rewritten trigger text. View-derived activation remains as a fallback
+        // for typed/pasted navigation prefixes and direct triggers.
+        selectedItem?.onMentionNavigate?.();
+      } else {
         selectedItem?.onMentionSelect?.();
         setValue((prev) => {
           const next = [...(prev ?? [])];
@@ -472,7 +590,6 @@ const MentionRoot = React.forwardRef<RootElement, MentionRootProps>((props, forw
         });
       }
 
-      const newCursorPosition = triggerIndex + insertionLength;
       // Request cursor restoration through context instead of mutating input DOM
       // directly. MentionInput applies this in a layout effect after controlled
       // value is committed, which avoids timing races on mobile IME flows.
@@ -508,6 +625,44 @@ const MentionRoot = React.forwardRef<RootElement, MentionRootProps>((props, forw
       filterStore,
       onItemsFilter,
     ]
+  );
+
+  const onMentionInsert = React.useCallback(
+    (request: MentionInsertRequest) => {
+      const input = inputRef.current;
+      const sourceValue = input?.value ?? inputValue;
+      const at = Math.max(0, Math.min(sourceValue.length, request.at ?? sourceValue.length));
+      const splice: MentionSplice = {
+        replaceStart: at,
+        replaceEnd: at,
+        prefix: resolveMentionInsertPrefix(sourceValue, at, request.separate),
+        text: request.text,
+        suffix: request.suffix,
+        value: request.value,
+        kind: request.kind,
+        commitRange: true,
+      };
+
+      const { value: newValue, caret } = applyMentionSplice(sourceValue, EMPTY_MENTIONS, splice);
+      setMentions((prev) => applyMentionSplice(sourceValue, prev, splice).mentions);
+      setInputValue(newValue);
+      setValue((prev) => {
+        const next = [...(prev ?? [])];
+        if (!next.includes(request.value)) next.push(request.value);
+        return next;
+      });
+      setPendingSelection({ start: caret, end: caret, expectedValue: newValue });
+      // An open menu was anchored to a trigger span that just moved, and the
+      // caret is no longer in it. Same teardown a commit does.
+      setOpen(false);
+      setHighlightedItem(null);
+      filterStore.search = '';
+      // The gesture that inserts this happened outside the input (a drop, a
+      // toolbar action), so the caret restoration above lands on an input the
+      // user is not in. Typing is the expected next step, so take focus.
+      input?.focus();
+    },
+    [filterStore, inputValue, setInputValue, setMentions, setOpen, setValue]
   );
 
   const onNavigateBack = React.useCallback(() => {
@@ -601,9 +756,11 @@ const MentionRoot = React.forwardRef<RootElement, MentionRootProps>((props, forw
       mentions={mentions}
       onMentionsChange={setMentions}
       onMentionAdd={onMentionAdd}
+      onMentionInsert={onMentionInsert}
       onNavigateBack={onNavigateBack}
       onMentionsRemove={onMentionsRemove}
       onMentionClick={onMentionClick}
+      getMentionChip={getMentionChip}
       pendingSelection={pendingSelection}
       onPendingSelectionChange={setPendingSelection}
       dir={dir}
@@ -642,4 +799,12 @@ const Root = MentionRoot;
 
 export { MentionRoot, Root, getDataState, useMentionContext };
 
-export type { ItemData, Mention, MentionKind, MentionRootProps };
+export type {
+  ItemData,
+  Mention,
+  MentionChip,
+  MentionChipResolver,
+  MentionInsertRequest,
+  MentionKind,
+  MentionRootProps,
+};

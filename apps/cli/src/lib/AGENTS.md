@@ -52,6 +52,10 @@ control-plane path is DEPRECATED; do not add functionality to it.
   `specs/local-first-two-plane.md`). Local dispatch triggers off the renderer-authored
   `latestUserMsgId` doc-meta write (same doc-watch path as cloud dispatch)
   plus the local Machine RPC fast path.
+- `loro/AGENTS.md` — the doc-open cost contract: `getOrCreateSessionDoc` joins
+  the room and pulls its stream, so bulk/startup/recovery scans must pre-filter
+  through room-free indexes and never open docs off a workspace-wide
+  enumeration. Read it before touching anything that enumerates rooms.
 - `local-loro-data-plane-server.ts` — Electron renderer ↔ CLI **local Loro data
   plane** (protocol v7, push, peer-scoped): dedicated `lody-loro-data-plane`
   socket in the 0700 run dir; routes persistent connections to per-workspace
@@ -80,11 +84,25 @@ control-plane path is DEPRECATED; do not add functionality to it.
   doc's first catch-up is a realistic oversize, so it must NOT be a terminal
   room error); `payload_too_large` stays terminal only for a single
   flock entry above the budget. Receiver-side skip-until-newline is backup —
-  a framing overflow must NOT destroy the socket. Named Flock docs opened by a
-  renderer are bridged by `LoroDocumentManager` into `repo.joinFlockDocRoom()` and
+  a framing overflow must NOT destroy the socket. Feed `createJsonLineSplitter`
+  the RAW socket chunk: it owns a stateful UTF-8 decode, and per-chunk
+  `toString('utf8')` mangles a multi-byte character split across a chunk
+  boundary into U+FFFD. A flock bundle carries file paths as literal UTF-8 JSON,
+  so that corruption becomes a permanent garbled LWW key in the receiver's
+  replica (`isCorruptedCodeCollabWorkspacePath` prunes the survivors).
+  Named Flock docs opened by a renderer are bridged by `LoroDocumentManager`
+  into `repo.joinFlockDocRoom()` and
   released on the last local peer leave; Code Collab `fi`/`fis` and machine flock
   docs must not rely on `syncOnce()` as live cloud subscription. These cloud
-  hydrates (and the session-doc equivalent) are background data relays ONLY:
+  hydrates are background data relays ONLY. A renderer-joined Session Doc uses a
+  separate four-way bounded, one-shot raw `joinDocRoom` reconciliation: never create a
+  `SessionDocument`, release after first remote sync or local leave, and unload the repo
+  doc after the last local peer leaves unless dispatch has activated the Session. This
+  preserves CLI-authored offline backfill without retaining every historical cloud room.
+  Raw join/leave and `SessionDocument` activation are serialized per doc id: activation
+  must wait for an already-started `repo.unloadDoc`, then open a fresh doc, so an in-flight
+  renderer-only release cannot evict the handle retained by dispatch.
+  For both room kinds,
   the CLI's cloud room status is never pushed to renderers as local room
   health — offline cloud failures must not poison the renderer's local
   reconnect loop (`specs/local-first-two-plane.md`). There is NO polling
@@ -136,6 +154,21 @@ control-plane path is DEPRECATED; do not add functionality to it.
   `loro/machine-flock-sync-coordinator.ts` owns the live room, dirty state, and
   exponential retry; request-scoped `syncOnce()` failures must not make local project
   add/update flows fail after the local write is durable.
+- Builtin Codex local-project history import is read-only: require
+  `_meta.lody.sessionHistory` v1 and call the Core-defined history method; never fall back to
+  `loadSession`, which resumes the thread and can contend with its active writer. Publish a new
+  imported Session only after history and its cursor are durable; legacy `metadata_only` shells
+  remain selectable so the next import can finish hydration.
+- `loro/machine-flock-command-watcher.ts` owns the machine's durable COMMAND
+  subscription (archive/delete/delete-local-project/provider-setup), separately from the
+  sync coordinator's write room. Flock rows are durable, so reconnect correctness is
+  SCAN-based, not event-based: every authoritative join rescans every queue, and join or
+  initial-sync failures retry with bounded backoff. Events are only low-latency wakeups
+  and carry `authoritative`, which gates provider setup — a stale local setup row must
+  not outrun a remote cancellation. Route both the event and rejoin paths through
+  `MessageHandler.rescanMachineCommands`: a command family wired to only one of them
+  fails silently, because its queue simply stops draining. Room-status recovery uses the
+  shared `isRecoverableStreamsRoomStatus` ('detached' is never recoverable).
 - **Streams recovery has TWO signals and they must not be recombined**
   (`loro/connection-recovery.ts`). `onStreamsOnline` is cheap, unthrottled, and
   fires on every health rising edge — it RELEASES work parked while offline
@@ -152,6 +185,50 @@ control-plane path is DEPRECATED; do not add functionality to it.
   `LODY_LORO_HEALTH_STABILITY_WINDOW_MS` (5s) counts as a failed recovery and
   charges the attempt counter instead of resetting it, and `force` must not
   clear that history. Regression coverage: `tests/reconnect-storm-repro.test.ts`.
+- `session-gc-manager.ts` — idle cleanup plus memory-pressure reclamation. `evaluateMemoryPressure`
+  returns TWO independent verdicts, `evict` and `block`, and they are not the same threshold:
+  reclaiming an idle session is invisible (it is restored on its next turn), refusing a turn is a
+  user-visible failure. On **macOS the signal is `kern.memorystatus_vm_pressure_level`**, not bytes
+  — WARNING reclaims, only CRITICAL refuses, and an unreadable level FAILS OPEN. Do not add a
+  byte-threshold fallback there: byte estimates cannot see compressor headroom, which is where a
+  Mac's reclaimable memory lives, so they report pressure on healthy machines.
+  On **Linux under a cgroup, `memory.max - memory.current` is NOT headroom** — `memory.current`
+  counts page cache, so a tree scan parks tens of GB of clean cache in it and the cgroup reads as
+  full while resident memory is a fraction of that. Headroom therefore credits reclaimable
+  cache/slab (`computeCgroupReclaimableBytes`), and because that estimate deliberately excludes
+  `active_file` it is only allowed to RECLAIM on its own — refusing a turn additionally requires a
+  real stall (`memory.pressure` some avg10, or a hard-headroom floor on kernels without PSI). Host
+  `MemAvailable` needs no such corroboration; it is already reclaim-aware.
+  On **Windows the commit limit is NOT a hard ceiling** — with the default system-managed page
+  file it is `RAM + current page file size`, and Microsoft documents that Windows grows the page
+  file once commit charge hits 90% of the limit, so a healthy machine sits permanently a few
+  hundred MB under its CURRENT limit. `utils/memory.ts` therefore measures the page file
+  configuration too (`computeWindowsCommitGrowthBytes`, pure/testable) and refuses only on
+  `effectiveAvailableCommitBytes = availableCommit + growth`; raw commit headroom and low
+  `AvailableBytes` may only RECLAIM. The documented system-managed ceiling is
+  `min(max(3 x RAM, 4GB), volume size / 8)` and **the volume/8 term is load-bearing** — it binds on
+  small disks, i.e. exactly the machines that do run out of commit. Growth is `number | null`:
+  `null` means UNDETERMINED (unreported volume, or an empty page file enumeration on a machine
+  whose commit limit exceeds RAM) and drops `effectiveAvailableCommitBytes` so the check fails
+  open. Never collapse `null` to `0` — that manufactures a hard ceiling out of a failed probe.
+  Physical availability never refuses on Windows at all: the Memory Manager trims working sets and
+  pages out rather than failing, which is why Chromium/.NET/SQL Server all treat physical pressure
+  as a shed-caches signal only. `os.freemem()` is the physical number (libuv returns
+  `ullAvailPhys`, i.e. free + zero + standby) — do not add a probe for it.
+  Commit comes from `powershell.exe`, preferring the documented `\Memory\Commit Limit` /
+  `\Memory\Committed Bytes` perf counters and falling back to `Win32_OperatingSystem`
+  (`TotalVirtualMemorySize`/`FreeVirtualMemory` are `ullTotalPageFile`/`ullAvailPageFile` in
+  practice, but the CIM docs do not say so — hence fallback, not primary). Timeout is 5s because a
+  1s budget expired exactly on the loaded machines it exists to measure, and a failed probe fails
+  OPEN as on macOS. That probe is a PROCESS SPAWN, so it is cached for 30s and the sampler only
+  bypasses the cache via `refresh()`/`getMemoryPressureSnapshot({ force: true })` — the paths about
+  to act. Do not make the periodic sweep force it: at the monitor's 5s cadence that is ~17k
+  `powershell.exe` launches a day on an idle daemon.
+  Two more rules, both learned from a false refusal: never act on the CACHED sample (force a
+  refresh once anything looks like pressure), and re-check with a short delay before failing a turn
+  (`pressureRecheckAttempts`) because reclaim returns cache in milliseconds. Eviction is bounded
+  per call (`maxEvictionsPerCall`) because the caller awaits it on the prompt hot path. The
+  threshold is a safety MARGIN, never "what a turn needs" — do not phrase it that way to users.
 - `provider-setup-manager.ts` owns durable default managed-builtin creation;
   setup rows with executable runtime overrides are invalid. The future
   config stays under `['providerSetup', configId]` while runtime/auth/live-probe
@@ -203,13 +280,15 @@ control-plane path is DEPRECATED; do not add functionality to it.
   `collectPendingScheduledTasksFromHistory` + `nextCronFireMs`.
   INVARIANT: `history-apply.ts` strips `rawInput`/`rawOutput` from ALL generic tool calls
   (unstructured by spec) EXCEPT the four scheduling tools in `SCHEDULING_TOOL_NAMES`
-  (`CronCreate/CronDelete/CronList/ScheduleWakeup`, matched via `_meta.claudeCode.toolName`),
+  (`CronCreate/CronDelete/CronList/ScheduleWakeup`, matched via `_meta.lody.toolName`),
   whose small `rawInput`/`rawOutput` are kept, whose persisted `title` is pinned to the
   canonical tool name, and which also record `schedulingTimeZone` (this machine's IANA zone,
   captured at persist time — cron is local-time to it, so the panel resolves fire times in
   that zone via `nextCronFireMs`, not the viewer's browser zone). The deriver reads exactly
   those fields — do not "clean up" this exception or the panel goes silently empty (unit tests
   fabricate history and won't catch it).
+  The former `_meta.claudeCode.toolName` carrier is read only by the centralized
+  one-release compatibility path; new provider output must use the Core contract.
   RPC fast-path ordering: turn-scoped history LIST writes in `message-handler.ts`
   (assistant entry creation, ACP/proposed-plan flushes, finalization, chat_failed
   notices, image-group entries) first `await awaitTurnHistoryGate(sessionId)` —
@@ -256,6 +335,13 @@ control-plane path is DEPRECATED; do not add functionality to it.
   [AGENTS.md](review-automation/AGENTS.md).
 - `code-collab/` — unified Code Collab v2 filesystem RPC service; see its own
   [AGENTS.md](code-collab/AGENTS.md).
+- `file-preview/` — the `file/preview` (File Preview v3) read path: text AND binary,
+  size-limited, path-allowlisted for remote transport. Electron's local-only
+  `file/preview-local` IPC counterpart is deliberately the exception: it allows the
+  desktop user to inspect any local regular file, read-only. **A preview must never
+  activate Code Collab** — no workspace watch, no All Changes recompute, no Flock
+  publish. That coupling is exactly what this directory was split out to remove; see
+  its own [AGENTS.md](file-preview/AGENTS.md).
 - **Session file attachments** (spec: `specs/session-files.md`): `message-handler.ts`
   has `handleSessionFileUpload` (cloud, MCP `lody_upload_files`) and local
   `handleSessionFileSendLocal`. Local bytes live in `session-file-blob-store.ts`

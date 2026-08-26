@@ -28,6 +28,15 @@ Session conversation page chain:
     `pt-9` in `web-workspace-layout.tsx`, both gated the same way — so no page
     (this bar included) reserves its own right-side inset for the caption buttons.
     Mobile never renders `SessionTabBar`; it uses `MobileSessionTabSheet` instead.
+    Desktop session tabs (not drafts or file/diff viewers) are mention drag
+    sources: the parent tab uses HTML5 drag, child session tabs arm the
+    in-flight store from the strip's dnd-kit pointer drag. Dropping onto the
+    conversation inserts a mention of that tab; dropping onto another tab
+    still reorders. Pointer-over-conversation wins over closest-tab collision.
+    A lone parent Session tab is not draggable; enable tab drag only once a
+    second visible tab exists. On desktop, Cmd/Ctrl+W closes the focused side
+    panel or child tab; when the parent is the only conversation tab, it leaves
+    the Session view for Chat Landing without archiving the Session.
     Desktop tabs share width equally whenever all can reach `ACTIVE_TAB_MIN_WIDTH`;
     below that threshold the active tab keeps that width and the others share the remainder.
     **The tab pills' top border shares one line with the sidebar and side-panel
@@ -107,6 +116,29 @@ Session conversation page chain:
   (`buildChildSessionsByParent` in `session-list-rows.ts` groups by bare `parentSessionId`) — side
   chat activity and unread state are meant to surface on the parent conversation, so do not add a
   placement filter there.
+  Do NOT confuse that with `SessionMeta.openedBySessionId`, which records the Session that CREATED
+  another (the `lody_session_create` MCP tool, or `lody session create` run inside a session). That
+  one is presentation-only provenance: the opened Session stays INDEPENDENT — own workspace,
+  machine, project, lifecycle, sidebar row — and is only INDENTED under its opener by
+  `lib/session-opened-by-tree.ts`. It must never be turned into a `parentSessionId`, never roll
+  its activity into the opener's row, and never be filtered out of the session list. Both
+  directions of that link are navigable: the sidebar tree plus its "Go to Opener Session" row menu,
+  `SessionHeaderMenu`'s `openedByRelations` ("Opened by …" / "Opened sessions"), and
+  in-conversation relationship cards. A successful `session_create` Operation completion links to
+  each exact `target.sessionId`; the opened Session's first scroll row links back to its exact
+  `openedBySessionId` and shows the opener's live title. The latter is passed through
+  `SessionChatStream.leadingContent`, never persisted as fake history. These are wired from
+  `session-chat-interface.tsx` via `openedSessionsAtomFamily` — that atom excludes
+  `parentSessionId` rows on purpose, so a Session is never presented in both relationships.
+  An agent running inside a CHILD TAB can create one of these, so the opener is often a Tab with
+  no sidebar row. `openedBySessionId` always keeps that PRECISE Tab, while new creates also persist
+  `openedByRootSessionId` when a root route is required. Navigation must carry both dimensions
+  (`SessionNavigationTarget`: root `sessionId` + exact `tabSessionId`) and encode the latter through
+  `session-tab-url.ts`; opening only one id either loses the Tab or routes to a hidden child. For
+  pre-existing data, `resolveOpenedByNavigationTarget` derives the root from the opener's
+  `parentSessionId`. Sidebar indentation uses the same persisted root first, then the legacy
+  `buildSidebarOpenerRowResolver` fallback (`SessionListRow.openedByRowSessionId`). Do not collapse
+  the two ids into one field, and do not give the child Tab a sidebar row to nest under.
   Unlike a fixed panel, a side chat is a tab the moment it exists, so mounting every one of them
   would open a Loro session doc per side chat even for a user who never expands the panel: mount one
   when it is first selected (`mountedSideSessionIds`), plus any fork target still waiting to report
@@ -126,6 +158,11 @@ Session conversation page chain:
   mounted active chat surface's ref; the split desktop toolbar must not mount or subscribe to a
   second session doc merely to discover that turn. Keep its capability, archive, pending/loading,
   and RPC path identical to the assistant-footer fork action.
+  When the authoritative capability cache advertises worktree forking for a Git-backed project,
+  those entry points first offer shared-workspace Tab or new-worktree Session. A worktree fork keeps
+  the source route active after the accepted response, persists its target id locally so refresh can
+  reattach, and navigates only after the target publishes committed root-Session meta. Dirty-source
+  confirmation means committed `HEAD` only; never imply that uncommitted or untracked files move.
   Browser side-panel state and the mobile deep link are named `browser` / `?browser=1`; the removed
   `preview` values are not migrated. Once opened, keep `SessionBrowserPanel` mounted while other fixed side-panel
   tabs are active so managed DOM state and Electron native-view history survive tab switches.
@@ -153,6 +190,23 @@ Session conversation page chain:
   `useSessionDoc` never survive an in-place session switch.
   Electron public-browser restoration only reattaches the existing `WebContentsView`; it must not
   issue another navigation to the cached URL, which would silently reload and lose page state.
+- Complete `.html` / `.htm` viewer text may switch between Monaco source and Managed Preview without
+  a Machine RPC endpoint. Build a policy-owned `srcdoc` from the current complete viewer text,
+  inject the shared annotation runtime, and run it in uncached static-document mode
+  (`allow-scripts` only, opaque origin). Static frames must be destroyed as soon as the file
+  tab or rendered mode becomes inactive; never park their JavaScript in the Browser frame cache.
+  Keep CSP/referrer/base policy and the annotation runtime ahead of source scripts, map runtime
+  messages to a file-path logical URL whose namespace distinguishes relative, POSIX-absolute,
+  Windows-drive, and UNC paths. Same-document `#fragment` links stay inside the `srcdoc`; leave
+  rendered mode on every other navigation request because local subresources/pages are not part of
+  the single-document contract. HTML starts in code mode,
+  and truncated documents are never executable. The iframe is a permission boundary, not a promised
+  renderer-process/thread boundary; do not claim arbitrary user JS cannot consume the app renderer.
+  Likewise, CSP governs the initial `srcdoc`, not an arbitrary later self-navigation. Require
+  credentialless iframe support before offering the toggle, and do not describe the
+  self-contained/no-network rule as a hard browser guarantee. The rendered frame exists only while
+  its viewer tab and containing sidebar are visible. Key the file viewer by session + tab so switching
+  session targets always returns HTML to code mode before the new file can execute.
 - Session Browser has strict dual engines. Public HTTP(S) uses only a declared public-browser
   capability (Electron `WebContentsView` today); loopback/private targets use Managed Preview and
   are the only pages eligible for Visual Annotation. Never fall back from a missing public engine
@@ -240,12 +294,145 @@ Session conversation page chain:
   the composer, so its right edge and max width must stay aligned automatically.
   Desktop run knobs are TWO footer buttons from `desktop-run-config-menu.tsx`:
   `DesktopRunConfigMenu` (`[agent icon] model · reasoning ⌄` face; dropdown =
-  Agent/Model/Reasoning side submenus + Plan/Fast toggle rows) and
-  `DesktopPermissionModeButton` (mode icon + full name; flat mode list). Both
+  Agent/Model/Interaction/Reasoning plus provider-defined select side submenus +
+  Plan/Fast toggle rows) and
+  `DesktopPermissionModeButton` (permission icon + full name; flat permission
+  list). Explicit `_permission` config options take precedence over legacy ACP
+  modes; provider interaction modes stay inside the run-config dropdown. Both
   are also used by the desktop chat landing; `DesktopRunConfigMenu` receives an
   explicit agent selection/machine scope rather than reading `SessionMeta`.
   Agent/Model/Reasoning option selection closes the dropdown and must not return
   keyboard focus to its trigger; Plan/Fast toggle rows intentionally stay open.
+  Once the model list reaches `OPTION_SEARCH_MIN_OPTIONS`
+  (`lib/fuzzy-option-filter.ts` — the same threshold and matcher the mobile
+  sheet uses) the Model submenu gains a fuzzy search row over
+  `MenuOptionSearchList`: a provider may publish dozens of models, and scrolling
+  is not a way to find one. A search field inside a Radix menu must be
+  `DropdownMenuSearchInput`, which owns the fight with the menu's typeahead and
+  roving focus (its jsdoc has the details); the same tasks-side Model submenu
+  (`tasks/task-agent-run-config-menu.tsx`) is still an unsearchable clone and
+  should adopt it.
+  `DesktopRunConfigMenu` gains a **Role** row when the caller passes
+  `agentRoles`. It sits ABOVE Agent, since a Role answers every row under it at
+  once. BOTH composers pass it, but they mean different things by it and the
+  difference is load-bearing:
+
+  - **Chat landing** authorizes the WHOLE Role — machine, agent config, run
+    config, instruction — because it can still move the agent.
+  - **An existing session** (`useSessionAgentRole`) can NOT: its agent, machine,
+    and runtime are fixed. So it offers only Roles bound to an agent of the same
+    TYPE and applies only their RUN CONFIG, which is exactly what transfers:
+    model / reasoning / permission are published per `cliType:agentType`, and
+    they are the values a session can still change every turn. Availability is
+    not consulted there — nothing is going to that Role's machine — and the
+    Role's INSTRUCTION is not applied, because a prompt prefix belongs to the
+    first turn of a session the Role creates. The row is NOT gated on
+    `isEmptyConversation`: those values stay changeable for the whole
+    conversation. `isAgentRoleRunConfigApplied` is the shared value rule;
+    `isComposerAgentRoleApplied` is that rule plus the landing's agent check. With Roles to pick it is a submenu of
+  `None` + the Roles bound to the machine the chat will start on (a Role's
+  `machineId + agentConfigId` are exact, so a Role from another machine could
+  only move the chat or fall back) beside a pane stating what the highlighted
+  one runs; with NO Roles the row's VALUE is the create action instead, and the
+  editor opens seeded from the composer's current configuration
+  (`buildAgentRoleFormValueFromRunConfig`) — "save what I am about to run" is
+  why that entry point is here at all, and the new Role is SELECTED as soon as
+  the composer can offer it — creating from here means "use this now". That is
+  deferred, not immediate (`resolvePendingAgentRoleSelection`): the write
+  resolves on durability while the catalog snapshot arrives on its own tick, so
+  the Role is not in the list at that moment; and a Role bound to another
+  machine is given up on rather than followed there. `None` clears the NAME, not the
+  configuration: the values the Role seeded are the user's own now, and rolling
+  them back would undo choices they never asked to undo. An unavailable Role
+  stays listed and disabled with its reason, `machine_offline` included, since
+  no machine heading carries it here. `AgentRoleDetailPane`
+  (`sessions/agent-role-detail-pane.tsx`) is the ONE pane that reads a Role, and
+  the `@` mention menu renders the same one — a Role is the same object on both
+  surfaces, and describing it twice is how the two drift (the mention menu's own
+  generic rows had already drifted: they printed the stored ids raw and labelled
+  the permission mode "Reasoning"). Each host passes the subject and sizes the
+  box; the mention menu also passes `machineLabel`, because that list spans
+  machines while the composer's is one machine by construction. It resolves each stored id
+  against the BOUND agent's capabilities, so a Role reads in that agent's own
+  wording ("Full access", not `agent-full-access`), and it shows ONLY what the
+  Role pins — `resolveConfigOptionValue` would fall back to the agent's current
+  value and print a reasoning level the Role never chose. Each pinned value is
+  ONE line: `glyph label ……… value`, the same row grammar as the Agent / Model /
+  Reasoning rows this submenu opened from, so the pane reads as a continuation
+  of that menu rather than a second vocabulary. The label sits at the glyph's
+  own size — it names the glyph, it does not compete with the value — and the
+  value is pushed to the right edge, which aligns the column without a fixed
+  label width that no single width could give across locales. A value that
+  outruns the line elides rather than wraps, and a model id elides at the START
+  (`claude-opus-5` vs `claude-sonnet-5` differ in the tail). The permission's DESCRIPTION is
+  deliberately absent: a sentence about what one value allows belongs to the
+  Role editor, not to a scan of what is pinned. Its machine is passed
+  in rather than looked up, so the pane stays renderable without the workspace's
+  machine-visibility context. The Role editor is a Dialog and is therefore
+  hosted by the composer, NOT inside menu content, where it would unmount with
+  the menu the moment it opened; `AgentRoleEditorDialog` is the one editor,
+  shared with Settings.
+  Picking a Role flows through the SAME preference channel as that agent's
+  remembered defaults (`useReconcileAcpSessionConfigSelection`), never a second
+  apply path — so a pinned value the agent no longer supports falls back visibly
+  there instead of being forced in. The footer names a Role only while
+  `isComposerAgentRoleApplied` still holds (`lib/composer-agent-roles.ts`):
+  every value the Role pins is what will run. Moving a knob takes the name away
+  rather than clearing the preference, which would re-seed the value just
+  changed. With a Role selected the TRIGGER carries the Role and nothing else,
+  and the model/reasoning/permission/Plan/Fast values render beside it as inert
+  dimmed text: a Role IS the whole configuration, so changing one of those by
+  hand is exactly what unnames it, and a knob that silently unnames the thing
+  next to it is a trap. Permission is one of those values
+  (`doesAgentRolePinPermissionMode`), so `DesktopPermissionModeButton` is not
+  rendered at all while a Role that pins it is selected — but it STAYS a button
+  when the Role pins nothing there, because an agent with no permission control
+  leaves a Role nothing to own and hiding the knob then would remove one the
+  Role never had. The composer's preference NAMES a Role rather than holding a
+  copy: editing one bumps its `revision`, which rides in `preferenceRevision`,
+  so the composer re-seeds from what the Role says NOW — a captured copy would
+  keep running the old values under the edited Role's name, and a deleted Role
+  simply stops resolving. A warning-tone pinned mode (full access / skip permissions)
+  keeps its amber shield in the face and in the detail pane: the rest is quiet
+  because the Role decided it, but that value no longer has a button carrying
+  the warning. `resolvePermissionModeFace` (`lib/permission-mode-face.ts`) is
+  the one rule for what permission even IS on a given agent — an explicit
+  `_permission` option, a legacy ACP mode, or a plain mode selector standing in
+  — shared by the button, the face, and the Role detail pane. The pane takes
+  only its `source` from that rule: the face RESOLVES a value, and resolution
+  falls back to the agent's current one, which the pane must never present as
+  something the Role pinned.
+  Mobile (`MobileSessionRunConfig` → `MobileRunConfigSheet`) has the same Role
+  row, in the same place — above Agent — as an ordinary `MobileInlinePicker`,
+  with no detail pane and no edit: a phone row cannot carry the binding a Role
+  authorizes, so the binding is read on desktop or in Settings. It DOES offer
+  create, as the last entry in the list. The row renders whenever the caller
+  passes `agentRoles`, even with none to list — the row then reads `None` and
+  its list is the way to make the first one, which is what the desktop row does
+  too; hiding it made the control look absent. `None` still leads the list and
+  an unavailable Role is still listed, disabled, with its reason (from the
+  shared `AGENT_ROLE_UNAVAILABLE_REASON_KEYS`).
+  The Role editor is a Dialog, so BOTH composers host it outside their menu /
+  drawer — and the in-session one mounts it only while OPEN, because it reads
+  machine visibility and the composer must stay renderable in hosts that do not
+  provide that context. The collapsed
+  `MobileRunConfigButton` face is unchanged: it shows the agent icon + model +
+  reasoning, which stays true whether or not a Role set them. Neither the Role pane nor
+  the `@` mention pane shows a private/workspace badge: every Role offered is
+  one this user may run, so visibility changes nothing about accepting it and is
+  a Settings concern. The remembered Role rides in
+  `chatLandingDefaults.agentRoleId` and is restored only once the workspace
+  catalog can answer — before that, "not in the list" means "not loaded yet", so
+  the stored id must not be overwritten with null.
+  `SessionMeta.agentRoleId`/`agentRoleRevision` record provenance only.
+  A Role also appears in **Recently used**, because a Role IS one of those whole
+  combinations: the record carries `agentRoleId`, that id is part of
+  `getRecentRunConfigKey` (the same knobs picked by hand are a DIFFERENT entry —
+  a Role also carries its instruction and its provenance), the row leads with
+  the Role's mark and name, and picking it re-applies the ROLE rather than
+  replaying its values. `buildRecentRunConfigItems` drops a Role entry whose
+  Role is not in the passed `agentRoles` — a Role never falls back, so a deleted
+  or unavailable one must not quietly re-run as loose values.
   The selected mode is applied per TURN (it becomes the user entry's
   `inputConfig.modeId`; `resolveSessionConversationConfig` reads the latest turn
   back as the preference). So approving "Yes, implement this plan" — which only
@@ -271,9 +458,10 @@ Session conversation page chain:
   while either is uploading. Desktop same-machine uploads use
   `@/lib/electron-session-file-sender.ts` / `window.api.sendSessionFileLocal`, return
   a `transport:'local'` block into the same `pendingFiles[].uploaded` slot, and fall
-  back to cloud on handoff failure. Image + file inputs use the same plain hidden
+  back to cloud on handoff failure. The composer exposes one unfiltered hidden
   `<input type="file">` on every platform (Windows included — the renderer no
-  longer crashes once locale `.pak`s ship; see `apps/electron/AGENTS.md`).
+  longer crashes once locale `.pak`s ship; see `apps/electron/AGENTS.md`) and
+  routes each selection by MIME into the image or file state machine.
 - `floating-permission-request.tsx`: floating permissions + ask-user-question;
   hidden-composer mobile keyboard lift/scroll lives there.
   `notification-permission-prompt.tsx` and the inner content of `session-pin.tsx`
@@ -304,7 +492,14 @@ Session conversation page chain:
   later phase reports its own presence, so do not widen the timeout to cover a
   whole agent run. Durable resolution of a truly stalled turn still comes from
   CLI-side reconciliation on the next daemon start; the timeout only bounds the
-  optimistic UI. That pre-start label is additionally suppressed whenever the
+  optimistic UI. Message SUBMISSION ROUTING has one deliberate conservative
+  exception to presence-only display state: an unfinished assistant transcript is
+  an ordering barrier when presence is momentarily absent. `session-message-submit-route.ts`
+  must queue in that state (even when the preference is guide; steering requires
+  positive live prompt activity), because queue promotion is safe for both a live
+  turn and a stale transcript while direct dispatch can create a second accepted
+  turn. This barrier affects routing only; it must not relight Working UI or enable
+  Stop. That pre-start label is additionally suppressed whenever the
   status chip has an active connection/machine problem (`statusStripState !=
 null`: browser offline, machine removed or offline) — the chip owns that story,
   and "Starting…" next to "machine offline" is a contradiction. `isSessionWorking`
@@ -381,7 +576,8 @@ labelClassName`) so the stage diffstat never clips. Wired from
   opens the existing fixed All Changes side-panel tab; file-row and comment-reference
   actions may still create a diff viewer because they carry a precise file/comment focus.
   The context stage is also the single owner of agent-driven GitHub/worktree actions:
-  a changed worktree without a PR shows `Create PR` + `Commit & Push`. For an open
+  a changed GitHub-capable workspace without a PR shows `Create PR` + `Commit & Push`,
+  including a direct Local Project with a resolved GitHub repository. For an open
   associated PR, compact poller state selects exactly one higher-priority path:
   conflicts show `Resolve Conflicts` (an immediate agent prompt), failed/error CI
   shows `Fix CI Errors` (refresh details, include a bounded failed-check snapshot,
@@ -530,9 +726,17 @@ labelClassName`) so the stage diffstat never clips. Wired from
 Code Collab file surfaces (data chain: [packages/components/AGENTS.md](../../../AGENTS.md)):
 
 - Diff page: `session-conversation-diff-panel.tsx`, data from
-  `use-session-conversation-diff-data.ts`.
+  `use-session-conversation-diff-data.ts`. Each file title copies the
+  workspace-relative path and, when wired, opens a file-preview viewer tab
+  through `handleOpenFile` with `pathKind: 'canonical'` (never the markdown
+  href parser).
 - Editor window (Monaco): `session-monaco-text-viewer.tsx` inside
   `session-file-content-view.tsx`.
+- Markdown file viewers copy the latest complete source text (including unsaved
+  editor changes) from the top toolbar. On mobile, source mode uses the native
+  text surface instead of Monaco so long-press keeps the OS selection menu;
+  rendered Markdown must opt into native selection through
+  `data-native-selection-allow`.
 - v2 semantics for file tree, All Changes, refresh/save conflicts, and CLI-local
   turn diff RPC: `specs/code-collab-v2.md`.
 - **File tree: ONE row renderer** (`VirtualFileTree` in `components/file-tree-view.tsx`)
@@ -547,6 +751,16 @@ Code Collab file surfaces (data chain: [packages/components/AGENTS.md](../../../
   scroll re-renders, which needs `pruneExpandedFileTreeIds` to return its input
   Set on a no-op prune (watcher ticks churn `data`) and icon factories to cache by
   resolved icon name. Coverage: `tests/file-tree-virtual-rows.test.tsx`.
+  **Expanded folders + selected row are the user's intent and outlive the
+  component.** The side panel shows one tab at a time, so opening a file unmounts
+  the tree; component-local state collapsed every folder on the way back. State
+  lives in `lib/file-tree-view-state.ts`, keyed per tree (`viewStateKey`,
+  `session-files:<sessionId>` from `session-detail.tsx`), memory-only and LRU
+  bounded; an unkeyed tree stays ephemeral. `pruneExpandedFileTreeIds` therefore
+  applies to the RENDERED set only — pruning the stored set would drop every
+  nested folder each time the provider rebuilds the tree, because a lazy
+  directory carries no children until it is initialized. Coverage:
+  `tests/file-tree-view-state.test.tsx`.
 - **Viewers are intentionally NOT code-split** (file viewer, diff viewer, diff
   panel, inner Monaco/Markdown are static imports). Code-splitting only pays off
   over a network; in the local Electron bundle a lazy `import()` adds no benefit

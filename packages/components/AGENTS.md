@@ -11,7 +11,40 @@ mobile surfaces.
 - Regenerate TanStack routes after changing route files.
 - Add Storybook coverage for new presentational components and meaningful states.
 - All user-visible copy must go through i18n.
+- Compact number units (K/M/B vs 万/亿) follow the product language via
+  `toIntlLocaleOrEn` / `formatCompactNumber`, never the host OS locale.
 - Prefer shared primitives from `src/components/ui` over private replacements.
+- `ui/emoji-picker.tsx` is the shadcn `frimousse` registry component, with its
+  two copy strings on i18n rather than the registry's inline English. Its dataset
+  SHIPS WITH THE APP: `frimousse` otherwise fetches
+  `${emojibaseUrl}/${locale}/{data,messages}.json` from a public CDN, which
+  leaves the picker spinning forever in an offline desktop or mobile app. Every
+  host build therefore registers `vite-emojibase-assets.ts` (see
+  `apps/electron/electron.vite.config.ts`) and the picker reads
+  `getBundledEmojibaseUrl()`. It is a URL contract, not an import — the library
+  builds those paths at runtime, so a hashed `?url` asset cannot satisfy it, and
+  a host that forgets the plugin gets an empty picker. Keep the locale list in
+  the plugin and `lib/emojibase-assets.ts` in step; each locale is ~750 KB.
+  The URL is anchored on the Vite BASE, never on `document.baseURI` alone: the
+  router uses browser history over http, so the document URL is a deep route and
+  resolving against it asks for `…/settings/emojibase`, which the dev server
+  answers with the SPA fallback — the picker then parses HTML as JSON.
+  Its search input also carries `focus-visible:shadow-none`. The global "Pro
+  focus style" in `tailwind/index.css` puts an inset `--primary` ring on any
+  focused input through a zero-specificity `:where(…)` selector, so every input
+  with its own `focus-visible:` utility overrides it and never shows it; this
+  bare registry input had none and was the one field in the app that did.
+- A settings row (`settings/compact-layout.tsx`) is one grid: the label column takes the
+  remaining space and the control column hugs its content. Never size either column from a
+  viewport breakpoint — settings render in a panel far narrower than the window, and the
+  panel clips its overflow, so a `md:`-width label column silently hides the control.
+- An editable control fills with `bg-input-field`, never `bg-input`. `--input` is the
+  theme's raw `input.background` and doubles as a muted chip/composer slab that may sit
+  BELOW the page color in a light theme — a recessed gray field reads as disabled.
+  `--input-field` (derived in `lib/vscode-theme/vscode-theme-css.ts` as the lighter of
+  the field and page colors) keeps a dark theme's raised fill and lifts a light theme's
+  field onto the page, where `--input-border` delimits it. Gray then means disabled
+  (`disabled:bg-muted`), so keep that pair intact.
 - `AgentActivityIndicator` animations stay CSS-only and compositor-friendly
   (`transform`/`opacity`). Do not restore canvas frame loops, React animation
   state, or timers; keep the Storybook Playwright render budgets passing.
@@ -38,6 +71,9 @@ mobile surfaces.
   intentionally public or narrowly token-scoped DTO.
 - Renderer and worker builds that cannot use native top-level await must use
   `vite-top-level-await-fixed.ts`. Do not bypass its audited-version assertion.
+- System theme state, persistence, and browser preference tracking are owned by
+  `next-themes`. Keep Lody's wrapper focused on preview state, fixed VS Code theme
+  application, and the Electron native-theme bridge.
 
 ## Crash surfaces
 
@@ -82,6 +118,9 @@ mobile surfaces.
 - Controls for a machine resolved as local use Electron local session control,
   independent of cloud-token or sync state. A failed local bridge is an error; never
   fall back to a remote RPC path.
+- Cloud Electron waits for the first **Run local agent** setting snapshot before
+  creating its workspace runtime. Enabled uses dual sync; disabled uses cloud-only
+  sync and must not attach the local data plane or surface its reconnect state.
 - Workspace-level rooms without a machine owner use the platform fallback. Task rooms
   and the Task Index depend on this behavior; returning no transport silently disables
   task synchronization.
@@ -91,12 +130,37 @@ mobile surfaces.
 - Presence is merged by origin. For an origin represented by the local plane, the local
   snapshot is authoritative, including absence; do not resurrect cleared presence from
   a lagging replica.
+- Doc-metadata bootstrap and the live repo watch overlap by design: merge per field
+  with live winning (`mergeBootstrapMetaCache`), never letting the snapshot undo an
+  archive already applied live.
 
 ## Code Collab
 
-- The owner-session file-index Flock is the file-tree and All Changes source. Machine
-  RPC handles exact file content, save, LSP, and diff requests; it is not the file-index
-  source of truth.
+- Remote file surfaces read the owner-session file-index Flock. An Electron surface whose
+  target resolves to the local machine MUST load its initial file tree and All Changes from
+  the local `code-collab/get-file-index` Machine RPC snapshot without waiting for the
+  Flock; it then subscribes to local Flock events for later changes. A delayed or failed
+  subscription must not block that initial IPC read or fall back to cloud RPC. The CLI
+  asynchronously reconciles the initial snapshot back to Flock, so transient stale join
+  events must be allowed to converge rather than treated as initial authority. Machine RPC
+  also handles exact file content, save, LSP, and diff requests.
+- **Opening a file to preview it is NOT a Code Collab operation.** `openFile` goes
+  through File Preview v3, which the machine answers with a plain read — no workspace
+  watch, no All Changes recompute, no Flock publish. A local Electron target uses the
+  IPC-only `file/preview-local` method and MUST NOT fall back to Streams RPC while its
+  route is unresolved; remote targets use the restricted `file/preview` method. It handles
+  text and binary (PNG/JPEG/…) alike and is size-limited on the machine. So the file
+  index is a HINT here, never a gate: a `binary` entry carries no `unavailableReason`
+  (or the tree row goes unclickable via `canOpen` in
+  `session-file-provider-view-model.ts`), and a path the index has never seen — an
+  agent-produced temporary file, say — is still sent to the machine. Binary results
+  must not enter the text open cache; that cache backs `save-text` conflict detection.
+- Preview READS a wider path set than `save-text` WRITES (writes stay inside the session
+  workspace). So a result with `external: true` must be forced readonly regardless of
+  what the index says — otherwise the editor shows a Save button for a file the machine
+  will refuse, and the user loses the edit at save time.
+- Path provenance, skip-reason classification, and why file identity must come from the
+  machine's reported path: [src/lib/AGENTS.md](src/lib/AGENTS.md).
 - File-index rows must pass the shared Zod helpers. Preserve structured lazy-directory
   entries so `@file` completion can initialize a directory before refreshing results.
 - Turn-scoped diffs come from the CLI-local evidence store. Do not synthesize them from
@@ -111,8 +175,105 @@ mobile surfaces.
 - Chat landing: `src/components/chat/chat-landing.tsx`.
 - Sidebar: `loro-sidebar.tsx`, `loro-app-sidebar.tsx`, and
   `sessions/session-list-rows.ts`. Sidebar rows are sessions, not Tasks.
+  EVERY desktop session row is a drag source for a session mention
+  (`lib/session-mention-drag.ts`, dropped on the conversation page or the
+  landing) — a new row renderer that omits it makes the gesture work in some
+  lists and not others. Session tabs in `session-tab-bar.tsx` are the same
+  gesture: parent tabs HTML5-drag, child session tabs arm the in-flight store
+  from dnd-kit. `startSessionMentionDrag` / `armSessionMentionDrag` light
+  `ConversationDropOverlay` immediately, before `dragenter`. A row whose surface is a navigation `<a>` overlay must
+  put `draggable` on the ROW and `draggable={false}` on that anchor, or the
+  browser starts a link drag instead.
+  `SessionMeta.openedBySessionId` (a Session created BY another, e.g. the
+  `lody_session_create` MCP tool) indents that row under its opener via
+  `lib/session-opened-by-tree.ts`. EVERY session list uses it — `session-list.tsx`
+  groups, the local-project sections, and `sidebar-updated-session-list.tsx`
+  (which renders both the Updated bucket and the Pinned section) — plus
+  `sidebar-navigation-model.ts`, so keyboard nav matches what is rendered.
+  It is presentation only and is NOT `parentSessionId`: opened Sessions keep
+  their own workspace/lifecycle and stay first-class rows, while
+  `parentSessionId` children never reach the sidebar at all (`sessionListAtom`),
+  so nothing can nest twice. TWO fields, and they must not be merged:
+  `openedBySessionId` is the PRECISE opener and drives navigation;
+  `openedByRowSessionId` is the sidebar ROW to indent under. They differ when an
+  agent inside a child Tab creates a Session — the Tab has no row, so
+  `buildSidebarOpenerRowResolver` (`sessions/session-list-rows.ts`) walks
+  `parentSessionId` up to the root row. Never "simplify" that by rewriting
+  `openedBySessionId` to the root: "Go to Opener Session" and the conversation's
+  "Opened by" entry must still land on the exact Tab that created the Session.
+  The opener and unrelated top-level rows keep the exact flat-list alignment.
+  The shared leading slot owns the node-centre affordance: an idle opener shows
+  its disclosure at rest and swaps it for ⋯ on row hover; an idle child shows
+  ├/└ and swaps those for ⋯ in the SAME 7px-centred position. STATUS OUTRANKS
+  THE TREE on both sides: an active (working / unread / waiting) child drops
+  the trunk and elbow, and an active opener drops its disclosure — that node
+  shows only the status, never both. Gate the opener on the whole activity set,
+  not just `isWorking`: the disclosure branch REPLACES the indicator, so an
+  unread opener would otherwise render a chevron and lose its unread dot. The
+  context menu's expand/collapse item is what keeps a busy opener foldable, so
+  it must stay wired. Only a child widens that slot
+  from 14px to 26px, producing the 12px title indent without shifting the row
+  background. Keep connector geometry in `sidebar-row-shared.tsx`, and keep the
+  opener's context menu expand/collapse item wired to the same toggle callback.
+  The resolver needs `allActiveSessions` (the only view that still contains
+  child Tabs), so any new list must take it from the sidebar rather than
+  re-deriving it from rows. Nesting is then resolved INSIDE one rendered list,
+  which is what keeps section boundaries intact: a pinned opener and an unpinned
+  opened Session are in different arrays, so both stay top-level. The tree never
+  hides a Session — a missing, cross-section, cross-group, cycling, or
+  deeper-than-one-level opener degrades to a top-level row; the preview cap
+  (`MAX_VISIBLE_SESSIONS` / `SHOW_FULL_BUCKET_THRESHOLD`) counts top-level rows.
+  Every list here is sorted by latest activity, so each surface passes `rootRank`
+  and an opener is ranked by its FRESHEST opened Session — without it, nesting
+  would bury a just-updated row under a stale opener and silently break the
+  ordering contract of Updated mode. Collapse state is the shared
+  `sidebarCollapsedOpenedBySessionsAtom` and defaults to EXPANDED. Both
+  navigation directions must stay reachable: the tree and the row context menu's
+  "Go to Opener Session" in every sidebar list, `SessionHeaderMenu.openedByRelations`,
+  and the in-conversation cards for successful create Operations / the opened
+  Session's precise opener. The mobile chat lists render the same tree from the
+  same two fields, per bucket, minus the disclosure — see `mobile/AGENTS.md`.
+  Session lifecycle actions traverse both relations: a root archive, restore,
+  or delete includes child Tabs and every independently opened descendant.
+  Child Tabs share the root's machine lifecycle command; independently opened
+  Sessions enqueue their own. The archive list keeps the opened-by indentation
+  while child Tabs remain inside their owning Session's archived-tab UI.
+- Desktop update prompt: `sidebar-update-banner.tsx` plus `update-changelog-dialog.tsx`,
+  driven by the pure selectors in `lib/electron-update-banner.ts`. The changelog opens
+  in-app; release notes come from a remote feed and render as sanitized Markdown with
+  raw HTML off. The website is only the no-notes fallback, through `getChangelogUrl`
+  and `openExternalUrl`, never a hardcoded link.
 - Agent configuration: `settings/agent-config-dialog.tsx` and
   `settings/env-vars-textarea.tsx`.
+- Codex reset forecast: `components/codex-reset/` + `lib/codex-reset-forecast*.ts`.
+  A public unauthenticated GET to the third-party `codex-resets.com`, cached in ONE
+  module-level store (`lib/codex-reset-forecast-store.ts`) that every surface shares.
+  **Nothing loads on mount.** A request happens only when a user OPENS a surface
+  that shows the forecast — the settings provider row's chip (the click that opens
+  the dialog) and the composer's usage popover (Radix mounts its content on open,
+  so `CodexResetForecastUsageRow` loads from its own mount). `useCodexResetForecast`
+  therefore has no load effect; call `revalidate()` from the interaction. Never
+  attach credentials, and never fetch per component: `SessionUsagePopover` is mounted
+  per open tab AND side chat (hidden ones included) and `ProviderRow` per provider,
+  so a mount-time fetch was a request storm. Concurrent callers coalesce onto one
+  in-flight request; freshness is the served `Cache-Control: max-age` clamped to
+  1m–5m — the endpoint's CDN-shaped 4h is wrong for someone who just opened the
+  panel — and a lapsed TTL revalidates with `If-None-Match`, so the usual outcome is
+  a 304. `data` survives a revalidation, which is what gives stale-while-revalidate
+  for free — never blank it on refresh. Gate every entry point on
+  `canShowCodexResetForecast` (built-in Codex with no custom key/brand, matching
+  `canShowSubscriptionRateLimits`); a disabled entry makes no request at all. The
+  provider row always shows the entry; the usage-popover row appears only while a
+  watch is live. There is deliberately NO always-visible composer band: it would
+  have to load in the background to know whether to render. That popover row must
+  NOT own the dialog — opening a Radix Dialog from inside a Popover dismisses the
+  popover and unmounts a dialog rendered in its content, so `SessionUsagePopover`
+  renders `CodexResetForecastDialogHost` as a sibling of the popover instead.
+  `forecast_window` is FREE TEXT, not a timestamp ("the next 6 hours", "later today").
+  Do not show that untranslated phrase as the forecast time: render the absolute UTC
+  `expires_at` instant semantically ("Today 2:00 PM", "明天 14:00") in the user's
+  browser/OS time zone, and describe it as the time through which the forecast is valid
+  rather than promising a reset.
 - Responsive mobile UI: `src/components/mobile/AGENTS.md`.
 - Session UI: `src/components/sessions/AGENTS.md`.
 - Tasks: `src/components/tasks/AGENTS.md`.

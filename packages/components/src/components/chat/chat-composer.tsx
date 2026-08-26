@@ -8,6 +8,7 @@ import {
   type ClipboardEvent,
   type DragEvent,
   type KeyboardEvent,
+  type MutableRefObject,
   type ReactNode,
   type Ref,
 } from 'react';
@@ -15,14 +16,21 @@ import { ClipboardPaste, RefreshCw, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import type { AcpCommandSummary } from '@lody/shared';
-import { AttachmentAddMenu } from './attachment-add-menu';
+import { AttachmentAddMenu, type AttachmentAddMenuMcp } from './attachment-add-menu';
 import { CommentReferenceChip, type CommentReferenceChipItem } from './comment-reference-chip';
 import {
   VisualAnnotationReferenceChip,
   type VisualAnnotationReferenceChipItem,
 } from './visual-annotation-reference-chip';
 import { cn } from '@/lib/utils';
-import { CombinedMentionTextarea } from '@/components/mentions/combined-mention-textarea';
+import {
+  CombinedMentionTextarea,
+  type CombinedMentionTextareaHandle,
+} from '@/components/mentions/combined-mention-textarea';
+import {
+  getComposerMentionChip,
+  wrapPastedTextChipLabel,
+} from '@/components/mentions/mention-chips';
 import type { MentionProjectSource } from '@/components/mentions/mention-project-file-source';
 import type { SkillMentionAgent } from '@/components/mentions/mention-skill-source';
 import {
@@ -34,6 +42,7 @@ import {
   type PastedTextDraft,
 } from '@/lib/pasted-text-draft';
 import type { Mention as MentionRange } from '@/ui/mention/index';
+import type { PersistedMentionRange } from '@/components/mentions/mention-persistence';
 import { toIntlLocale } from '@/lib/intl-locale';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { Button, type ButtonProps } from '@/ui/button';
@@ -50,7 +59,7 @@ import { Textarea, type TextareaProps } from '@/ui/textarea';
 import { getFilesFromDataTransfer, hasFileTransfer } from '@/lib/file-drop';
 import {
   getChatComposerPromptPlaceholderKey,
-  hasChatComposerFileMentionHints,
+  getChatComposerMobilePromptPlaceholderKey,
 } from '@/lib/chat-composer-placeholder';
 import { Kbd } from '@/components/commands/kbd';
 import { commands, formatKeyBinding } from '@/lib/commands';
@@ -111,22 +120,33 @@ export interface ChatComposerProps {
   promptRef?: Ref<HTMLTextAreaElement>;
   pastedTextDrafts?: PastedTextDraft[];
   onPastedTextDraftsChange?: (drafts: PastedTextDraft[]) => void;
+  /**
+   * Every committed mention range. The send path needs these to record which
+   * regions of the sent text were mentions; see `useMentionPromptExpansion`.
+   */
+  onMentionRangesChange?: (ranges: MentionRange[]) => void;
+  /** Ranges stored with the draft, restored when the composer remounts. */
+  persistedMentions?: readonly PersistedMentionRange[];
+  /** Identity of the draft `promptValue` belongs to; see `draftKey` there. */
+  draftKey?: string;
+  /**
+   * Handle for writing a mention from outside the composer — the page-level
+   * drop target of a dragged sidebar session. See `CombinedMentionTextarea`.
+   */
+  mentionActionsRef?: Ref<CombinedMentionTextareaHandle>;
   imageItems?: ChatComposerImageItem[];
-  imageAddAriaLabel?: string;
-  imageAddDisabled?: boolean;
-  onImageAddClick?: () => void;
+  attachmentAddDisabled?: boolean;
+  onAttachmentAddClick?: () => void;
   imageDropDisabled?: boolean;
   onImageDrop?: (files: File[]) => void;
   onImageRemove?: (id: string) => void;
   onImageRetry?: (id: string) => void;
   /** Pending file attachments (non-image), rendered as a chip strip. */
   fileItems?: ChatComposerFileItem[];
-  fileAddAriaLabel?: string;
-  fileAddDisabled?: boolean;
-  /** Shows the paperclip "add attachment" button when provided. */
-  onFileAddClick?: () => void;
   onFileRemove?: (id: string) => void;
   onFileRetry?: (id: string) => void;
+  /** Per-turn MCP selection, rendered as a second level of the "+" menu. */
+  mcp?: AttachmentAddMenuMcp;
   /** Comment reference items attached to this message */
   commentReferenceItems?: CommentReferenceChipItem[];
   /** Remove a comment reference by localId */
@@ -157,6 +177,11 @@ export interface ChatComposerProps {
   autoResize?: boolean;
   /** Maximum number of rows when autoResize is enabled (default: 12) */
   maxRows?: number;
+  /**
+   * Marks the next viewport resize as caused by this composer's height change,
+   * so a parent conversation can preserve the reader's scroll position.
+   */
+  skipNextViewportResizeAutoScrollRef?: MutableRefObject<boolean>;
   /** Focus the textarea when clicking the container background. */
   focusOnContainerClick?: boolean;
 }
@@ -219,18 +244,21 @@ export function ChatComposer({
   promptRef,
   pastedTextDrafts = [],
   onPastedTextDraftsChange,
+  onMentionRangesChange,
+  persistedMentions,
+  draftKey,
+  mentionActionsRef,
   imageItems = [],
-  imageAddDisabled = false,
-  onImageAddClick,
-  imageDropDisabled = imageAddDisabled,
+  attachmentAddDisabled = false,
+  onAttachmentAddClick,
+  imageDropDisabled = attachmentAddDisabled,
   onImageDrop,
   onImageRemove,
   onImageRetry,
   fileItems = [],
-  fileAddDisabled = false,
-  onFileAddClick,
   onFileRemove,
   onFileRetry,
+  mcp,
   commentReferenceItems = [],
   onCommentReferenceRemove,
   onCommentReferenceClick,
@@ -248,6 +276,7 @@ export function ChatComposer({
   className,
   autoResize = false,
   maxRows = 12,
+  skipNextViewportResizeAutoScrollRef,
   focusOnContainerClick = false,
 }: ChatComposerProps) {
   const { t, i18n } = useTranslation();
@@ -287,22 +316,25 @@ export function ChatComposer({
   const pastedTextEditorLabel = t('composer.pastedTextEditorLabel', 'Edit pasted text');
   const resolvedPromptPlaceholder =
     promptPlaceholder ??
-    // On mobile the full "'/' commands, '@' files, '#' issues, '$' skills"
-    // hint wraps to two lines and eats the composer; keep just the '@' hint
-    // (and only when file mentions are actually available).
     (isMobile
-      ? hasChatComposerFileMentionHints(mentionSource)
-        ? t('composer.promptPlaceholder.mobile', "Press '@' for files.")
-        : t('composer.promptPlaceholder.base')
-      : t(getChatComposerPromptPlaceholderKey({ mentionSource, availableCommands })));
+      ? t(getChatComposerMobilePromptPlaceholderKey({ mentionSource, skillAgent }))
+      : t(
+          getChatComposerPromptPlaceholderKey({
+            mentionSource,
+            availableCommands,
+            skillAgent,
+          })
+        ));
   const numberFormatter = useMemo(() => new Intl.NumberFormat(intlLocale), [intlLocale]);
   const previewPastedTextDraft =
     pastedTextDrafts.find((item) => item.id === previewPastedTextDraftId) ?? null;
   const formatPastedTextInlineLabel = useCallback(
     (text: string) =>
-      t('composer.pastedTextInlineLabel', '[Pasted {{charCount}} chars]', {
-        charCount: numberFormatter.format(getPastedTextCharacterCount(text)),
-      }),
+      wrapPastedTextChipLabel(
+        t('composer.pastedTextInlineLabel', '[Pasted {{charCount}} chars]', {
+          charCount: numberFormatter.format(getPastedTextCharacterCount(text)),
+        })
+      ),
     [numberFormatter, t]
   );
   const pastedTextMentions = useMemo<MentionRange[]>(
@@ -486,6 +518,8 @@ export function ChatComposer({
     const minHeight = lineHeight * effectivePromptRows + paddingTop + paddingBottom;
     const maxHeight = lineHeight * maxRows + paddingTop + paddingBottom;
 
+    const previousHeight = textarea.style.height;
+
     // Reset height to auto to get accurate scrollHeight
     textarea.style.height = 'auto';
 
@@ -497,11 +531,35 @@ export function ChatComposer({
     const scrollHeight = textarea.scrollHeight;
     const newHeight = hasValue ? Math.max(minHeight, Math.min(scrollHeight, maxHeight)) : minHeight;
 
-    textarea.style.height = `${newHeight}px`;
+    const nextHeight = `${newHeight}px`;
+    if (previousHeight && previousHeight !== nextHeight && skipNextViewportResizeAutoScrollRef) {
+      skipNextViewportResizeAutoScrollRef.current = true;
+    }
+    textarea.style.height = nextHeight;
     textarea.style.overflowY = scrollHeight > maxHeight ? 'auto' : 'hidden';
-  }, [autoResize, promptValue, promptRef, effectivePromptRows, maxRows]);
+  }, [
+    autoResize,
+    promptValue,
+    promptRef,
+    effectivePromptRows,
+    maxRows,
+    skipNextViewportResizeAutoScrollRef,
+  ]);
 
   const boxTextareaClassName = getChatComposerTextareaClassName({ tone, variant, isMobile });
+
+  /**
+   * The colour a mention decoration paints to hide the textarea's own glyphs
+   * before redrawing them in the mention colour. It has to equal whatever this
+   * composer paints behind the textarea, or the "invisible" cover shows up as a
+   * rectangle — which is exactly what `--input` did here, since this surface is
+   * deliberately `bg-background` rather than the muddy `bg-input`.
+   *
+   * KEEP IN SYNC with the `bg-*` classes below. CSS cannot read an ancestor's
+   * background, so this is a copy, and a copy can drift.
+   */
+  const mentionSurfaceClassName =
+    '[--mention-chip-surface:hsl(var(--background))] dark:[--mention-chip-surface:color-mix(in_srgb,hsl(var(--input))_90%,hsl(var(--background)))]';
 
   // Linear-like light surface: white canvas + hairline border + soft lift.
   // Avoid heavy bg-input fills that read as muddy gray on cool-white themes.
@@ -510,7 +568,8 @@ export function ChatComposer({
         'w-full',
         'focus-within:ring-1 focus-within:ring-offset-0',
         'focus-within:outline-hidden',
-        'rounded-2xl border border-foreground/[0.10] bg-background focus-within:ring-ring/30 dark:border-input-border/70 dark:bg-input/90'
+        'rounded-2xl border border-foreground/[0.10] bg-background focus-within:ring-ring/30 dark:border-input-border/70 dark:bg-input/90',
+        mentionSurfaceClassName
       )
     : undefined;
 
@@ -534,13 +593,15 @@ export function ChatComposer({
   const landingContainerClassName = cn(
     'flex flex-col gap-4 rounded-xl border px-4 pt-4 pb-3 transition-shadow focus-within:ring-1',
     'border-foreground/[0.10] bg-background shadow-[0_1px_2px_hsl(0_0%_0%/0.04),0_8px_24px_-12px_hsl(0_0%_0%/0.08)] focus-within:ring-ring/30',
-    'dark:border-input-border/60 dark:bg-input/90 dark:shadow-[0_22px_70px_-48px_rgba(15,23,42,0.25)] dark:focus-within:ring-ring/40'
+    'dark:border-input-border/60 dark:bg-input/90 dark:shadow-[0_22px_70px_-48px_rgba(15,23,42,0.25)] dark:focus-within:ring-ring/40',
+    mentionSurfaceClassName
   );
 
   const sessionContainerClassName = cn(
     'flex flex-col gap-1 rounded-xl border px-2 py-1.5 transition-colors duration-150',
     'border border-foreground/[0.10] bg-background focus-within:border-ring/40',
-    'dark:border-input-border/70 dark:bg-input/90'
+    'dark:border-input-border/70 dark:bg-input/90',
+    mentionSurfaceClassName
   );
 
   const boxContainerClassName = isLanding ? landingContainerClassName : sessionContainerClassName;
@@ -818,6 +879,11 @@ export function ChatComposer({
                 externalMentions={pastedTextMentions}
                 onExternalMentionsChange={handlePastedTextMentionsChange}
                 onMentionClick={handleMentionClick}
+                getMentionChip={getComposerMentionChip}
+                onMentionRangesChange={onMentionRangesChange}
+                persistedMentions={persistedMentions}
+                draftKey={draftKey}
+                mentionActionsRef={mentionActionsRef}
                 onKeyDown={onPromptKeyDown}
                 onPaste={onPromptPaste}
                 onCopy={handlePromptCopy}
@@ -864,10 +930,9 @@ export function ChatComposer({
                   isMobile={isMobile}
                   isLanding={isLanding}
                   disabled={promptDisabled}
-                  onAddImage={onImageAddClick}
-                  onAddFile={onFileAddClick}
-                  imageDisabled={imageAddDisabled}
-                  fileDisabled={fileAddDisabled}
+                  onAddAttachment={onAttachmentAddClick}
+                  attachmentDisabled={attachmentAddDisabled}
+                  mcp={mcp}
                 />
 
                 {/* Single row only: long model names must shrink/truncate inside
@@ -915,6 +980,11 @@ export function ChatComposer({
               externalMentions={pastedTextMentions}
               onExternalMentionsChange={handlePastedTextMentionsChange}
               onMentionClick={handleMentionClick}
+              getMentionChip={getComposerMentionChip}
+              onMentionRangesChange={onMentionRangesChange}
+              persistedMentions={persistedMentions}
+              draftKey={draftKey}
+              mentionActionsRef={mentionActionsRef}
               onKeyDown={onPromptKeyDown}
               onPaste={onPromptPaste}
               onCopy={handlePromptCopy}

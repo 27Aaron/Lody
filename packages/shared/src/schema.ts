@@ -8,6 +8,7 @@ import {
   AgentBrandId,
   AgentConfigId,
   AgentConfigCliType,
+  AgentRoleId,
   AgentType,
   AcpCapabilityCacheEntry,
   BuiltinRuntimeOverrides,
@@ -31,8 +32,9 @@ import {
 } from '.';
 import type { PlanEntry } from '@agentclientprotocol/sdk';
 import type { ModelInfo } from './ai';
+import type { MachineProtocolCapabilities } from './machine-protocol-capabilities';
 export * from 'loro-mirror';
-import { UsageData } from 'acp-extension-core';
+import type { RateLimit } from 'acp-extension-core';
 
 export const RATE_LIMIT_ENTRY_KEY_SEPARATOR = '::';
 
@@ -453,6 +455,10 @@ const acpSessionConfigSchema = schema
       resume: schema.String({ required: false }),
       /** Config option values (configId → value) for setSessionConfigOption */
       configOptionValues: schema.Any({ required: false }),
+      /** Workspace MCP catalog ids selected for this session (string[]). */
+      mcpServerIds: schema.Any({ required: false }),
+      /** Whether the built-in Lody Task MCP tools are mounted for this Turn. */
+      taskToolsEnabled: schema.Boolean({ required: false }),
       chainDepth: schema.Number({ required: false }),
     },
     { required: false }
@@ -770,9 +776,27 @@ export type SessionMeta = {
   cliType: AgentConfigCliType;
   agentType: AgentType;
   agentConfigId?: AgentConfigId;
+  /**
+   * Agent Role this session was created from, and the Role revision that was
+   * resolved when its create Operation was accepted.
+   *
+   * Provenance only. Execution is governed by the already-frozen agent config
+   * and dispatch config, so nothing may re-read the mutable Role catalog from
+   * these fields: a later Role edit or delete must not change execution.
+   */
+  agentRoleId?: AgentRoleId;
+  agentRoleRevision?: number;
   acpSessionId?: ACPSessionId;
-  /** Session that created/opened this session, when known. */
+  /** Exact Session or child Tab that created/opened this session, when known. */
   openedBySessionId?: SessionId;
+  /**
+   * Root Session that owns `openedBySessionId` when the opener is a child Tab.
+   * Omitted when the exact opener is already a root Session. Keeping this
+   * companion pointer makes the cross-Session route self-contained: clients
+   * can open the root route and restore the precise Tab even if the opener's
+   * metadata has not synced yet.
+   */
+  openedByRootSessionId?: SessionId;
   /** Project binding for this session (GitHub repo or local project). */
   project?: ProjectRef;
   repoFullName?: string;
@@ -791,7 +815,10 @@ export type SessionMeta = {
    */
   pullRequestState?: Record<string, SessionPullRequestStateMeta>;
   contextWindowUsage?: SessionContextWindowUsage;
-  /** Latest user history entry id waiting to be handled by the machine. */
+  /**
+   * Latest user history entry published for dispatch. Owned by dispatch
+   * producers; execution terminal bookkeeping must never rewrite it.
+   */
   latestUserMsgId?: string;
   /** Assistant turn id the client wants to stop; cancel is ignored unless it matches the machine's in-memory active turn. */
   lastCanceledTurn?: string;
@@ -799,7 +826,10 @@ export type SessionMeta = {
   lastHandledUserMsgId?: string;
   /** User history entry id currently being processed by the machine. */
   processingUserMsgId?: string;
-  /** Latest user turn pointer cleared because its history payload never synced to the machine. */
+  /**
+   * Exact dispatch activation negatively acknowledged because its history
+   * payload never synced. It suppresses only a matching producer pointer.
+   */
   lastMissingHistoryUserMsgId?: string;
   /** Goal thread id the user dismissed from the banner after it reached a terminal state.
    *  The banner stays hidden until a goal with a different threadId arrives. */
@@ -924,10 +954,38 @@ export type MessageQueueItemInput = Omit<
   project: ProjectRef | undefined;
 };
 
+const sessionForkOperationDocSchema = schema.LoroMap(
+  {
+    id: schema.String(),
+    sourceSessionId: schema.String<SessionId>(),
+    sourceTurnId: schema.String(),
+    requestedByUserId: schema.String(),
+    targetContext: schema.String<'shared' | 'new-worktree'>(),
+    capturedHeadSha: schema.String({ required: false }),
+    sourceWasDirty: schema.Boolean({ required: false }),
+    state: schema.String<'preparing' | 'failed'>(),
+    phase: schema.String<'preparing-worktree' | 'running-setup' | 'starting-agent' | 'committing'>({
+      required: false,
+    }),
+    error: schema.LoroMap(
+      {
+        code: schema.String(),
+        message: schema.String(),
+      },
+      { required: false }
+    ),
+    createdAt: schema.String(),
+    updatedAt: schema.String(),
+  },
+  { required: false }
+);
+
 export const sessionDocSchema = schema({
   session: sessionSchema,
   history: schema.LoroList(sessionHistorySchema, (item) => item.id),
   mq: schema.LoroMovableList(messageQueueItemSchema, (item) => item.$cid, { required: false }),
+  /** Temporary durable state for an asynchronous Session fork. Removed on success. */
+  forkOperation: sessionForkOperationDocSchema,
   preview: sessionPreviewDocSchema,
   externalHistoryCursor: sessionExternalHistoryCursorDocSchema,
 });
@@ -961,6 +1019,8 @@ export type MachineMeta = {
   rpcVersion?: string;
   /** True when this machine can handle local project history sync/import over Streams RPC. */
   supportsLocalProjectHistoryRpc?: boolean;
+  /** Versioned daemon protocols available to remote and local clients. */
+  protocolCapabilities?: MachineProtocolCapabilities;
 };
 
 /**
@@ -974,7 +1034,7 @@ export type MachineLegacyMetaFields = {
   workspacePaths?: Record<SessionId, string>;
   needToArchiveSessions?: Record<SessionId, boolean>;
   needToDeleteSessions?: Record<SessionId, NeedToDeleteSessionQueueItem>;
-  raceLimits?: Record<string, UsageData>;
+  raceLimits?: Record<string, RateLimit>;
 };
 
 /**
@@ -984,7 +1044,7 @@ export type MachineLegacyMetaFields = {
  */
 export type MachineViewMeta = MachineMeta &
   Omit<MachineLegacyMetaFields, 'raceLimits'> & {
-    raceLimits: Record<string, UsageData>;
+    raceLimits: Record<string, RateLimit>;
   };
 
 export const getMachineHostType = (meta: Pick<MachineMeta, 'hostType'>): MachineHostType =>

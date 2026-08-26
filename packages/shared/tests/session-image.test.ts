@@ -1,42 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  buildCloudflareImageResizingApiPath,
   getSessionImageDownloadApiPath,
   getSessionImageThumbnailApiPath,
   isValidSessionImagePathSegment,
-  unwrapCloudflareImageResizingApiPath,
+  parseSessionImageThumbnailOptions,
 } from '../src/session-image';
 
 describe('session-image thumbnail path', () => {
-  it('builds a cloudflare image resizing path from source path', () => {
-    expect(
-      buildCloudflareImageResizingApiPath(
-        '/api/workspaces/workspace/session-images/session/image',
-        {
-          width: 200,
-          height: 120,
-          fit: 'cover',
-          quality: 90,
-        }
-      )
-    ).toBe(
-      '/cdn-cgi/image/width=200,height=120,fit=cover,quality=90,format=auto,metadata=none/api/workspaces/workspace/session-images/session/image'
-    );
-  });
-
-  it('normalizes out-of-range resize options', () => {
-    expect(
-      buildCloudflareImageResizingApiPath('api/workspaces/ws/session-images/session/image', {
-        width: Number.NaN,
-        height: 100000,
-        quality: 0,
-      })
-    ).toBe(
-      '/cdn-cgi/image/width=512,height=4096,fit=scale-down,quality=1,format=auto,metadata=none/api/workspaces/ws/session-images/session/image'
-    );
-  });
-
   it('builds thumbnail path from encoded session image path', () => {
     const downloadPath = getSessionImageDownloadApiPath('workspace id', 'session id', 'image/id');
     expect(downloadPath).toBe(
@@ -48,25 +19,57 @@ describe('session-image thumbnail path', () => {
         width: 180,
       })
     ).toBe(
-      '/cdn-cgi/image/width=180,fit=scale-down,quality=85,format=auto,metadata=none/api/workspaces/workspace%20id/session-images/session%20id/image%2Fid'
+      '/api/workspaces/workspace%20id/session-images/session%20id/image%2Fid/thumbnail?width=180&fit=scale-down&quality=85'
     );
   });
 
-  it('unwraps a cloudflare image resizing path to its source api path', () => {
+  it('normalizes thumbnail api query options', () => {
     expect(
-      unwrapCloudflareImageResizingApiPath(
-        '/cdn-cgi/image/width=192,height=192,fit=cover,quality=85,format=auto,metadata=none/api/workspaces/workspace/session-images/session/image'
-      )
-    ).toBe('/api/workspaces/workspace/session-images/session/image');
+      getSessionImageThumbnailApiPath('workspace', 'session', 'image', {
+        width: Number.NaN,
+        height: 100000,
+        fit: 'cover',
+        quality: 0,
+      })
+    ).toBe(
+      '/api/workspaces/workspace/session-images/session/image/thumbnail?width=512&height=4096&fit=cover&quality=1'
+    );
   });
 
-  it('does not unwrap non-resizing or malformed paths', () => {
+  it('round-trips the builder query back through the server-side parser', () => {
+    const path = getSessionImageThumbnailApiPath('workspace', 'session', 'image', {
+      width: 180,
+      height: 120,
+      fit: 'cover',
+      quality: 90,
+    });
+    const searchParams = new URLSearchParams(path.slice(path.indexOf('?')));
+
+    expect(parseSessionImageThumbnailOptions(searchParams)).toEqual({
+      width: 180,
+      height: 120,
+      fit: 'cover',
+      quality: 90,
+    });
+  });
+
+  it('clamps untrusted thumbnail query options the same way the builder does', () => {
     expect(
-      unwrapCloudflareImageResizingApiPath('/api/workspaces/workspace/session-images/session/image')
-    ).toBeNull();
-    expect(unwrapCloudflareImageResizingApiPath('/cdn-cgi/image/')).toBeNull();
-    expect(unwrapCloudflareImageResizingApiPath('/cdn-cgi/image/width=192')).toBeNull();
-    expect(unwrapCloudflareImageResizingApiPath('/cdn-cgi/image/width=192/')).toBeNull();
+      parseSessionImageThumbnailOptions(
+        new URLSearchParams({ width: 'nope', height: '100000', fit: 'squish', quality: '0' })
+      )
+    ).toEqual({ width: 512, height: 4096, fit: 'scale-down', quality: 1 });
+
+    // Absent height keeps the aspect ratio; a blank one falls back to the width.
+    expect(parseSessionImageThumbnailOptions(new URLSearchParams({ width: '180' }))).toEqual({
+      width: 180,
+      height: undefined,
+      fit: 'scale-down',
+      quality: 85,
+    });
+    expect(
+      parseSessionImageThumbnailOptions(new URLSearchParams({ width: '180', height: '' }))
+    ).toEqual({ width: 180, height: 180, fit: 'scale-down', quality: 85 });
   });
 
   it('validates safe session image path segments', () => {

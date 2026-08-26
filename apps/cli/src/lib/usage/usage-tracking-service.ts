@@ -49,6 +49,7 @@ const cloneModelUsage = (
 };
 
 const cloneUsageUpdate = (update: SessionUsageUpdate): SessionUsageUpdate => ({
+  sessionId: update.sessionId,
   usage: { ...update.usage },
   ...(update.modelUsage ? { modelUsage: cloneModelUsage(update.modelUsage) } : {}),
 });
@@ -89,6 +90,7 @@ const mergeUsageUpdate = (
   base: SessionUsageUpdate,
   delta: SessionUsageUpdate
 ): SessionUsageUpdate => ({
+  sessionId: delta.sessionId,
   usage: {
     inputTokens: base.usage.inputTokens + delta.usage.inputTokens,
     outputTokens: base.usage.outputTokens + delta.usage.outputTokens,
@@ -277,6 +279,7 @@ export class UsageTrackingService {
       case 'claude':
         return update;
       case 'codex':
+      case 'kimi':
         if (!update.modelUsage) return update;
         for (const [model, usage] of Object.entries(update.modelUsage)) {
           let costUSD = 0;

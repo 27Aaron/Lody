@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createEmptyAcpSessionConfigSelectionState,
   getAcpSessionConfigOptionValues,
+  filterAcpSessionConfigOptionValues,
   reduceAcpSessionConfigSelection,
   type AcpSessionConfigSelectionAction,
   type AcpSessionConfigSelectionState,
@@ -124,5 +125,32 @@ describe('ACP session config reconciliation', () => {
       ],
     });
     expect(getAcpSessionConfigOptionValues(authoritative)).toEqual({ 'fast-mode': 'off' });
+  });
+
+  it('filters values against the current selector schema', () => {
+    const selectors = [
+      {
+        configId: 'collaboration_mode',
+        label: 'Collaboration mode',
+        type: 'select' as const,
+        currentValue: 'default',
+        options: [
+          { value: 'default', label: 'Default' },
+          { value: 'plan', label: 'Plan' },
+        ],
+      },
+    ];
+    expect(
+      filterAcpSessionConfigOptionValues(
+        { 'plan-mode': 'on', collaboration_mode: 'plan', future_option: 'enabled' },
+        selectors
+      )
+    ).toEqual({ collaboration_mode: 'plan' });
+    expect(
+      filterAcpSessionConfigOptionValues(
+        { 'plan-mode': 'on', collaboration_mode: 'invalid' },
+        selectors
+      )
+    ).toEqual({});
   });
 });

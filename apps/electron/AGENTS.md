@@ -34,6 +34,12 @@ Root `AGENTS.md` also applies.
 - Run desktop development from the repository root with `pnpm start:local`. It must
   rebuild the embedded CLI and local renderer before launching the bundled CLI; do
   not reuse production/cloud artifacts.
+- Cloud desktop development must likewise build and sync the CLI before
+  `electron-vite dev`; the direct `apps/cli/dist` lookup is only a missing-staging
+  fallback and must not let an older `resources/cli` shadow a fresh build.
+- Turning off **Run local agent** is an explicit cloud control-only mode: do not
+  probe an embedded or externally started CLI, and keep the local Loro data-plane
+  relay disconnected until the setting is enabled again.
 - `local-platform:get-snapshot` atomically supplies the persistent `local:*` user and
   the single `lw_*` workspace from the CLI catalog. Do not split this into independent
   fallbacks. A missing catalog means provisioning; malformed identities or multiple
@@ -43,12 +49,31 @@ Root `AGENTS.md` also applies.
 
 ## Renderer and window integration
 
+- Electron 39's Chromium supports native top-level await. Keep renderer and module
+  worker builds on native TLA; do not add `vite-plugin-top-level-await` or an
+  equivalent full-bundle AST compatibility rewrite. Reprocessing Rollup's complete
+  output graph materially increases production renderer peak memory.
+- Linux window identity is one contract: the composition's packaged `desktopName`,
+  electron-builder's `syncDesktopName`, the pre-ready `app.setDesktopName` value,
+  and the AppImage runtime desktop entry must all resolve to the same desktop-file
+  basename. KDE uses that identity to associate Wayland/X11 windows with the
+  installed icon.
+- Generic update metadata may carry localized Markdown under
+  `vendor.lodyChangelog.locales.{en,zh_CN}` in addition to the standard English
+  `releaseNotes` fallback. Main validates and bounds those remote strings before
+  exposing them through `ElectronUpdaterState`; renderer code must use the shared
+  safe Markdown renderer rather than raw HTML.
 - React render failures are split by owner: the root `createRoot` error callbacks
   persist fatal IPC diagnostics, while `ErrorBoundary` owns caught-error UI and
   PostHog reporting. De-duplicate the same error across React and window events.
   Renderer-mounted notification must come from a committed layout-effect sentinel,
   never a timer or microtask guess.
 - Theme changes must also update the native window color in `window-theme.ts`.
+  OS appearance changes while `themeSource` is `system` must retint chrome and
+  notify the renderer (`lodyApp:nativeThemeUpdated`). On macOS also subscribe
+  to `AppleInterfaceThemeChangedNotification`; Chromium `matchMedia` and
+  `nativeTheme.updated` often miss Control Center switches.
+- The onboarding window must be native Light before its first renderer paint; normal product windows start from the System theme source.
   Windows title-bar geometry must stay aligned across
   `MAIN_WINDOW_TITLE_BAR_OVERLAY_HEIGHT`, the `h-9` drag strip in
   `routes/__root.tsx`, and the `pt-9` offset in `web-workspace-layout.tsx`.
@@ -78,8 +103,9 @@ Root `AGENTS.md` also applies.
   `ELECTRON_RUN_AS_NODE` when it exists. On packaged macOS, omitting it launches a
   second GUI app instead of Node.
 - Electron Builder ignores nested staged `node_modules`. `eb-after-pack.mjs` must copy
-  them into `app.asar.unpacked`, then probe CLI `--help`, node-pty loading, and a real
-  in-memory SQLite database before signing.
+  them into `app.asar.unpacked`, assert the DeepSeek adapter plus all four pinned
+  presets, then probe CLI `--help`, node-pty loading, and a real in-memory SQLite
+  database before signing.
 - Keep `better-sqlite3 >= 13.0.2`, CLI `engines.node >= 22.14.0`, the first-import
   guard in `sqlite-runtime-support.ts`, and its tests aligned. Older Node versions can
   segfault while loading the N-API 10 binding. Linux armv7 is unsupported.
@@ -89,6 +115,26 @@ Root `AGENTS.md` also applies.
 - `electronLanguages` must include underscore names used by macOS resources and
   hyphenated names used by Chromium `.pak` files. The after-pack assertion for
   `locales/en-US.pak` is a release gate.
+
+## Release packaging and auto-update
+
+- Always package through `scripts/package-electron.mjs` (`pnpm run package -- <args>`),
+  never `electron-builder` directly. It injects the released version via
+  `extraMetadata` so `package.json` is a fallback rather than the release source of
+  truth, and it forces `--publish never` unless a caller opts in.
+- The `publish` block in `electron-builder.yml` is what gives the public build an
+  update feed: `electron.vite.config.ts` strips every `VITE_*` value, so
+  `AppUpdaterService` finds no `VITE_ELECTRON_UPDATE_URL` and falls back to the
+  packaged `app-update.yml`. That block is also what makes electron-builder emit
+  `latest*.yml` at all. Its tag contract is `v${version}`.
+- Artifact names must stay space-free. GitHub Releases rewrites spaces in uploaded
+  asset names to periods, which would desynchronize them from the names recorded in
+  `latest*.yml`. Do not reintroduce `${productName}` into an `artifactName`.
+- macOS releases must be signed and notarized. Squirrel.Mac will not install an update
+  it cannot validate against the running app's signature, so an unsigned macOS build
+  silently has no working auto-update. Windows and Linux do not have this constraint.
+- CI packages Linux as `AppImage deb` only; `snap` stays in the target list for local
+  builds because it needs snapcraft on the machine.
 
 ## Verification
 

@@ -184,6 +184,10 @@ export const cloudOperations = {
       'teamSharing',
       'inbox:dismiss'
     ),
+    suppressSharingReview: defineCloudMutation<{ itemId: string }, { updated: boolean }>(
+      'teamSharing',
+      'inbox:suppressSharingReview'
+    ),
   },
   billing: {
     createCheckoutSession: action<ConvexApi['billing']['createCheckoutSession']>(
@@ -209,6 +213,9 @@ export const cloudOperations = {
     >('billing:getWorkspaceCreationAvailability'),
     getWorkspaceMemberLimitState: query<ConvexApi['billing']['getWorkspaceMemberLimitState']>(
       'billing:getWorkspaceMemberLimitState'
+    ),
+    getWorkspaceSeatInvitePreview: query<ConvexApi['billing']['getWorkspaceSeatInvitePreview']>(
+      'billing:getWorkspaceSeatInvitePreview'
     ),
     listBillingInvoices: action<ConvexApi['billing']['listBillingInvoices']>(
       'billing:listBillingInvoices'

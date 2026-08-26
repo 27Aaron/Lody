@@ -20,6 +20,9 @@ export const localProbeResultAtom = atom<LocalProbeResult | null>(null);
  */
 export const localProbeAttemptedAtom = atom<boolean>(false);
 
+/** Electron's Run local agent setting; `null` means the first read is pending. */
+export const localAgentEnabledAtom = atom<boolean | null>(null);
+
 /**
  * Is the local desktop CLI still booting — reachable, but not yet able to serve
  * local-project control requests (list files, list dir, read file, git state, …)?
@@ -64,6 +67,7 @@ function getMachineIdFromCliState(state: ElectronCliState): MachineId | null {
 }
 
 function getLocalProbeResultFromCliState(state: ElectronCliState): LocalProbeResult | null {
+  if (!state.localAgentEnabled) return null;
   const machineId = getMachineIdFromCliState(state);
   if (!machineId) return null;
   return {
@@ -81,6 +85,7 @@ function getLocalProbeResultFromCliState(state: ElectronCliState): LocalProbeRes
  * so the normal error path can run instead of spinning forever.
  */
 function isLocalCliRuntimeStarting(state: ElectronCliState): boolean {
+  if (!state.localAgentEnabled) return false;
   if (state.startupStage === 'ready') return false;
   return (
     state.phase === 'starting' ||
@@ -109,6 +114,7 @@ export const localProbeEffectAtom = atomEffect((_get, set) => {
   if (!hasBrowserWindow() || !isElectronRenderer()) {
     set(localProbeResultAtom, null);
     set(localProbeAttemptedAtom, true);
+    set(localAgentEnabledAtom, false);
     set(localCliStartingAtom, false);
     return undefined;
   }
@@ -117,6 +123,7 @@ export const localProbeEffectAtom = atomEffect((_get, set) => {
   if (!cliStateApi?.getState || !cliStateApi.onState) {
     set(localProbeResultAtom, null);
     set(localProbeAttemptedAtom, true);
+    set(localAgentEnabledAtom, false);
     set(localCliStartingAtom, false);
     return undefined;
   }
@@ -124,6 +131,7 @@ export const localProbeEffectAtom = atomEffect((_get, set) => {
   let cancelled = false;
   const applyState = (state: ElectronCliState) => {
     if (cancelled) return;
+    set(localAgentEnabledAtom, state.localAgentEnabled);
     set(localProbeResultAtom, getLocalProbeResultFromCliState(state));
     set(localProbeAttemptedAtom, true);
     set(localCliStartingAtom, isLocalCliRuntimeStarting(state));
@@ -136,6 +144,7 @@ export const localProbeEffectAtom = atomEffect((_get, set) => {
       if (cancelled) return;
       set(localProbeResultAtom, null);
       set(localProbeAttemptedAtom, true);
+      set(localAgentEnabledAtom, false);
       set(localCliStartingAtom, false);
     });
   const unsubscribe = cliStateApi.onState(applyState);

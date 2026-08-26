@@ -18,7 +18,7 @@ const systemFontFamilies = [
 function ControlledAppearanceSettings({ isElectron }: { isElectron: boolean }) {
   const [theme, setTheme] = useState<AppearanceSettingsViewProps['theme']>('light');
   const [conversationFontSize, setConversationFontSize] =
-    useState<AppearanceSettingsViewProps['conversationFontSize']>('default');
+    useState<AppearanceSettingsViewProps['conversationFontSize']>(14);
   const [interfaceFontFamily, setInterfaceFontFamily] = useState('Inter');
   const [terminalFontFamily, setTerminalFontFamily] = useState('');
   const [terminalFontSize, setTerminalFontSize] = useState(13);

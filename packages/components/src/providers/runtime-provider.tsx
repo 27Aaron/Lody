@@ -11,6 +11,7 @@ import {
   setLodyPresenceSyncStateAtom,
 } from '@/atoms/presence';
 import {
+  localAgentEnabledAtom,
   localProbeAttemptedAtom,
   localProbeEffectAtom,
   localProbeResultAtom,
@@ -24,6 +25,7 @@ import { API_BASE_URL } from '@/lib';
 import { getCachedWorkspaceId } from '@/lib/local-storage-cache';
 import { usePostHog } from '@posthog/react';
 import { createWorkspaceRuntime } from './create-workspace-runtime';
+import { resolveCloudPlatformRuntimePolicy } from './cloud-platform-runtime-policy';
 import type { EagerSyncSurface } from './background-sync-coordinator';
 import { resolveEffectiveWorkspaceId } from './resolve-effective-workspace-id';
 import { useImplicitLocalWorkspace } from './local-platform-provider';
@@ -67,6 +69,7 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
   const workspaceId = useAtomValue(currentWorkspaceIdAtom);
   const localProbeResult = useAtomValue(localProbeResultAtom);
   const localProbeAttempted = useAtomValue(localProbeAttemptedAtom);
+  const localAgentEnabled = useAtomValue(localAgentEnabledAtom);
   const token = useAtomValue(authTokenAtom);
   const runtime = useAtomValue(runtimeAtom);
   const setRuntime = useSetAtom(runtimeAtom);
@@ -112,6 +115,10 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
   const isLocalPlatform = platform.sync.mode === 'local';
   const telemetryEnabled = platform.capabilities.has('telemetry');
   const implicitLocalWorkspace = useImplicitLocalWorkspace();
+  const { ready: localAgentRuntimeReady } = resolveCloudPlatformRuntimePolicy({
+    electron: isElectronRenderer(),
+    localAgentEnabled,
+  });
 
   // Compute effective workspaceId:
   // - Prefer cached id for the current slug (offline-first, avoids stale auth ids during transitions)
@@ -196,6 +203,15 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
 
     // Enter a new initialization cycle for this workspace.
     setRuntimeInitializing(true);
+
+    // The Electron main-process setting decides whether cloud desktop uses a
+    // dual local-first runtime or a cloud-only control runtime. Wait for that
+    // first snapshot so a persisted opt-out never opens the local socket even
+    // briefly and never flashes a false reconnecting state.
+    if (platform.sync.mode === 'dual' && !localAgentRuntimeReady) {
+      setControlConnectionState('idle');
+      return undefined;
+    }
 
     // Need workspaceId to initialize (either from cache or server)
     // Keep runtimeInitializing=true while waiting for workspaceId
@@ -349,6 +365,7 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
     telemetryEnabled,
     workspaceSlug,
     effectiveWorkspaceId,
+    localAgentRuntimeReady,
   ]);
 
   useEffect(() => {

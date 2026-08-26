@@ -17,6 +17,9 @@ import {
   type CodeCollabV2RefreshTextResponse,
   type CodeCollabV2SaveTextResponse,
   type CodeCollabV2TextFormat,
+  type FilePreviewV3Digest,
+  type FilePreviewV3ErrorCode,
+  type FilePreviewV3Response,
   type SessionId,
 } from '@lody/shared';
 import { SaveTextConflictError, SaveTextTransientError } from './code-collab-save-errors';
@@ -44,6 +47,15 @@ export type ParsedFileMetadataSnapshot = {
 
 export type CodeCollabSessionFileProviderRuntime = {
   readonly sessionId: SessionId;
+  /**
+   * File Preview v3 — the read path behind `openFile`. Always resolves; a
+   * transport failure arrives as `status: 'error'`.
+   */
+  previewFile(
+    path: string,
+    knownDigest?: FilePreviewV3Digest
+  ): Promise<FilePreviewV3Response | null>;
+  /** Retained for `saveText`'s digest bookkeeping and older provider callers. */
   openText(path: string): Promise<CodeCollabV2OpenTextOk | CodeCollabV2Error | null>;
   refreshText(
     path: string,
@@ -123,6 +135,14 @@ export type CodeCollabSessionOpenTextCacheEntry = {
   readonly text: string;
   readonly rawBytes?: number;
   readonly format?: CodeCollabV2TextFormat;
+  /**
+   * Every cache key this entry is stored under, when there is more than one.
+   * Set by `openFile` when the machine resolved a different on-disk spelling
+   * than the request; `saveText` refreshes all of them, so a later
+   * `checkTextChanged` under either spelling sees the post-save digest instead
+   * of reporting our own save as an external change.
+   */
+  readonly cacheKeys?: readonly string[];
 };
 
 type SaveConflictCacheEntry = {
@@ -302,6 +322,16 @@ export class CodeCollabSessionFileProvider implements SessionFileProvider {
     return this.findFile(pathOrFileId);
   }
 
+  /**
+   * Open a file for preview through File Preview v3.
+   *
+   * The file index is only a hint here: it tells us whether the path is a lazy
+   * directory, and it seeds the entry shown while loading. It is deliberately NOT
+   * a gate any more — a binary file, or a path the index has never seen (an
+   * agent-produced temporary file, for instance), still goes to the machine,
+   * which is the only authority on what the file actually is. The machine
+   * answers with a plain read; it never activates Code Collab for a preview.
+   */
   async openFile(
     pathOrFileId: string,
     _mode?: SessionFileProviderMode
@@ -318,30 +348,23 @@ export class CodeCollabSessionFileProvider implements SessionFileProvider {
     if (indexed.entryType === 'lazy-directory') {
       return unavailable(indexed, 'metadata-only', 'Open the directory to load its children.');
     }
-    if (indexed.kind === 'binary') {
-      return unavailable(indexed, 'unsupported-special', 'Binary preview is not supported yet.');
-    }
-    if (indexed.kind === 'large') {
-      return unavailable(indexed, 'text-too-large', 'This file is too large to open.');
-    }
-    if (indexed.unavailableReason) {
-      return unavailable(indexed, indexed.unavailableReason);
-    }
 
     const cached = this.openCache.get(path);
-    const response = cached
-      ? await this.runtime.refreshText(path, cached.digest)
-      : await this.runtime.openText(path);
+    const response = await this.runtime.previewFile(path, cached?.digest);
     if (!response) {
-      return unavailable(indexed, 'transient-io', 'Code Collab request timed out.');
+      return unavailable(indexed, 'transient-io', 'File preview request timed out.');
     }
-    if (isCodeCollabV2Error(response)) {
-      return codeCollabErrorToOpenResult(indexed, response);
+    if (response.status === 'error') {
+      return unavailable(
+        indexed,
+        filePreviewErrorCodeToUnavailableReason(response.code),
+        response.message ?? response.code
+      );
     }
-    if (response.status === 'up_to_date') {
+    if (response.status === 'unchanged') {
       return {
         status: 'ready',
-        entry: indexed,
+        entry: { ...indexed, readonly: indexed.readonly || response.external === true },
         snapshot: {
           kind: 'text',
           text: cached?.text ?? '',
@@ -349,24 +372,87 @@ export class CodeCollabSessionFileProvider implements SessionFileProvider {
         },
       };
     }
-    const text = await decodeTextPayload(response.text);
-    const digest = response.digest;
-    const format = response.format;
-    this.openCache.set(path, { digest, text, rawBytes: response.text.rawBytes, format });
+
+    const entry: SessionFileProviderEntry = {
+      ...indexed,
+      path: response.path,
+      fileId: response.path,
+      kind: response.kind === 'binary' ? 'binary' : 'text',
+      sizeBytes: response.sizeBytes,
+      // Preview reads a WIDER set of paths than save-text writes: preview also
+      // serves the temp/scratch roots, while `save-text` refuses anything outside
+      // the session workspace. An `external` file is therefore readonly no matter
+      // what the index says — otherwise the editor offers a Save that the machine
+      // is guaranteed to reject, and the user loses the edit. Binary is readonly
+      // for the ordinary reason: there is no text editor for it.
+      readonly: response.kind === 'binary' || response.external === true ? true : indexed.readonly,
+    };
+
+    if (response.kind === 'binary') {
+      if (response.content.encoding !== 'base64') {
+        return unavailable(
+          entry,
+          'unsupported-encoding',
+          'Binary preview arrived with a text encoding.'
+        );
+      }
+      // Binary is never put in the text open cache: that cache backs save-text
+      // conflict detection, and there is no text to conflict on.
+      this.openCache.delete(path);
+      this.openCache.delete(response.path);
+      return {
+        status: 'ready',
+        entry,
+        snapshot: {
+          kind: 'binary',
+          bytes: base64ToUint8Array(response.content.data),
+          ...(response.mimeType === undefined ? {} : { mimeType: response.mimeType }),
+        },
+      };
+    }
+
+    const text = await decodeFilePreviewText(response);
+    const format: CodeCollabV2TextFormat | undefined =
+      response.format === undefined
+        ? undefined
+        : {
+            encoding: 'utf8',
+            ...(response.format.bom === undefined ? {} : { bom: response.format.bom }),
+            ...(response.format.eol === undefined ? {} : { eol: response.format.eol }),
+          };
+    // Cache under BOTH spellings when the machine resolved a different one.
+    //
+    // `response.path` is required: it becomes `entry.fileId` above, so it is
+    // what `saveText` is later called with, and keying only by the request made
+    // save report "Open the file before saving it." for a file open on screen.
+    // The requested path is required too: the viewer tab keeps the spelling it
+    // was opened with (`session-detail.tsx` refreshes a tab's `fileId` from the
+    // file INDEX, which never learns the resolved name), so `checkTextChanged`
+    // and the next `openFile` still arrive with the original. Dropping that key
+    // silently disables the external-change pre-check and re-downloads the file
+    // on every re-open, because no `knownDigest` can be sent.
+    const cacheKeys = path === response.path ? undefined : [response.path, path];
+    const cacheEntry = {
+      digest: response.digest,
+      text,
+      rawBytes: response.content.rawBytes,
+      ...(format === undefined ? {} : { format }),
+      ...(cacheKeys === undefined ? {} : { cacheKeys }),
+    };
+    for (const key of cacheKeys ?? [response.path]) {
+      this.openCache.set(key, cacheEntry);
+    }
     return {
       status: 'ready',
       entry: {
-        ...indexed,
-        path: response.path,
-        fileId: response.path,
-        readonly: response.readonly ?? indexed.readonly,
-        textEol: format?.eol,
-        hasBom: format?.bom,
+        ...entry,
+        ...(format?.eol === undefined ? {} : { textEol: format.eol }),
+        ...(format?.bom === undefined ? {} : { hasBom: format.bom }),
       },
       snapshot: {
         kind: 'text',
         text,
-        eol: format?.eol,
+        ...(format?.eol === undefined ? {} : { eol: format.eol }),
       },
     };
   }
@@ -477,12 +563,21 @@ export class CodeCollabSessionFileProvider implements SessionFileProvider {
       });
       throw new SaveTextConflictError(response.reason, conflictId);
     }
-    this.openCache.set(path, {
+    // Refresh EVERY key the open stored this entry under, not just the one the
+    // save was addressed to. The viewer tab keeps the requested spelling while
+    // `entry.fileId` carries the machine's, so after a save through the fileId a
+    // `checkTextChanged` with the tab spelling would otherwise find the pre-save
+    // digest and report our own save as an external change.
+    const savedEntry = {
       digest: response.digest,
       text,
       rawBytes: payload.rawBytes,
       format: cached.format,
-    });
+      ...(cached.cacheKeys === undefined ? {} : { cacheKeys: cached.cacheKeys }),
+    };
+    for (const key of cached.cacheKeys ?? [path]) {
+      this.openCache.set(key, savedEntry);
+    }
     this.emitText(path, text);
     return {
       status: 'ready',
@@ -805,6 +900,10 @@ export function codeCollabFileTreeValueToSessionFileEntry(
     };
   }
   if (value.kind === 'binary') {
+    // No `unavailableReason`: since File Preview v3, binary files open. The row
+    // must stay clickable (`canOpen` in `session-file-provider-view-model.ts` is
+    // gated on this field), and the machine decides whether the bytes are
+    // renderable.
     return {
       entryType: 'file',
       fileId: path,
@@ -812,7 +911,6 @@ export function codeCollabFileTreeValueToSessionFileEntry(
       kind: 'binary',
       sourceState,
       readonly: true,
-      unavailableReason: 'unsupported-special',
     };
   }
   if (value.kind === 'too_large') {
@@ -871,6 +969,64 @@ function codeCollabErrorToOpenResult(
   error: CodeCollabV2Error
 ): SessionFileOpenResult {
   return unavailable(entry, errorCodeToUnavailableReason(error.code), error.message ?? error.code);
+}
+
+type SessionFileUnavailableReason = SessionFileOpenResult extends infer TResult
+  ? TResult extends { status: 'unavailable'; reason: infer TReason }
+    ? TReason
+    : never
+  : never;
+
+function filePreviewErrorCodeToUnavailableReason(
+  code: FilePreviewV3ErrorCode
+): SessionFileUnavailableReason {
+  switch (code) {
+    case 'permission_denied':
+      return 'permission-denied';
+    case 'too_large':
+      return 'text-too-large';
+    case 'file_not_found':
+      return 'deleted';
+    case 'decode_error':
+      return 'unsupported-encoding';
+    case 'not_a_file':
+      return 'unsupported-special';
+    // `path_not_allowed` deliberately maps to permission-denied rather than a new
+    // reason: to the user it is "Lody is not allowed to read that", which is the
+    // existing `outside-workspace` presentation in `session-file-error-state.tsx`.
+    case 'path_not_allowed':
+    case 'invalid_path':
+      return 'permission-denied';
+    case 'session_not_found':
+    case 'workspace_root_unavailable':
+      return 'metadata-only';
+    case 'machine_offline':
+    case 'transient_io':
+      return 'transient-io';
+  }
+  const exhaustive: never = code;
+  throw new Error(`Unsupported file preview error code: ${String(exhaustive)}`);
+}
+
+async function decodeFilePreviewText(
+  response: Extract<FilePreviewV3Response, { status: 'ok' }>
+): Promise<string> {
+  const content = response.content;
+  if (content.encoding === 'utf8-plain') {
+    return content.text;
+  }
+  if (content.encoding !== 'utf8-gzip-base64') {
+    throw new Error('File preview text payload has a binary encoding.');
+  }
+  const compressed = base64ToUint8Array(content.data);
+  if (compressed.byteLength !== content.compressedBytes) {
+    throw new Error('File preview compressed payload size mismatch.');
+  }
+  const bytes = await gzipDecode(compressed);
+  if (bytes.byteLength !== content.rawBytes) {
+    throw new Error('File preview payload size mismatch.');
+  }
+  return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
 }
 
 function errorCodeToUnavailableReason(

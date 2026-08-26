@@ -16,11 +16,26 @@ export type BillingPendingAction = 'checkout' | null;
 
 export interface BillingOverviewData {
   billingAccountId: string | null;
+  /** Backend capability fence for rolling frontend/backend deployments. */
+  giftStackingSupported: boolean;
   effectivePlanTier: 'free' | 'plus' | 'enterprise';
   entitlementSource: 'free' | 'stripe' | 'stripe_gift' | 'enterprise';
   offerKey: string | null;
   yearlyEarlyBirdEligible: boolean;
   promotionalEntitlementEndsAt: number | null;
+  /** Entire granted gift window, including a gift phase that starts later. */
+  giftStartsAt: number | null;
+  giftEndsAt: number | null;
+  /** First charge after the gift window, when automatic billing is configured. */
+  nextBillingAt: number | null;
+  autoRenewAfterGift: boolean;
+  /** A prior paid phase can be restored without collecting payment again. */
+  canResumeAfterGift: boolean;
+  scheduledBillingInterval: BillingInterval | null;
+  /** True only for the Lody-owned gift Subscription Schedule shape. */
+  scheduleManaged: boolean;
+  /** A setup Checkout is collecting a payment method for post-gift billing. */
+  subscriptionSetupPending: boolean;
   checkoutPending: boolean;
   /** Interval chosen when the pending paid-workspace checkout was created. */
   checkoutInterval: BillingInterval | null;
@@ -174,8 +189,10 @@ export function BillingSettingsView({
 
   const isPaid =
     overview.effectivePlanTier === 'plus' || overview.effectivePlanTier === 'enterprise';
+  const checkoutInProgress = overview.checkoutPending || overview.subscriptionSetupPending;
+  const paidCheckoutPending = overview.checkoutPending && !overview.subscriptionSetupPending;
   const planName =
-    overview.checkoutPending || overview.effectivePlanTier === 'plus'
+    paidCheckoutPending || overview.effectivePlanTier === 'plus'
       ? t('billing.plan.plus')
       : overview.effectivePlanTier === 'enterprise'
         ? t('billing.plan.enterprise')
@@ -187,6 +204,16 @@ export function BillingSettingsView({
   const permissionBlocked = !canManage && canManageBillingKnown;
   const isPastDue = overview.subscriptionStatus === 'past_due';
   const isPromotional = overview.entitlementSource === 'stripe_gift';
+  const giftEnd = overview.giftEndsAt ?? overview.promotionalEntitlementEndsAt;
+  const hasGiftTimeline = giftEnd !== null && giftEnd > Date.now();
+  const canScheduleAfterGift =
+    overview.giftStackingSupported &&
+    overview.scheduleManaged &&
+    isPromotional &&
+    !overview.autoRenewAfterGift &&
+    !overview.canResumeAfterGift &&
+    overview.effectivePlanTier === 'plus';
+  const showSubscriptionOffer = !isPaid || canScheduleAfterGift;
 
   // `null` = unlimited.
   const sessionLimit =
@@ -208,7 +235,7 @@ export function BillingSettingsView({
   // beside it, and the status detail (renewal/cancel date, past-due, pending)
   // follows after a separator.
   const planIntervalLabel =
-    isPaid && !overview.checkoutPending && overview.billingInterval
+    isPaid && !checkoutInProgress && overview.billingInterval
       ? isPromotional
         ? t('billing.promotionalBadge')
         : overview.billingInterval === 'year'
@@ -218,26 +245,37 @@ export function BillingSettingsView({
   const showIntervalSwitch =
     isPaid &&
     overview.entitlementSource === 'stripe' &&
+    !overview.scheduleManaged &&
     overview.offerKey !== 'founder_monthly_500_forever' &&
     canManage &&
     !overview.cancelAtPeriodEnd &&
-    !overview.checkoutPending &&
+    !checkoutInProgress &&
     !!overview.billingInterval;
-  const planStatusDetail = overview.checkoutPending
-    ? t('billing.checkoutPendingDescription')
-    : isPastDue
-      ? t('billing.pastDue')
-      : isPromotional && overview.promotionalEntitlementEndsAt
-        ? t('billing.promotionalEndsOn', {
-            date: formatDate(overview.promotionalEntitlementEndsAt),
-          })
-        : isPaid && overview.currentPeriodEnd
-          ? overview.cancelAtPeriodEnd
-            ? t('billing.cancelsOn', { date: formatDate(overview.currentPeriodEnd) })
-            : t('billing.renewsOn', { date: formatDate(overview.currentPeriodEnd) })
-          : !isPaid
-            ? t('billing.freeTagline')
-            : null;
+  const planStatusDetail = overview.subscriptionSetupPending
+    ? t('billing.subscriptionSetupPendingDescription')
+    : overview.checkoutPending
+      ? t('billing.checkoutPendingDescription')
+      : isPastDue
+        ? t('billing.pastDue')
+        : hasGiftTimeline && overview.autoRenewAfterGift && overview.nextBillingAt
+          ? t('billing.giftThenBillingOn', {
+              date: formatDate(overview.nextBillingAt),
+              interval:
+                overview.scheduledBillingInterval === 'year'
+                  ? t('billing.yearly').toLocaleLowerCase()
+                  : t('billing.monthly').toLocaleLowerCase(),
+            })
+          : hasGiftTimeline && giftEnd
+            ? t('billing.promotionalEndsOn', {
+                date: formatDate(giftEnd),
+              })
+            : isPaid && overview.currentPeriodEnd
+              ? overview.cancelAtPeriodEnd
+                ? t('billing.cancelsOn', { date: formatDate(overview.currentPeriodEnd) })
+                : t('billing.renewsOn', { date: formatDate(overview.currentPeriodEnd) })
+              : !isPaid
+                ? t('billing.freeTagline')
+                : null;
 
   return (
     <div className={settingContainerClass}>
@@ -247,10 +285,14 @@ export function BillingSettingsView({
           <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-primary" />
           <div className="min-w-0 flex-1">
             <p className="text-sm font-medium text-foreground">
-              {t('billing.externalCheckoutTitle')}
+              {canScheduleAfterGift || overview.subscriptionSetupPending
+                ? t('billing.externalSetupTitle')
+                : t('billing.externalCheckoutTitle')}
             </p>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              {t('billing.externalCheckoutDescription')}
+              {canScheduleAfterGift || overview.subscriptionSetupPending
+                ? t('billing.externalSetupDescription')
+                : t('billing.externalCheckoutDescription')}
             </p>
           </div>
           {onCancelExternalCheckout ? (
@@ -267,10 +309,14 @@ export function BillingSettingsView({
           <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-primary" />
           <div className="min-w-0">
             <p className="text-sm font-medium text-foreground">
-              {t('billing.paymentProcessingTitle')}
+              {overview.subscriptionSetupPending
+                ? t('billing.subscriptionSetupProcessingTitle')
+                : t('billing.paymentProcessingTitle')}
             </p>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              {t('billing.paymentProcessingDescription')}
+              {overview.subscriptionSetupPending
+                ? t('billing.subscriptionSetupProcessingDescription')
+                : t('billing.paymentProcessingDescription')}
             </p>
           </div>
         </Card>
@@ -285,8 +331,11 @@ export function BillingSettingsView({
           {overview.cancelAtPeriodEnd && !isPromotional ? (
             <Badge variant="outline">{t('billing.cancelAtPeriodEnd')}</Badge>
           ) : null}
-          {overview.checkoutPending ? (
+          {checkoutInProgress ? (
             <Badge variant="secondary">{t('billing.checkoutPending')}</Badge>
+          ) : null}
+          {hasGiftTimeline && overview.autoRenewAfterGift ? (
+            <Badge variant="secondary">{t('billing.postGiftBillingScheduled')}</Badge>
           ) : null}
           {overview.yearlyEarlyBirdEligible ? (
             <Badge variant="secondary">{t('billing.yearlyPromoPrice')}</Badge>
@@ -327,7 +376,7 @@ export function BillingSettingsView({
       </Card>
 
       {/* Session usage */}
-      {!overview.checkoutPending ? (
+      {!paidCheckoutPending ? (
         <Card className="p-5">
           <div className="flex items-baseline justify-between gap-2">
             <span className="text-sm font-medium text-foreground">{t('billing.sessions')}</span>
@@ -375,22 +424,32 @@ export function BillingSettingsView({
       ) : null}
 
       {/* Upgrade */}
-      {!isPaid ? (
+      {showSubscriptionOffer ? (
         <Card className="overflow-hidden">
           <div className="border-b border-border/70 bg-muted/30 px-5 py-3">
             <p className="text-sm font-semibold text-foreground">
-              {overview.checkoutPending
-                ? t('billing.completeCheckoutTitle')
-                : t('billing.upgradeTitle')}
+              {checkoutInProgress
+                ? overview.subscriptionSetupPending
+                  ? t('billing.completeSubscriptionSetupTitle')
+                  : t('billing.completeCheckoutTitle')
+                : canScheduleAfterGift
+                  ? t('billing.subscribeAfterGiftTitle')
+                  : t('billing.upgradeTitle')}
             </p>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              {overview.checkoutPending
-                ? t('billing.checkoutPendingDescription')
-                : t('billing.upgradeSubtitle')}
+              {checkoutInProgress
+                ? overview.subscriptionSetupPending
+                  ? t('billing.subscriptionSetupPendingDescription')
+                  : t('billing.checkoutPendingDescription')
+                : canScheduleAfterGift
+                  ? t('billing.subscribeAfterGiftSubtitle', {
+                      date: formatDate(giftEnd),
+                    })
+                  : t('billing.upgradeSubtitle')}
             </p>
           </div>
           <div className="space-y-4 p-5">
-            {overview.checkoutPending ? (
+            {checkoutInProgress ? (
               /* Awaiting payment: present the plan the checkout was created
                  for instead of the two-option selector. The small toggle
                  still lets the user switch (which supersedes the stored
@@ -491,9 +550,11 @@ export function BillingSettingsView({
                     ? overview.yearlyEarlyBirdEligible
                       ? t('billing.subscribeLockedEarlyBird')
                       : t('billing.upgradeEarlyBird')
-                    : overview.checkoutPending
+                    : checkoutInProgress
                       ? t('billing.continueCheckout')
-                      : t('billing.upgrade')}
+                      : canScheduleAfterGift
+                        ? t('billing.subscribeAfterGift')
+                        : t('billing.upgrade')}
                 </Button>
                 <SubscribeConsentNotice />
               </div>
@@ -517,42 +578,45 @@ export function BillingSettingsView({
               <PricingPageLink />
               <FounderCallLink />
             </div>
+          </div>
+        </Card>
+      ) : null}
 
-            {canManage ? (
-              <div className="border-t border-border/60 pt-4">
-                <label
-                  htmlFor="billing-redemption-code"
-                  className="text-xs font-medium text-muted-foreground"
-                >
-                  {t('billing.redeemLabel')}
-                </label>
-                <div className="mt-1.5 flex gap-2">
-                  <Input
-                    id="billing-redemption-code"
-                    value={code}
-                    onChange={(event) => setCode(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' && code.trim() && !redeemPending) {
-                        onRedeemCode(code.trim());
-                      }
-                    }}
-                    placeholder={t('billing.redeemPlaceholder')}
-                    className="h-8 max-w-[220px]"
-                    autoComplete="off"
-                    spellCheck={false}
-                  />
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={redeemPending || !code.trim()}
-                    onClick={() => onRedeemCode(code.trim())}
-                  >
-                    {redeemPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                    {t('billing.redeemApply')}
-                  </Button>
-                </div>
-              </div>
-            ) : null}
+      {/* Gift codes extend both free and paid Plus timelines. Keep redemption
+          independent from the upgrade card so paid subscribers can use it. */}
+      {canManage &&
+      overview.effectivePlanTier !== 'enterprise' &&
+      (!isPaid || overview.giftStackingSupported) ? (
+        <Card className="p-5">
+          <p className="text-sm font-semibold text-foreground">{t('billing.redeemTitle')}</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">{t('billing.redeemSubtitle')}</p>
+          <label htmlFor="billing-redemption-code" className="sr-only">
+            {t('billing.redeemLabel')}
+          </label>
+          <div className="mt-3 flex gap-2">
+            <Input
+              id="billing-redemption-code"
+              value={code}
+              onChange={(event) => setCode(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && code.trim() && !redeemPending && !checkoutInProgress) {
+                  onRedeemCode(code.trim());
+                }
+              }}
+              placeholder={t('billing.redeemPlaceholder')}
+              className="h-8 max-w-[220px]"
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={redeemPending || checkoutInProgress || !code.trim()}
+              onClick={() => onRedeemCode(code.trim())}
+            >
+              {redeemPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              {t('billing.redeemApply')}
+            </Button>
           </div>
         </Card>
       ) : null}
@@ -715,7 +779,11 @@ export function BillingSettingsView({
 
       {/* Cancel / resume subscription: deliberately low-emphasis, tucked at the
           very bottom of the billing page rather than beside the plan. */}
-      {isPaid && canManage && overview.entitlementSource === 'stripe' ? (
+      {isPaid &&
+      canManage &&
+      ((overview.entitlementSource === 'stripe' &&
+        (!overview.scheduleManaged || overview.autoRenewAfterGift || overview.cancelAtPeriodEnd)) ||
+        (isPromotional && (overview.autoRenewAfterGift || overview.canResumeAfterGift))) ? (
         <div className="flex justify-end pt-1">
           {overview.cancelAtPeriodEnd ? (
             <button

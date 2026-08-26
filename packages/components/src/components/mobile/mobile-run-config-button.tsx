@@ -64,6 +64,7 @@ export function useRunConfigFace({
 >) {
   const {
     modelSelectors,
+    permissionModeSelectors,
     modeSelectors,
     thoughtLevelSelectors,
     planModeSelectors,
@@ -103,16 +104,18 @@ export function useRunConfigFace({
     thinkingSelector?.options.find((option) => option.value === thinkingValue)?.label ??
     thinkingValue;
 
-  const modeSelector: AcpSelectConfigOptionSelector | undefined = modeSelectors[0];
+  const explicitPermissionSelector = permissionModeSelectors[0];
+  const modeSelector: AcpSelectConfigOptionSelector | undefined =
+    explicitPermissionSelector ?? modeSelectors[0];
   const modeId: string | null =
-    modeOptions.length > 0
-      ? selectedModeId
-      : modeSelector
+    explicitPermissionSelector || modeOptions.length === 0
+      ? modeSelector
         ? ((resolveConfigOptionValue(
             modeSelector,
             configOptionValues?.[modeSelector.configId]
           ) as string) ?? null)
-        : null;
+        : null
+      : selectedModeId;
 
   const planSelector = planModeSelectors[0];
   const planOn = planSelector

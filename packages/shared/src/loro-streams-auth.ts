@@ -14,6 +14,11 @@ export const LoroStreamsTokenResponseSchema = z.object({
   token: z.string(),
   expiresIn: z.number().int().positive(),
   gatewayBaseUrl: z.string().url().optional(),
+  // Hosted shard topology (bare host suffix, e.g. "streams.example.com"):
+  // when present, clients spread presence/control/write traffic across the
+  // sibling subdomains under this suffix instead of piling every SSE stream
+  // onto the gateway origin. Validated again client-side before use.
+  shardHostSuffix: z.string().min(1).max(253).optional(),
 });
 
 export type LoroStreamsTokenRequest = z.infer<typeof LoroStreamsTokenRequestSchema>;
@@ -25,6 +30,7 @@ type CachedLoroStreamsToken = {
   token: string;
   expiresAtMs: number;
   gatewayBaseUrl?: string;
+  shardHostSuffix?: string;
 };
 
 export const LORO_STREAMS_TOKEN_REFRESH_SKEW_MS = 30_000;
@@ -40,6 +46,7 @@ const CachedLoroStreamsTokenSchema = z.object({
   token: z.string().min(1),
   expiresAtMs: z.number().finite(),
   gatewayBaseUrl: z.string().url().optional(),
+  shardHostSuffix: z.string().min(1).max(253).optional(),
 });
 
 const EncryptedLoroStreamsTokenStorageSchema = z.object({
@@ -449,6 +456,7 @@ export function createLoroStreamsTokenProvider(options: {
         // bouncing through 401s until the next refresh tick.
         expiresAtMs: getServerNow() + parsed.data.expiresIn * 1000,
         gatewayBaseUrl: parsed.data.gatewayBaseUrl,
+        shardHostSuffix: parsed.data.shardHostSuffix,
       };
       emit({
         type: 'fetch-success',
@@ -586,6 +594,8 @@ export function createLoroStreamsTokenProvider(options: {
     /** Force the next `getToken()` call to fetch a fresh token from the server. */
     invalidate,
     getGatewayBaseUrl: (): string | undefined => cached?.gatewayBaseUrl,
+    /** Hosted shard topology from the token response; undefined until a token has been fetched. */
+    getShardHostSuffix: (): string | undefined => cached?.shardHostSuffix,
     /**
      * Returns an auth callback compatible with `StreamsTransportAdapter` / `StreamsCrdt`.
      * On `reason: "unauthorized"`, invalidates the cached token before fetching a fresh one.

@@ -6,13 +6,15 @@ import {
   requestLocalCliHostShutdown,
   type LocalCliHostRecord,
 } from '@lody/shared/node/local-cli-host-lease';
-import { version } from '../../package.json';
+import { version } from '@/pkg';
 import { LODY_LOG_DIR, readPidFileRecord, spawnDaemonRunnerAndAwaitReady } from './daemon-shared';
 import { flushTelemetry } from '@/instrument';
 import { captureDaemonEvent } from './analytics-events';
 import { fetchLocalProbeHealth } from '@/lib/local-probe-health';
 import { AuthClient, performLoginWithAuthCredential } from '@/lib/auth';
+import { getCliPlatformKind } from '@/lib/cli-platform';
 import { createHybridLogger, getLogger } from '@/utils/logger';
+import { ensureDaemonBackendAuth, type DaemonAuthPreflightOutcome } from './daemon-auth-preflight';
 import { buildDaemonStartPassthroughArgs, type DaemonStartOptions } from './daemon-start-options';
 import { formatDaemonBackendStatus } from './daemon-status-format';
 import { readLatestLogTail } from '@/utils/log-files';
@@ -125,6 +127,25 @@ async function startDaemonProcess(passthroughArgs: string[]): Promise<StartResul
   }
 }
 
+function daemonAuthFailureHint(
+  reason: Exclude<DaemonAuthPreflightOutcome, { status: 'authenticated' }>['reason']
+): string {
+  switch (reason) {
+    case 'backend_unreachable':
+      return `Retry once the connection is back, or start anyway with ${chalk.yellow('--skip-auth-check')}.`;
+    case 'login_required_non_interactive':
+      // No terminal is attached, so device authorization would block for
+      // minutes with nobody to open the link.
+      return `Run ${chalk.yellow('lody login')} from a terminal, or pass ${chalk.yellow('--auth <cli_token>')}.`;
+    case 'login_failed':
+      return `Run ${chalk.yellow('lody login')} and retry.`;
+    default: {
+      const unreachable: never = reason;
+      return unreachable;
+    }
+  }
+}
+
 function printStartTips(): void {
   console.log(`Use ${chalk.yellow('lody daemon status')} to check status`);
   console.log(`Use ${chalk.yellow('lody daemon stop')} to stop`);
@@ -164,6 +185,10 @@ export const daemonCommand = new Command('daemon')
       .description('Start lody daemon in the background')
       .option('--auth <credential>', 'Connect with a CLI API key or machine connection token')
       .option('--machine-name <name>', 'Machine name to register (defaults to hostname)')
+      .option(
+        '--skip-auth-check',
+        'Skip the backend connectivity and sign-in check before entering daemon mode'
+      )
       .allowUnknownOption(true)
       .action(async (options: DaemonStartOptions, cmd: Command) => {
         const readiness = await checkDaemonStartReadiness();
@@ -172,18 +197,46 @@ export const daemonCommand = new Command('daemon')
         }
 
         const passthroughArgs = buildDaemonStartPassthroughArgs(options, cmd.args);
-        if (options.auth) {
+        const platformKind = getCliPlatformKind();
+
+        if (platformKind === 'local' && options.auth) {
+          console.error('--auth is not available on the local platform.');
+          await exitDaemonCommand(1);
+          return;
+        }
+
+        // The daemon runner is detached, so a credential problem discovered
+        // inside it is invisible. Resolve authentication in this foreground
+        // process first — including the interactive device-authorization flow.
+        if (platformKind === 'cloud' && (options.auth || !options.skipAuthCheck)) {
           createHybridLogger({ level: 'info' });
           const logger = getLogger('daemon');
           const authClient = new AuthClient(logger);
-          const loginResult = await performLoginWithAuthCredential(authClient, logger, {
-            credential: options.auth,
-            machineName: options.machineName,
-          });
-          if (!loginResult.success) {
-            console.error(loginResult.error);
-            await exitDaemonCommand(1);
-            return;
+
+          if (options.auth) {
+            const loginResult = await performLoginWithAuthCredential(authClient, logger, {
+              credential: options.auth,
+              machineName: options.machineName,
+            });
+            if (!loginResult.success) {
+              captureDaemonEvent('daemon_start_failed', { reason_code: 'auth_credential' });
+              console.error(loginResult.error);
+              await exitDaemonCommand(1);
+              return;
+            }
+          } else {
+            const preflight = await ensureDaemonBackendAuth({
+              authClient,
+              logger,
+              machineName: options.machineName,
+            });
+            if (preflight.status === 'failed') {
+              captureDaemonEvent('daemon_start_failed', { reason_code: preflight.reason });
+              console.error(preflight.message);
+              console.error(daemonAuthFailureHint(preflight.reason));
+              await exitDaemonCommand(1);
+              return;
+            }
           }
         }
 

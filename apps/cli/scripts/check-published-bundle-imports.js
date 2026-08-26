@@ -2,9 +2,10 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { pathToFileURL } from 'node:url';
+import { collectRuntimeDependencyVersionIssues } from './published-runtime-dependency-policy.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -35,10 +36,8 @@ const requiredPublishedRuntimeDependencies = [
 // resolve a layout the packaging never saw. Do NOT drop to @lydell/node-pty@1.1.0: it
 // repackages node-pty 1.1.0-beta14, which predates the queued pty writer and writes
 // through tty.WriteStream, where EAGAIN is masked and can block (microsoft/node-pty#833).
-const requiredExactPublishedRuntimeDependencies = new Map([
-  ['loro-crdt', '1.14.0'],
-  ['@lydell/node-pty', '1.2.0-beta.14'],
-]);
+const requiredExactPublishedRuntimeDependencies = ['loro-crdt'];
+const requiredPinnedPublishedRuntimeDependencies = new Map([['@lydell/node-pty', '1.2.0-beta.14']]);
 
 for (const block of dependencyBlocks) {
   const dependencies = packageJson[block];
@@ -94,6 +93,8 @@ if (violations.length > 0) {
 }
 
 checkPublishedRuntimeDependencies();
+runDeepSeekAdapterBundleSmoke();
+runGrokAdapterBundleSmoke();
 runPublishedRuntimeSmoke();
 runWorkspaceWatchWorkerSmoke();
 runDiffWorkerSmoke();
@@ -246,14 +247,11 @@ function checkPublishedRuntimeDependencies() {
 }
 
 function checkExactPublishedRuntimeDependencies(publishedDependencyBlocks) {
-  const mismatched = [];
-
-  for (const [dependencyName, expectedVersion] of requiredExactPublishedRuntimeDependencies) {
-    const actualVersion = findPublishedDependencyVersion(publishedDependencyBlocks, dependencyName);
-    if (actualVersion !== expectedVersion) {
-      mismatched.push({ dependencyName, expectedVersion, actualVersion });
-    }
-  }
+  const mismatched = collectRuntimeDependencyVersionIssues({
+    dependencyBlocks: publishedDependencyBlocks,
+    exactDependencies: requiredExactPublishedRuntimeDependencies,
+    pinnedDependencies: requiredPinnedPublishedRuntimeDependencies,
+  });
 
   if (mismatched.length === 0) {
     return;
@@ -271,15 +269,68 @@ function checkExactPublishedRuntimeDependencies(publishedDependencyBlocks) {
   process.exit(1);
 }
 
-function findPublishedDependencyVersion(publishedDependencyBlocks, dependencyName) {
-  for (const dependencies of publishedDependencyBlocks) {
-    const version = dependencies?.[dependencyName];
-    if (typeof version === 'string') {
-      return version;
+function runDeepSeekAdapterBundleSmoke() {
+  const adapterPath = path.join(distDir, 'deepseek-acp.js');
+  if (!fs.existsSync(adapterPath)) {
+    console.error(`Published CLI DeepSeek adapter is missing: ${adapterPath}`);
+    process.exit(1);
+  }
+
+  for (const presetId of ['standard', 'code', 'minimal', 'cordis']) {
+    const presetPath = path.join(distDir, 'deepseek-agent-presets', presetId, 'agent.cordis.yml');
+    if (!fs.existsSync(presetPath)) {
+      console.error(`Published CLI DeepSeek preset is missing: ${presetPath}`);
+      process.exit(1);
     }
   }
 
-  return null;
+  const smokeScript = `
+const adapter = await import(${JSON.stringify(pathToFileURL(adapterPath).href)});
+if (adapter.name !== 'acp-extension-dsh') process.exit(2);
+if (typeof adapter.apply !== 'function') process.exit(3);
+if (!Array.isArray(adapter.inject) || !adapter.inject.includes('permissionPresets')) process.exit(4);
+`;
+  try {
+    execFileSync(process.execPath, ['--input-type=module', '--eval', smokeScript], {
+      cwd: cliRoot,
+      encoding: 'utf8',
+      stdio: 'pipe',
+    });
+  } catch (error) {
+    console.error('Published CLI DeepSeek adapter bundle smoke failed.');
+    if (error && typeof error === 'object') {
+      if ('stdout' in error && error.stdout) console.error(String(error.stdout));
+      if ('stderr' in error && error.stderr) console.error(String(error.stderr));
+    }
+    process.exit(1);
+  }
+}
+
+function runGrokAdapterBundleSmoke() {
+  const adapterPath = path.join(distDir, 'grok-acp.js');
+  if (!fs.existsSync(adapterPath)) {
+    console.error(`Published CLI Grok adapter is missing: ${adapterPath}`);
+    process.exit(1);
+  }
+
+  const env = { ...process.env };
+  delete env.GROK_PATH;
+  const result = spawnSync(process.execPath, [adapterPath], {
+    cwd: cliRoot,
+    encoding: 'utf8',
+    env,
+    input: '',
+  });
+  const expectedError = 'GROK_PATH must point to the official Grok runtime';
+  if (result.status === 1 && result.stderr.includes(expectedError)) {
+    return;
+  }
+
+  console.error('Published CLI Grok adapter bundle smoke failed.');
+  if (result.error) console.error(result.error.message);
+  if (result.stdout) console.error(result.stdout);
+  if (result.stderr) console.error(result.stderr);
+  process.exit(1);
 }
 
 function runPublishedRuntimeSmoke() {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   isImeComposingKeyboardEvent,
+  isImeComposingNativeKeyboardEvent,
   resolveDuplicatedImeCommitEcho,
 } from '../src/lib/ime';
 
@@ -52,6 +53,30 @@ describe('isImeComposingKeyboardEvent', () => {
   });
 });
 
+describe('isImeComposingNativeKeyboardEvent', () => {
+  it('returns true for a native composing Escape event', () => {
+    expect(
+      isImeComposingNativeKeyboardEvent({
+        key: 'Escape',
+        isComposing: true,
+      })
+    ).toBe(true);
+  });
+
+  it('supports the legacy 229 signal used by some IMEs', () => {
+    expect(
+      isImeComposingNativeKeyboardEvent({
+        key: 'Escape',
+        keyCode: 229,
+      })
+    ).toBe(true);
+  });
+
+  it('does not consume a regular Escape event', () => {
+    expect(isImeComposingNativeKeyboardEvent({ key: 'Escape' })).toBe(false);
+  });
+});
+
 describe('resolveDuplicatedImeCommitEcho', () => {
   it('resolves duplicated insertFromComposition echo while composing', () => {
     expect(
@@ -98,5 +123,3 @@ describe('resolveDuplicatedImeCommitEcho', () => {
     ).toBeNull();
   });
 });
-
-

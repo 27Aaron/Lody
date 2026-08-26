@@ -136,7 +136,7 @@ export function SessionBrowserToolbar({
         </ToolbarButton>
 
         <form className="min-w-0 flex-1 px-1" onSubmit={submit}>
-          <div className="flex h-8 min-w-0 items-center rounded-md border border-input-border bg-input-background transition-colors focus-within:border-ring focus-within:ring-1 focus-within:ring-ring">
+          <div className="flex h-8 min-w-0 items-center rounded-md border border-input-border bg-input-field transition-colors focus-within:border-ring focus-within:ring-1 focus-within:ring-ring">
             <input
               ref={addressInputRef}
               type="text"

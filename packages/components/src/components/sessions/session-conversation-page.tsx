@@ -1,5 +1,9 @@
 import type { DragEventHandler, ReactNode, Ref } from 'react';
 
+import {
+  ConversationDropOverlay,
+  type ConversationDropKind,
+} from '@/components/shared/conversation-drop-overlay';
 import { CardHeader } from '@/ui/card';
 import { cn } from '@/lib/utils';
 
@@ -86,7 +90,9 @@ export function SessionConversationPageBody({
 
 export interface SessionConversationPageProps {
   className?: string;
-  imageDragActive?: boolean;
+  /** Highlights the page while an accepted drag (attachment or session) is over it. */
+  dropActive?: boolean;
+  dropKind?: ConversationDropKind;
   headerSlot?: ReactNode;
   subHeaderSlot?: ReactNode;
   hideMessageArea?: boolean;
@@ -101,7 +107,8 @@ export interface SessionConversationPageProps {
 
 export function SessionConversationPage({
   className,
-  imageDragActive = false,
+  dropActive = false,
+  dropKind = 'session-mention',
   headerSlot,
   subHeaderSlot,
   hideMessageArea = false,
@@ -115,17 +122,13 @@ export function SessionConversationPage({
 }: SessionConversationPageProps) {
   return (
     <div
-      className={cn(
-        'relative flex flex-col',
-        hideMessageArea ? '' : 'h-full',
-        imageDragActive && 'ring-2 ring-primary/25 border-primary/50',
-        className
-      )}
+      className={cn('relative flex flex-col', hideMessageArea ? '' : 'h-full', className)}
       onDragEnter={onDragEnter}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
     >
+      <ConversationDropOverlay active={dropActive} kind={dropKind} />
       {children ?? (
         <>
           {headerSlot}

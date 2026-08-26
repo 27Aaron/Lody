@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as ResetPasswordRouteImport } from './routes/reset-password'
+import { Route as OnboardingRouteImport } from './routes/onboarding'
 import { Route as NotFoundRouteImport } from './routes/notFound'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as ForgotPasswordRouteImport } from './routes/forgot-password'
@@ -39,6 +40,7 @@ import { Route as WorkspaceNameAuthSettingsProjectsRouteImport } from './routes/
 import { Route as WorkspaceNameAuthSettingsPreferencesRouteImport } from './routes/$workspaceName/_auth/settings/preferences'
 import { Route as WorkspaceNameAuthSettingsPeopleRouteImport } from './routes/$workspaceName/_auth/settings/people'
 import { Route as WorkspaceNameAuthSettingsMyMachinesRouteImport } from './routes/$workspaceName/_auth/settings/my-machines'
+import { Route as WorkspaceNameAuthSettingsMcpRouteImport } from './routes/$workspaceName/_auth/settings/mcp'
 import { Route as WorkspaceNameAuthSettingsMachinesRouteImport } from './routes/$workspaceName/_auth/settings/machines'
 import { Route as WorkspaceNameAuthSettingsKeyboardShortcutsRouteImport } from './routes/$workspaceName/_auth/settings/keyboard-shortcuts'
 import { Route as WorkspaceNameAuthSettingsGithubRouteImport } from './routes/$workspaceName/_auth/settings/github'
@@ -48,6 +50,7 @@ import { Route as WorkspaceNameAuthSettingsBillingRouteImport } from './routes/$
 import { Route as WorkspaceNameAuthSettingsAppearanceRouteImport } from './routes/$workspaceName/_auth/settings/appearance'
 import { Route as WorkspaceNameAuthSettingsAiUsageRouteImport } from './routes/$workspaceName/_auth/settings/ai-usage'
 import { Route as WorkspaceNameAuthSettingsAgentsRouteImport } from './routes/$workspaceName/_auth/settings/agents'
+import { Route as WorkspaceNameAuthSettingsAgentRolesRouteImport } from './routes/$workspaceName/_auth/settings/agent-roles'
 import { Route as WorkspaceNameAuthSettingsAgentConfigRouteImport } from './routes/$workspaceName/_auth/settings/agent-config'
 import { Route as WorkspaceNameAuthSettingsAccountRouteImport } from './routes/$workspaceName/_auth/settings/account'
 import { Route as WorkspaceNameAuthSettingsAboutRouteImport } from './routes/$workspaceName/_auth/settings/about'
@@ -57,6 +60,11 @@ import { Route as WorkspaceNameAuthLocalMachineIdLocalProjectIdRouteImport } fro
 const ResetPasswordRoute = ResetPasswordRouteImport.update({
   id: '/reset-password',
   path: '/reset-password',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OnboardingRoute = OnboardingRouteImport.update({
+  id: '/onboarding',
+  path: '/onboarding',
   getParentRoute: () => rootRouteImport,
 } as any)
 const NotFoundRoute = NotFoundRouteImport.update({
@@ -215,6 +223,12 @@ const WorkspaceNameAuthSettingsMyMachinesRoute =
     path: '/my-machines',
     getParentRoute: () => WorkspaceNameAuthSettingsRoute,
   } as any)
+const WorkspaceNameAuthSettingsMcpRoute =
+  WorkspaceNameAuthSettingsMcpRouteImport.update({
+    id: '/mcp',
+    path: '/mcp',
+    getParentRoute: () => WorkspaceNameAuthSettingsRoute,
+  } as any)
 const WorkspaceNameAuthSettingsMachinesRoute =
   WorkspaceNameAuthSettingsMachinesRouteImport.update({
     id: '/machines',
@@ -269,6 +283,12 @@ const WorkspaceNameAuthSettingsAgentsRoute =
     path: '/agents',
     getParentRoute: () => WorkspaceNameAuthSettingsRoute,
   } as any)
+const WorkspaceNameAuthSettingsAgentRolesRoute =
+  WorkspaceNameAuthSettingsAgentRolesRouteImport.update({
+    id: '/agent-roles',
+    path: '/agent-roles',
+    getParentRoute: () => WorkspaceNameAuthSettingsRoute,
+  } as any)
 const WorkspaceNameAuthSettingsAgentConfigRoute =
   WorkspaceNameAuthSettingsAgentConfigRouteImport.update({
     id: '/agent-config',
@@ -310,6 +330,7 @@ export interface FileRoutesByFullPath {
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
   '/notFound': typeof NotFoundRoute
+  '/onboarding': typeof OnboardingRoute
   '/reset-password': typeof ResetPasswordRoute
   '/desktop/checkout-return': typeof DesktopCheckoutReturnRoute
   '/desktop/github-install': typeof DesktopGithubInstallRoute
@@ -325,6 +346,7 @@ export interface FileRoutesByFullPath {
   '/$workspaceName/settings/about': typeof WorkspaceNameAuthSettingsAboutRoute
   '/$workspaceName/settings/account': typeof WorkspaceNameAuthSettingsAccountRoute
   '/$workspaceName/settings/agent-config': typeof WorkspaceNameAuthSettingsAgentConfigRoute
+  '/$workspaceName/settings/agent-roles': typeof WorkspaceNameAuthSettingsAgentRolesRoute
   '/$workspaceName/settings/agents': typeof WorkspaceNameAuthSettingsAgentsRoute
   '/$workspaceName/settings/ai-usage': typeof WorkspaceNameAuthSettingsAiUsageRoute
   '/$workspaceName/settings/appearance': typeof WorkspaceNameAuthSettingsAppearanceRoute
@@ -334,6 +356,7 @@ export interface FileRoutesByFullPath {
   '/$workspaceName/settings/github': typeof WorkspaceNameAuthSettingsGithubRoute
   '/$workspaceName/settings/keyboard-shortcuts': typeof WorkspaceNameAuthSettingsKeyboardShortcutsRoute
   '/$workspaceName/settings/machines': typeof WorkspaceNameAuthSettingsMachinesRoute
+  '/$workspaceName/settings/mcp': typeof WorkspaceNameAuthSettingsMcpRoute
   '/$workspaceName/settings/my-machines': typeof WorkspaceNameAuthSettingsMyMachinesRoute
   '/$workspaceName/settings/people': typeof WorkspaceNameAuthSettingsPeopleRoute
   '/$workspaceName/settings/preferences': typeof WorkspaceNameAuthSettingsPreferencesRoute
@@ -354,6 +377,7 @@ export interface FileRoutesByTo {
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
   '/notFound': typeof NotFoundRoute
+  '/onboarding': typeof OnboardingRoute
   '/reset-password': typeof ResetPasswordRoute
   '/$workspaceName': typeof WorkspaceNameIndexRoute
   '/desktop/checkout-return': typeof DesktopCheckoutReturnRoute
@@ -368,6 +392,7 @@ export interface FileRoutesByTo {
   '/$workspaceName/settings/about': typeof WorkspaceNameAuthSettingsAboutRoute
   '/$workspaceName/settings/account': typeof WorkspaceNameAuthSettingsAccountRoute
   '/$workspaceName/settings/agent-config': typeof WorkspaceNameAuthSettingsAgentConfigRoute
+  '/$workspaceName/settings/agent-roles': typeof WorkspaceNameAuthSettingsAgentRolesRoute
   '/$workspaceName/settings/agents': typeof WorkspaceNameAuthSettingsAgentsRoute
   '/$workspaceName/settings/ai-usage': typeof WorkspaceNameAuthSettingsAiUsageRoute
   '/$workspaceName/settings/appearance': typeof WorkspaceNameAuthSettingsAppearanceRoute
@@ -377,6 +402,7 @@ export interface FileRoutesByTo {
   '/$workspaceName/settings/github': typeof WorkspaceNameAuthSettingsGithubRoute
   '/$workspaceName/settings/keyboard-shortcuts': typeof WorkspaceNameAuthSettingsKeyboardShortcutsRoute
   '/$workspaceName/settings/machines': typeof WorkspaceNameAuthSettingsMachinesRoute
+  '/$workspaceName/settings/mcp': typeof WorkspaceNameAuthSettingsMcpRoute
   '/$workspaceName/settings/my-machines': typeof WorkspaceNameAuthSettingsMyMachinesRoute
   '/$workspaceName/settings/people': typeof WorkspaceNameAuthSettingsPeopleRoute
   '/$workspaceName/settings/preferences': typeof WorkspaceNameAuthSettingsPreferencesRoute
@@ -399,6 +425,7 @@ export interface FileRoutesById {
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
   '/notFound': typeof NotFoundRoute
+  '/onboarding': typeof OnboardingRoute
   '/reset-password': typeof ResetPasswordRoute
   '/$workspaceName/_auth': typeof WorkspaceNameAuthRouteWithChildren
   '/desktop/checkout-return': typeof DesktopCheckoutReturnRoute
@@ -415,6 +442,7 @@ export interface FileRoutesById {
   '/$workspaceName/_auth/settings/about': typeof WorkspaceNameAuthSettingsAboutRoute
   '/$workspaceName/_auth/settings/account': typeof WorkspaceNameAuthSettingsAccountRoute
   '/$workspaceName/_auth/settings/agent-config': typeof WorkspaceNameAuthSettingsAgentConfigRoute
+  '/$workspaceName/_auth/settings/agent-roles': typeof WorkspaceNameAuthSettingsAgentRolesRoute
   '/$workspaceName/_auth/settings/agents': typeof WorkspaceNameAuthSettingsAgentsRoute
   '/$workspaceName/_auth/settings/ai-usage': typeof WorkspaceNameAuthSettingsAiUsageRoute
   '/$workspaceName/_auth/settings/appearance': typeof WorkspaceNameAuthSettingsAppearanceRoute
@@ -424,6 +452,7 @@ export interface FileRoutesById {
   '/$workspaceName/_auth/settings/github': typeof WorkspaceNameAuthSettingsGithubRoute
   '/$workspaceName/_auth/settings/keyboard-shortcuts': typeof WorkspaceNameAuthSettingsKeyboardShortcutsRoute
   '/$workspaceName/_auth/settings/machines': typeof WorkspaceNameAuthSettingsMachinesRoute
+  '/$workspaceName/_auth/settings/mcp': typeof WorkspaceNameAuthSettingsMcpRoute
   '/$workspaceName/_auth/settings/my-machines': typeof WorkspaceNameAuthSettingsMyMachinesRoute
   '/$workspaceName/_auth/settings/people': typeof WorkspaceNameAuthSettingsPeopleRoute
   '/$workspaceName/_auth/settings/preferences': typeof WorkspaceNameAuthSettingsPreferencesRoute
@@ -447,6 +476,7 @@ export interface FileRouteTypes {
     | '/forgot-password'
     | '/login'
     | '/notFound'
+    | '/onboarding'
     | '/reset-password'
     | '/desktop/checkout-return'
     | '/desktop/github-install'
@@ -462,6 +492,7 @@ export interface FileRouteTypes {
     | '/$workspaceName/settings/about'
     | '/$workspaceName/settings/account'
     | '/$workspaceName/settings/agent-config'
+    | '/$workspaceName/settings/agent-roles'
     | '/$workspaceName/settings/agents'
     | '/$workspaceName/settings/ai-usage'
     | '/$workspaceName/settings/appearance'
@@ -471,6 +502,7 @@ export interface FileRouteTypes {
     | '/$workspaceName/settings/github'
     | '/$workspaceName/settings/keyboard-shortcuts'
     | '/$workspaceName/settings/machines'
+    | '/$workspaceName/settings/mcp'
     | '/$workspaceName/settings/my-machines'
     | '/$workspaceName/settings/people'
     | '/$workspaceName/settings/preferences'
@@ -491,6 +523,7 @@ export interface FileRouteTypes {
     | '/forgot-password'
     | '/login'
     | '/notFound'
+    | '/onboarding'
     | '/reset-password'
     | '/$workspaceName'
     | '/desktop/checkout-return'
@@ -505,6 +538,7 @@ export interface FileRouteTypes {
     | '/$workspaceName/settings/about'
     | '/$workspaceName/settings/account'
     | '/$workspaceName/settings/agent-config'
+    | '/$workspaceName/settings/agent-roles'
     | '/$workspaceName/settings/agents'
     | '/$workspaceName/settings/ai-usage'
     | '/$workspaceName/settings/appearance'
@@ -514,6 +548,7 @@ export interface FileRouteTypes {
     | '/$workspaceName/settings/github'
     | '/$workspaceName/settings/keyboard-shortcuts'
     | '/$workspaceName/settings/machines'
+    | '/$workspaceName/settings/mcp'
     | '/$workspaceName/settings/my-machines'
     | '/$workspaceName/settings/people'
     | '/$workspaceName/settings/preferences'
@@ -535,6 +570,7 @@ export interface FileRouteTypes {
     | '/forgot-password'
     | '/login'
     | '/notFound'
+    | '/onboarding'
     | '/reset-password'
     | '/$workspaceName/_auth'
     | '/desktop/checkout-return'
@@ -551,6 +587,7 @@ export interface FileRouteTypes {
     | '/$workspaceName/_auth/settings/about'
     | '/$workspaceName/_auth/settings/account'
     | '/$workspaceName/_auth/settings/agent-config'
+    | '/$workspaceName/_auth/settings/agent-roles'
     | '/$workspaceName/_auth/settings/agents'
     | '/$workspaceName/_auth/settings/ai-usage'
     | '/$workspaceName/_auth/settings/appearance'
@@ -560,6 +597,7 @@ export interface FileRouteTypes {
     | '/$workspaceName/_auth/settings/github'
     | '/$workspaceName/_auth/settings/keyboard-shortcuts'
     | '/$workspaceName/_auth/settings/machines'
+    | '/$workspaceName/_auth/settings/mcp'
     | '/$workspaceName/_auth/settings/my-machines'
     | '/$workspaceName/_auth/settings/people'
     | '/$workspaceName/_auth/settings/preferences'
@@ -582,6 +620,7 @@ export interface RootRouteChildren {
   ForgotPasswordRoute: typeof ForgotPasswordRoute
   LoginRoute: typeof LoginRoute
   NotFoundRoute: typeof NotFoundRoute
+  OnboardingRoute: typeof OnboardingRoute
   ResetPasswordRoute: typeof ResetPasswordRoute
   DesktopCheckoutReturnRoute: typeof DesktopCheckoutReturnRoute
   DesktopGithubInstallRoute: typeof DesktopGithubInstallRoute
@@ -597,6 +636,13 @@ declare module '@tanstack/react-router' {
       path: '/reset-password'
       fullPath: '/reset-password'
       preLoaderRoute: typeof ResetPasswordRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/onboarding': {
+      id: '/onboarding'
+      path: '/onboarding'
+      fullPath: '/onboarding'
+      preLoaderRoute: typeof OnboardingRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/notFound': {
@@ -802,6 +848,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof WorkspaceNameAuthSettingsMyMachinesRouteImport
       parentRoute: typeof WorkspaceNameAuthSettingsRoute
     }
+    '/$workspaceName/_auth/settings/mcp': {
+      id: '/$workspaceName/_auth/settings/mcp'
+      path: '/mcp'
+      fullPath: '/$workspaceName/settings/mcp'
+      preLoaderRoute: typeof WorkspaceNameAuthSettingsMcpRouteImport
+      parentRoute: typeof WorkspaceNameAuthSettingsRoute
+    }
     '/$workspaceName/_auth/settings/machines': {
       id: '/$workspaceName/_auth/settings/machines'
       path: '/machines'
@@ -865,6 +918,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof WorkspaceNameAuthSettingsAgentsRouteImport
       parentRoute: typeof WorkspaceNameAuthSettingsRoute
     }
+    '/$workspaceName/_auth/settings/agent-roles': {
+      id: '/$workspaceName/_auth/settings/agent-roles'
+      path: '/agent-roles'
+      fullPath: '/$workspaceName/settings/agent-roles'
+      preLoaderRoute: typeof WorkspaceNameAuthSettingsAgentRolesRouteImport
+      parentRoute: typeof WorkspaceNameAuthSettingsRoute
+    }
     '/$workspaceName/_auth/settings/agent-config': {
       id: '/$workspaceName/_auth/settings/agent-config'
       path: '/agent-config'
@@ -922,6 +982,7 @@ interface WorkspaceNameAuthSettingsRouteChildren {
   WorkspaceNameAuthSettingsAboutRoute: typeof WorkspaceNameAuthSettingsAboutRoute
   WorkspaceNameAuthSettingsAccountRoute: typeof WorkspaceNameAuthSettingsAccountRoute
   WorkspaceNameAuthSettingsAgentConfigRoute: typeof WorkspaceNameAuthSettingsAgentConfigRoute
+  WorkspaceNameAuthSettingsAgentRolesRoute: typeof WorkspaceNameAuthSettingsAgentRolesRoute
   WorkspaceNameAuthSettingsAgentsRoute: typeof WorkspaceNameAuthSettingsAgentsRoute
   WorkspaceNameAuthSettingsAiUsageRoute: typeof WorkspaceNameAuthSettingsAiUsageRoute
   WorkspaceNameAuthSettingsAppearanceRoute: typeof WorkspaceNameAuthSettingsAppearanceRoute
@@ -931,6 +992,7 @@ interface WorkspaceNameAuthSettingsRouteChildren {
   WorkspaceNameAuthSettingsGithubRoute: typeof WorkspaceNameAuthSettingsGithubRoute
   WorkspaceNameAuthSettingsKeyboardShortcutsRoute: typeof WorkspaceNameAuthSettingsKeyboardShortcutsRoute
   WorkspaceNameAuthSettingsMachinesRoute: typeof WorkspaceNameAuthSettingsMachinesRoute
+  WorkspaceNameAuthSettingsMcpRoute: typeof WorkspaceNameAuthSettingsMcpRoute
   WorkspaceNameAuthSettingsMyMachinesRoute: typeof WorkspaceNameAuthSettingsMyMachinesRoute
   WorkspaceNameAuthSettingsPeopleRoute: typeof WorkspaceNameAuthSettingsPeopleRoute
   WorkspaceNameAuthSettingsPreferencesRoute: typeof WorkspaceNameAuthSettingsPreferencesRoute
@@ -947,6 +1009,8 @@ const WorkspaceNameAuthSettingsRouteChildren: WorkspaceNameAuthSettingsRouteChil
       WorkspaceNameAuthSettingsAccountRoute,
     WorkspaceNameAuthSettingsAgentConfigRoute:
       WorkspaceNameAuthSettingsAgentConfigRoute,
+    WorkspaceNameAuthSettingsAgentRolesRoute:
+      WorkspaceNameAuthSettingsAgentRolesRoute,
     WorkspaceNameAuthSettingsAgentsRoute: WorkspaceNameAuthSettingsAgentsRoute,
     WorkspaceNameAuthSettingsAiUsageRoute:
       WorkspaceNameAuthSettingsAiUsageRoute,
@@ -963,6 +1027,7 @@ const WorkspaceNameAuthSettingsRouteChildren: WorkspaceNameAuthSettingsRouteChil
       WorkspaceNameAuthSettingsKeyboardShortcutsRoute,
     WorkspaceNameAuthSettingsMachinesRoute:
       WorkspaceNameAuthSettingsMachinesRoute,
+    WorkspaceNameAuthSettingsMcpRoute: WorkspaceNameAuthSettingsMcpRoute,
     WorkspaceNameAuthSettingsMyMachinesRoute:
       WorkspaceNameAuthSettingsMyMachinesRoute,
     WorkspaceNameAuthSettingsPeopleRoute: WorkspaceNameAuthSettingsPeopleRoute,
@@ -1029,6 +1094,7 @@ const rootRouteChildren: RootRouteChildren = {
   ForgotPasswordRoute: ForgotPasswordRoute,
   LoginRoute: LoginRoute,
   NotFoundRoute: NotFoundRoute,
+  OnboardingRoute: OnboardingRoute,
   ResetPasswordRoute: ResetPasswordRoute,
   DesktopCheckoutReturnRoute: DesktopCheckoutReturnRoute,
   DesktopGithubInstallRoute: DesktopGithubInstallRoute,

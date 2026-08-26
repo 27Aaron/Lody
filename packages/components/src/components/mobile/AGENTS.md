@@ -96,7 +96,12 @@ embedded` lazy-imported from `../tasks/tasks-workspace.tsx` (`embedded`
   (`selectedMobileHomeTab` init); `mobile-workspace-stack.tsx` only keeps the
   `/chat` search/base context mounted under session drawers.
 - Settings: `mobile-settings-layout.tsx` / `mobile-settings-row.tsx` +
-  per-area `mobile-*-settings.tsx` pages.
+  per-area `mobile-*-settings.tsx` pages. In-card row dividers on `bg-card`
+  settings surfaces must use full-strength `border-border` (card outline
+  `border-border/60`) — `border-border/40` is invisible on the near-white
+  card, leaving rows visually glued together. `MobileSettingsSection` renders
+  `title`+`actions` on one header line and `description` full-width below it
+  (don't squeeze the description into the title column next to wide actions).
 - Sheets (bottom): `mobile-new-chat-sheet.tsx`,
   `mobile-workspace-switcher-sheet.tsx`, `mobile-create/delete-workspace-sheet`,
   `mobile-worktree-config-sheet.tsx`, `mobile-acp-history-sheet.tsx`,
@@ -125,8 +130,11 @@ embedded` lazy-imported from `../tasks/tasks-workspace.tsx` (`embedded`
 - Opened files: `mobile-file-viewer-drawer.tsx` is a full-screen right drawer
   layered over the still-mounted conversation. Its header always shows the
   file-type icon and basename; the `…` sheet exposes the complete, wrapping
-  path plus tap-to-copy and an explicit copy action. Keep file viewer contents
-  mounted across drawer closes so editor/scroll state survives reopening.
+  path plus tap-to-copy and explicit path/content copy actions (the content
+  action is Markdown-only). Keep file viewer contents mounted across drawer
+  closes so editor/scroll state survives reopening. Markdown rendered and
+  source modes keep native long-press selection; source mode must not expose
+  Monaco's desktop context menu.
 - Floating frosted session header: session-detail's mobile `BaseHeader` is an
   absolute overlay (`bg-background/55 backdrop-blur-xl`, 3rem + safe-area) —
   content scrolls UNDER it and frosts. Contract: session-detail sets
@@ -145,6 +153,33 @@ embedded` lazy-imported from `../tasks/tasks-workspace.tsx` (`embedded`
 - Lists: `mobile-chat-list.tsx`, `mobile-swipeable-row.tsx` (iOS-Mail-style
   row actions; also `touch-action: pan-y`), `mobile-filter-pill-bar.tsx`,
   `mobile-filter-drawer.tsx`, `mobile-inline-picker.tsx`.
+- Opened-by tree: `MobileChatListCard` runs the shared
+  `lib/session-opened-by-tree.ts` model over EACH bucket, so a Session created
+  by the `lody_session_create` MCP tool indents under its opener the same way
+  the desktop sidebar nests it. Resolving per bucket is what keeps
+  Pinned/date/project section boundaries intact; `chat-landing.tsx` fills
+  `openedBySessionId` (precise opener) and `openedByRowSessionId` (row to nest
+  under, via `buildSidebarOpenerRowResolver`) — two fields, never merged.
+  Fold state is the shared `sidebarCollapsedOpenedBySessionsAtom`, so the
+  drawer sidebar and the mobile list can never disagree.
+  The row's leading slot owns ONE node, same contract as `sidebar-row-shared`:
+  fold chevron on an opener, ├/└ on an opened Session, or the status
+  indicator — never two. STATUS WINS on both sides: an active opener drops its
+  chevron and an active opened Session drops its connectors. Consequence to
+  keep in mind: desktop still exposes the fold in the row context menu, but
+  mobile has no row context menu, so an ACTIVE opener cannot be folded until it
+  goes quiet. That was accepted deliberately; do not "fix" it by drawing both.
+  Because the node is the ordinary 16px status slot, a top-level row keeps its
+  exact flat geometry (`px-4`, `w-4`). Only an opened Session widens the slot
+  to `w-8 justify-start` — the node stays put and the CONTENT indents 16px, so
+  the row background never steps.
+  The chevron is a SIBLING of the row `<button>` (the row is one big button —
+  nesting a control inside it is invalid and unreachable to assistive tech),
+  and it needs `MobileSwipeableRow liftAboveEdgeSwipeZone`: the swipe face is a
+  `z-10` stacking context, so nothing inside it can clear the drill-page
+  `EDGE_ZONE_PX` strip at `zIndex={20}` on its own. Pass that flag ONLY when
+  the chevron actually renders — it costs the edge-back swipe on those rows
+  (same trade as the composer's `protectFromEdgeBackZone`).
 - Swipe row text: `mobile-swipeable-row.tsx` owns Pin/Archive/Restore/Delete
   visible + aria labels via `chat.mobileHome.swipeActions.*`; avoid hardcoded
   localized overrides in callers.
@@ -157,9 +192,24 @@ embedded` lazy-imported from `../tasks/tasks-workspace.tsx` (`embedded`
   (`[agent icon] model · reasoning · [mode face] · plan/fast`; mode face =
   `permission-mode-face.tsx`, classified by `@lody/shared`
   `classifyPermissionModeFace`), and opens `mobile-run-config-sheet.tsx`
-  (Agent/Model/Reasoning/Permission/Plan/Fast rows; Agent/Model/Reasoning/
-  Permission use coordinated inline pickers; closing the sheet must not restore
+  (Role/Agent/Model/Interaction/Reasoning/Permission/Plan/Fast rows plus
+  provider-defined select rows; Agent/Model/Interaction/Reasoning/Permission and
+  provider-defined selects use coordinated inline pickers; explicit
+  permission selectors take precedence over legacy ACP modes; closing the sheet must not restore
   focus to the composer). New-chat scopes agents via `allowedMachineIds` from
+  The **Role** row renders whenever the caller passes `agentRoles` — BOTH
+  composers do, meaning different things by it (see `sessions/AGENTS.md`) — and
+  renders even when there is nothing to list, reading `None`. It sits above
+  Agent, since a Role answers every row under it, and is an ordinary inline
+  picker: `None` first, then the Roles by emoji + name, an unavailable one
+  listed but disabled with its reason, and `New role` last. Mobile has no detail
+  pane and no edit: a phone row cannot carry the binding a Role authorizes, so
+  that is read on desktop or in Settings. `None` reports `null`, which clears
+  the NAME and leaves the configuration as it stands. `None` also carries an
+  EMPTY glyph so its label lines up with the emoji-led rows under it; the
+  trigger deliberately does not, because it shows one value rather than a
+  column.
+  New-chat scopes agents via `allowedMachineIds` from
   the selected machine and leaves agent unlocked; in-session locks agent once
   the conversation has turns. `mobile-session-composer-footer.tsx` still
   exports the legacy `MobileModelPickerLabel` helpers for any remaining chip
@@ -167,7 +217,20 @@ embedded` lazy-imported from `../tasks/tasks-workspace.tsx` (`embedded`
   (Plan/Fast live inside the run-config sheet).
 - `mobile-inline-picker.tsx` dropdown is keyboard-operable (↑/↓/Enter/Esc, desktop
   search autofocus on `pointer: fine`) and **virtualizes lists >40 options** via
-  `@tanstack/react-virtual` (scroll-by-index keeps the active row mounted). The
+  `@tanstack/react-virtual` (scroll-by-index keeps the active row mounted). Its
+  search filters FUZZILY and re-ranks through `lib/fuzzy-option-filter.ts`,
+  shared with the desktop run-config menu so one query behaves the same on both:
+  a substring match cannot find `claude-opus-5` from `op5`, and a provider's
+  model list can run to dozens of ids. `shouldOfferOptionSearch` is the single
+  threshold for when a row gets a field at all. Its input is `type="text"`, not
+  `type="search"` — the search type draws a UA cancel glyph in the browser's own
+  accent, which belongs to no theme and is no thumb's target — and the clear
+  button beside it is ours.
+- Any mobile sheet that can put a FIELD on screen owes the native-keyboard
+  contract, `mobile-run-config-sheet.tsx` included (its rows open pickers with
+  search fields). Call `useKeyboardAwareSheet()` rather than assembling it: it
+  is three parts that only work together (lift, capped scroller, centered
+  focus), and sheets carrying two of the three exist and misbehave on iOS. The
   desktop chat landing layers 2D-spatial keyboard nav on top — see
   [chat-landing-keyboard-nav.md](chat-landing-keyboard-nav.md).
 

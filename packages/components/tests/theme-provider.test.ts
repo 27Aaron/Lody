@@ -6,6 +6,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 import {
   ThemeProvider,
+  nextCycledTheme,
   useActiveVSCodeThemeId,
   useResolvedTheme,
   useTheme,
@@ -21,7 +22,7 @@ const FIXED_LIGHT_THEME_ID = 'lody-light';
 const FIXED_DARK_THEME_ID = 'vesper';
 
 function ThemeProbe() {
-  const { theme, setTheme } = useTheme();
+  const { theme, previewTheme, setTheme } = useTheme();
   const resolvedTheme = useResolvedTheme();
   const activeVSCodeThemeId = useActiveVSCodeThemeId();
 
@@ -34,7 +35,9 @@ function ThemeProbe() {
       'data-active-vscode-theme-id': activeVSCodeThemeId ?? '',
     },
     React.createElement('button', { id: 'set-dark-theme', onClick: () => setTheme('dark') }),
-    React.createElement('button', { id: 'set-light-theme', onClick: () => setTheme('light') })
+    React.createElement('button', { id: 'set-light-theme', onClick: () => setTheme('light') }),
+    React.createElement('button', { id: 'set-system-theme', onClick: () => setTheme('system') }),
+    React.createElement('button', { id: 'preview-dark-theme', onClick: () => previewTheme('dark') })
   );
 }
 
@@ -92,12 +95,15 @@ function installMatchMediaMock(initialMatches: boolean) {
   });
 
   return {
-    setMatches(nextMatches: boolean) {
+    setMatches(nextMatches: boolean, notify = true) {
       if (matches === nextMatches) {
         return;
       }
 
       matches = nextMatches;
+      if (!notify) {
+        return;
+      }
       const event = { matches, media: COLOR_SCHEME_QUERY } as MediaQueryListEvent;
 
       for (const listener of listeners) {
@@ -112,6 +118,14 @@ function installMatchMediaMock(initialMatches: boolean) {
     },
   };
 }
+
+describe('nextCycledTheme', () => {
+  it('cycles light, dark, then system', () => {
+    expect(nextCycledTheme('light')).toBe('dark');
+    expect(nextCycledTheme('dark')).toBe('system');
+    expect(nextCycledTheme('system')).toBe('light');
+  });
+});
 
 describe('ThemeProvider', () => {
   let root: Root | undefined;
@@ -130,6 +144,7 @@ describe('ThemeProvider', () => {
     document.documentElement.removeAttribute('style');
     delete document.documentElement.dataset.lodyVscodeTheme;
     document.documentElement.classList.remove('light', 'dark');
+    Reflect.deleteProperty(window, 'api');
     if (originalMatchMediaDescriptor) {
       Object.defineProperty(window, 'matchMedia', originalMatchMediaDescriptor);
     } else {
@@ -219,6 +234,7 @@ describe('ThemeProvider', () => {
     const probe = container.querySelector<HTMLElement>('#theme-probe');
     const setDarkThemeButton = container.querySelector<HTMLButtonElement>('#set-dark-theme');
     const setLightThemeButton = container.querySelector<HTMLButtonElement>('#set-light-theme');
+    const setSystemThemeButton = container.querySelector<HTMLButtonElement>('#set-system-theme');
 
     // Light mode pins Lody Light.
     expect(probe?.dataset.theme).toBe('light');
@@ -245,6 +261,14 @@ describe('ThemeProvider', () => {
     expect(window.localStorage.getItem(themeStorageKey)).toBe('light');
     expect(probe?.dataset.activeVscodeThemeId).toBe(FIXED_LIGHT_THEME_ID);
     expect(document.documentElement.dataset.lodyVscodeTheme).toBe(FIXED_LIGHT_THEME_ID);
+
+    flushSync(() => {
+      setSystemThemeButton?.click();
+    });
+
+    expect(window.localStorage.getItem(themeStorageKey)).toBe('system');
+    expect(probe?.dataset.theme).toBe('system');
+    expect(document.documentElement.style.colorScheme).toBe('light dark');
   });
 
   it('reacts to storage events for the theme mode', () => {
@@ -314,6 +338,7 @@ describe('ThemeProvider', () => {
     expect(probe?.dataset.resolvedTheme).toBe('light');
     expect(probe?.dataset.activeVscodeThemeId).toBe(FIXED_LIGHT_THEME_ID);
     expect(document.documentElement.classList.contains('light')).toBe(true);
+    expect(document.documentElement.style.colorScheme).toBe('light dark');
     expect(document.documentElement.dataset.lodyVscodeTheme).toBe(FIXED_LIGHT_THEME_ID);
 
     flushSync(() => {
@@ -335,5 +360,86 @@ describe('ThemeProvider', () => {
     expect(probe?.dataset.activeVscodeThemeId).toBe(FIXED_LIGHT_THEME_ID);
     expect(document.documentElement.classList.contains('light')).toBe(true);
     expect(document.documentElement.dataset.lodyVscodeTheme).toBe(FIXED_LIGHT_THEME_ID);
+  });
+
+  it('previews a theme without persisting it', () => {
+    const themeStorageKey = 'theme-provider-test-theme';
+    window.localStorage.setItem(themeStorageKey, 'light');
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    flushSync(() => {
+      root?.render(
+        React.createElement(
+          ThemeProvider,
+          {
+            defaultTheme: 'light',
+            storageKey: themeStorageKey,
+          },
+          React.createElement(ThemeProbe)
+        )
+      );
+    });
+
+    const probe = container.querySelector<HTMLElement>('#theme-probe');
+    const previewDarkButton = container.querySelector<HTMLButtonElement>('#preview-dark-theme');
+    expect(probe?.dataset.resolvedTheme).toBe('light');
+
+    flushSync(() => {
+      previewDarkButton?.click();
+    });
+
+    expect(probe?.dataset.resolvedTheme).toBe('dark');
+    expect(document.documentElement.classList.contains('dark')).toBe(true);
+    expect(window.localStorage.getItem(themeStorageKey)).toBe('light');
+  });
+
+  it('follows Electron native theme updates while theme mode is system', () => {
+    installMatchMediaMock(false);
+    const nativeThemeHandlers = new Set<(resolved: 'light' | 'dark') => void>();
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {
+        onNativeThemeUpdated: (handler: (resolved: 'light' | 'dark') => void) => {
+          nativeThemeHandlers.add(handler);
+          return () => {
+            nativeThemeHandlers.delete(handler);
+          };
+        },
+      },
+    });
+
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    flushSync(() => {
+      root?.render(
+        React.createElement(
+          ThemeProvider,
+          {
+            defaultTheme: 'system',
+            storageKey: 'theme-provider-test-theme',
+          },
+          React.createElement(ThemeProbe)
+        )
+      );
+    });
+
+    const probe = container.querySelector<HTMLElement>('#theme-probe');
+    expect(probe?.dataset.resolvedTheme).toBe('light');
+    expect(nativeThemeHandlers.size).toBe(1);
+
+    flushSync(() => {
+      for (const handler of nativeThemeHandlers) {
+        handler('dark');
+      }
+    });
+
+    expect(probe?.dataset.theme).toBe('system');
+    expect(probe?.dataset.resolvedTheme).toBe('dark');
+    expect(document.documentElement.classList.contains('dark')).toBe(true);
+    expect(document.documentElement.style.colorScheme).toBe('light dark');
   });
 });

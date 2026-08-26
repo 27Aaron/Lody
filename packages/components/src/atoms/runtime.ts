@@ -1,5 +1,5 @@
 import { atom } from 'jotai';
-import { LoroDoc } from 'loro-crdt';
+import type { LoroDoc } from 'loro-crdt';
 import type { LoroRepo } from 'loro-repo';
 import type {
   InferInputType,
@@ -43,7 +43,10 @@ import type {
   WorkspaceId,
   LocalProjectId,
   previewVisualCommentDocSchema,
+  sessionDocSchema,
   CodeCollabV2Error,
+  CodeCollabV2FileIndexRequest,
+  CodeCollabV2FileIndexSnapshot,
   CodeCollabV2InitDirectoryOk,
   CodeCollabV2InitDirectoryRequest,
   CodeCollabV2LspUnsupported,
@@ -59,10 +62,12 @@ import type {
   CodeCollabV2RefreshTextResponse,
   CodeCollabV2SaveTextRequest,
   CodeCollabV2SaveTextResponse,
+  FilePreviewV3Request,
+  FilePreviewV3Response,
 } from '@lody/shared';
 import type { LocalProjectGitStateRpcResponse } from '@lody/loro-streams-rpc';
 import type { WorkspaceWriter } from '../providers/workspace-writer';
-import { sessionDocSchema } from '@lody/shared';
+import type { CodeCollabFileIndexCache } from '@/lib/code-collab-file-index-cache';
 import { readStoredAuthToken } from '@/lib/auth-bootstrap';
 import type { RoomSyncState } from '@/lib/room-sync-state';
 import { currentWorkspaceIdAtom, currentWorkspaceSlugAtom } from './workspace-context';
@@ -150,6 +155,8 @@ export type WorkspaceRuntime = {
    */
   readonly workspaceId: WorkspaceId;
   readonly repo: LoroRepo;
+  /** Workspace-owned, scoped LRU for owner-session file-index Flock resources. */
+  readonly codeCollabFileIndexCache: CodeCollabFileIndexCache;
   /**
    * The authored-write seam. Every durable repo mutation the renderer performs
    * goes through this instead of calling `repo.*` / `sessionStore.setState`
@@ -349,6 +356,24 @@ export type WorkspaceRuntime = {
     endpointId: string,
     options?: { timeoutMs?: number }
   ) => Promise<SessionPreviewEndpointReleaseResponse | null>;
+  /**
+   * File Preview v3: read one file from the machine. Never activates Code Collab
+   * there, and always resolves (transport failures come back as `status: 'error'`).
+   */
+  requestFilePreview: (
+    machineId: MachineId,
+    request: Omit<FilePreviewV3Request, 'v'>,
+    options?: { timeoutMs?: number; ownerSessionId?: SessionId | string }
+  ) => Promise<FilePreviewV3Response>;
+  /**
+   * Electron-only initial Code Collab tree/current-All-Changes snapshot. This
+   * never falls back to the cloud Machine RPC transport.
+   */
+  requestLocalCodeCollabFileIndex: (
+    machineId: MachineId,
+    request: CodeCollabV2FileIndexRequest,
+    options?: { timeoutMs?: number; ownerSessionId?: SessionId | string }
+  ) => Promise<CodeCollabV2FileIndexSnapshot | CodeCollabV2Error | null>;
   requestCodeCollabOpenText: (
     machineId: MachineId,
     request: CodeCollabV2OpenTextRequest,

@@ -5,7 +5,7 @@ export type TaskBodyEditorProps = {
   value: string;
   disabled?: boolean;
   /** Called on idle and on blur, not per keystroke. */
-  onCommit: (next: string) => void;
+  onCommit: (next: string) => void | Promise<void>;
   /** Quote the current selection into a new thread comment. */
   onQuoteSelection?: (quote: string) => void;
   /** Persists an image and returns the stable markdown destination. */

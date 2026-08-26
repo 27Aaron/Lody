@@ -153,12 +153,13 @@ describe('MessageHandler image upload flow', () => {
     // simulate the in-flight turn that owns this activity.
     injectActivePresence(harness.handler, sessionId);
 
-    (
-      harness.host.handleCodexImageGenerationBegin as (sessionId: SessionId, event: unknown) => void
-    )(sessionId, {
-      acpSessionId: 'acp-1',
-      callId: 'ig-1',
-    });
+    (harness.host.handleImageGenerationBegin as (sessionId: SessionId, event: unknown) => void)(
+      sessionId,
+      {
+        acpSessionId: 'acp-1',
+        callId: 'ig-1',
+      }
+    );
 
     await vi.waitFor(() => {
       expect(harness.sessionDoc.setStatus).toHaveBeenCalledWith({
@@ -167,7 +168,7 @@ describe('MessageHandler image upload flow', () => {
       });
     });
 
-    (harness.host.handleCodexImageGenerationEnd as (sessionId: SessionId, event: unknown) => void)(
+    (harness.host.handleImageGenerationEnd as (sessionId: SessionId, event: unknown) => void)(
       sessionId,
       {
         acpSessionId: 'acp-1',
@@ -188,12 +189,13 @@ describe('MessageHandler image upload flow', () => {
     const sessionId = 'session-idle-image-generation' as SessionId;
     injectActivePresence(harness.handler, sessionId);
 
-    (
-      harness.host.handleCodexImageGenerationBegin as (sessionId: SessionId, event: unknown) => void
-    )(sessionId, {
-      acpSessionId: 'acp-1',
-      callId: 'ig-idle',
-    });
+    (harness.host.handleImageGenerationBegin as (sessionId: SessionId, event: unknown) => void)(
+      sessionId,
+      {
+        acpSessionId: 'acp-1',
+        callId: 'ig-idle',
+      }
+    );
 
     await vi.waitFor(() => {
       expect(harness.sessionDoc.getMetaState).toHaveBeenCalled();
@@ -280,12 +282,13 @@ describe('MessageHandler image upload flow', () => {
       ) => Promise<void>
     )(sessionId, harness.sessionDoc, turnId, undefined);
 
-    (
-      harness.host.handleCodexImageGenerationBegin as (sessionId: SessionId, event: unknown) => void
-    )(sessionId, {
-      acpSessionId: 'acp-1',
-      callId: 'ig-1',
-    });
+    (harness.host.handleImageGenerationBegin as (sessionId: SessionId, event: unknown) => void)(
+      sessionId,
+      {
+        acpSessionId: 'acp-1',
+        callId: 'ig-1',
+      }
+    );
     (harness.host.clearACPState as (sessionId: SessionId) => void)(sessionId);
 
     vi.spyOn(harness.host, 'validateSessionImageUploadPath').mockResolvedValue({
@@ -304,7 +307,7 @@ describe('MessageHandler image upload flow', () => {
       downloadUrl: 'https://example.com/img-codex',
     });
 
-    (harness.host.handleCodexImageGenerationEnd as (sessionId: SessionId, event: unknown) => void)(
+    (harness.host.handleImageGenerationEnd as (sessionId: SessionId, event: unknown) => void)(
       sessionId,
       {
         acpSessionId: 'acp-1',
@@ -345,9 +348,10 @@ describe('MessageHandler image upload flow', () => {
       ) => Promise<void>
     )(sessionId, harness.sessionDoc, turnId, undefined);
 
-    (
-      harness.host.handleCodexImageGenerationBegin as (sessionId: SessionId, event: unknown) => void
-    )(sessionId, { acpSessionId: 'acp-inline', callId: 'ig-inline' });
+    (harness.host.handleImageGenerationBegin as (sessionId: SessionId, event: unknown) => void)(
+      sessionId,
+      { acpSessionId: 'acp-inline', callId: 'ig-inline' }
+    );
 
     const upload = vi.spyOn(harness.host, 'uploadSessionImageFile').mockResolvedValue({
       imageId: 'img-inline',
@@ -359,7 +363,7 @@ describe('MessageHandler image upload flow', () => {
       downloadUrl: 'https://example.com/img-inline',
     });
 
-    (harness.host.handleCodexImageGenerationEnd as (sessionId: SessionId, event: unknown) => void)(
+    (harness.host.handleImageGenerationEnd as (sessionId: SessionId, event: unknown) => void)(
       sessionId,
       {
         acpSessionId: 'acp-inline',
@@ -411,12 +415,13 @@ describe('MessageHandler image upload flow', () => {
       ) => Promise<void>
     )(sessionId, harness.sessionDoc, turnId, undefined);
 
-    (
-      harness.host.handleCodexImageGenerationBegin as (sessionId: SessionId, event: unknown) => void
-    )(sessionId, {
-      acpSessionId: 'acp-1',
-      callId: 'ig-1',
-    });
+    (harness.host.handleImageGenerationBegin as (sessionId: SessionId, event: unknown) => void)(
+      sessionId,
+      {
+        acpSessionId: 'acp-1',
+        callId: 'ig-1',
+      }
+    );
     (harness.host.clearACPState as (sessionId: SessionId) => void)(sessionId);
 
     const validatePath = vi
@@ -437,7 +442,7 @@ describe('MessageHandler image upload flow', () => {
       downloadUrl: 'https://example.com/img-codex',
     });
 
-    (harness.host.handleCodexImageGenerationEnd as (sessionId: SessionId, event: unknown) => void)(
+    (harness.host.handleImageGenerationEnd as (sessionId: SessionId, event: unknown) => void)(
       sessionId,
       {
         acpSessionId: 'acp-1',
@@ -452,7 +457,7 @@ describe('MessageHandler image upload flow', () => {
     expect(validatePath).not.toHaveBeenCalled();
     expect(harness.history[0]?.items).toEqual([]);
 
-    (harness.host.handleCodexImageGenerationEnd as (sessionId: SessionId, event: unknown) => void)(
+    (harness.host.handleImageGenerationEnd as (sessionId: SessionId, event: unknown) => void)(
       sessionId,
       {
         acpSessionId: 'acp-1',
@@ -465,7 +470,7 @@ describe('MessageHandler image upload flow', () => {
       sessionId
     );
 
-    (harness.host.handleCodexImageGenerationEnd as (sessionId: SessionId, event: unknown) => void)(
+    (harness.host.handleImageGenerationEnd as (sessionId: SessionId, event: unknown) => void)(
       sessionId,
       {
         acpSessionId: 'acp-1',

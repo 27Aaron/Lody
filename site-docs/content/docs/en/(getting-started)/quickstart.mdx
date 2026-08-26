@@ -34,7 +34,6 @@ Android, any browser, and a CLI you can run on a remote server.
 ### Start
 
 ```bash tab="Daemon (recommended)"
-npx lody login
 npx lody daemon start
 ```
 ```bash tab="Foreground"
@@ -42,14 +41,16 @@ npx lody login
 npx lody start
 ```
 
-`npx lody login` uses a device code flow and opens the sign-in page in your browser; on a headless
-machine it prints the sign-in link instead. Once you finish signing in, the CLI picks up your
-account automatically.
+`npx lody daemon start` first checks that it can reach Lody and that this machine is signed in. If it
+is not, it starts the device code flow right there: it opens the sign-in page in your browser (on a
+headless machine it prints the link instead) and waits until you finish, then goes into the
+background. This is also how you connect a remote machine — run it over SSH on a server, cloud VM, or
+another workstation and that machine shows up in your workspace.
 
-`npx lody daemon start` runs the Lody CLI in the background and brings it back if it exits
-unexpectedly. If you cannot reach a browser at all, start the daemon directly with
-`npx lody daemon start --auth <cli_token>`. You can view and generate a `cli_token` in the desktop
-app under **Settings** -> **Account** -> **CLI Token**.
+The daemon brings the CLI back if it exits unexpectedly. If you cannot reach a browser at all, start
+it directly with `npx lody daemon start --auth <cli_token>`. You can view and generate a `cli_token`
+in the desktop app under **Settings** -> **Account** -> **CLI Token**. `npx lody login` remains
+available if you prefer to sign in as a separate step.
 
 <Callout title="Using the desktop app purely as a remote control">
 The desktop app starts its bundled local CLI by default so it can run agents on this computer. If
@@ -131,4 +132,3 @@ on the Settings page.
 - [Learn about Worktrees](/docs/worktrees) - Understand how Lody isolates tasks
 - [Configure Agents](/docs/agents) - Set up Claude Code, Codex, or Claude-compatible endpoints
 - [Mobile Access](/docs/mobile) - Review and approve changes from your phone
-</content>

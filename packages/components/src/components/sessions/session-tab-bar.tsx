@@ -1,11 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Plus, Loader2, X, History, Undo2, Pin, FileDiff } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import {
-  getSessionLaunchConfigLegacyFields,
-  type SessionId,
-  type SessionMeta,
-} from '@lody/shared';
+import { getSessionLaunchConfigLegacyFields, type SessionId, type SessionMeta } from '@lody/shared';
 import { useTranslation } from 'react-i18next';
 import { useAtomValue } from 'jotai';
 import { focusLayerAtom } from '@/atoms/focus-layer';
@@ -20,6 +16,7 @@ import {
   closestCenter,
   DndContext,
   type DragEndEvent,
+  type DragStartEvent,
   PointerSensor,
   useSensor,
   useSensors,
@@ -34,6 +31,12 @@ import { CSS } from '@dnd-kit/utilities';
 import { type DraftSessionTab, getDraftTabLabel } from '@/lib/session-draft-tabs';
 import { TAB_PILL_ACTIVE_CLASS, TAB_PILL_INACTIVE_CLASS } from '@/components/shared/tab-pill-strip';
 import { AdaptiveTabStrip, AdaptiveTabStripItem } from './adaptive-tab-strip';
+import {
+  armSessionMentionDrag,
+  clearSessionMentionDrag,
+  isPointOverSessionMentionDropLayer,
+  startSessionMentionDrag,
+} from '@/lib/session-mention-drag';
 
 /** A viewer tab item (file or diff) displayed in the tab bar. */
 export interface ViewerTabItem {
@@ -79,6 +82,12 @@ interface SessionTabBarProps {
   leftSlot?: React.ReactNode;
   /** Extra classes on the bar root (e.g. macOS traffic-light inset). */
   className?: string;
+  /**
+   * Dropping a session tab onto the conversation inserts a mention of it.
+   * Parent tabs use HTML5 drag; child session tabs share the strip's pointer
+   * drag (horizontal drop on another tab still reorders).
+   */
+  onMentionSession?: (sessionId: string) => void;
 }
 
 /* One canvas: `bg-background` runs unbroken from this bar down through the
@@ -111,6 +120,20 @@ const TAB_INLINE_ACTION_CLASS =
   'ml-auto shrink-0 rounded-sm p-0.5 opacity-70 transition-[opacity,background-color,color] hover:bg-muted-foreground/10 hover:text-tab-hover-foreground hover:opacity-100';
 const TAB_BAR_ACTION_CLASS =
   'flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-hover hover:text-hover-foreground';
+
+function clientPointFromDragEnd(event: DragEndEvent): { x: number; y: number } | null {
+  const source = event.activatorEvent;
+  if (
+    !source ||
+    !('clientX' in source) ||
+    !('clientY' in source) ||
+    typeof source.clientX !== 'number' ||
+    typeof source.clientY !== 'number'
+  ) {
+    return null;
+  }
+  return { x: source.clientX + event.delta.x, y: source.clientY + event.delta.y };
+}
 
 function getTabLabel(
   session: SessionMeta,
@@ -159,6 +182,7 @@ function TabContent({
   commitRename,
   cancelRename,
   solo,
+  html5MentionDrag = false,
   t,
 }: {
   session: SessionMeta;
@@ -167,6 +191,8 @@ function TabContent({
   isEditing: boolean;
   isParent: boolean;
   solo: boolean;
+  /** Parent tab is not in the dnd-kit strip, so it starts an HTML5 mention drag. */
+  html5MentionDrag?: boolean;
   editDraft: string;
   iconVisibility: string;
   inputRef: React.RefObject<HTMLInputElement>;
@@ -196,6 +222,14 @@ function TabContent({
       aria-selected={isActive}
       tabIndex={isActive ? 0 : -1}
       aria-label={label}
+      draggable={html5MentionDrag && !isEditing}
+      onDragStart={
+        html5MentionDrag && !isEditing
+          ? (event) => {
+              startSessionMentionDrag(event, { sessionId: session.id, title: label });
+            }
+          : undefined
+      }
       className={cn(
         TAB_ITEM_CLASS,
         solo
@@ -516,6 +550,7 @@ export const SessionTabBar = memo(function SessionTabBar({
   rightSlot,
   leftSlot,
   className,
+  onMentionSession,
 }: SessionTabBarProps) {
   const { t } = useTranslation();
   const focusLayer = useAtomValue(focusLayerAtom);
@@ -588,6 +623,13 @@ export const SessionTabBar = memo(function SessionTabBar({
   }, [childSessions, draftTabs, showSessionTabs, showViewerTabs, tabOrder, viewerTabs]);
 
   const sortableIds = useMemo(() => sortableItems.map((i) => i.id), [sortableItems]);
+  const sessionIdByTabId = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const item of sortableItems) {
+      if (item.data.kind === 'session') map.set(item.id, item.data.session.id);
+    }
+    return map;
+  }, [sortableItems]);
 
   // A lone tab spans the whole row, so it drops the active fill — a full-width
   // pill would paint the entire bar and break the one-canvas rule. It also has
@@ -617,18 +659,45 @@ export const SessionTabBar = memo(function SessionTabBar({
   // DnD: require 5px movement before drag starts to avoid interfering with click
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
+  const handleDragStart = useCallback(
+    (event: DragStartEvent) => {
+      const sessionId = sessionIdByTabId.get(String(event.active.id));
+      if (sessionId) armSessionMentionDrag(sessionId);
+    },
+    [sessionIdByTabId]
+  );
+
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
       const { active, over } = event;
-      if (!over || active.id === over.id) return;
-      const oldIndex = sortableIds.indexOf(active.id as string);
-      const newIndex = sortableIds.indexOf(over.id as string);
-      if (oldIndex === -1 || newIndex === -1) return;
-      const newOrder = arrayMove(sortableIds, oldIndex, newIndex);
-      onTabReorder?.(newOrder);
+      const activeId = String(active.id);
+      const overId = over ? String(over.id) : null;
+      const point = clientPointFromDragEnd(event);
+      // Tab droppables stay the closest collision even when the pointer is in
+      // the conversation below, so mention wins whenever the pointer is there.
+      const droppedOnConversation =
+        point != null && isPointOverSessionMentionDropLayer(point.x, point.y);
+      const draggedSessionId = sessionIdByTabId.get(activeId);
+      if (droppedOnConversation) {
+        if (draggedSessionId) onMentionSession?.(draggedSessionId);
+      } else if (
+        overId != null &&
+        activeId !== overId &&
+        sortableIds.includes(activeId) &&
+        sortableIds.includes(overId)
+      ) {
+        const oldIndex = sortableIds.indexOf(activeId);
+        const newIndex = sortableIds.indexOf(overId);
+        onTabReorder?.(arrayMove(sortableIds, oldIndex, newIndex));
+      }
+      clearSessionMentionDrag();
     },
-    [sortableIds, onTabReorder]
+    [onMentionSession, onTabReorder, sessionIdByTabId, sortableIds]
   );
+
+  const handleDragCancel = useCallback(() => {
+    clearSessionMentionDrag();
+  }, []);
 
   const iconVisibility = 'opacity-0 group-hover:opacity-100';
 
@@ -698,12 +767,19 @@ export const SessionTabBar = memo(function SessionTabBar({
               isActive={!hasActiveViewerTab && parentSession.id === activeTabSessionId}
               isEditing={editingTabId === parentSession.id}
               isParent={true}
+              html5MentionDrag={!soloTab}
               {...sharedTabProps}
             />
           </AdaptiveTabStripItem>
         )}
         {/* All sortable tabs (child sessions + viewer tabs) — unified DnD */}
-        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragStart={handleDragStart}
+          onDragEnd={handleDragEnd}
+          onDragCancel={handleDragCancel}
+        >
           <SortableContext items={sortableIds} strategy={horizontalListSortingStrategy}>
             {sortableItems.map((item) =>
               item.data.kind === 'session' ? (

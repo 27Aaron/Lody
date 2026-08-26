@@ -8,8 +8,8 @@ import type { PendingScheduledTask } from './schema';
  * calls this on the history it already renders.
  *
  * The persisted `tool_call` keeps `title` (the tool name), `rawInput`, `rawOutput`, `content`,
- * `status`, and `schedulingTimeZone` (the creating machine's zone), but NOT the structured
- * `_meta.claudeCode.toolResponse` (job id, scheduledFor, jobs[]). So we reconstruct from
+ * `status`, and `schedulingTimeZone` (the creating machine's zone), but not provider metadata.
+ * So we reconstruct from
  * `rawInput` + the owning turn's timestamp:
  *  - ScheduleWakeup: only the latest matters; scheduledFor ≈ turn end + delaySeconds (no TZ).
  *  - CronCreate: schedule/recurring/prompt come from rawInput.cron/recurring/prompt, and the
@@ -94,7 +94,8 @@ export function collectPendingScheduledTasksFromHistory(
     for (const rawItem of entry.items ?? []) {
       const item = asRecord(rawItem);
       if (!item || item.type !== 'tool_call' || item.status !== 'completed') continue;
-      const toolName = asString(item.title);
+      // `toolName` is the canonical name; older history pinned it into `title`.
+      const toolName = asString(item.toolName) ?? asString(item.title);
       if (!toolName) continue;
       const rawInput = asRecord(item.rawInput) ?? {};
 

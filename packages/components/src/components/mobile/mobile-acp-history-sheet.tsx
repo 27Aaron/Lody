@@ -20,6 +20,7 @@ import {
 } from '@/ui/alert-dialog';
 import { cn } from '@/lib/utils';
 import { toIntlLocale } from '@/lib/intl-locale';
+import { getVisibleLocalProjectHistoryFailures } from '@/lib/local-project-history-catalog';
 import { AgentIcon } from '@/components/icons/agent-icon';
 import {
   formatHistorySyncSummary,
@@ -115,6 +116,9 @@ export function MobileAcpHistorySheet({
         }),
       })
     : t('workspace.projects.historyNotSyncedYet', { defaultValue: 'Not synced yet' });
+  const syncFailures = state.syncSummary
+    ? getVisibleLocalProjectHistoryFailures(state.syncSummary)
+    : null;
 
   const updateSelection = (selectedIds: string[]) => {
     onHistorySelectionChange(row, state.provider, selectedIds);
@@ -204,9 +208,26 @@ export function MobileAcpHistorySheet({
                 <div className="min-w-0 flex-1">
                   <p className="text-[0.8rem] text-muted-foreground">{statusLabel}</p>
                   {state.syncSummary ? (
-                    <p className="mt-0.5 text-[0.72rem] leading-relaxed text-muted-foreground/80">
-                      {formatHistorySyncSummary(state.syncSummary, t)}
-                    </p>
+                    <div className="mt-0.5 text-[0.72rem] leading-relaxed text-muted-foreground/80">
+                      <p>{formatHistorySyncSummary(state.syncSummary, t)}</p>
+                      {syncFailures && syncFailures.failures.length > 0 ? (
+                        <ul className="mt-1 space-y-0.5 text-destructive">
+                          {syncFailures.failures.map((failure) => (
+                            <li key={failure.acpSessionId} className="break-words">
+                              {failure.acpSessionId}: {failure.message}
+                            </li>
+                          ))}
+                          {syncFailures.remaining > 0 ? (
+                            <li>
+                              {t('workspace.projects.historySyncMoreFailures', {
+                                defaultValue: '{{count}} more failures',
+                                count: syncFailures.remaining,
+                              })}
+                            </li>
+                          ) : null}
+                        </ul>
+                      ) : null}
+                    </div>
                   ) : null}
                 </div>
                 {state.canSync ? (

@@ -14,7 +14,7 @@ const LONG_TEXT = Array.from(
 function EditorHarness({
   initialValue,
   isSaving = false,
-  conversationFontSize = 'default',
+  conversationFontSize = 14,
 }: {
   initialValue: string;
   isSaving?: boolean;
@@ -63,7 +63,7 @@ export const Saving: Story = {
 };
 
 export const LargeFontSize: Story = {
-  render: () => <EditorHarness initialValue={SHORT_TEXT} conversationFontSize="large" />,
+  render: () => <EditorHarness initialValue={SHORT_TEXT} conversationFontSize={24} />,
 };
 
 export const NarrowColumn: Story = {

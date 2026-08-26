@@ -44,6 +44,8 @@ export function pageHead(args: {
   image?: string;
   alternates?: Alternate[];
   robots?: Robots;
+  /** Extra <link> tags appended after canonical/alternates (e.g. RSS feeds). */
+  links?: Array<Record<string, string>>;
   /** Serialized JSON-LD object (placed in head as application/ld+json). */
   jsonLd?: Record<string, unknown> | readonly Record<string, unknown>[];
 }): SiteHead {
@@ -89,6 +91,7 @@ export function pageHead(args: {
             },
           ]
         : []),
+      ...(args.links ?? []),
     ],
     scripts: jsonLdNodes.map((node) => ({
       type: 'application/ld+json',

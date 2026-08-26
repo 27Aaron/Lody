@@ -14,6 +14,7 @@ import {
 import { formatErrorMessage } from '@/utils/format-error';
 import { getLodyDataDir } from '@lody/shared/node/installation-profile';
 import { mapGitSpawnError } from './git-process-error';
+import { resolveAvailableBranchName } from './branch-name-allocation';
 
 const SAFE_SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const LODY_LOCAL_BRANCH_PREFIX = 'lody/';
@@ -118,11 +119,6 @@ const buildBrokerAuthEnv = (auth: GitCredentialBrokerAuth | undefined): NodeJS.P
 
 export type RemoveWorktreeOptions = {
   baseBranchName?: string;
-};
-
-type ReusableBaseBranch = {
-  branchName: string;
-  startPoint?: string;
 };
 
 const DEFAULT_ARCHIVE_BACKUP_AUTHOR_NAME = 'Lody Archive';
@@ -249,8 +245,8 @@ const readLastJsonLine = (filePath: string): HelperDebugEntry | null => {
 
 /**
  * WorktreeManager handles git worktree operations for a single repository.
- * Each session gets its own worktree directory. Most sessions also get their own branch,
- * except sessions started from an existing non-default branch reuse that branch directly.
+ * Each fresh session gets its own worktree directory and a newly allocated branch.
+ * Existing branches are reattached only for an explicit same-session restore.
  */
 export class WorktreeManager {
   private readonly repoId: RepoId;
@@ -1127,7 +1123,7 @@ export class WorktreeManager {
     return normalized.startsWith('release/') || normalized.startsWith('releases/');
   }
 
-  private shouldReuseExistingBaseBranch(branchName?: string): branchName is string {
+  private isLegacyReusedBaseBranch(branchName?: string): branchName is string {
     const trimmed = branchName?.trim();
     return !!trimmed && !this.isCommonBaseBranchName(trimmed);
   }
@@ -1145,39 +1141,15 @@ export class WorktreeManager {
     }
   }
 
-  private async resolveExistingBranchName(
-    sessionId: SessionId,
-    preferredBranchName?: string
-  ): Promise<string | null> {
-    const trimmedPreferred = preferredBranchName?.trim();
-    if (trimmedPreferred && (await this.hasLocalBranch(trimmedPreferred))) {
-      return trimmedPreferred;
-    }
-
-    const defaultBranchName = this.getDefaultSessionBranchName(sessionId);
-    if (await this.hasLocalBranch(defaultBranchName)) {
-      return defaultBranchName;
-    }
-
-    return null;
-  }
-
-  private async resolveReusableBaseBranch(baseBranch?: string): Promise<ReusableBaseBranch | null> {
-    if (this.isLocalSharedSource()) {
+  private async resolveRestoreBranchName(restoreBranchName?: string): Promise<string | null> {
+    const trimmed = restoreBranchName?.trim();
+    if (!trimmed) {
       return null;
     }
-    const trimmed = baseBranch?.trim();
-    if (!this.shouldReuseExistingBaseBranch(trimmed)) {
-      return null;
+    if (!(await this.hasLocalBranch(trimmed))) {
+      throw new Error(`Session restore branch not found: ${trimmed}`);
     }
-    if (await this.hasLocalBranch(trimmed)) {
-      return { branchName: trimmed };
-    }
-    const remoteBranch = `origin/${trimmed}`;
-    if (this.repoUrl && (await this.hasCommitish(remoteBranch))) {
-      return { branchName: trimmed, startPoint: remoteBranch };
-    }
-    return null;
+    return trimmed;
   }
 
   private shouldPreserveRemovedBranch(
@@ -1188,7 +1160,7 @@ export class WorktreeManager {
     return (
       !!baseBranchName &&
       branchName === baseBranchName &&
-      this.shouldReuseExistingBaseBranch(baseBranchName)
+      this.isLegacyReusedBaseBranch(baseBranchName)
     );
   }
 
@@ -1208,11 +1180,6 @@ export class WorktreeManager {
     }
 
     return true;
-  }
-
-  private isBranchAlreadyCheckedOutError(error: unknown): boolean {
-    const message = formatErrorMessage(error).toLowerCase();
-    return message.includes('is already checked out at');
   }
 
   private isLikelyStaleWorktreeError(error: unknown): boolean {
@@ -1247,69 +1214,134 @@ export class WorktreeManager {
     }
   }
 
+  private isBranchNameConflictError(error: unknown): boolean {
+    const message = formatErrorMessage(error).toLowerCase();
+    return (
+      (message.includes('branch named') && message.includes('already exists')) ||
+      message.includes('cannot lock ref')
+    );
+  }
+
+  private async runFreshWorktreeAddWithPruneRetry(
+    sessionId: SessionId,
+    worktreePath: string,
+    startPoint: string,
+    cwd: string
+  ): Promise<void> {
+    const branchName = await this.resolveAvailableSessionBranchName(sessionId);
+    const createArgs = ['worktree', 'add', '-b', branchName, worktreePath, startPoint];
+    try {
+      await this.runGit(createArgs, cwd);
+      return;
+    } catch (error) {
+      if (!this.isLikelyStaleWorktreeError(error)) {
+        throw error;
+      }
+      this.logger.debug(
+        `[${this.repoId}] Fresh worktree add failed; pruning stale entries before retry: ${formatErrorMessage(error)}`
+      );
+      try {
+        await this.runGit(['worktree', 'prune'], cwd);
+      } catch (pruneError) {
+        this.logger.debug(
+          `[${this.repoId}] git worktree prune failed before fresh-branch retry: ${formatErrorMessage(pruneError)}`
+        );
+      }
+
+      // `git worktree add -b` creates the branch before every later setup step.
+      // If a stale worktree registration made that setup fail, reattach only the
+      // branch this invocation just created. A pre-existing/racing branch-name
+      // conflict must never take this path.
+      if (!this.isBranchNameConflictError(error) && (await this.hasLocalBranch(branchName))) {
+        const [branchHead, startPointHead] = await Promise.all([
+          this.runGit(['rev-parse', '--verify', `${branchName}^{commit}`], cwd),
+          this.runGit(['rev-parse', '--verify', `${startPoint}^{commit}`], cwd),
+        ]);
+        if (branchHead === startPointHead) {
+          await this.runWorktreeAddWithPruneRetry(
+            ['worktree', 'add', worktreePath, branchName],
+            cwd
+          );
+          return;
+        }
+      }
+
+      // The branch was not created by the failed command (or another writer won
+      // its name). Allocate a new suffix instead of attaching to that ref.
+      const retryBranchName = await this.resolveAvailableSessionBranchName(sessionId);
+      await this.runGit(['worktree', 'add', '-b', retryBranchName, worktreePath, startPoint], cwd);
+    }
+  }
+
   private async resolveAvailableSessionBranchName(sessionId: SessionId): Promise<string> {
     const baseName = this.getDefaultSessionBranchName(sessionId);
-    let existing: Set<string>;
-    try {
-      const output = await this.runGit(
-        ['for-each-ref', '--format=%(refname:short)', `refs/heads/${baseName}*`],
-        this.getGitAdminCwd()
-      );
-      existing = new Set(
-        output
-          .split('\n')
-          .map((line) => line.trim())
-          .filter(Boolean)
-      );
-    } catch {
-      existing = new Set();
-    }
-
-    if (!existing.has(baseName)) {
-      return baseName;
-    }
-
-    for (let index = 2; index < 1000; index += 1) {
-      const candidate = `${baseName}-${index}`;
-      if (!existing.has(candidate)) {
-        return candidate;
-      }
-    }
-
-    throw new Error(`[${this.repoId}] Unable to find available branch name for ${sessionId}`);
+    const output = await this.runGit(
+      ['for-each-ref', '--format=%(refname:lstrip=2)', 'refs/heads'],
+      this.getGitAdminCwd()
+    );
+    return resolveAvailableBranchName(
+      baseName,
+      output
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)
+    );
   }
 
   /**
    * Create a worktree for a session
-   * Branch name: session/<shortSessionId> for common base branches; existing non-default
-   * branches are reused directly.
+   * Branch name: session/<shortSessionId> (or lody/<shortSessionId> for shared-local
+   * sources), with a numeric suffix when that ref already exists.
    */
   async createWorktree(
     sessionId: SessionId,
     baseBranch?: string,
-    restoreBranchName?: string
+    restoreBranchName?: string,
+    exactStartPoint?: string
   ): Promise<WorktreeInfo> {
     return withRepoLock(this.repoId, async () => {
       assertSafeSessionId(sessionId);
-      // Ensure we have latest origin refs before cutting worktrees.
-      await this.ensureRepoLocked(this.repoUrl ? 'required' : 'skip');
-
       const worktreePath = this.getWorktreeHostPath(sessionId);
       const gitAdminCwd = this.getGitAdminCwd();
 
-      // Check if worktree already exists
+      // Check if worktree already exists. Restoring an on-disk worktree only
+      // reads local git state, so it must not depend on origin being reachable.
       if (fs.existsSync(worktreePath)) {
         this.ensureWorktreeGitdirIsRelative(sessionId);
         const info = await this.getWorktreeInfo(sessionId);
+        if (exactStartPoint && info.headSha !== exactStartPoint) {
+          throw new Error(
+            `[${this.repoId}] Existing worktree HEAD ${info.headSha ?? 'unknown'} does not match captured fork HEAD ${exactStartPoint}`
+          );
+        }
         this.logger.debug(
           `[${this.repoId}] Worktree already exists (sessionId=${sessionId} branch=${info.branch} head=${info.headSha ?? 'unknown'}): ${info.hostPath}`
         );
         return info;
       }
 
-      const existingBranchName = await this.resolveExistingBranchName(sessionId, restoreBranchName);
+      const existingBranchName = await this.resolveRestoreBranchName(restoreBranchName);
+
+      // Cutting a fresh branch needs up-to-date origin refs for its base, so the
+      // fetch is required there. Restoring from an existing local branch only
+      // needs local refs; fetch best-effort so an unreachable origin (offline,
+      // dead proxy) does not block the restore.
+      await this.ensureRepoLocked(
+        this.repoUrl ? (existingBranchName ? 'best-effort' : 'required') : 'skip'
+      );
 
       if (existingBranchName) {
+        if (exactStartPoint) {
+          const existingHead = await this.runGit(
+            ['rev-parse', '--verify', `${existingBranchName}^{commit}`],
+            gitAdminCwd
+          );
+          if (existingHead !== exactStartPoint) {
+            throw new Error(
+              `[${this.repoId}] Existing fork branch HEAD ${existingHead} does not match captured fork HEAD ${exactStartPoint}`
+            );
+          }
+        }
         // Worktree missing but branch exists - create worktree from existing branch
         this.logger.debug(
           `[${this.repoId}] Creating worktree from existing branch: ${existingBranchName}`
@@ -1319,53 +1351,34 @@ export class WorktreeManager {
           gitAdminCwd
         );
       } else {
-        const branchName = await this.resolveAvailableSessionBranchName(sessionId);
-        const resolvedBase = await this.resolveBaseRef(baseBranch);
-        const reusableBaseBranch = await this.resolveReusableBaseBranch(baseBranch);
-        if (reusableBaseBranch) {
-          this.logger.debug(
-            `[${this.repoId}] Creating worktree from selected branch: ${reusableBaseBranch.branchName}`
+        if (exactStartPoint) {
+          const verifiedStartPoint = await this.runGit(
+            ['rev-parse', '--verify', `${exactStartPoint}^{commit}`],
+            gitAdminCwd
           );
-          try {
-            if (reusableBaseBranch.startPoint) {
-              await this.runWorktreeAddWithPruneRetry(
-                [
-                  'worktree',
-                  'add',
-                  '-b',
-                  reusableBaseBranch.branchName,
-                  worktreePath,
-                  reusableBaseBranch.startPoint,
-                ],
-                gitAdminCwd
-              );
-            } else {
-              await this.runWorktreeAddWithPruneRetry(
-                ['worktree', 'add', worktreePath, reusableBaseBranch.branchName],
-                gitAdminCwd
-              );
-            }
-          } catch (error) {
-            if (!this.isBranchAlreadyCheckedOutError(error)) {
-              throw error;
-            }
-            this.logger.debug(
-              `[${this.repoId}] Selected branch already checked out; creating session branch instead (branch=${branchName} base=${resolvedBase})`
-            );
-            await this.runWorktreeAddWithPruneRetry(
-              ['worktree', 'add', '-b', branchName, worktreePath, resolvedBase],
-              gitAdminCwd
+          if (verifiedStartPoint !== exactStartPoint) {
+            throw new Error(
+              `[${this.repoId}] Captured fork HEAD did not resolve exactly: ${exactStartPoint}`
             );
           }
-        } else {
-          // Create new branch and worktree
           this.logger.debug(
-            `[${this.repoId}] Creating new worktree (sessionId=${sessionId} branch=${branchName} base=${resolvedBase}): ${worktreePath}`
+            `[${this.repoId}] Creating fork worktree from captured HEAD (sessionId=${sessionId} head=${exactStartPoint})`
           );
-
-          // Create worktree with new branch
-          await this.runWorktreeAddWithPruneRetry(
-            ['worktree', 'add', '-b', branchName, worktreePath, resolvedBase],
+          await this.runFreshWorktreeAddWithPruneRetry(
+            sessionId,
+            worktreePath,
+            exactStartPoint,
+            gitAdminCwd
+          );
+        } else {
+          const resolvedBase = await this.resolveBaseRef(baseBranch);
+          this.logger.debug(
+            `[${this.repoId}] Creating new worktree (sessionId=${sessionId} base=${resolvedBase}): ${worktreePath}`
+          );
+          await this.runFreshWorktreeAddWithPruneRetry(
+            sessionId,
+            worktreePath,
+            resolvedBase,
             gitAdminCwd
           );
         }
@@ -1448,9 +1461,7 @@ export class WorktreeManager {
     return withRepoLock(this.repoId, async () => {
       assertSafeSessionId(sessionId);
       const worktreePath = this.getWorktreeHostPath(sessionId);
-      const branchName =
-        (await this.getCurrentBranchName(sessionId)) ??
-        (await this.resolveExistingBranchName(sessionId));
+      const branchName = (await this.getCurrentBranchName(sessionId)) ?? null;
 
       if (!fs.existsSync(worktreePath)) {
         this.logger.debug(`[${this.repoId}] Worktree for session ${sessionId} does not exist`);
@@ -1517,8 +1528,8 @@ export class WorktreeManager {
     const currentBranchName = await this.getCurrentBranchName(sessionId);
     const resolvedBranchName =
       currentBranchName ??
-      (preferredBranchName
-        ? await this.resolveExistingBranchName(sessionId, preferredBranchName)
+      (preferredBranchName && (await this.hasLocalBranch(preferredBranchName))
+        ? preferredBranchName
         : null);
 
     if (!fs.existsSync(worktreePath)) {

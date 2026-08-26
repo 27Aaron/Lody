@@ -984,7 +984,6 @@ export function MachineAgentSettings({
         onRefreshCapabilities={refreshCapabilities}
         onCheckBinaryStatus={checkBinaryStatus}
         onInstallBinary={installBinary}
-        deferManagedBuiltinCreation
       />
     ) : null;
 

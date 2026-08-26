@@ -34,6 +34,7 @@ import {
   getSessionRoomId,
   getAcpCapabilityCacheEntryAuthority,
   resolveProjectGitHubRepo,
+  SessionForkOperationSchema,
   type AcpConfigOptionValue,
   type CommentReferencePayload,
   type LocalProjectHistoryProvider,
@@ -51,6 +52,12 @@ import {
   SessionChatInterface,
   type SessionChatInterfaceHandle,
 } from '@/components/sessions/session-chat-interface';
+import { WorktreeIcon } from '@/components/icons/worktree-icon';
+import {
+  getSessionForkDestinationOptions,
+  type SessionForkDestination,
+  type SessionForkWorktreeAvailability,
+} from '@/components/sessions/session-fork-destination-menu';
 import { clearSessionChatInputDrafts } from '@/components/sessions/session-chat-input-area';
 import {
   RenameSessionDialog,
@@ -61,6 +68,7 @@ import {
   type DraftSessionChatInterfaceHandle,
   type DraftSessionSendPayload,
 } from '@/components/sessions/draft-session-chat-interface';
+import { SessionMentionDropLayer } from '@/components/sessions/session-mention-drop-layer';
 import { BaseHeader } from '@/components/page-headers/base-header';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { usePublishSessionViewing } from '@/hooks/use-publish-session-viewing';
@@ -100,6 +108,7 @@ import { SessionTabBar, type ViewerTabItem } from './session-tab-bar';
 import {
   getSideChatLauncherState,
   getSidePanelTabCloseFallback,
+  getSidePanelTabStateAfterClose,
   SessionSidePanelEmptyState,
   SessionSidePanelTabBar,
   type SessionSidePanelOption,
@@ -138,9 +147,10 @@ import { getCommandKeybindings, useCommand } from '@/lib/commands';
 import { cn, getBasename } from '@/lib';
 import { isMacOSElectronRenderer, useElectronFullscreen } from '@/lib/electron';
 import {
-  normalizeMarkdownAgentFilePath,
-  parseMarkdownAgentFileHref,
-} from '@/lib/markdown-agent-file-link';
+  resolveSessionFileOpenTarget,
+  type SessionFileOpenPathKind,
+} from '@/lib/session-file-open-target';
+import { isSessionMarkdownPath } from '@/lib/session-file-language';
 import { SessionNotFound } from './session-not-found';
 import { SessionSyncingIndicator } from './session-syncing-indicator';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/ui/sheet';
@@ -196,6 +206,10 @@ import {
   getSessionTabUrlSyncAction,
   parseSessionTabSearch,
 } from '@/lib/session-tab-url';
+import {
+  getSessionNavigationLocation,
+  type SessionNavigationTarget,
+} from '@/lib/session-navigation';
 import { getSessionDetailInitialTabState } from '@/lib/session-detail-initial-state';
 import {
   resolveSessionFileProviderOpenPath,
@@ -206,7 +220,7 @@ import {
   refreshPinnedProviderFileViewerTab,
 } from '@/lib/session-file-provider-open-result';
 import { canOpenHistoricalSessionDiffs } from '@/lib/session-file-provider';
-import { useSessionDocSyncState } from '@/hooks/use-session-doc';
+import { useSessionDoc, useSessionDocSyncState } from '@/hooks/use-session-doc';
 import { useDelayedFlag } from '@/hooks/use-delayed-flag';
 import { isSyncingRoomSyncState } from '@/lib/room-sync-state';
 import {
@@ -276,6 +290,8 @@ type ViewerTab =
       startLine?: number;
       endLine?: number;
       focusRequestSeq?: number;
+      /** One-shot request to enter the executable HTML preview after opening. */
+      htmlPreviewRequestSeq?: number;
     }
   | {
       id: string;
@@ -288,6 +304,23 @@ type ViewerTab =
       mode?: 'conversation' | 'base';
       label: string;
     };
+
+type SessionDetailOpenFileOptions = {
+  /** Analytics only. */
+  readonly source?:
+    | 'file_tree'
+    | 'conversation_file_diff'
+    | 'lsp'
+    | 'diff_header'
+    | 'html_attachment';
+  /** Defaults to `markdown-href`; see `lib/session-file-open-target.ts`. */
+  readonly pathKind?: SessionFileOpenPathKind;
+  /** Explicit 1-based anchor, for callers that have one without encoding it in the path. */
+  readonly startLine?: number;
+  readonly endLine?: number;
+  /** Enter rendered HTML after the file snapshot becomes available. */
+  readonly previewHtml?: boolean;
+};
 
 /** Mobile diff sheet state */
 type MobileDiffState = {
@@ -309,8 +342,61 @@ type ExternalHistoryRefreshViewState = {
   provider: LocalProjectHistoryProvider;
 };
 
+type PendingForkState = Record<
+  string,
+  {
+    turnId: string;
+    targetSessionId: SessionId;
+    phase: 'requesting' | 'awaiting-history';
+    placement: 'tab' | 'side-panel' | 'worktree';
+  }
+>;
+
+const getPendingWorktreeForkStorageKey = (sessionId: SessionId) =>
+  `lody:session:${sessionId}:pending-worktree-forks`;
+
+function readPendingWorktreeForks(sessionId: SessionId): PendingForkState {
+  if (typeof window === 'undefined') return {};
+  try {
+    const value = JSON.parse(
+      localStorage.getItem(getPendingWorktreeForkStorageKey(sessionId)) ?? '{}'
+    );
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    return Object.fromEntries(
+      Object.entries(value).filter((entry): entry is [string, PendingForkState[string]] => {
+        const pending = entry[1] as Partial<PendingForkState[string]> | null;
+        return (
+          !!pending &&
+          pending.placement === 'worktree' &&
+          pending.phase === 'awaiting-history' &&
+          typeof pending.turnId === 'string' &&
+          typeof pending.targetSessionId === 'string'
+        );
+      })
+    );
+  } catch {
+    return {};
+  }
+}
+
+function writePendingWorktreeForks(sessionId: SessionId, pendingForks: PendingForkState): void {
+  if (typeof window === 'undefined') return;
+  const durablePending = Object.fromEntries(
+    Object.entries(pendingForks).filter(
+      ([, pending]) => pending.placement === 'worktree' && pending.phase === 'awaiting-history'
+    )
+  );
+  const key = getPendingWorktreeForkStorageKey(sessionId);
+  if (Object.keys(durablePending).length === 0) {
+    localStorage.removeItem(key);
+    return;
+  }
+  localStorage.setItem(key, JSON.stringify(durablePending));
+}
+
 type ViewerTabSaveState = SessionFileSaveViewState & {
   readonly saveRequestSeq: number;
+  readonly copyMarkdownRequestSeq: number;
 };
 
 const EMPTY_VIEWER_TAB_SAVE_STATE: ViewerTabSaveState = {
@@ -320,6 +406,7 @@ const EMPTY_VIEWER_TAB_SAVE_STATE: ViewerTabSaveState = {
   conflict: false,
   error: false,
   saveRequestSeq: 0,
+  copyMarkdownRequestSeq: 0,
 };
 
 /* Top inset for mobile full-screen drawer edge-swipe strips (PR / Browser /
@@ -358,6 +445,38 @@ const sessionDetailMetaEqual = (
   right: SessionMeta | undefined
 ): boolean => left === right || JSON.stringify(left) === JSON.stringify(right);
 
+function PendingWorktreeForkObserver({
+  targetSessionId,
+  onCompleted,
+  onFailed,
+}: {
+  targetSessionId: SessionId;
+  onCompleted: () => void;
+  onFailed: (message: string) => void;
+}) {
+  const { doc, ready } = useSessionDoc(targetSessionId, { syncEnabled: true });
+  const terminalRef = useRef(false);
+  useEffect(() => {
+    if (!ready || terminalRef.current) return;
+    const operation = SessionForkOperationSchema.safeParse(doc.forkOperation);
+    if (operation.success && operation.data.state === 'failed') {
+      terminalRef.current = true;
+      onFailed(operation.data.error?.message ?? 'Unable to create the fork worktree');
+      return;
+    }
+    const completed = doc.history.some((entry) =>
+      (entry.items ?? []).some(
+        (item) => item.type === 'system_notice' && item.name === 'session_fork_origin'
+      )
+    );
+    if (!operation.success && completed) {
+      terminalRef.current = true;
+      onCompleted();
+    }
+  }, [doc.forkOperation, doc.history, onCompleted, onFailed, ready]);
+  return null;
+}
+
 const areViewerTabsEquivalent = (prev: ViewerTab, next: ViewerTab): boolean => {
   if (prev.id !== next.id || prev.type !== next.type || prev.label !== next.label) {
     return false;
@@ -369,7 +488,8 @@ const areViewerTabsEquivalent = (prev: ViewerTab, next: ViewerTab): boolean => {
       prev.filePath === next.filePath &&
       prev.startLine === next.startLine &&
       prev.endLine === next.endLine &&
-      prev.focusRequestSeq === next.focusRequestSeq
+      prev.focusRequestSeq === next.focusRequestSeq &&
+      prev.htmlPreviewRequestSeq === next.htmlPreviewRequestSeq
     );
   }
 
@@ -802,17 +922,18 @@ const SessionDetail = ({
   const [pendingDraftChildSessionIds, setPendingDraftChildSessionIds] = useState<
     Partial<Record<DraftSessionTab['id'], SessionId>>
   >({});
-  const [pendingForks, setPendingForks] = useState<
-    Record<
-      string,
-      {
-        turnId: string;
-        targetSessionId: SessionId;
-        phase: 'requesting' | 'awaiting-history';
-        placement: 'tab' | 'side-panel';
-      }
-    >
+  const [pendingForks, setPendingForks] = useState<PendingForkState>(() =>
+    readPendingWorktreeForks(sessionId)
+  );
+  const [worktreeAvailabilityBySessionId, setWorktreeAvailabilityBySessionId] = useState<
+    Partial<Record<string, 'available' | 'unavailable' | 'checking'>>
   >({});
+  const worktreeAvailabilityRequestRef = useRef<Set<string>>(new Set());
+  const [dirtyForkConfirmation, setDirtyForkConfirmation] = useState<{
+    source: SessionMeta;
+    turnId: string;
+    targetSessionId: SessionId;
+  } | null>(null);
   const [closingSideSessionIds, setClosingSideSessionIds] = useState<Set<SessionId>>(
     () => new Set()
   );
@@ -842,7 +963,10 @@ const SessionDetail = ({
     setOpenedSidebarTabs(nextInitialTabState.sidePanel.tabs);
     setDraftTabsState(readPersistedDraftTabs(sessionId));
     setPendingDraftChildSessionIds({});
-    setPendingForks({});
+    setPendingForks(readPendingWorktreeForks(sessionId));
+    setWorktreeAvailabilityBySessionId({});
+    worktreeAvailabilityRequestRef.current = new Set();
+    setDirtyForkConfirmation(null);
     setClosingSideSessionIds(new Set());
     setMountedSideSessionIds(new Set());
     setTabOrderState(readStoredTabOrder(sessionId));
@@ -965,6 +1089,10 @@ const SessionDetail = ({
   }, [sessionId, tabOrder]);
 
   useEffect(() => {
+    writePendingWorktreeForks(sessionId, pendingForks);
+  }, [pendingForks, sessionId]);
+
+  useEffect(() => {
     writePersistedDraftTabs(sessionId, draftTabs);
   }, [draftTabs, sessionId]);
 
@@ -995,6 +1123,9 @@ const SessionDetail = ({
     () => draftTabs.find((draft) => draft.id === activeTabSessionId) ?? null,
     [activeTabSessionId, draftTabs]
   );
+  // A draft tab is not a session: mentioning the parent there is valid. Do not
+  // fall back to `activeTabSession.id` — that resolves drafts to the parent.
+  const sessionMentionExcludeId = activeDraftTab ? null : activeTabSessionId;
   const activeCommentReferenceKeys =
     commentReferenceKeysBySession[activeTabSessionId] ?? EMPTY_COMMENT_REFERENCE_KEYS;
 
@@ -1027,25 +1158,73 @@ const SessionDetail = ({
     },
     [sessionMachine?.acpCapabilities]
   );
+  const canForkSessionToWorktree = useCallback(
+    (target: SessionMeta): boolean => {
+      if (
+        !target.agentConfigId ||
+        !target.project ||
+        (target.project.kind !== 'local' && target.project.kind !== 'github')
+      ) {
+        return false;
+      }
+      const capability =
+        sessionMachine?.acpCapabilities?.[getAcpCapabilityCacheKey(target.agentConfigId)];
+      return (
+        getAcpCapabilityCacheEntryAuthority(capability, undefined) === 'authoritative' &&
+        capability?.sessionForkWorktree === true
+      );
+    },
+    [sessionMachine?.acpCapabilities]
+  );
   const handleForkAssistant = useCallback(
-    async (source: SessionMeta, turnId: string, placement: 'tab' | 'side-panel' = 'tab') => {
-      if (!runtime || !user?.id || !canForkSession(source) || pendingForks[source.id]) return;
-      const targetSessionId = crypto.randomUUID() as SessionId;
+    async (
+      source: SessionMeta,
+      turnId: string,
+      placement: 'tab' | 'side-panel' | 'worktree' = 'tab',
+      options: { targetSessionId?: SessionId; acknowledgeDirtySource?: true } = {}
+    ) => {
+      if (
+        !runtime ||
+        !user?.id ||
+        !canForkSession(source) ||
+        (pendingForks[source.id] && !options.targetSessionId)
+      )
+        return;
+      const targetSessionId = options.targetSessionId ?? (crypto.randomUUID() as SessionId);
       setPendingForks((current) => ({
         ...current,
         [source.id]: { turnId, targetSessionId, phase: 'requesting', placement },
       }));
-      const response = await runtime.requestSessionFork(
-        source.machineId,
-        {
-          sourceSessionId: source.id,
-          sourceTurnId: turnId,
-          targetSessionId,
-          requestedByUserId: user.id,
-          ...(placement === 'side-panel' ? { targetPlacement: 'side-panel' as const } : {}),
-        },
-        { timeoutMs: 120_000 }
-      );
+      const request = {
+        sourceSessionId: source.id,
+        sourceTurnId: turnId,
+        targetSessionId,
+        requestedByUserId: user.id,
+        ...(placement === 'worktree'
+          ? {
+              targetContext: {
+                kind: 'new-worktree' as const,
+                ...(options.acknowledgeDirtySource
+                  ? { acknowledgeDirtySource: true as const }
+                  : {}),
+              },
+            }
+          : {}),
+        ...(placement === 'side-panel' ? { targetPlacement: 'side-panel' as const } : {}),
+      };
+      const requestOptions = { timeoutMs: placement === 'worktree' ? 15_000 : 120_000 };
+      let response = await runtime.requestSessionFork(source.machineId, request, requestOptions);
+      if (
+        placement === 'worktree' &&
+        !response?.success &&
+        response?.error?.code === 'INTERNAL_ERROR'
+      ) {
+        response = await runtime.requestSessionFork(source.machineId, request, requestOptions);
+      }
+      if (response?.disposition === 'confirmation-required') {
+        setDirtyForkConfirmation({ source, turnId, targetSessionId });
+        return;
+      }
       if (!response?.success) {
         setPendingForks((current) => {
           const next = { ...current };
@@ -1055,6 +1234,13 @@ const SessionDetail = ({
         toast.error(response?.error?.message ?? t('sessions.forkFailed', 'Unable to fork session'));
         return;
       }
+      capturePostHogEvent(postHog, 'session/fork_succeeded', {
+        workspace_id: currentWorkspaceId ?? null,
+        source_session_id: source.id,
+        source_is_child: Boolean(source.parentSessionId),
+        destination: placement,
+        partial: response.partial,
+      });
       setPendingForks((current) => {
         const pending = current[source.id];
         if (!pending || pending.targetSessionId !== targetSessionId) return current;
@@ -1074,7 +1260,7 @@ const SessionDetail = ({
         );
       }
     },
-    [canForkSession, pendingForks, runtime, t, user?.id]
+    [canForkSession, currentWorkspaceId, pendingForks, postHog, runtime, t, user?.id]
   );
   const pendingForkSourceByTargetSessionId = useMemo(() => {
     const sourceByTarget = new Map<SessionId, string>();
@@ -1085,26 +1271,81 @@ const SessionDetail = ({
     }
     return sourceByTarget;
   }, [pendingForks]);
+  const getForkWorktreeAvailability = useCallback(
+    (source: SessionMeta): SessionForkWorktreeAvailability => {
+      if (!canForkSessionToWorktree(source)) return 'hidden';
+      if (source.project?.kind === 'github') return 'available';
+      const cached = worktreeAvailabilityBySessionId[source.id];
+      if (cached === 'unavailable') return 'hidden';
+      if (cached === 'available') return 'available';
+      return 'checking';
+    },
+    [canForkSessionToWorktree, worktreeAvailabilityBySessionId]
+  );
+  const resolveForkWorktreeAvailability = useCallback(
+    async (source: SessionMeta) => {
+      if (!canForkSessionToWorktree(source) || source.project?.kind !== 'local') return;
+      if (!runtime || !user?.id) return;
+      if (worktreeAvailabilityRequestRef.current.has(source.id)) return;
+      worktreeAvailabilityRequestRef.current.add(source.id);
+      setWorktreeAvailabilityBySessionId((current) => ({
+        ...current,
+        [source.id]: 'checking',
+      }));
+      try {
+        const gitState = await runtime.requestLocalProjectGitState(
+          source.machineId,
+          source.project.localProjectId,
+          user.id,
+          { timeoutMs: 15_000 }
+        );
+        const available = gitState?.success === true && gitState.state.git === true;
+        setWorktreeAvailabilityBySessionId((current) => ({
+          ...current,
+          [source.id]: available ? 'available' : 'unavailable',
+        }));
+      } catch {
+        worktreeAvailabilityRequestRef.current.delete(source.id);
+        setWorktreeAvailabilityBySessionId((current) => {
+          const next = { ...current };
+          delete next[source.id];
+          return next;
+        });
+      }
+    },
+    [canForkSessionToWorktree, runtime, user?.id]
+  );
+  const handleForkDestination = useCallback(
+    (source: SessionMeta, turnId: string, destination: SessionForkDestination = 'shared') => {
+      void handleForkAssistant(source, turnId, destination === 'new-worktree' ? 'worktree' : 'tab');
+    },
+    [handleForkAssistant]
+  );
+  useEffect(() => {
+    if (activeTabSession) void resolveForkWorktreeAvailability(activeTabSession);
+  }, [activeTabSession, resolveForkWorktreeAvailability]);
   // Claims the pending fork so exactly one of the two completion paths below
   // acts on it. Stable identity keeps the completion props from churning on
   // every fork state transition.
-  const takePendingFork = useStableCallback((sourceSessionId: string, targetSessionId: SessionId) => {
-    const pending = pendingForks[sourceSessionId];
-    if (
-      !pending ||
-      pending.phase !== 'awaiting-history' ||
-      pending.targetSessionId !== targetSessionId
-    ) {
-      return null;
+  const takePendingFork = useStableCallback(
+    (sourceSessionId: string, targetSessionId: SessionId) => {
+      const pending = pendingForks[sourceSessionId];
+      if (
+        !pending ||
+        pending.phase !== 'awaiting-history' ||
+        pending.targetSessionId !== targetSessionId
+      ) {
+        return null;
+      }
+      setPendingForks((current) => {
+        if (current[sourceSessionId] !== pending) return current;
+        const next = { ...current };
+        delete next[sourceSessionId];
+        return next;
+      });
+      return pending;
     }
-    setPendingForks((current) => {
-      if (current[sourceSessionId] !== pending) return current;
-      const next = { ...current };
-      delete next[sourceSessionId];
-      return next;
-    });
-    return pending;
-  });
+  );
 
   const isActiveSessionLocalMachine = !!localMachineId && activeSessionMachineId === localMachineId;
   const machineDotlodyPath = useMemo(
@@ -1459,7 +1700,8 @@ const SessionDetail = ({
     setSessionPinned,
     transferSessionOwner,
   } = useSessionActions();
-  const { members: workspaceMembers, isMultiMember: isMultiMemberWorkspace } = useWorkspaceMembers();
+  const { members: workspaceMembers, isMultiMember: isMultiMemberWorkspace } =
+    useWorkspaceMembers();
   const handleTransferSessionOwner = useCallback(
     async (targetSessionId: SessionId, nextUserId: string) => {
       try {
@@ -1534,6 +1776,13 @@ const SessionDetail = ({
       }
     },
     [flushPendingInitialTurn]
+  );
+
+  const handleInsertDroppedSessionMention = useCallback(
+    (droppedSessionId: string) => {
+      chatRefsMap.current.get(activeTabSessionId)?.insertSessionMention(droppedSessionId);
+    },
+    [activeTabSessionId]
   );
 
   const handleSessionCommentReferencesChange = useCallback(
@@ -2231,7 +2480,7 @@ const SessionDetail = ({
   // Single fork entry point for every launcher: the header/footer action forks
   // into a top tab, the side-panel launcher forks into a right-hand panel.
   const forkActiveConversation = useCallback(
-    (placement: 'tab' | 'side-panel' = 'tab') => {
+    (placement: 'tab' | 'side-panel' | 'worktree' = 'tab') => {
       const sourceSession = activeDraftTab ? null : activeTabSession;
       if (!sourceSession || !canForkSession(sourceSession) || pendingForks[sourceSession.id]) {
         return;
@@ -2258,7 +2507,9 @@ const SessionDetail = ({
     ]
   );
   const handleForkCurrentSession = useCallback(
-    () => forkActiveConversation('tab'),
+    (destination?: SessionForkDestination) => {
+      forkActiveConversation(destination === 'new-worktree' ? 'worktree' : 'tab');
+    },
     [forkActiveConversation]
   );
   const isCreatingSideSession = useMemo(
@@ -2707,9 +2958,7 @@ const SessionDetail = ({
            checks the window can spare it); a panel already showing content
            keeps the user's chosen size. */
         const sidebarEmpty =
-          activeSidebarTab === null &&
-          activeSideSessionId === null &&
-          activeViewerTabId === null;
+          activeSidebarTab === null && activeSideSessionId === null && activeViewerTabId === null;
         if (!isSidebarOpen || sidebarEmpty) {
           setPrSidebarWidthRequest((current) => ({
             seq: (current?.seq ?? 0) + 1,
@@ -2819,46 +3068,71 @@ const SessionDetail = ({
   }, [replaceSessionUrlBrowser]);
 
   const handleOpenFile = useStableCallback(
-    (filePath: string, source: 'file_tree' | 'conversation_file_diff' = 'file_tree') => {
+    (filePath: string, options: SessionDetailOpenFileOptions = {}) => {
       setFileProviderRequestedByInteraction(true);
       void (async () => {
-        const normalizedFilePath = normalizeMarkdownAgentFilePath(
-          filePath,
-          activeSessionWorkspacePath
-        );
-        const parsedTarget = parseMarkdownAgentFileHref(normalizedFilePath);
-        const baseFilePath = parsedTarget?.filePath ?? normalizedFilePath;
+        // Where the path came from decides whether it may be rewritten at all;
+        // `resolveSessionFileOpenTarget` owns that rule and documents why.
+        const target = resolveSessionFileOpenTarget({
+          rawPath: filePath,
+          pathKind: options.pathKind ?? 'markdown-href',
+          workspacePath: activeSessionWorkspacePath,
+          ...(options.startLine === undefined ? {} : { startLine: options.startLine }),
+          ...(options.endLine === undefined ? {} : { endLine: options.endLine }),
+        });
         const resolution = await resolveSessionFileProviderOpenPath(
           activeSessionFileProvider,
-          baseFilePath
+          target.filePath
         ).catch(
           (): SessionFileProviderOpenPathResolution => ({
-            path: baseFilePath,
+            path: target.filePath,
             redirected: false,
           })
         );
         const resolvedFilePath = resolution.path;
 
+        const requestSeq = nextFocusRequestSeq();
         upsertViewerTab({
           id: getFileViewerTabId(resolvedFilePath, resolution.fileId),
           type: 'file',
           filePath: resolvedFilePath,
           ...(resolution.fileId === undefined ? {} : { fileId: resolution.fileId }),
           label: getBasename(resolvedFilePath),
-          startLine: parsedTarget?.startLine,
-          endLine: parsedTarget?.endLine,
-          focusRequestSeq: nextFocusRequestSeq(),
+          startLine: target.startLine,
+          endLine: target.endLine,
+          focusRequestSeq: requestSeq,
+          ...(options.previewHtml ? { htmlPreviewRequestSeq: requestSeq } : {}),
         });
         captureSessionDetailEvent('session/viewer_file_opened', {
-          source: parsedTarget ? 'markdown_link' : source,
+          source: target.fromMarkdownLink ? 'markdown_link' : (options.source ?? 'file_tree'),
           file_extension: getFileExtension(resolvedFilePath),
-          has_line_anchor: parsedTarget?.startLine != null,
-          line_suffix_format: parsedTarget?.lineSuffixFormat ?? null,
+          has_line_anchor: target.startLine != null,
+          line_suffix_format: target.lineSuffixFormat ?? null,
           symlink_redirected: resolution.redirected,
         });
       })();
     }
   );
+
+  const handleOpenHtmlFile = useStableCallback((filePath: string) => {
+    handleOpenFile(filePath, {
+      pathKind: 'canonical',
+      source: 'html_attachment',
+      previewHtml: true,
+    });
+  });
+
+  /**
+   * Every entry point whose path came from the file index. Kept stable so the
+   * file tree's memoized rows do not re-render on each parent commit.
+   */
+  const handleOpenIndexedFile = useStableCallback((filePath: string) => {
+    handleOpenFile(filePath, { pathKind: 'canonical' });
+  });
+
+  const handleOpenFileFromDiff = useStableCallback((filePath: string) => {
+    handleOpenFile(filePath, { pathKind: 'canonical', source: 'diff_header' });
+  });
 
   const handleOpenFileDiffForChat = useStableCallback((turnId: string, filePath: string) => {
     setFileProviderRequestedByInteraction(true);
@@ -3005,9 +3279,18 @@ const SessionDetail = ({
         setIsSidebarOpen(true);
         return;
       }
+      if (taken.placement === 'worktree') {
+        if (!workspaceSlug) return;
+        void router.navigate({
+          to: '/$workspaceName/sessions/$sessionId',
+          params: { workspaceName: workspaceSlug, sessionId: targetSessionId },
+          search: { tab: undefined },
+        });
+        return;
+      }
       handleSessionTabSelect(targetSessionId);
     },
-    [handleSessionTabSelect, selectSidePanelTab, takePendingFork]
+    [handleSessionTabSelect, router, selectSidePanelTab, takePendingFork, workspaceSlug]
   );
   const handleForkedConversationPrepareError = useCallback(
     (sourceSessionId: string, targetSessionId: SessionId) => {
@@ -3019,15 +3302,21 @@ const SessionDetail = ({
     [t, takePendingFork]
   );
   const handleNavigateSession = useCallback(
-    (targetSessionId: SessionId) => {
-      if (
-        targetSessionId === sessionId ||
-        visibleChildSessions.some((child) => child.id === targetSessionId)
-      ) {
-        handleSessionTabSelect(targetSessionId);
+    (target: SessionNavigationTarget) => {
+      const location = getSessionNavigationLocation(target);
+      if (location.sessionId === sessionId) {
+        handleSessionTabSelect(target.tabSessionId ?? target.sessionId);
+        return;
       }
+
+      if (!workspaceSlug) return;
+      void router.navigate({
+        to: '/$workspaceName/sessions/$sessionId',
+        params: { workspaceName: workspaceSlug, sessionId: location.sessionId },
+        search: { tab: location.tab },
+      });
     },
-    [handleSessionTabSelect, sessionId, visibleChildSessions]
+    [handleSessionTabSelect, router, sessionId, workspaceSlug]
   );
 
   // When a viewer tab is selected, activate the viewer surface for the current session.
@@ -3208,12 +3497,15 @@ const SessionDetail = ({
 
   const handleCloseSidebarTab = useCallback(
     (tabId: SidebarTab) => {
-      const fallbackTabId = getSidePanelTabCloseFallback(sidePanelTabIds, tabId);
+      const { fallbackTabId, sidebarOpen } = getSidePanelTabStateAfterClose(sidePanelTabIds, tabId);
       const fallbackSidebarTabId = getSidePanelTabCloseFallback(
         visibleOpenedSidebarTabs,
         tabId
       ) as SidebarTab | null;
       setOpenedSidebarTabs((current) => current.filter((candidate) => candidate !== tabId));
+      if (!sidebarOpen) {
+        setIsSidebarOpen(false);
+      }
       if (activeSidebarTab === tabId) {
         if (activeViewerTabId === null) {
           selectSidePanelTab(fallbackTabId);
@@ -3292,6 +3584,10 @@ const SessionDetail = ({
       }
       const existingIndex = viewerTabs.findIndex((tab) => tab.id === tabId);
       if (existingIndex >= 0) {
+        const { sidebarOpen } = getSidePanelTabStateAfterClose(sidePanelTabIds, tabId);
+        if (!sidebarOpen) {
+          setIsSidebarOpen(false);
+        }
         captureSessionDetailEvent('session/viewer_tab_closed', {
           viewer_tab_id: tabId,
           viewer_tab_type: tabId.startsWith('file:') ? 'file' : 'diff',
@@ -3678,10 +3974,15 @@ const SessionDetail = ({
           throw new Error(termination?.error ?? 'Side session termination failed');
         }
         await deleteSessions([sideSessionId]);
+        const { fallbackTabId, sidebarOpen } = getSidePanelTabStateAfterClose(
+          sidePanelTabIds,
+          getSideSessionPanelTabId(sideSessionId)
+        );
+        if (!sidebarOpen) {
+          setIsSidebarOpen(false);
+        }
         if (activeSideSessionId === sideSessionId) {
-          selectSidePanelTab(
-            getSidePanelTabCloseFallback(sidePanelTabIds, getSideSessionPanelTabId(sideSessionId))
-          );
+          selectSidePanelTab(fallbackTabId);
         }
       } catch (error) {
         console.error('Failed to close side session', { sideSessionId, error });
@@ -3751,8 +4052,15 @@ const SessionDetail = ({
         activeSidePanelTabId,
         activeConversationTabId: activeTabSessionId,
         parentConversationTabId: sessionId,
+        conversationTabCount: orderedSessionTabIds.length,
       }),
-    [activeSidePanelTabId, activeTabSessionId, isSidebarOpen, sessionId]
+    [
+      activeSidePanelTabId,
+      activeTabSessionId,
+      isSidebarOpen,
+      orderedSessionTabIds.length,
+      sessionId,
+    ]
   );
 
   useCommand({
@@ -3760,14 +4068,18 @@ const SessionDetail = ({
     title: t('commands.session.closeFocusedTab', 'Close Focused Tab'),
     category: 'Session',
     keybindings: getCommandKeybindings('session.closeFocusedTab'),
-    // Consume the native close-window chord anywhere on a desktop session page, including
-    // the non-closeable parent tab. `run` remains a no-op when there is no closeable target.
+    // Consume the native close-window chord anywhere on a desktop session page. The lone
+    // parent tab returns to chat landing; a parent with siblings remains non-closeable.
     when: () => !isMobile && Boolean(activeSession),
     // Cmd/Ctrl+W is a tab-management command even while the composer or editor owns focus.
     allowInTextInput: true,
     run: () => {
       const target = resolveFocusedTabCloseTarget();
       if (!target) return;
+      if (target.kind === 'landing') {
+        handleBackToList();
+        return;
+      }
       if (target.kind === 'side-panel') {
         handleSidePanelTabClose(target.tabId);
         return;
@@ -3806,6 +4118,11 @@ const SessionDetail = ({
      browser state, live status). */
   const [mobileTabSheetOpen, setMobileTabSheetOpen] = useState(false);
   const [mobileMenuSheetOpen, setMobileMenuSheetOpen] = useState(false);
+  useEffect(() => {
+    if (mobileMenuSheetOpen && activeTabSession) {
+      void resolveForkWorktreeAvailability(activeTabSession);
+    }
+  }, [activeTabSession, mobileMenuSheetOpen, resolveForkWorktreeAvailability]);
   // Reactive per-conversation "working" state. Rules-of-hooks forbids calling
   // useAtomValue per tab in a map, so read them all through ONE derived atom
   // keyed on the (memoized) real-session id list (drafts have no live status).
@@ -4161,6 +4478,74 @@ const SessionDetail = ({
     </Dialog>
   );
 
+  const worktreeForkObservers = Object.entries(pendingForks)
+    .filter(
+      ([, pending]) => pending.placement === 'worktree' && pending.phase === 'awaiting-history'
+    )
+    .map(([sourceSessionId, pending]) => (
+      <PendingWorktreeForkObserver
+        key={pending.targetSessionId}
+        targetSessionId={pending.targetSessionId}
+        onCompleted={() =>
+          handleForkedConversationPrepared(sourceSessionId, pending.targetSessionId)
+        }
+        onFailed={(message) => {
+          if (!takePendingFork(sourceSessionId, pending.targetSessionId)) return;
+          toast.error(message);
+        }}
+      />
+    ));
+
+  const cancelDirtyFork = () => {
+    const confirmation = dirtyForkConfirmation;
+    setDirtyForkConfirmation(null);
+    if (!confirmation) return;
+    setPendingForks((current) => {
+      const next = { ...current };
+      delete next[confirmation.source.id];
+      return next;
+    });
+  };
+
+  const dirtyForkDialog = (
+    <Dialog
+      open={dirtyForkConfirmation !== null}
+      onOpenChange={(open) => {
+        if (!open) cancelDirtyFork();
+      }}
+    >
+      <DialogContent className={cn(isMobile ? '' : 'max-w-md')}>
+        <DialogHeader>
+          <DialogTitle>{t('sessions.forkDirty.title', 'Uncommitted changes found')}</DialogTitle>
+          <DialogDescription>
+            {t(
+              'sessions.forkDirty.description',
+              'The new worktree starts from the latest committed HEAD. Uncommitted and untracked files will not be copied.'
+            )}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={cancelDirtyFork}>
+            {t('common.cancel', 'Cancel')}
+          </Button>
+          <Button
+            onClick={() => {
+              const confirmation = dirtyForkConfirmation;
+              setDirtyForkConfirmation(null);
+              if (!confirmation) return;
+              void handleForkAssistant(confirmation.source, confirmation.turnId, 'worktree', {
+                targetSessionId: confirmation.targetSessionId,
+                acknowledgeDirtySource: true,
+              });
+            }}
+          >
+            {t('sessions.forkDirty.confirm', 'Continue from committed HEAD')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+
   const fileQuickOpenDialog = (
     <SessionFileQuickOpen
       open={isFileQuickOpenOpen}
@@ -4169,13 +4554,14 @@ const SessionDetail = ({
       providerPending={activeSessionFileProviderPending}
       providerMessage={activeSessionFileProviderMessage}
       fallbackPaths={changeFilePaths}
-      onOpenFile={handleOpenFile}
+      onOpenFile={handleOpenIndexedFile}
     />
   );
 
   const renderViewerTabContent = (tab: ViewerTab, className = 'h-full', active = true) =>
     tab.type === 'file' ? (
       <SessionFileContentView
+        key={`${activeSession.id}:${tab.id}`}
         sessionId={activeSession.id}
         session={activeSession}
         filePath={tab.filePath}
@@ -4183,7 +4569,10 @@ const SessionDetail = ({
         startLine={tab.startLine}
         endLine={tab.endLine}
         focusRequestSeq={tab.focusRequestSeq}
+        htmlPreviewRequestSeq={tab.htmlPreviewRequestSeq}
         saveRequestSeq={viewerTabSaveStates[tab.id]?.saveRequestSeq ?? 0}
+        copyMarkdownRequestSeq={viewerTabSaveStates[tab.id]?.copyMarkdownRequestSeq ?? 0}
+        preferNativeMarkdownSelection={isMobile}
         fileProvider={activeSessionFileProvider}
         fileProviderPending={activeSessionFileProviderPending}
         fileProviderMessage={activeSessionFileProviderMessage}
@@ -4192,14 +4581,29 @@ const SessionDetail = ({
           ? {}
           : { fileProviderRole: activeSessionCodeCollabFiles.role })}
         onSaveStateChange={(state) => handleViewerTabSaveStateChange(tab.id, state)}
+        visualAnnotationReferenceKeys={
+          visualAnnotationReferenceKeysBySession[activeSession.id] ??
+          EMPTY_VISUAL_ANNOTATION_REFERENCE_KEYS
+        }
+        onAddVisualAnnotationToChat={(reference) =>
+          handleAddPreviewAnnotationToChat(activeSession.id, reference)
+        }
+        onToggleVisualAnnotationInChat={(reference) =>
+          handleTogglePreviewAnnotationInChat(activeSession.id, reference)
+        }
         onOpenFile={(target) => {
-          // Keep the LSP locator in a VS Code-shaped suffix. The shared
-          // parser splits it back into path/line before provider lookup;
-          // the current viewer still scrolls by line, so column is only
-          // retained for round-tripping.
-          const column = target.character === undefined ? '' : `C${target.character + 1}`;
-          const line = target.line === undefined ? '' : `:L${target.line + 1}${column}`;
-          handleOpenFile(`${target.filePath}${line}`);
+          // The LSP locator travels as structured fields, never encoded into
+          // the path. Round-tripping it through a `:L<line>` suffix meant the
+          // path had to be re-parsed, and a filename that legitimately ends in
+          // `:<digits>` lost its tail. The viewer scrolls by line, so the
+          // column has nowhere to go and is dropped here rather than encoded.
+          handleOpenFile(target.filePath, {
+            pathKind: 'canonical',
+            // Was reported as `markdown_link` only because the locator used to
+            // ride in the path as a `:L<n>` suffix; name the real source now.
+            source: 'lsp',
+            ...(target.line === undefined ? {} : { startLine: target.line + 1 }),
+          });
         }}
         className={className}
       />
@@ -4233,6 +4637,7 @@ const SessionDetail = ({
             ? activeSessionFileProviderPending
             : false
         }
+        onOpenFile={handleOpenFileFromDiff}
         className={className}
       />
     );
@@ -4333,17 +4738,35 @@ const SessionDetail = ({
     if (!activeSession?.isArchived) {
       if (!activeDraftTab && activeTabSession && canForkSession(activeTabSession)) {
         const pendingFork = pendingForks[activeTabSession.id];
-        mobileMenuActions.push({
-          id: 'fork',
-          icon: pendingFork ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <GitFork className="h-3.5 w-3.5" />
-          ),
-          label: t('sessions.forkSession', 'Fork session'),
-          onClick: handleForkCurrentSession,
-          disabled: pendingFork !== undefined,
-        });
+        const worktreeAvailability = getForkWorktreeAvailability(activeTabSession);
+        if (worktreeAvailability === 'hidden') {
+          mobileMenuActions.push({
+            id: 'fork',
+            icon: pendingFork ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <GitFork className="h-3.5 w-3.5" />
+            ),
+            label: t('sessions.forkSession', 'Fork session'),
+            onClick: handleForkCurrentSession,
+            disabled: pendingFork !== undefined,
+          });
+        } else {
+          for (const option of getSessionForkDestinationOptions(t, worktreeAvailability)) {
+            mobileMenuActions.push({
+              id: `fork-${option.id}`,
+              icon:
+                option.id === 'new-worktree' ? (
+                  <WorktreeIcon className="h-3.5 w-3.5" />
+                ) : (
+                  <Folder className="h-3.5 w-3.5" />
+                ),
+              label: option.label,
+              onClick: () => handleForkCurrentSession(option.id),
+              disabled: pendingFork !== undefined || option.disabled,
+            });
+          }
+        }
       }
       mobileMenuActions.push({
         id: 'rename',
@@ -4561,6 +4984,7 @@ const SessionDetail = ({
                   }
                   onFileDiffClick={handleOpenFileDiffMobileForChat}
                   onFilePathClick={handleOpenFile}
+                  onOpenHtmlFile={handleOpenHtmlFile}
                   onNavigateToComment={handleNavigateToCommentMobile}
                   onCommentReferencesChange={getCommentReferencesChangeHandler(tabSession.id)}
                   onVisualAnnotationReferencesChange={getVisualAnnotationReferencesChangeHandler(
@@ -4572,12 +4996,15 @@ const SessionDetail = ({
                   onOpenPrTab={handleOpenPrTab}
                   onOpenAllChanges={handleOpenAllChanges}
                   onOpenBrowser={() => handleOpenBrowser(tabSession.id, true)}
+                  onOpenExistingBrowser={() => handleOpenBrowser(tabSession.id, false)}
                   changesDiffStat={changesDiffStat}
                   onForkLastAssistant={
                     canForkSession(tabSession)
-                      ? (turnId) => void handleForkAssistant(tabSession, turnId)
+                      ? (turnId, destination) =>
+                          handleForkDestination(tabSession, turnId, destination)
                       : undefined
                   }
+                  forkWorktreeAvailability={getForkWorktreeAvailability(tabSession)}
                   forkingAssistantMessageId={pendingForks[tabSession.id]?.turnId}
                   onNavigateSession={handleNavigateSession}
                   onConversationPrepared={
@@ -4685,6 +5112,7 @@ const SessionDetail = ({
                       ? activeSessionFileProviderPending
                       : false
                   }
+                  onOpenFile={handleOpenFileFromDiff}
                   className="h-full"
                 />
               )}
@@ -4710,6 +5138,22 @@ const SessionDetail = ({
                     tab.filePath,
                     t('sessions.fileViewer.pathCopied', 'File path copied')
                   )
+                }
+                onCopyMarkdown={
+                  isSessionMarkdownPath(tab.filePath)
+                    ? () => {
+                        setViewerTabSaveStates((prev) => {
+                          const previous = prev[tab.id] ?? EMPTY_VIEWER_TAB_SAVE_STATE;
+                          return {
+                            ...prev,
+                            [tab.id]: {
+                              ...previous,
+                              copyMarkdownRequestSeq: previous.copyMarkdownRequestSeq + 1,
+                            },
+                          };
+                        });
+                      }
+                    : undefined
                 }
               >
                 {renderViewerTabContent(tab, 'h-full', open)}
@@ -4775,7 +5219,7 @@ const SessionDetail = ({
                     message={activeSessionFileProviderMessage}
                     onOpenFile={(filePath) => {
                       setMobileFilesBrowserOpen(false);
-                      handleOpenFile(filePath);
+                      handleOpenIndexedFile(filePath);
                     }}
                     /* No bottom tab bar over this drawer — only the safe area
                        needs clearing. */
@@ -4904,6 +5348,8 @@ const SessionDetail = ({
         {fileQuickOpenDialog}
         {deleteConfirmDialog}
         {archiveConfirmDialog}
+        {dirtyForkDialog}
+        {worktreeForkObservers}
         <SessionShareDialog
           open={showSessionSharing && pendingSessionShare != null}
           sessionTitle={
@@ -4934,12 +5380,15 @@ const SessionDetail = ({
     activeSidebarTab === 'files' ? (
       <FileTreeView
         session={activeSession}
-        handleOpenFile={handleOpenFile}
+        handleOpenFile={handleOpenIndexedFile}
         fileProvider={activeSessionFileProvider}
         fileProviderPending={activeSessionFileProviderPending}
         fileProviderMessage={activeSessionFileProviderMessage}
         autoCodeCollab={false}
         changedFilePaths={changeFilePaths}
+        // Opening a file selects its viewer tab, which unmounts this tree. Key
+        // its expanded folders per session so returning to Files restores them.
+        viewStateKey={`session-files:${activeSession.id}`}
       />
     ) : activeSidebarTab === 'pr' && latestPr && repoFullName && latestPrNumber ? (
       <PrTabContainer
@@ -5070,6 +5519,16 @@ const SessionDetail = ({
           ? handleForkCurrentSession
           : undefined
       }
+      forkWorktreeAvailability={
+        activeTabSession ? getForkWorktreeAvailability(activeTabSession) : 'hidden'
+      }
+      onForkWorktreeMenuOpen={
+        activeTabSession
+          ? () => {
+              void resolveForkWorktreeAvailability(activeTabSession);
+            }
+          : undefined
+      }
       forkingAssistantMessageId={
         activeTabSession ? pendingForks[activeTabSession.id]?.turnId : null
       }
@@ -5078,6 +5537,7 @@ const SessionDetail = ({
         showSessionSharing ? () => handleRequestShareSession(activeSession) : undefined
       }
       onOpenPrTab={handleOpenPrTab}
+      onNavigateSession={handleNavigateSession}
       browserActionSession={activeBrowserSession}
       onOpenBrowser={() => {
         if (activeBrowserSession) {
@@ -5105,6 +5565,7 @@ const SessionDetail = ({
       archivedChildSessions={archivedChildSessions}
       onTabRestore={handleTabRestore}
       onTabReorder={handleSessionTabReorder}
+      onMentionSession={handleInsertDroppedSessionMention}
       leftSlot={leftSidebarExpandButton}
       rightSlot={desktopHeaderToolbar}
       className={cn(
@@ -5134,8 +5595,7 @@ const SessionDetail = ({
   ) => {
     const pendingForkSourceId = pendingForkSourceByTargetSessionId.get(chatSession.id);
     return {
-      ref: (element: SessionChatInterfaceHandle | null) =>
-        setChatTabRef(chatSession.id, element),
+      ref: (element: SessionChatInterfaceHandle | null) => setChatTabRef(chatSession.id, element),
       session: chatSession,
       workspaceSession: activeSession,
       className: 'h-full',
@@ -5144,6 +5604,9 @@ const SessionDetail = ({
       isVisible,
       onFileDiffClick: handleOpenFileDiffForChat,
       onFilePathClick: handleOpenFile,
+      onOpenHtmlFile: handleOpenHtmlFile,
+      onOpenBrowser: () => handleOpenBrowser(chatSession.id, true),
+      onOpenExistingBrowser: () => handleOpenBrowser(chatSession.id, false),
       onNavigateToComment: handleNavigateToComment,
       onCommentReferencesChange: getCommentReferencesChangeHandler(chatSession.id),
       onVisualAnnotationReferencesChange: getVisualAnnotationReferencesChangeHandler(
@@ -5165,7 +5628,11 @@ const SessionDetail = ({
   };
 
   const desktopChatSurfaces = (
-    <>
+    <SessionMentionDropLayer
+      enabled
+      excludeSessionId={sessionMentionExcludeId}
+      onDropSessionId={handleInsertDroppedSessionMention}
+    >
       {[activeSession, ...visibleChildSessions].map((tabSession) => {
         const isActive = tabSession.id === activeTabSessionId;
         const externalHistoryRefresh = externalHistoryRefreshBySessionId[tabSession.id];
@@ -5175,11 +5642,12 @@ const SessionDetail = ({
         return (
           <div
             key={tabSession.id}
-            className={isActive ? 'h-full' : 'hidden h-full'}
+            className={cn('absolute inset-0', !isActive && 'hidden')}
             aria-hidden={!isActive}
           >
             <SessionChatInterface
               {...getSharedChatSurfaceProps(tabSession, isActive)}
+              paintSessionMentionOverlay={false}
               isChildTab={tabSession.id !== sessionId}
               isExternalHistoryRefreshing={externalHistoryRefresh !== undefined}
               externalHistoryProviderLabel={externalHistoryProviderLabel}
@@ -5190,9 +5658,10 @@ const SessionDetail = ({
               changesDiffStat={changesDiffStat}
               onForkLastAssistant={
                 canForkSession(tabSession)
-                  ? (turnId) => void handleForkAssistant(tabSession, turnId)
+                  ? (turnId, destination) => handleForkDestination(tabSession, turnId, destination)
                   : undefined
               }
+              forkWorktreeAvailability={getForkWorktreeAvailability(tabSession)}
               forkingAssistantMessageId={pendingForks[tabSession.id]?.turnId}
             />
           </div>
@@ -5203,7 +5672,7 @@ const SessionDetail = ({
         return (
           <div
             key={draft.id}
-            className={isActive ? 'h-full' : 'hidden h-full'}
+            className={cn('absolute inset-0', !isActive && 'hidden')}
             aria-hidden={!isActive}
           >
             <DraftSessionChatInterface
@@ -5218,14 +5687,18 @@ const SessionDetail = ({
           </div>
         );
       })}
-    </>
+    </SessionMentionDropLayer>
   );
 
   const desktopViewerSurfaces = viewerTabs.map((tab) => {
     const isActive = tab.id === effectiveActiveViewerTabId;
     return (
-      <div key={tab.id} className={isActive ? 'h-full' : 'hidden h-full'} aria-hidden={!isActive}>
-        {renderViewerTabContent(tab)}
+      <div
+        key={tab.id}
+        className={isActive ? 'h-full' : 'hidden h-full'}
+        aria-hidden={!isActive || !isSidebarOpen}
+      >
+        {renderViewerTabContent(tab, 'h-full', isActive && isSidebarOpen)}
       </div>
     );
   });
@@ -5336,6 +5809,8 @@ const SessionDetail = ({
           shortcuts have a mounted target on desktop. They portal out, so tree position
           doesn't matter. */}
       {archiveConfirmDialog}
+      {dirtyForkDialog}
+      {worktreeForkObservers}
       <SessionShareDialog
         open={showSessionSharing && pendingSessionShare != null}
         sessionTitle={

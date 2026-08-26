@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   SESSION_FILE_MAX_COUNT,
   type MachineId,
@@ -92,7 +92,6 @@ export function useChatLandingFileDraft(args: {
   const { t } = useTranslation();
   const { workspaceId, authToken, machineId, sessionId: draftSessionId, ensureSessionId } = args;
   const localMachineId = useAtomValue(localMachineIdAtom);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
 
   // Desktop local-transport fast path: available only when the selected machine
@@ -314,22 +313,6 @@ export function useChatLandingFileDraft(args: {
     [ensureSessionId, pendingFiles.length, startUpload, t]
   );
 
-  const handleFileInputChange = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => {
-      const fileList = event.target.files;
-      if (!fileList) {
-        return;
-      }
-      handleAddFiles(Array.from(fileList));
-      event.target.value = '';
-    },
-    [handleAddFiles]
-  );
-
-  const handleOpenFilePicker = useCallback(() => {
-    fileInputRef.current?.click();
-  }, []);
-
   const handleRemoveFile = useCallback((localId: string) => {
     setPendingFiles((prev) => {
       const target = prev.find((entry) => entry.localId === localId);
@@ -384,14 +367,11 @@ export function useChatLandingFileDraft(args: {
   );
 
   return {
-    fileInputRef,
     fileItems,
     hasBlockingFiles,
     hasUploadedFiles,
     canAddMoreFiles: pendingFiles.length < SESSION_FILE_MAX_COUNT,
     addFiles: handleAddFiles,
-    handleOpenFilePicker,
-    handleFileInputChange,
     handleRemoveFile,
     handleRetryFile,
     clearPendingFiles,

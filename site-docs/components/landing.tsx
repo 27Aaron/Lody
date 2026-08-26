@@ -83,11 +83,18 @@ const copy: Record<LandingLocale, LandingCopy> = {
       ],
     },
     cli: {
-      title: 'Same control plane in the terminal',
-      body: 'Scripts, CI, and other systems can open sessions and kick off work through the same control plane agents use.',
+      title: 'Connect any machine from the terminal',
+      body: 'Run npx lody daemon start on a server, cloud VM, or the desktop at home. It opens a sign-in link in your browser, then keeps that machine connected — so you can hand it work from your phone, the web app, a script, or CI.',
       prompt: '$',
       lines: [
-        { cmd: 'lody session create --agent codex "Fix the auth 500s"' },
+        {
+          caption: 'On the remote machine — sign in once, stays connected',
+          cmd: 'npx lody daemon start',
+        },
+        {
+          caption: 'From your laptop, a script, or CI',
+          cmd: 'lody session create --agent codex "Fix the auth 500s"',
+        },
         { cmd: 'lody session chat <id> "Also check rate limits"' },
         { cmd: 'lody session list' },
         { cmd: 'lody session status <id>' },
@@ -204,11 +211,15 @@ const copy: Record<LandingLocale, LandingCopy> = {
       ],
     },
     cli: {
-      title: '终端里同一套控制面',
-      body: '脚本、CI 和其他系统通过与 Agent 相同的控制面开会话、触发任务。',
+      title: '一行命令接入任意机器',
+      body: '在服务器、云主机或家里的台式机上跑 npx lody daemon start：它会在浏览器里打开登录链接，登录完这台机器就一直在线——之后用手机、Web、脚本或 CI 都能给它派活。',
       prompt: '$',
       lines: [
-        { cmd: 'lody session create --agent codex "修 auth 500"' },
+        { caption: '在远端机器上——登录一次，之后保持在线', cmd: 'npx lody daemon start' },
+        {
+          caption: '在你自己的电脑、脚本或 CI 里',
+          cmd: 'lody session create --agent codex "修 auth 500"',
+        },
         { cmd: 'lody session chat <id> "顺便检查限流"' },
         { cmd: 'lody session list' },
         { cmd: 'lody session status <id>' },

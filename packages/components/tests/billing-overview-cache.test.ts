@@ -76,6 +76,42 @@ describe('billing overview cache', () => {
 
     expect(readBillingOverviewCache('workspace-1', 'session-1')).toBeNull();
   });
+
+  it('defaults timeline fields when reading a cache written by an older client', () => {
+    const legacyOverview = overview();
+    const rawOverview = { ...legacyOverview } as Record<string, unknown>;
+    for (const field of [
+      'giftStackingSupported',
+      'giftStartsAt',
+      'giftEndsAt',
+      'nextBillingAt',
+      'autoRenewAfterGift',
+      'canResumeAfterGift',
+      'scheduledBillingInterval',
+      'scheduleManaged',
+      'subscriptionSetupPending',
+    ]) {
+      delete rawOverview[field];
+    }
+    localStorage.setItem(
+      'lody:billingOverview',
+      JSON.stringify({
+        'workspace-1': { authSessionId: 'session-1', overview: rawOverview },
+      })
+    );
+
+    expect(readBillingOverviewCache('workspace-1', 'session-1')).toMatchObject({
+      giftStackingSupported: false,
+      giftStartsAt: null,
+      giftEndsAt: null,
+      nextBillingAt: null,
+      autoRenewAfterGift: false,
+      canResumeAfterGift: false,
+      scheduledBillingInterval: null,
+      scheduleManaged: false,
+      subscriptionSetupPending: false,
+    });
+  });
 });
 
 describe('billing overview reconciliation', () => {

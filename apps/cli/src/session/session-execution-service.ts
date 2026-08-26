@@ -130,9 +130,26 @@ type FinalizeTurnContext = {
   abortSignal?: AbortSignal;
   onAutoPromptStart?: () => void | Promise<void>;
   onAutoPromptEnd?: () => void | Promise<void>;
+  /**
+   * False when the prompt returned without the agent ever emitting output. The
+   * turn is still finalized (diff stats, PR detection, auto-commit all stay
+   * correct), but it must not be announced as a completed answer.
+   */
+  producedOutput?: boolean;
 };
 
 const TURN_FINALIZATION_STAGE_WARN_MS = 5_000;
+
+/**
+ * Shown in chat when a turn ends with no agent output at all. It names the most
+ * common upstream cause without asserting it, because the adapter discarded the
+ * real error before we could classify it.
+ */
+const SILENT_TURN_FAILURE_MESSAGE =
+  'The agent ended the turn without producing any output. The model call most likely failed ' +
+  'upstream (a context-length or rate-limit rejection is the usual cause) and the agent ' +
+  'reported it as a normal completion instead of an error. Retry your message, or start a ' +
+  'new session if this conversation has grown too long.';
 
 type TurnFinalizationEffects = {
   finalizeACPState: (sessionId: SessionId, turnId?: string) => Promise<void>;
@@ -457,6 +474,12 @@ export type SessionExecutionServiceDeps = {
    * visible agent output, because the adapter may already have acted on it.
    */
   hasPromptOutputForTurn?: (sessionId: SessionId, turnId: string) => boolean;
+  /**
+   * Same observation, but `undefined` when the session's transient state is gone
+   * and the answer is unknowable. The no-output guard needs that distinction:
+   * "emitted nothing" fails the turn, "cannot tell" must not.
+   */
+  observePromptOutputForTurn?: (sessionId: SessionId, turnId: string) => boolean | undefined;
   fetchAcpCapabilities: (
     cliType: AgentConfigCliType,
     agentType: string,
@@ -471,6 +494,7 @@ export type SessionExecutionServiceDeps = {
     availableCommands?: AcpCommandSummary[];
     sessionFork: boolean;
     modelReasoningEfforts?: Record<string, string[]>;
+    capabilitySourceVersion?: string;
   }>;
   /** Evict idle sessions if system memory is under pressure */
   evictForMemoryPressure: (excludeSessionId?: SessionId) => Promise<MemoryPressureEvictionResult>;
@@ -1883,20 +1907,63 @@ export class SessionExecutionService {
   }
 
   private formatMemoryPressureFailureMessage(result: MemoryPressureEvictionResult): string {
-    const availableMb = Math.round(result.availableMemoryBytes / 1024 / 1024);
-    const thresholdMb = Math.round(result.thresholdBytes / 1024 / 1024);
-    const commitText =
-      result.availableCommitBytes !== undefined &&
-      (result.pressureReason === 'commit' || result.pressureReason === 'physical_and_commit') &&
+    // macOS decides from the kernel's own pressure level, not from a byte budget. Quoting
+    // "N MB available / M MB required" there would state a threshold that was never applied.
+    if (result.pressureReason === 'darwin_pressure_critical') {
+      return (
+        'The machine is at critical memory pressure — macOS is reclaiming memory and ' +
+        'terminating processes to keep up. The turn was not started; free memory and retry.'
+      );
+    }
+
+    const mb = (bytes: number) => `${Math.round(bytes / 1024 / 1024)}MB`;
+
+    // Windows refuses on commit only, and only once the page file can no longer grow. Quoting
+    // physical availability there would name a number that was not the reason.
+    if (
+      result.effectiveAvailableCommitBytes !== undefined &&
       result.commitThresholdBytes !== undefined
-        ? ` Commit headroom is ${Math.round(result.availableCommitBytes / 1024 / 1024)}MB ` +
-          `(threshold: ${Math.round(result.commitThresholdBytes / 1024 / 1024)}MB).`
-        : '';
+    ) {
+      return (
+        'The machine has run out of committable memory: ' +
+        `${mb(result.availableCommitBytes ?? 0)} below the commit limit plus ` +
+        `${mb(result.commitGrowthBytes ?? 0)} the page file can still grow, against a safety ` +
+        `margin of ${mb(result.commitThresholdBytes)}. The turn was not started; close some ` +
+        'programs, or raise the page file maximum, and retry.'
+      );
+    }
+
+    const availableMb = mb(result.availableMemoryBytes);
+    // Deliberately NOT "required to start a turn": the threshold is a safety margin the machine
+    // should keep free, not a measurement of what a turn costs. Quoting it as a requirement sent
+    // people hunting for 2.6GB that nothing was ever going to allocate.
+    const marginMb = mb(result.thresholdBytes);
+
+    // Under a cgroup, one total explains nothing — the operator needs to see which term is
+    // binding, and how much of `memory.current` is just page cache.
+    const cgroup = result.cgroup;
+    if (cgroup) {
+      const hostText =
+        result.hostAvailableBytes !== undefined
+          ? `host available ${mb(result.hostAvailableBytes)}, `
+          : '';
+      const stallText =
+        cgroup.psiSomeAvg10 !== null
+          ? `stalled ${cgroup.psiSomeAvg10}% of the last 10s on reclaim`
+          : 'PSI unavailable; hard headroom is below the floor';
+      return (
+        `The machine is under memory pressure and ${stallText}. ` +
+        `cgroup ${cgroup.path}: ${mb(cgroup.currentBytes)} of ${mb(cgroup.maxBytes)} used, ` +
+        `${mb(cgroup.hardHeadroomBytes)} unused plus ${mb(cgroup.reclaimableBytes)} reclaimable ` +
+        `cache/slab; ${hostText}safety margin ${marginMb}. ` +
+        'The turn was not started; free memory and retry.'
+      );
+    }
 
     return (
-      `The machine is under memory pressure (${availableMb}MB available, ` +
-      `${thresholdMb}MB required to start a turn). The turn was not started; ` +
-      `free memory and retry.${commitText}`
+      `The machine is under memory pressure (${availableMb} available, ` +
+      `safety margin ${marginMb}). The turn was not started; ` +
+      'free memory and retry.'
     );
   }
 
@@ -2416,6 +2483,15 @@ export class SessionExecutionService {
       return;
     }
 
+    // A turn that produced nothing is reported as a failure in chat, so pushing
+    // "your session finished" for it would contradict what the user sees.
+    if (ctx.producedOutput === false) {
+      this.deps.logger.debug(
+        `[${sessionId}] Turn ${turnId} produced no agent output; skipping session completion notification`
+      );
+      return;
+    }
+
     await this.runTurnFinalizationStage(sessionId, turnId, 'notifySessionCompleted', async () => {
       await this.deps.turnFinalization.notifySessionCompleted(sessionId, userId, turnId);
     });
@@ -2887,19 +2963,12 @@ export class SessionExecutionService {
     sessionDoc: SessionDocument,
     userTurnId: string
   ): Promise<void> {
-    const existingMeta = await this.getSessionMeta(sessionId);
     await this.setUserTurnStatus(sessionDoc, userTurnId, 'processing');
     await this.upsertSessionMeta(sessionId, {
-      // Taking ownership must not demote a pointer that already names a LATER
-      // turn (a send that landed while this one was starting, or a second
-      // refused steer). `sessionNeedsActiveWatch` reads meta only, so demoting
-      // it here means this turn's own completion writes
-      // `latestUserMsgId === lastHandledUserMsgId` and every turn queued behind
-      // it becomes invisible to the watcher — including after a restart. The
-      // terminal writes preserve the pointer for exactly the same reason.
-      latestUserMsgId: this.resolveLatestUserMsgIdForTerminalTurn(existingMeta, userTurnId),
+      // Dispatch producers own `latestUserMsgId`. Execution only claims its
+      // own processing slot, so an awaited status write can never overwrite a
+      // newer activation published by another peer.
       processingUserMsgId: userTurnId,
-      lastMissingHistoryUserMsgId: undefined,
     });
   }
 
@@ -3006,7 +3075,6 @@ export class SessionExecutionService {
     if (cancelledUserMsgId) {
       await this.setTerminalUserTurnStatus(sessionId, sessionDoc, cancelledUserMsgId, 'canceled');
       await this.upsertSessionMeta(sessionId, {
-        latestUserMsgId: existingMeta?.latestUserMsgId ?? cancelledUserMsgId,
         lastHandledUserMsgId: cancelledUserMsgId,
         processingUserMsgId: undefined,
       });
@@ -3015,35 +3083,65 @@ export class SessionExecutionService {
     await this.clearDispatchProcessing(sessionId);
   }
 
-  /**
-   * The dispatch pointer for a turn this machine owns: keep a pointer that names
-   * a DIFFERENT turn (one that arrived while this one held the session and is
-   * still outstanding), otherwise name this turn. Applies both when a turn takes
-   * ownership and when it releases it — collapsing the pointer in either place
-   * hides the turns queued behind it from `sessionNeedsActiveWatch`.
-   */
-  private resolveLatestUserMsgIdForTerminalTurn(
-    meta: SessionMeta | undefined,
-    terminalUserTurnId: string
-  ): string {
-    return meta?.latestUserMsgId && meta.latestUserMsgId !== terminalUserTurnId
-      ? meta.latestUserMsgId
-      : terminalUserTurnId;
-  }
-
   private async setDispatchHandled(
     sessionId: SessionId,
     sessionDoc: SessionDocument,
     userTurnId: string
   ): Promise<void> {
-    const existingMeta = await this.getSessionMeta(sessionId);
     await this.setTerminalUserTurnStatus(sessionId, sessionDoc, userTurnId, 'handled');
     await this.upsertSessionMeta(sessionId, {
-      latestUserMsgId: this.resolveLatestUserMsgIdForTerminalTurn(existingMeta, userTurnId),
       lastHandledUserMsgId: userTurnId,
       processingUserMsgId: undefined,
-      lastMissingHistoryUserMsgId: undefined,
     });
+  }
+
+  /**
+   * Did this turn emit anything the user can see?
+   *
+   * An ACP prompt that resolves without a single `session/update` produced no
+   * answer, no tool call, nothing. The protocol says an upstream failure should
+   * come back as a JSON-RPC error — `handleTurnError` classifies those — but an
+   * adapter is free to swallow it and resolve the prompt normally, and some do
+   * (observed: an over-context request answered with HTTP 400, recorded only in
+   * the agent's own session file). Without this check that turn walks the entire
+   * success path: `Session chat completed`, status idle, `lastHandledUserMsgId`
+   * advanced, and NOTHING in the chat — the user sees an unanswered message and
+   * every retry fails the same silent way.
+   *
+   * Must be read while the turn still owns the ACP update state, i.e. right
+   * after the prompt returns and before `finalizeTurn` clears it.
+   */
+  private turnProducedVisibleOutput(sessionId: SessionId, turnId: string): boolean {
+    // No observer wired, or transient state already gone: we cannot tell, and a
+    // guess here would fail a turn that actually answered. Fail open.
+    return this.deps.observePromptOutputForTurn?.(sessionId, turnId) ?? true;
+  }
+
+  /**
+   * Terminal bookkeeping for a turn that ended without output: a visible notice,
+   * a `failed` user turn, and the dispatch pointer still advanced. Advancing it
+   * is deliberate — the prompt was delivered and re-dispatching it would spin
+   * the same silent failure forever; the notice is what makes it visible.
+   */
+  private async recordSilentTurnFailure(options: {
+    sessionId: SessionId;
+    sessionDoc: SessionDocument;
+    turnId: string;
+    userTurnId?: string;
+  }): Promise<void> {
+    this.deps.logger.warn(
+      `[${options.sessionId}] Turn ${options.turnId} completed without any agent output; ` +
+        'recording it as a failed turn instead of a silent completion'
+    );
+    this.captureTurnFailed(options.sessionId, options.turnId, 'agent_no_output', false);
+    await this.deps.recordChatFailure(
+      options.sessionDoc,
+      'agent_no_output',
+      SILENT_TURN_FAILURE_MESSAGE
+    );
+    if (options.userTurnId) {
+      await this.markTurnFailed(options.sessionId, options.sessionDoc, options.userTurnId);
+    }
   }
 
   private async markTurnFailed(
@@ -3051,13 +3149,10 @@ export class SessionExecutionService {
     sessionDoc: SessionDocument,
     userTurnId: string
   ): Promise<void> {
-    const existingMeta = await this.getSessionMeta(sessionId);
     await this.setTerminalUserTurnStatus(sessionId, sessionDoc, userTurnId, 'failed');
     await this.upsertSessionMeta(sessionId, {
-      latestUserMsgId: this.resolveLatestUserMsgIdForTerminalTurn(existingMeta, userTurnId),
       lastHandledUserMsgId: userTurnId,
       processingUserMsgId: undefined,
-      lastMissingHistoryUserMsgId: undefined,
     });
   }
 
@@ -3311,6 +3406,9 @@ export class SessionExecutionService {
           workspaceId: message.workspaceId,
           agentCliType: acpSessionConfig.cliType,
           agentType: acpSessionConfig.agentType,
+          configOptionValues: acpSessionConfig.configOptionValues,
+          mcpServerIds: acpSessionConfig.mcpServerIds ?? [],
+          taskToolsEnabled: acpSessionConfig.taskToolsEnabled === true,
           customAcp: resumeCustomAcp,
           runtimeOverrides: resumeRuntimeOverrides,
           requesterUserId: userId,
@@ -3741,6 +3839,8 @@ export class SessionExecutionService {
         const completedTurnId = runtime.turnId;
         const completedUserTurnId = runtime.userTurnId ?? executionUserTurnId;
         const completedRequesterUserId = runtime.requesterUserId ?? userId;
+        // Read before finalization clears the turn's ACP update state.
+        const producedOutput = self.turnProducedVisibleOutput(sessionId, completedTurnId);
 
         yield* self.tryPromise(() =>
           traceAsync(
@@ -3775,6 +3875,7 @@ export class SessionExecutionService {
                 turnStartWorkingTreeDiff,
                 userId: completedRequesterUserId,
                 project,
+                producedOutput,
                 isTurnCancelled: () => self.isTurnCancelled(sessionId, completedTurnId),
                 abortSignal: signal,
                 onAutoPromptStart: async () => {
@@ -3802,7 +3903,26 @@ export class SessionExecutionService {
 
         yield* abortIfCancelled();
 
-        if (completedUserTurnId) {
+        if (!producedOutput) {
+          yield* self.tryPromise(() =>
+            traceAsync(
+              self.deps.logger,
+              'execution.record_silent_turn_failure',
+              {
+                sessionId,
+                turnId: completedTurnId,
+                ...(completedUserTurnId ? { userTurnId: completedUserTurnId } : {}),
+              },
+              async () =>
+                await self.recordSilentTurnFailure({
+                  sessionId,
+                  sessionDoc,
+                  turnId: completedTurnId,
+                  ...(completedUserTurnId ? { userTurnId: completedUserTurnId } : {}),
+                })
+            )
+          );
+        } else if (completedUserTurnId) {
           yield* self.tryPromise(() =>
             traceAsync(
               self.deps.logger,
@@ -3870,16 +3990,9 @@ export class SessionExecutionService {
               message: failureMessage,
             });
           }
-          yield* self.tryPromise(async () => {
-            if (executionUserTurnId) {
-              await self.upsertSessionMeta(sessionId, {
-                latestUserMsgId: executionUserTurnId,
-              });
-            }
-            if (incomingProjectBranch) {
-              await sessionDoc.setBaseBranch(incomingProjectBranch);
-            }
-          });
+          if (incomingProjectBranch) {
+            yield* self.tryPromise(() => sessionDoc.setBaseBranch(incomingProjectBranch));
+          }
           yield* ctx.openAssistantEntry({
             analytics: turnAnalytics,
             unhandledErrorContext: turnErrorContext,
@@ -4009,12 +4122,7 @@ export class SessionExecutionService {
       typeof message.userTurnId === 'string' && message.userTurnId.trim()
         ? message.userTurnId.trim()
         : undefined;
-    const project = message.project;
-    const githubRepoFullName = resolveProjectGitHubRepo(project);
-    const shouldPrepareWorktree =
-      (project?.kind === 'github' && !!githubRepoFullName) ||
-      (project?.kind === 'local' && project.useWorktree === true);
-    let branch = project?.branch?.trim() || undefined;
+    let project = message.project;
     const workdir =
       project?.kind === 'local'
         ? ((await this.resolveLocalProjectWorkdirForTurn(project.localProjectId)) ?? undefined)
@@ -4030,6 +4138,29 @@ export class SessionExecutionService {
       (await this.deps.workspaceDocument.getOrCreateSessionDoc(sessionId));
 
     const existingMeta = await sessionDoc.getMetaState();
+    // A persisted ACP session id proves that this direct local Session has run
+    // before. It can later be re-initialized when that ACP session is no longer
+    // resumable. Its stored branch was only a snapshot from the original
+    // creation, so checking it out here would rewrite the user's current
+    // workspace (and fails when it has local changes). New sessions write their
+    // project metadata before dispatch but do not yet have an ACP session id,
+    // so they must retain an explicitly requested branch. Worktree sessions
+    // still keep their explicit base branch semantics.
+    const hasPriorAcpSession = Boolean(existingMeta?.acpSessionId?.trim());
+    if (
+      project?.kind === 'local' &&
+      project.useWorktree !== true &&
+      existingMeta?.project?.kind === 'local' &&
+      hasPriorAcpSession
+    ) {
+      const { branch: _legacyBranch, ...directProject } = project;
+      project = directProject;
+    }
+    const githubRepoFullName = resolveProjectGitHubRepo(project);
+    const shouldPrepareWorktree =
+      (project?.kind === 'github' && !!githubRepoFullName) ||
+      (project?.kind === 'local' && project.useWorktree === true);
+    let branch = project?.branch?.trim() || undefined;
     const fromFeedbackPostId =
       message.meta?.fromFeedbackPostId?.trim() ||
       existingMeta?.fromFeedbackPostId?.trim() ||
@@ -4062,6 +4193,9 @@ export class SessionExecutionService {
       workspaceId,
       agentCliType: acpSessionConfig.cliType,
       agentType: acpSessionConfig.agentType,
+      configOptionValues: acpSessionConfig.configOptionValues,
+      mcpServerIds: acpSessionConfig.mcpServerIds ?? [],
+      taskToolsEnabled: acpSessionConfig.taskToolsEnabled === true,
       agentConfigId: existingMeta?.agentConfigId,
       customAcp: acpSessionConfig.customAcp,
       runtimeOverrides: acpSessionConfig.runtimeOverrides,
@@ -4309,7 +4443,7 @@ export class SessionExecutionService {
           self.deps.logger.debug(
             `[${sessionId}] session ready (workdir=${session.getWorkdir()} acpSessionId=${session.acpSessionId ?? 'null'})`
           );
-          if (githubRepoFullName) {
+          if (shouldPrepareWorktree) {
             void self.deps.maybeRenameSessionBranchFromPrompt(
               sessionId,
               session,
@@ -4370,6 +4504,8 @@ export class SessionExecutionService {
           const completedTurnId = runtime.turnId;
           const completedUserTurnId = runtime.userTurnId ?? userTurnId;
           const completedRequesterUserId = runtime.requesterUserId ?? sessionConfig.requesterUserId;
+          // Read before finalization clears the turn's ACP update state.
+          const producedOutput = self.turnProducedVisibleOutput(sessionId, completedTurnId);
 
           yield* self.tryPromise(() =>
             traceAsync(
@@ -4404,6 +4540,7 @@ export class SessionExecutionService {
                   turnStartWorkingTreeDiff,
                   userId: completedRequesterUserId,
                   project,
+                  producedOutput,
                   isTurnCancelled: () => self.isTurnCancelled(sessionId, completedTurnId),
                   abortSignal: signal,
                   onAutoPromptStart: async () => {
@@ -4431,7 +4568,26 @@ export class SessionExecutionService {
 
           yield* abortIfCancelled();
 
-          if (completedUserTurnId) {
+          if (!producedOutput) {
+            yield* self.tryPromise(() =>
+              traceAsync(
+                self.deps.logger,
+                'execution.record_silent_turn_failure',
+                {
+                  sessionId,
+                  turnId: completedTurnId,
+                  ...(completedUserTurnId ? { userTurnId: completedUserTurnId } : {}),
+                },
+                async () =>
+                  await self.recordSilentTurnFailure({
+                    sessionId,
+                    sessionDoc,
+                    turnId: completedTurnId,
+                    ...(completedUserTurnId ? { userTurnId: completedUserTurnId } : {}),
+                  })
+              )
+            );
+          } else if (completedUserTurnId) {
             yield* self.tryPromise(() =>
               traceAsync(
                 self.deps.logger,
@@ -4635,12 +4791,14 @@ export class SessionExecutionService {
     }
 
     void (async () => {
-      const sourceVersion = getAcpCapabilitySourceVersion({
-        cliType: config.agentCliType,
-        agentType: config.agentType,
-        customAcp: config.customAcp,
-        runtimeOverrides: config.runtimeOverrides,
-      });
+      const sourceVersion =
+        session.getAcpCapabilitySourceVersion?.() ??
+        getAcpCapabilitySourceVersion({
+          cliType: config.agentCliType,
+          agentType: config.agentType,
+          customAcp: config.customAcp,
+          runtimeOverrides: config.runtimeOverrides,
+        });
       const existing = await this.deps.workspaceDocument.getAcpCapabilities(
         this.deps.machineId,
         agentConfigId
@@ -4878,6 +5036,7 @@ export class SessionExecutionService {
         availableCommands,
         sessionFork,
         modelReasoningEfforts,
+        capabilitySourceVersion,
       } = await this.deps.fetchAcpCapabilities(
         message.cliType,
         message.agentType,
@@ -4906,12 +5065,13 @@ export class SessionExecutionService {
         configOptions,
         availableCommands,
         sessionFork,
-        getAcpCapabilitySourceVersion({
-          cliType: message.cliType,
-          agentType: message.agentType,
-          customAcp: message.customAcp,
-          runtimeOverrides: message.runtimeOverrides,
-        }),
+        capabilitySourceVersion ??
+          getAcpCapabilitySourceVersion({
+            cliType: message.cliType,
+            agentType: message.agentType,
+            customAcp: message.customAcp,
+            runtimeOverrides: message.runtimeOverrides,
+          }),
         modelReasoningEfforts,
         { signal: options.signal }
       );
@@ -5148,7 +5308,7 @@ export class SessionExecutionService {
                 error: `${displayName} requires Node >=${runtimeStatus.required}; current Node is ${runtimeStatus.current}`,
               };
             }
-            const command = await getManagedAgentRuntimeManager().ensureRuntime(
+            const installation = await getManagedAgentRuntimeManager().ensureCurrentRuntime(
               resolved.runtimeName,
               {
                 onProgress: (event) => {
@@ -5156,10 +5316,14 @@ export class SessionExecutionService {
                 },
               }
             );
-            const version = getManagedAgentRuntimeManager().getDefinition(
-              resolved.runtimeName
-            ).version;
-            return { ...base, success: true, command, installPath: command, version };
+            await getManagedAgentRuntimeManager().pruneSupersededVersions(resolved.runtimeName);
+            return {
+              ...base,
+              success: true,
+              command: installation.command,
+              installPath: installation.command,
+              version: installation.version,
+            };
           } catch (error) {
             // Managed-runtime install failures should emit sanitized PostHog
             // diagnostics with the concrete fetch/HTTP/verify reason.

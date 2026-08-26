@@ -8,13 +8,11 @@ import {
   Mail,
   Clock,
   Copy,
-  Shield,
   Trash2,
   ChevronDown,
   Check,
   LogOut,
   KeyRound,
-  Users,
   Pencil,
   X,
 } from 'lucide-react';
@@ -22,8 +20,6 @@ import { Button } from '@/ui/button';
 import { Input } from '@/ui/input';
 import { Label } from '@/ui/label';
 import { Badge } from '@/ui/badge';
-import { Alert, AlertDescription, AlertTitle } from '@/ui/alert';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/ui/select';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -55,6 +51,7 @@ import { MobileDeleteWorkspaceSheet } from '@/components/mobile/mobile-delete-wo
 import { AvatarEditor } from '../settings/avatar-editor';
 import { ChangePasswordButton } from '../settings/change-password-button';
 import { LinkedAccountsList } from '../settings/linked-accounts-list';
+import { InviteMemberDialog, type InviteMemberRole } from '../settings/invite-member-dialog';
 import type { AccountSettingsPureProps } from '../settings/account-setting-pure';
 
 function formatCliApiKeyTimestamp(
@@ -93,6 +90,8 @@ export function MobileAccountSettings({
   accountMachinesSlot,
   memberLimit = null,
   memberLimitReached = false,
+  billingUiAvailable = true,
+  seatPreview,
   onSignOut,
   onInviteMember,
   onRemoveMember,
@@ -132,8 +131,6 @@ export function MobileAccountSettings({
   const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
   const [deleteUserDialogOpen, setDeleteUserDialogOpen] = useState(false);
   const [userToDelete, setUserToDelete] = useState<string | null>(null);
-  const [inviteEmail, setInviteEmail] = useState('');
-  const [inviteRole, setInviteRole] = useState<'member' | 'admin'>('member');
   const [inviting, setInviting] = useState(false);
   const [pendingInvitations, setPendingInvitations] = useState(initialPendingInvitations);
   const [cancellingInvitationIds, setCancellingInvitationIds] = useState<Set<string>>(
@@ -322,17 +319,13 @@ export function MobileAccountSettings({
     }
   };
 
-  const handleInviteMember = async () => {
-    if (!inviteEmail.trim()) return;
-
+  const handleInviteMember = async (email: string, invitedRole: InviteMemberRole) => {
     setInviting(true);
     try {
-      const result = await onInviteMember(inviteEmail, inviteRole);
+      const result = await onInviteMember(email, invitedRole);
       if (result) {
         setPendingInvitations((prev) => [...prev, result]);
         setInviteDialogOpen(false);
-        setInviteEmail('');
-        setInviteRole('member');
       }
     } finally {
       setInviting(false);
@@ -536,13 +529,13 @@ export function MobileAccountSettings({
           actions={
             hasAdminPermission ? (
               <Button
-                size="icon"
-                variant="ghost"
-                className="h-8 w-8"
-                aria-label={t('workspace.members.invite')}
+                size="sm"
+                variant="outline"
+                className="h-8 px-2.5"
                 onClick={() => setInviteDialogOpen(true)}
               >
-                <UserPlus className="h-4 w-4" />
+                <UserPlus className="mr-1.5 h-3.5 w-3.5" />
+                {t('workspace.members.invite')}
               </Button>
             ) : undefined
           }
@@ -556,7 +549,7 @@ export function MobileAccountSettings({
                 key={member.id}
                 className={cn(
                   'flex items-center gap-3 px-4 py-3 text-sm',
-                  index > 0 && 'border-t border-border/40'
+                  index > 0 && 'border-t border-border'
                 )}
               >
                 <UserAvatar user={member.user} className="h-9 w-9 shrink-0 text-[12px]" />
@@ -622,7 +615,8 @@ export function MobileAccountSettings({
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                      aria-label={t('workspace.removeMember.title')}
+                      className="h-9 w-9 text-muted-foreground hover:text-destructive"
                       onClick={() => {
                         setUserToDelete(member.id);
                         setDeleteUserDialogOpen(true);
@@ -645,14 +639,16 @@ export function MobileAccountSettings({
               key={invitation.id}
               className={cn(
                 'flex items-center gap-3 px-4 py-3 text-sm',
-                index > 0 && 'border-t border-border/40'
+                index > 0 && 'border-t border-border'
               )}
             >
               <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted">
                 <Mail className="h-4 w-4 text-muted-foreground" />
               </div>
               <div className="min-w-0 flex-1">
-                <p className="truncate text-[0.95rem] font-medium leading-tight">
+                {/* Emails have no spaces — `truncate` cut long addresses to an
+                   unreadable stub on narrow phones; wrap them instead. */}
+                <p className="break-all text-[0.95rem] font-medium leading-tight">
                   {invitation.email}
                 </p>
                 <div className="mt-0.5 flex items-center gap-2 text-[0.72rem] text-muted-foreground">
@@ -669,7 +665,7 @@ export function MobileAccountSettings({
                     variant="ghost"
                     size="icon"
                     aria-label={t('workspace.invitations.copyLink')}
-                    className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                    className="h-9 w-9 text-muted-foreground hover:text-foreground"
                     onClick={() => {
                       void onCopyInviteLink(getInviteLink(invitation));
                     }}
@@ -680,7 +676,8 @@ export function MobileAccountSettings({
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                      aria-label={t('common.cancel')}
+                      className="h-9 w-9 text-muted-foreground hover:text-destructive"
                       disabled={cancellingInvitationIds.has(invitation.id)}
                       onClick={() => {
                         void (async () => {
@@ -765,7 +762,7 @@ export function MobileAccountSettings({
                   key={apiKey.id}
                   className={cn(
                     'flex flex-col gap-3 px-4 py-3 text-sm',
-                    index > 0 && 'border-t border-border/40'
+                    index > 0 && 'border-t border-border'
                   )}
                 >
                   <div className="min-w-0 space-y-1">
@@ -1003,89 +1000,20 @@ export function MobileAccountSettings({
       ) : null}
 
       {/* Invite Dialog */}
-      <Dialog open={inviteDialogOpen} onOpenChange={setInviteDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>
-              {memberLimitReached
-                ? t('workspace.invite.mobileLimitTitle')
-                : t('workspace.invite.title')}
-            </DialogTitle>
-            <DialogDescription>
-              {memberLimitReached
-                ? t('workspace.invite.limitDescription', { limit: memberLimit ?? 3 })
-                : t('workspace.invite.description')}
-            </DialogDescription>
-          </DialogHeader>
-          {memberLimitReached ? (
-            <Alert className="my-4">
-              <Users />
-              <AlertTitle>{t('workspace.invite.limitAlertTitle')}</AlertTitle>
-              <AlertDescription>
-                {t('workspace.invite.mobileLimitAlertDescription')}
-              </AlertDescription>
-            </Alert>
-          ) : (
-            <div className="space-y-4 py-4">
-              <div className="space-y-2">
-                <Label htmlFor="email">{t('workspace.invite.email')}</Label>
-                <Input
-                  id="email"
-                  value={inviteEmail}
-                  onChange={(e) => setInviteEmail(e.target.value)}
-                  placeholder={t('workspace.invite.emailPlaceholder')}
-                  type="email"
-                  autoComplete="email"
-                  autoCapitalize="none"
-                  autoCorrect="off"
-                  spellCheck={false}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="role">{t('workspace.invite.role')}</Label>
-                <Select
-                  value={inviteRole}
-                  onValueChange={(value) => setInviteRole(value as 'member' | 'admin')}
-                >
-                  <SelectTrigger className="h-9 w-full sm:w-[220px]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="member">{t('organization.role.member')}</SelectItem>
-                    <SelectItem value="admin">
-                      <div className="flex items-center">
-                        <Shield className="mr-2 h-4 w-4" />
-                        <span>{t('organization.role.admin')}</span>
-                      </div>
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-          )}
-          <DialogFooter>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setInviteDialogOpen(false)}
-              disabled={inviting}
-            >
-              {memberLimitReached ? t('common.close') : t('common.cancel')}
-            </Button>
-            {!memberLimitReached ? (
-              <Button
-                size="sm"
-                onClick={() => {
-                  void handleInviteMember();
-                }}
-                disabled={!inviteEmail.trim() || inviting}
-              >
-                {inviting ? t('common.inviting') : t('common.invite')}
-              </Button>
-            ) : null}
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <InviteMemberDialog
+        open={inviteDialogOpen}
+        onOpenChange={setInviteDialogOpen}
+        workspaceName={organization.name}
+        memberLimit={memberLimit}
+        memberLimitReached={memberLimitReached}
+        billingUiAvailable={billingUiAvailable}
+        hasAdminPermission={hasAdminPermission}
+        seatPreview={seatPreview}
+        inviting={inviting}
+        onInvite={(email, invitedRole) => {
+          void handleInviteMember(email, invitedRole);
+        }}
+      />
 
       {/* Remove Member Dialog */}
       <AlertDialog open={deleteUserDialogOpen} onOpenChange={setDeleteUserDialogOpen}>

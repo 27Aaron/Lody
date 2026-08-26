@@ -3,14 +3,16 @@ import type { SidebarOrganizeMode } from '@/atoms/sidebar-state';
 import {
   buildGroups,
   getVisibleSessionGroupRows,
-  MAX_VISIBLE_SESSIONS,
+  sessionGroupOverflowsPreview,
   type SessionRowGroup,
   type SessionListRepoState,
   type SessionListRow,
 } from '@/components/session-list';
+import { buildOpenedBySessionTree } from '@/lib/session-opened-by-tree';
 import {
   getVisibleUpdatedItems,
   sortUpdatedItems,
+  SIDEBAR_UPDATED_OPENED_BY_TREE_ACCESSORS,
   type SidebarUpdatedItem,
 } from '@/components/sidebar-updated-session-list';
 
@@ -18,7 +20,13 @@ type SidebarNavigationLocalProject = {
   machineId: string;
   localProjectId: string;
   collapsed: boolean;
-  sessions: Array<{ id: string }>;
+  sessions: Array<{
+    id: string;
+    /** Sidebar row to nest under; resolved by the sidebar (child Tab → root). */
+    openedByRowSessionId?: string | null;
+    /** Effective latest activity, so nav ranks groups exactly like the render. */
+    rootRankMs?: number;
+  }>;
 };
 
 export type SidebarNavigationLocalSection = {
@@ -29,6 +37,11 @@ export type SidebarNavigationLocalSection = {
 export type SidebarNavigationModelOptions = {
   organizeMode: SidebarOrganizeMode;
   showFullSessionGroups: Record<string, boolean>;
+  /**
+   * Opener session ids whose opened Sessions are collapsed in the sidebar tree.
+   * Keyboard navigation must skip rows the user cannot see.
+   */
+  collapsedOpenedBySessions?: Record<string, boolean>;
   pinnedItems: SidebarUpdatedItem[];
   pinnedSectionCollapsed: boolean;
   workspace: {
@@ -49,24 +62,26 @@ export type SidebarNavigationModelOptions = {
 function emitSessionGroup(
   items: SidebarNavItem[],
   group: SessionRowGroup,
-  showFullSessionGroups: Record<string, boolean>
+  showFullSessionGroups: Record<string, boolean>,
+  collapsedOpenedBySessions: Record<string, boolean>
 ): void {
   items.push({ kind: 'group-header', groupKey: group.key, collapsed: group.collapsed });
   if (group.collapsed) return;
 
   const showFull = showFullSessionGroups[group.key] ?? false;
-  for (const session of getVisibleSessionGroupRows(group, showFull)) {
+  for (const session of getVisibleSessionGroupRows(group, showFull, collapsedOpenedBySessions)) {
     items.push({ kind: 'session', sessionId: session.sessionId, groupKey: group.key });
   }
 
-  if (group.sessions.length > MAX_VISIBLE_SESSIONS) {
+  if (sessionGroupOverflowsPreview(group)) {
     items.push({ kind: 'show-more', groupKey: group.key, expanded: showFull });
   }
 }
 
 function emitLocalSections(
   items: SidebarNavItem[],
-  sections: SidebarNavigationLocalSection[]
+  sections: SidebarNavigationLocalSection[],
+  collapsedOpenedBySessions: Record<string, boolean>
 ): void {
   for (const section of sections) {
     if (section.collapsed) continue;
@@ -79,8 +94,16 @@ function emitLocalSections(
         collapsed: project.collapsed,
       });
       if (project.collapsed) continue;
-      for (const session of project.sessions) {
-        items.push({ kind: 'session', sessionId: session.id, groupKey: projectKey });
+      // Same opened-by tree the local project section renders, so arrow keys
+      // never land on a row hidden behind a collapsed opener.
+      const nodes = buildOpenedBySessionTree(project.sessions, {
+        getId: (session) => session.id,
+        getOpenedBySessionId: (session) => session.openedByRowSessionId ?? null,
+        isCollapsed: (openerId) => collapsedOpenedBySessions[openerId] === true,
+        rootRank: (session) => session.rootRankMs ?? 0,
+      });
+      for (const node of nodes) {
+        items.push({ kind: 'session', sessionId: node.item.id, groupKey: projectKey });
       }
     }
   }
@@ -89,6 +112,7 @@ function emitLocalSections(
 export function buildSidebarNavigationItems({
   organizeMode,
   showFullSessionGroups,
+  collapsedOpenedBySessions = {},
   pinnedItems,
   pinnedSectionCollapsed,
   workspace,
@@ -97,30 +121,42 @@ export function buildSidebarNavigationItems({
   const items: SidebarNavItem[] = [];
 
   if (!pinnedSectionCollapsed) {
-    for (const item of sortUpdatedItems(pinnedItems)) {
-      items.push({ kind: 'session', sessionId: item.id, groupKey: '__pinned__' });
+    // The Pinned section renders through the same list component, so it gets the
+    // same opened-by tree — resolved inside the pinned items ONLY, which is what
+    // keeps a pinned opener from swallowing an unpinned row (and vice versa).
+    const pinnedNodes = buildOpenedBySessionTree(sortUpdatedItems(pinnedItems), {
+      ...SIDEBAR_UPDATED_OPENED_BY_TREE_ACCESSORS,
+      isCollapsed: (openerId) => collapsedOpenedBySessions[openerId] === true,
+    });
+    for (const node of pinnedNodes) {
+      items.push({ kind: 'session', sessionId: node.item.id, groupKey: '__pinned__' });
     }
   }
 
   if (organizeMode === 'updated') {
     if (updated.collapsed) return items;
     const orderedItems = sortUpdatedItems(updated.items);
-    for (const item of getVisibleUpdatedItems(orderedItems, true, updated.showFull)) {
+    for (const item of getVisibleUpdatedItems(
+      orderedItems,
+      true,
+      updated.showFull,
+      collapsedOpenedBySessions
+    )) {
       items.push({ kind: 'session', sessionId: item.id, groupKey: '__updated__' });
     }
     return items;
   }
 
-  emitLocalSections(items, workspace.localSections);
+  emitLocalSections(items, workspace.localSections, collapsedOpenedBySessions);
 
   if (!workspace.githubSectionCollapsed) {
     for (const group of buildGroups(workspace.repoSessions, workspace.repos, false)) {
-      emitSessionGroup(items, group, showFullSessionGroups);
+      emitSessionGroup(items, group, showFullSessionGroups, collapsedOpenedBySessions);
     }
   }
 
   for (const group of buildGroups(workspace.chatSessions, [], workspace.chatsCollapsed)) {
-    emitSessionGroup(items, group, showFullSessionGroups);
+    emitSessionGroup(items, group, showFullSessionGroups, collapsedOpenedBySessions);
   }
 
   return items;

@@ -50,10 +50,12 @@ import {
   type AcpConfigOptionSummary,
   type AcpCommandSummary,
   type AcpCapabilityCacheEntry,
-  createLocalLoroDataPlaneScheduler,
-  LocalLoroDataPlaneServer,
+  type SessionForkOperation,
+  SessionForkOperationSchema,
   type LodyPresenceStateMap,
 } from '@lody/shared';
+import { LocalLoroDataPlaneServer } from '@lody/shared/local-loro-data-plane-server';
+import { createLocalLoroDataPlaneScheduler } from '@lody/shared/local-loro-data-plane-scheduler';
 import { v4 as uuidv4 } from 'uuid';
 import { getLogger, type Logger } from '@/utils/logger';
 import { captureException, captureMessage } from '@/instrument';
@@ -86,7 +88,7 @@ import type { ModelInfo } from '@lody/shared';
 import { redactProxyUrl, sanitizeUrlForLogging } from '@/utils/log-sanitize';
 import { getProxyForUrl } from 'proxy-from-env';
 import { HttpsProxyAgent } from 'https-proxy-agent';
-import { UsageData } from 'acp-extension-core';
+import type { RateLimit } from 'acp-extension-core';
 import { createCliSqliteRepoStore } from './sqlite-repo-store';
 import { streamsRoomBinding, type StreamsRoomBinding } from './streams-room-binding';
 import { formatErrorMessage } from '@/utils/format-error';
@@ -233,6 +235,7 @@ class ProxiedWebSocket extends WebSocketOriginal {
 
 import { PersistCoalescer } from './persist-coalescer';
 import { readTimeoutEnv, withTimeout } from './timeout-utils';
+import { ConcurrentQueue } from '../concurrent-queue';
 import type { CliSqliteRepoStore } from './sqlite-repo-store';
 import type { CloudBillingPort, CloudStreamsTokenPort } from '@lody/platform';
 
@@ -293,6 +296,8 @@ export class LoroDocumentManager {
   private machineExistenceWatcher: RepoWatchHandle | null = null;
   private readonly connectionRecovery: LoroConnectionRecoveryController;
   private readonly machineFlockSync: MachineFlockSyncCoordinator;
+  /** In-flight `syncFlockDocOrThrow` attempts, keyed by Flock document id. */
+  private readonly activeFlockDocSyncs = new Map<string, Promise<unknown>>();
   private detachMachineFlockMetaRoomSyncedListener: (() => void) | null = null;
   private initialMetaSyncCompleted = false;
   private readonly initialMetaSyncPromise: Promise<boolean>;
@@ -472,6 +477,9 @@ export class LoroDocumentManager {
     this.localLoroDataPlaneServer?.setDocRoomJoinHandler((docId) =>
       this.handleLocalDocRoomJoin(docId)
     );
+    this.localLoroDataPlaneServer?.setDocRoomLeaveHandler((docId) =>
+      this.handleLocalDocRoomLeave(docId)
+    );
     this.localLoroDataPlaneServer?.setFlockRoomJoinHandler((flockDocId) =>
       this.handleLocalFlockRoomJoin(flockDocId)
     );
@@ -583,10 +591,12 @@ export class LoroDocumentManager {
       this.presenceRuntime?.attachStreams({
         streamsBaseUrl: streamsTransport.gatewayBaseUrl,
         auth: streamsTransport.tokenProvider.createAuthCallback(),
+        shardHostSuffix: streamsTransport.tokenProvider.getShardHostSuffix(),
       });
       this.machineMonitorRuntime?.attachStreams({
         streamsBaseUrl: streamsTransport.gatewayBaseUrl,
         auth: streamsTransport.tokenProvider.createAuthCallback(),
+        shardHostSuffix: streamsTransport.tokenProvider.getShardHostSuffix(),
       });
       this.remoteStreamsAttached = true;
       this.remoteStreamsGeneration += 1;
@@ -881,6 +891,14 @@ export class LoroDocumentManager {
     }
   }
 
+  /**
+   * Concurrent callers for the SAME document share one round trip. A batch of
+   * sessions starting together (dispatch drain, `session_create_many`) asks for
+   * the identical workspace Flock doc at the same moment, and N syncs of one
+   * document buy nothing but N timeout budgets. Each caller still applies its
+   * OWN timeout to the shared attempt, and a stalled sync is not piled onto —
+   * the same rule `machine-flock-sync-coordinator` already applies per machine.
+   */
   async syncFlockDocOrThrow(
     flockDocId: string,
     options: { timeoutMs?: number; reason?: string } = {}
@@ -890,12 +908,21 @@ export class LoroDocumentManager {
       options.timeoutMs ?? readTimeoutEnv('LODY_LORO_SYNC_MACHINE_FLOCK_TIMEOUT_MS', 8_000);
     const timeoutMessage = `Timeout waiting for Flock document sync (doc=${flockDocId})`;
 
+    let activeSync = this.activeFlockDocSyncs.get(flockDocId);
+    if (!activeSync) {
+      const started: Promise<unknown> = this.repo
+        .sync({ scope: 'doc', flockDocIds: [flockDocId] })
+        .finally(() => {
+          if (this.activeFlockDocSyncs.get(flockDocId) === started) {
+            this.activeFlockDocSyncs.delete(flockDocId);
+          }
+        });
+      this.activeFlockDocSyncs.set(flockDocId, started);
+      activeSync = started;
+    }
+
     try {
-      await withTimeout(
-        this.repo.sync({ scope: 'doc', flockDocIds: [flockDocId] }),
-        timeoutMs,
-        timeoutMessage
-      );
+      await withTimeout(activeSync, timeoutMs, timeoutMessage);
     } catch (error) {
       throw new Error(
         `Flock document sync failed for ${flockDocId} (${reason}): ${formatErrorMessage(error)}`,
@@ -956,7 +983,18 @@ export class LoroDocumentManager {
   }
 
   private pendingSessionDocs = new Map<SessionId, Promise<SessionDocument>>();
-  private pendingLocalJoinHydrates = new Map<SessionId, Promise<void>>();
+  private readonly localDocRoomHydrateQueue = new ConcurrentQueue<string>(4);
+  private readonly localDocOwnershipChains = new Map<string, Promise<void>>();
+  private localDocRoomBridgeGeneration = 0;
+  private cleaningUp = false;
+  private localDocRoomBridges = new Map<
+    string,
+    {
+      sub: RepoRoomSubscription | null;
+      cancel: () => void;
+      canceled: Promise<void>;
+    }
+  >();
   private localFlockRoomBridges = new Map<
     string,
     {
@@ -964,16 +1002,132 @@ export class LoroDocumentManager {
     }
   >();
 
-  private sessionIdFromDocRoomId(docId: string): SessionId | null {
-    return getSessionIdFromRoomId(docId);
-  }
-
   private handleLocalDocRoomJoin(docId: string): void {
-    const sessionId = this.sessionIdFromDocRoomId(docId);
-    if (!sessionId) {
+    const sessionId = getSessionIdFromRoomId(docId);
+    if (
+      !sessionId ||
+      this.cleaningUp ||
+      this.sessions.has(sessionId) ||
+      this.pendingSessionDocs.has(sessionId) ||
+      this.localDocRoomBridges.has(docId)
+    ) {
       return;
     }
-    this.ensureSessionDocHydratedForLocalJoin(sessionId);
+
+    let cancel!: () => void;
+    const canceled = new Promise<void>((resolve) => {
+      cancel = resolve;
+    });
+    const bridge = { sub: null as RepoRoomSubscription | null, cancel, canceled };
+    const generation = this.localDocRoomBridgeGeneration;
+    this.localDocRoomBridges.set(docId, bridge);
+
+    void this.localDocRoomHydrateQueue
+      .enqueue(
+        docId,
+        async () =>
+          await this.withLocalDocOwnership(docId, async () => {
+            if (
+              this.cleaningUp ||
+              generation !== this.localDocRoomBridgeGeneration ||
+              this.localDocRoomBridges.get(docId) !== bridge ||
+              this.sessions.has(sessionId) ||
+              this.pendingSessionDocs.has(sessionId)
+            ) {
+              return;
+            }
+
+            let sub: RepoRoomSubscription | null = null;
+            try {
+              sub = await this.repo.joinDocRoom(docId);
+              if (
+                this.cleaningUp ||
+                generation !== this.localDocRoomBridgeGeneration ||
+                this.localDocRoomBridges.get(docId) !== bridge ||
+                this.sessions.has(sessionId) ||
+                this.pendingSessionDocs.has(sessionId)
+              ) {
+                return;
+              }
+              bridge.sub = sub;
+              // One cloud reconciliation is sufficient. A later active turn is
+              // owned by SessionDispatchWatcher/SessionDocument; keeping this raw
+              // subscription forever would recreate the historical-room leak.
+              await Promise.race([streamsRoomBinding(sub).firstSyncedWithRemote, bridge.canceled]);
+            } catch (error: unknown) {
+              this.logger.debug(
+                `[${sessionId}] Local data-plane session cloud reconcile failed: ${formatErrorMessage(error)}`
+              );
+            } finally {
+              sub?.unsubscribe();
+              if (this.localDocRoomBridges.get(docId) === bridge) {
+                this.localDocRoomBridges.delete(docId);
+              }
+            }
+          })
+      )
+      .catch((error: unknown) => {
+        this.logger.debug(
+          `[${sessionId}] Local data-plane session cloud reconcile queue failed: ${formatErrorMessage(error)}`
+        );
+      });
+  }
+
+  private handleLocalDocRoomLeave(docId: string): void {
+    const sessionId = getSessionIdFromRoomId(docId);
+    if (!sessionId || this.cleaningUp) {
+      return;
+    }
+    this.cancelLocalDocRoomBridge(docId);
+    const generation = this.localDocRoomBridgeGeneration;
+    void this.localDocRoomHydrateQueue
+      .enqueue(
+        docId,
+        async () =>
+          await this.withLocalDocOwnership(docId, async () => {
+            if (
+              this.cleaningUp ||
+              generation !== this.localDocRoomBridgeGeneration ||
+              this.sessions.has(sessionId) ||
+              this.pendingSessionDocs.has(sessionId) ||
+              this.localDocRoomBridges.has(docId)
+            ) {
+              return;
+            }
+            await this.unloadDocRoom(docId);
+          })
+      )
+      .catch((error: unknown) => {
+        this.logger.debug(
+          `[${sessionId}] Failed to release local data-plane session doc: ${formatErrorMessage(error)}`
+        );
+      });
+  }
+
+  private withLocalDocOwnership<T>(docId: string, task: () => Promise<T>): Promise<T> {
+    const previous = this.localDocOwnershipChains.get(docId) ?? Promise.resolve();
+    const result = previous.catch(() => undefined).then(task);
+    const chain = result.then(
+      () => undefined,
+      () => undefined
+    );
+    this.localDocOwnershipChains.set(docId, chain);
+    void chain.finally(() => {
+      if (this.localDocOwnershipChains.get(docId) === chain) {
+        this.localDocOwnershipChains.delete(docId);
+      }
+    });
+    return result;
+  }
+
+  private cancelLocalDocRoomBridge(docId: string): void {
+    const bridge = this.localDocRoomBridges.get(docId);
+    if (!bridge) {
+      return;
+    }
+    this.localDocRoomBridges.delete(docId);
+    bridge.cancel();
+    bridge.sub?.unsubscribe();
   }
 
   private handleLocalFlockRoomJoin(flockDocId: string): void {
@@ -1035,37 +1189,11 @@ export class LoroDocumentManager {
       });
   }
 
-  // Cloud hydrate for a renderer-joined session doc room. Background data
-  // relay only: the CLI's cloud room status is NEVER pushed to the renderer as
-  // local room health — offline, the local room stays healthy and this hydrate
-  // simply fails/retries in the background (specs/local-first-two-plane.md).
-  private ensureSessionDocHydratedForLocalJoin(sessionId: SessionId): void {
-    const existing = this.sessions.get(sessionId);
-    if (existing && existing.getDocRoomStatus() === 'joined') {
-      return;
-    }
-
-    if (this.pendingLocalJoinHydrates.has(sessionId)) {
-      return;
-    }
-
-    const hydrate = (async () => {
-      try {
-        const sessionDoc = await this.getOrCreateSessionDoc(sessionId);
-        await sessionDoc.ensureDocRoomJoined();
-      } catch (error: unknown) {
-        this.logger.debug(
-          `[${sessionId}] Local data-plane session cloud hydrate failed: ${formatErrorMessage(error)}`
-        );
-      }
-    })().finally(() => {
-      this.pendingLocalJoinHydrates.delete(sessionId);
-    });
-
-    this.pendingLocalJoinHydrates.set(sessionId, hydrate);
-  }
-
   async getOrCreateSessionDoc(sessionId: SessionId): Promise<SessionDocument> {
+    const docId = getSessionRoomId(sessionId);
+    // An activated SessionDocument owns the live cloud room from here on. Stop
+    // any one-shot renderer reconciliation without unloading the shared doc.
+    this.cancelLocalDocRoomBridge(docId);
     const existing = this.sessions.get(sessionId);
     if (existing) {
       return existing;
@@ -1077,11 +1205,15 @@ export class LoroDocumentManager {
       return await pending;
     }
 
-    const initPromise = (async () => {
+    // Serialize activation with renderer-only release for this exact doc. If a
+    // local leave already started repo.unloadDoc(), wait for it to finish and
+    // open a fresh handle; otherwise the unload could evict the document that
+    // the newly activated SessionDocument is about to retain.
+    const initPromise = this.withLocalDocOwnership(docId, async () => {
       const sessionDoc = new SessionDocument(
         this.repo,
         sessionId,
-        (docId) => this.unloadDocRoom(docId),
+        (sessionDocId) => this.unloadDocRoom(sessionDocId),
         this.logger
       );
       await sessionDoc.init();
@@ -1092,7 +1224,7 @@ export class LoroDocumentManager {
       }
       this.sessions.set(sessionId, sessionDoc);
       return sessionDoc;
-    })();
+    });
 
     this.pendingSessionDocs.set(sessionId, initPromise);
     try {
@@ -1103,18 +1235,35 @@ export class LoroDocumentManager {
   }
 
   async getSessionHistorySnapshot(sessionId: SessionId): Promise<SessionHistoryInput[]> {
-    const sessionDoc = new SessionDocument(
-      this.repo,
-      sessionId,
-      (docId) => this.unloadDocRoom(docId),
-      this.logger
-    );
-    await sessionDoc.init({ skipAutoRead: true });
-    try {
-      return await sessionDoc.getHistory();
-    } finally {
-      await sessionDoc.destroy({ preserveStatus: true });
+    const active = this.sessions.get(sessionId);
+    if (active) {
+      return await active.getHistory();
     }
+
+    const pending = this.pendingSessionDocs.get(sessionId);
+    if (pending) {
+      return await (await pending).getHistory();
+    }
+
+    const docId = getSessionRoomId(sessionId);
+    // A temporary snapshot destroys (and therefore unloads) its SessionDocument.
+    // Cancel any renderer-only cloud bridge first, then serialize the complete
+    // open/read/destroy lifecycle with raw leave and live SessionDocument takeover.
+    this.cancelLocalDocRoomBridge(docId);
+    return await this.withLocalDocOwnership(docId, async () => {
+      const sessionDoc = new SessionDocument(
+        this.repo,
+        sessionId,
+        (snapshotDocId) => this.unloadDocRoom(snapshotDocId),
+        this.logger
+      );
+      await sessionDoc.init({ skipAutoRead: true });
+      try {
+        return await sessionDoc.getHistory();
+      } finally {
+        await sessionDoc.destroy({ preserveStatus: true });
+      }
+    });
   }
 
   async createSession(
@@ -1270,7 +1419,7 @@ export class LoroDocumentManager {
     return this.presenceRuntime?.subscribe(listener) ?? null;
   }
 
-  async updateRateLimits(machineId: MachineId, cliType: CliType, limits: UsageData): Promise<void> {
+  async updateRateLimits(machineId: MachineId, cliType: CliType, limits: RateLimit): Promise<void> {
     if (!this.machine) {
       this.machine = this.createMachineDocument(machineId);
       await this.machine.init();
@@ -1366,6 +1515,11 @@ export class LoroDocumentManager {
   }
 
   async cleanUp(options: { fast?: boolean; preserveSessionStatus?: boolean } = {}) {
+    this.cleaningUp = true;
+    this.localDocRoomBridgeGeneration += 1;
+    for (const docId of [...this.localDocRoomBridges.keys()]) {
+      this.cancelLocalDocRoomBridge(docId);
+    }
     this.localLoroDataPlaneServer?.dispose();
     try {
       await this.machineMonitorRuntime?.stop();
@@ -1397,7 +1551,7 @@ export class LoroDocumentManager {
       }
     }
     this.pendingSessionDocs.clear();
-    this.pendingLocalJoinHydrates.clear();
+    this.localDocRoomBridges.clear();
     for (const bridge of this.localFlockRoomBridges.values()) {
       bridge.sub?.unsubscribe();
     }
@@ -1467,6 +1621,7 @@ type SessionDocInitialState = {
     id?: SessionId;
   };
   history?: SessionHistoryInput[];
+  forkOperation?: SessionForkOperation;
 };
 
 /**
@@ -1516,6 +1671,7 @@ export class SessionDocument implements LoroDocument<SessionDocMeta, SessionMeta
     const base: SessionDocInitialState = {
       session: { id: this.sessionId },
       history: [],
+      forkOperation: undefined,
     };
     const initialHistory = initialState?.history ?? base.history ?? [];
     const normalizedHistory = initialHistory.map((entry) => ({
@@ -1773,9 +1929,6 @@ export class SessionDocument implements LoroDocument<SessionDocMeta, SessionMeta
         // instead of burning the timeout; loro-repo resumes the sync when a
         // transport attaches later.
         if (binding.status === 'detached') {
-          this.logger.debug(
-            `[${this.sessionId}] Session doc room is detached (no transport attached); continuing offline-first (room=${this.roomId})`
-          );
           return;
         }
         const syncDocTimeoutMs = readTimeoutEnv('LODY_LORO_SYNC_DOC_TIMEOUT_MS', 8_000);
@@ -1849,6 +2002,7 @@ export class SessionDocument implements LoroDocument<SessionDocMeta, SessionMeta
       session: state.session,
       history,
       mq: state.mq as SessionDocMeta['mq'],
+      forkOperation: state.forkOperation as SessionDocMeta['forkOperation'],
       preview: state.preview as SessionDocMeta['preview'],
       externalHistoryCursor: state.externalHistoryCursor as SessionDocMeta['externalHistoryCursor'],
     };
@@ -1899,6 +2053,31 @@ export class SessionDocument implements LoroDocument<SessionDocMeta, SessionMeta
 
   async getMetaState(): Promise<SessionMeta | undefined> {
     return await getAliveDocMeta<SessionMeta>(this.repo, this.roomId);
+  }
+
+  getForkOperation(): SessionForkOperation | undefined {
+    if (!this.mirror) {
+      throw new Error('SessionDocument not initialized');
+    }
+    const parsed = SessionForkOperationSchema.safeParse(this.mirror.getState().forkOperation);
+    return parsed.success ? parsed.data : undefined;
+  }
+
+  setForkOperation(operation: SessionForkOperation | undefined): void {
+    if (!this.mirror) {
+      throw new Error('SessionDocument not initialized');
+    }
+    this.mirror.setState((prev) => {
+      if (operation) {
+        // Mirror exposes readonly state to callers, but setState supplies its mutable draft.
+        // @ts-expect-error mutable Mirror draft
+        prev.forkOperation = operation;
+      } else {
+        // @ts-expect-error mutable Mirror draft
+        delete prev.forkOperation;
+      }
+      return prev;
+    });
   }
 
   async markHistoryAsSeen(turnId: string): Promise<void> {
@@ -2730,6 +2909,7 @@ const serializeAcpCapabilityWithoutFetchTime = (entry: AcpCapabilityCacheEntry):
     configOptions: entry.configOptions,
     availableCommands: entry.availableCommands,
     sessionFork: entry.sessionFork,
+    sessionForkWorktree: entry.sessionForkWorktree,
   });
 
 export class MachineDocument implements LoroDocument<{}, MachineMeta> {
@@ -2783,7 +2963,7 @@ export class MachineDocument implements LoroDocument<{}, MachineMeta> {
     return current;
   }
 
-  async updateRateLimits(cliType: CliType, limits: UsageData): Promise<void> {
+  async updateRateLimits(cliType: CliType, limits: RateLimit): Promise<void> {
     return this.enqueueRateLimitsUpdate(async () => {
       const limitId = ((limits as { limitId?: string }).limitId ?? cliType).trim() || cliType;
       const handle = await this.openMachineFlockDoc();
@@ -2837,6 +3017,7 @@ export class MachineDocument implements LoroDocument<{}, MachineMeta> {
       configOptions: configOptions?.length ? configOptions : undefined,
       availableCommands: availableCommands?.length ? availableCommands : undefined,
       sessionFork,
+      sessionForkWorktree: sessionFork,
       modelReasoningEfforts:
         modelReasoningEfforts && Object.keys(modelReasoningEfforts).length > 0
           ? modelReasoningEfforts

@@ -41,6 +41,9 @@ interface MentionItemProps
   /** Called when this item is committed as a mention by mouse or keyboard. */
   onMentionSelect?: () => void;
 
+  /** Called when this item navigates to another mention-menu level. */
+  onMentionNavigate?: () => void;
+
   /**
    * Literal text written into the input when this item is committed, replacing
    * the whole span from the trigger to the caret. Must carry its own leading
@@ -65,6 +68,7 @@ const MentionItem = React.forwardRef<ItemElement, MentionItemProps>(
       label: labelProp,
       disabled = false,
       onMentionSelect,
+      onMentionNavigate,
       insertText,
       navigateText,
       kind,
@@ -84,6 +88,7 @@ const MentionItem = React.forwardRef<ItemElement, MentionItemProps>(
     );
     const id = useId();
     const onMentionSelectRef = React.useRef(onMentionSelect);
+    const onMentionNavigateRef = React.useRef(onMentionNavigate);
 
     const label = labelProp ?? value;
     const isDisabled = disabled || context.disabled;
@@ -93,8 +98,15 @@ const MentionItem = React.forwardRef<ItemElement, MentionItemProps>(
       onMentionSelectRef.current = onMentionSelect;
     }, [onMentionSelect]);
 
+    useIsomorphicLayoutEffect(() => {
+      onMentionNavigateRef.current = onMentionNavigate;
+    }, [onMentionNavigate]);
+
     const handleMentionSelect = React.useCallback(() => {
       onMentionSelectRef.current?.();
+    }, []);
+    const handleMentionNavigate = React.useCallback(() => {
+      onMentionNavigateRef.current?.();
     }, []);
 
     useIsomorphicLayoutEffect(() => {
@@ -114,6 +126,7 @@ const MentionItem = React.forwardRef<ItemElement, MentionItemProps>(
         label,
         disabled: isDisabled,
         onMentionSelect: handleMentionSelect,
+        onMentionNavigate: handleMentionNavigate,
         insertText,
         navigateText,
         kind,
@@ -123,6 +136,7 @@ const MentionItem = React.forwardRef<ItemElement, MentionItemProps>(
       value,
       isDisabled,
       handleMentionSelect,
+      handleMentionNavigate,
       context.onItemRegister,
       insertText,
       navigateText,

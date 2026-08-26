@@ -36,6 +36,16 @@ describe('BuiltinAuthenticationOutputParser', () => {
     });
   });
 
+  it('parses Grok device authorization from the trusted xAI account host', () => {
+    const parser = new BuiltinAuthenticationOutputParser('grok');
+    const url = 'https://accounts.x.ai/oauth2/device?user_code=ABCD-EFGH';
+
+    expect(parser.push(`Open this URL to authenticate:\n${url}\n`)).toEqual({
+      authorizationUrl: url,
+      userCode: 'ABCD-EFGH',
+    });
+  });
+
   it('strips terminal hyperlinks and exposes Claude manual-code fallback', () => {
     const parser = new BuiltinAuthenticationOutputParser('claude');
     const url = 'https://claude.com/cai/oauth/authorize?code=true&client_id=test&state=state-value';

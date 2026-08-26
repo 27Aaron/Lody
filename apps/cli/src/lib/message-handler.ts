@@ -37,7 +37,7 @@ import {
   type BuiltinRuntimeOverrides,
   type CustomAcpLaunchSpec,
   type TitleGenerationConfig,
-  isBuiltinAgentType,
+  isManagedBuiltinAgentType,
   sanitizeLodyInternalInstructions,
   usesAcpProvidedSessionTitle,
   SessionCreateResponse,
@@ -170,6 +170,7 @@ import {
   type AgentRunConfigSelection,
   type LodyOperationItemResult,
   type StoredLodyOperation,
+  CURRENT_MACHINE_PROTOCOL_CAPABILITIES,
 } from '@lody/shared';
 import { ISession, SessionManager } from '../session/session-manager';
 import { captureCli } from '@/lib/analytics/posthog';
@@ -192,6 +193,7 @@ import type {
 } from '@lody/platform';
 import { Logger } from '@/utils/logger';
 import { ProviderSetupManager } from './provider-setup-manager';
+import { MachineFlockCommandWatcher } from './loro/machine-flock-command-watcher';
 import {
   EXIT_CODE_REMOTE_RESTART,
   EXIT_CODE_REMOTE_UPGRADE,
@@ -203,7 +205,6 @@ import {
 import { formatErrorMessage } from '@/utils/format-error';
 import { startTraceSpan, traceAsync } from '@/utils/trace-span';
 import { getCliHttpFetch } from '@/utils/http-transport';
-import { streamsRoomBinding } from './loro/streams-room-binding';
 import { prepareCliStreamsGatewayBaseUrl } from './loro/streams-access';
 import { readTimeoutEnv, withTimeout } from './loro/timeout-utils';
 import {
@@ -257,19 +258,23 @@ import {
   type SessionActivePresencePhase,
 } from './loro/session-active-presence';
 import {
-  resolveCodexImageGenerationStatusWrite,
+  resolveImageGenerationStatusWrite,
   shouldRestoreRunningAfterPermission,
 } from './session-activity-status';
-import type { RepoRoomSubscription, RepoWatchHandle } from 'loro-repo';
+import type { RepoWatchHandle } from 'loro-repo';
 import { resolveGitBranchName } from './git/resolve-git-branch-name';
 import {
   AgentClient,
   type AcpWriteTextFileEvidence,
-  type CodexImageGenerationBeginEvent,
-  type CodexImageGenerationEndEvent,
+  type ImageGenerationBeginEvent,
+  type ImageGenerationEndEvent,
 } from 'src/agent/agent-client';
-import { UsageData, SessionUsageUpdate } from 'acp-extension-core';
+import type { RateLimit, SessionUsageUpdate } from 'acp-extension-core';
 import { getWorktreeManager } from '@/session/worktree/worktree-manager';
+import {
+  isManagedWorktreeBranchName,
+  renameBranchWithAvailableSuffix,
+} from '@/session/worktree/branch-name-allocation';
 import { createWorktreeScriptHistoryRecorder } from '@/session/worktree/worktree-script-history';
 import { runWorktreeCleanup } from '@/session/worktree/worktree-setup-runner';
 import {
@@ -288,6 +293,7 @@ import { TurnHistoryGate } from '@/session/turn-history-gate';
 import { SessionDispatchWatcher } from '@/session/session-dispatch-watcher';
 import { SessionUserResolver } from '@/session/session-user-resolver';
 import { SessionForkService } from '@/session/session-fork-service';
+import { createFileSessionForkOperationStore } from '@/session/session-fork-operation-store';
 import {
   SessionEditAndResendService,
   type SessionEditAndResendInput,
@@ -321,6 +327,7 @@ import {
   type CodeCollabV2WorkspaceResolveOptions,
   type CodeCollabV2WorkspaceResolver,
 } from '@/lib/code-collab/code-collab-v2-service';
+import { FilePreviewService } from '@/lib/file-preview/file-preview-service';
 import {
   CodeCollabV2DiffStore,
   type CodeCollabV2DiffStoreEvent,
@@ -690,6 +697,17 @@ type ValidatedUploadFile = {
 
 type UploadedSessionFile = SessionFilePayload & { downloadUrl: string };
 
+/**
+ * Persist workspace-relative attachment provenance with one cross-platform
+ * separator convention so downstream canonical-path consumers can open it.
+ */
+export function normalizeSessionFileSourcePath(
+  sourcePath: string,
+  separator: string = path.sep
+): string {
+  return separator === '/' ? sourcePath : sourcePath.split(separator).join('/');
+}
+
 const SESSION_FILE_MAX_PART_RETRIES = 3;
 
 // Best-effort MIME type from a file extension for the agent-send path. The
@@ -752,10 +770,10 @@ const SESSION_IMAGE_MIME_TYPE_BY_EXTENSION: Record<
 // ACP ToolCallStatus values that represent a finished image generation.
 // `pending`/`in_progress` keep the captured turnId alive for retries; everything
 // else is terminal and clears the per-call tracking state.
-const CODEX_IMAGE_GENERATION_TERMINAL_STATUSES = new Set(['completed', 'failed']);
+const IMAGE_GENERATION_TERMINAL_STATUSES = new Set(['completed', 'failed']);
 
-function isCodexImageGenerationTerminalStatus(status: string): boolean {
-  return CODEX_IMAGE_GENERATION_TERMINAL_STATUSES.has(status.trim().toLowerCase());
+function isImageGenerationTerminalStatus(status: string): boolean {
+  return IMAGE_GENERATION_TERMINAL_STATUSES.has(status.trim().toLowerCase());
 }
 
 /**
@@ -800,7 +818,7 @@ export class MessageHandler {
   private pendingProcessLifecycleAction: MachineProcessLifecycleAction | null = null;
   private readonly store = new SessionTransientStore();
   private sessionActivePresence!: SessionActivePresenceController;
-  private readonly titleGenerationInFlight = new Set<SessionId>();
+  private readonly titleGenerationInFlight = new Map<SessionId, Promise<string | null>>();
   // Note: titleGenerationInFlight, archiveInFlight, deleteInFlight are self-cleaning
   // and stay as independent tracking. All other per-session state lives in this.store.
   private archiveWatchHandle: RepoWatchHandle | null = null;
@@ -809,10 +827,7 @@ export class MessageHandler {
   private readonly deleteInFlight = new Set<SessionId>();
   private readonly deletedSessionIds = new Set<SessionId>();
   private readonly deleteLocalProjectInFlight = new Set<LocalProjectId>();
-  private machineFlockCommandWatcherPromise: Promise<void> | null = null;
-  private machineFlockCommandUnsubscribe: (() => void) | null = null;
-  private machineFlockCommandRoomSub: RepoRoomSubscription | null = null;
-  private providerSetupProcessingReady = false;
+  private machineFlockCommandWatcher: MachineFlockCommandWatcher;
   // Desktop local-transport backfill: in-flight task keys (`${sessionId}:${fileId}`)
   // so a file is never backfilled by two concurrent workers (re-enqueue dedupe).
   private readonly sessionFileBackfillInFlight = new Set<string>();
@@ -848,7 +863,6 @@ export class MessageHandler {
   private static readonly CODE_COLLAB_EVIDENCE_MAX_AUTOMATIC_RETRIES = 5;
   private static readonly CODE_COLLAB_EVIDENCE_RETRY_BASE_DELAY_MS = 100;
   private static readonly CODE_COLLAB_EVIDENCE_RETRY_MAX_DELAY_MS = 1_600;
-  private static readonly CODEX_PROPOSED_PLAN_UPDATE_BATCH_WINDOW_MS = 100;
   private static readonly CONTEXT_WINDOW_USAGE_THROTTLE_MS = 400;
   // Track permission wait time: requestId -> timestamp when permission was requested
   private readonly permissionRequestStartTimes = new Map<string, number>();
@@ -896,6 +910,9 @@ export class MessageHandler {
   private readonly codeCollabV2TurnRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly codeCollabV2TurnRetryFailures = new Map<string, number>();
   private codeCollabV2Service: CodeCollabV2Service;
+  // File Preview v3. Separate from Code Collab on purpose: previewing a file must
+  // not start a workspace watcher or publish a file index.
+  private filePreviewService: FilePreviewService;
 
   /**
    * Get a logger with session context. Caches loggers per session for efficiency.
@@ -1159,7 +1176,7 @@ export class MessageHandler {
       const sessionDoc = await this.workspaceDocument.getOrCreateSessionDoc(sessionId);
       const meta = await sessionDoc.getMetaState();
       if (!meta) return;
-      if (meta.cliType !== 'builtin' || !isBuiltinAgentType(meta.agentType)) {
+      if (meta.cliType !== 'builtin' || !isManagedBuiltinAgentType(meta.agentType)) {
         return;
       }
       const cliType = meta.agentType;
@@ -1233,39 +1250,36 @@ export class MessageHandler {
   private async flushCodexGeneratedImageUploads(sessionId: SessionId): Promise<void> {
     for (;;) {
       const state = this.store.get(sessionId);
-      if (state.codexImageGenerationUploads.size === 0) break;
-      await Promise.all([...state.codexImageGenerationUploads.values()]);
+      if (state.imageGenerationUploads.size === 0) break;
+      await Promise.all([...state.imageGenerationUploads.values()]);
     }
   }
 
-  private handleCodexImageGenerationBegin(
-    sessionId: SessionId,
-    event: CodexImageGenerationBeginEvent
-  ): void {
+  private handleImageGenerationBegin(sessionId: SessionId, event: ImageGenerationBeginEvent): void {
     const turnId = this.store.getTurnId(sessionId) ?? null;
     const state = this.store.get(sessionId);
-    state.codexImageGenerationTurnIds.set(event.callId, turnId);
-    state.codexImageGenerationActiveCallIds.add(event.callId);
-    this.enqueueCodexImageGenerationActivityStatusSync(sessionId);
+    state.imageGenerationTurnIds.set(event.callId, turnId);
+    state.imageGenerationActiveCallIds.add(event.callId);
+    this.enqueueImageGenerationActivityStatusSync(sessionId);
     this.logger.debug(
       `[${sessionId}] Codex image generation started (callId=${event.callId} turnId=${turnId ?? 'none'})`
     );
   }
 
-  private enqueueCodexImageGenerationActivityStatusSync(sessionId: SessionId): void {
+  private enqueueImageGenerationActivityStatusSync(sessionId: SessionId): void {
     const state = this.store.get(sessionId);
-    const task = state.codexImageGenerationActivityStatusChain
+    const task = state.imageGenerationActivityStatusChain
       .catch(() => undefined)
       .then(async () => {
         const currentState = this.store.get(sessionId);
-        const hasActiveImageGeneration = currentState.codexImageGenerationActiveCallIds.size > 0;
+        const hasActiveImageGeneration = currentState.imageGenerationActiveCallIds.size > 0;
         const sessionDoc = await this.workspaceDocument.getOrCreateSessionDoc(sessionId);
         const status = (await sessionDoc.getMetaState())?.status;
 
         // This chain rides on ACP events and can drain after the visible active
         // scope ended; a working-status write is only sustainable while this
         // session still has active presence.
-        const nextStatus = resolveCodexImageGenerationStatusWrite({
+        const nextStatus = resolveImageGenerationStatusWrite({
           hasActiveImageGeneration,
           hasActivePresence: this.hasSessionActivePresence(sessionId),
           status,
@@ -1281,7 +1295,7 @@ export class MessageHandler {
         }
       });
 
-    state.codexImageGenerationActivityStatusChain = task;
+    state.imageGenerationActivityStatusChain = task;
     void task.catch((error) => {
       try {
         this.logger.debug(
@@ -1295,38 +1309,35 @@ export class MessageHandler {
     });
   }
 
-  private handleCodexImageGenerationEnd(
-    sessionId: SessionId,
-    event: CodexImageGenerationEndEvent
-  ): void {
+  private handleImageGenerationEnd(sessionId: SessionId, event: ImageGenerationEndEvent): void {
     const state = this.store.get(sessionId);
-    const isTerminal = isCodexImageGenerationTerminalStatus(event.status);
+    const isTerminal = isImageGenerationTerminalStatus(event.status);
     if (isTerminal) {
-      state.codexImageGenerationActiveCallIds.delete(event.callId);
-      this.enqueueCodexImageGenerationActivityStatusSync(sessionId);
+      state.imageGenerationActiveCallIds.delete(event.callId);
+      this.enqueueImageGenerationActivityStatusSync(sessionId);
     }
 
-    if (state.codexImageGenerationUploadedCallIds.has(event.callId)) {
+    if (state.imageGenerationUploadedCallIds.has(event.callId)) {
       this.logger.debug(
         `[${sessionId}] Ignoring duplicate Codex image generation upload (callId=${event.callId} status=${event.status})`
       );
       return;
     }
-    if (state.codexImageGenerationUploads.has(event.callId)) {
+    if (state.imageGenerationUploads.has(event.callId)) {
       this.logger.debug(
         `[${sessionId}] Codex image generation upload already in flight (callId=${event.callId} status=${event.status})`
       );
       return;
     }
 
-    const cachedTurnId = state.codexImageGenerationTurnIds.get(event.callId);
+    const cachedTurnId = state.imageGenerationTurnIds.get(event.callId);
     const capturedTurnId =
       cachedTurnId !== undefined ? cachedTurnId : (this.store.getTurnId(sessionId) ?? null);
 
     const savedPath = this.resolveCodexGeneratedImagePath(sessionId, event.savedPath);
     if (!savedPath && !event.image) {
       if (isTerminal) {
-        state.codexImageGenerationTurnIds.delete(event.callId);
+        state.imageGenerationTurnIds.delete(event.callId);
       }
       this.logger.debug(
         `[${sessionId}] Codex image generation has neither a usable savedPath nor inline image data (callId=${event.callId} status=${event.status} terminal=${isTerminal})`
@@ -1371,28 +1382,28 @@ export class MessageHandler {
       throw pathError ?? new Error('Codex generated image has no uploadable payload');
     })()
       .then(() => {
-        state.codexImageGenerationUploadedCallIds.add(callId);
-        state.codexImageGenerationTurnIds.delete(callId);
+        state.imageGenerationUploadedCallIds.add(callId);
+        state.imageGenerationTurnIds.delete(callId);
       })
       .catch((error) => {
         this.logger.debug(
           `[${sessionId}] Failed to upload Codex generated image (callId=${callId} path=${savedPath ?? 'none'}): ${formatErrorMessage(error)}`
         );
         if (isTerminal) {
-          state.codexImageGenerationTurnIds.delete(callId);
+          state.imageGenerationTurnIds.delete(callId);
         }
       })
       .finally(() => {
-        state.codexImageGenerationUploads.delete(callId);
+        state.imageGenerationUploads.delete(callId);
       });
 
-    state.codexImageGenerationUploads.set(callId, uploadPromise);
+    state.imageGenerationUploads.set(callId, uploadPromise);
   }
 
   private async uploadCodexGeneratedInlineImage(args: {
     sessionId: SessionId;
     callId: string;
-    image: NonNullable<CodexImageGenerationEndEvent['image']>;
+    image: NonNullable<ImageGenerationEndEvent['image']>;
     attachTarget?: SessionImageUploadAttachTarget;
   }): Promise<void> {
     const notification: AcpSessionNotification = {
@@ -1591,151 +1602,6 @@ export class MessageHandler {
       this.logger.debug(
         `[${sessionId}] Failed to persist thread goal clear: ${formatErrorMessage(error)}`
       );
-    }
-  }
-
-  private enqueueCodexProposedPlanUpdate(
-    sessionId: SessionId,
-    plan: Extract<MessageContent, { type: 'proposed_plan' }>
-  ): void {
-    const state = this.store.get(sessionId);
-    const targetEntryId = this.store.getTurnId(sessionId);
-    const existing = state.codexProposedPlanBuffer.get(plan.turnId);
-    if (
-      existing &&
-      existing.targetEntryId === targetEntryId &&
-      existing.plan.markdown === plan.markdown &&
-      existing.plan.status === plan.status &&
-      existing.plan.isLatest === plan.isLatest
-    ) {
-      return;
-    }
-    state.codexProposedPlanBuffer.set(plan.turnId, {
-      plan,
-      ...(targetEntryId ? { targetEntryId } : {}),
-    });
-    this.scheduleCodexProposedPlanFlush(sessionId);
-  }
-
-  private clearScheduledCodexProposedPlanFlush(sessionId: SessionId): void {
-    const state = this.store.get(sessionId);
-    if (!state.codexProposedPlanFlushTimer) {
-      return;
-    }
-    clearTimeout(state.codexProposedPlanFlushTimer);
-    state.codexProposedPlanFlushTimer = null;
-  }
-
-  private scheduleCodexProposedPlanFlush(sessionId: SessionId): void {
-    const state = this.store.get(sessionId);
-    if (state.codexProposedPlanFlushInFlight || state.codexProposedPlanFlushTimer) {
-      return;
-    }
-    const timer = setTimeout(() => {
-      state.codexProposedPlanFlushTimer = null;
-      void this.startCodexProposedPlanFlush(sessionId);
-    }, MessageHandler.CODEX_PROPOSED_PLAN_UPDATE_BATCH_WINDOW_MS);
-    timer.unref?.();
-    state.codexProposedPlanFlushTimer = timer;
-  }
-
-  private startCodexProposedPlanFlush(sessionId: SessionId): Promise<void> | null {
-    const state = this.store.get(sessionId);
-    if (state.codexProposedPlanFlushInFlight) {
-      return state.codexProposedPlanFlushInFlight;
-    }
-
-    const flushPromise = this.flushCodexProposedPlanUpdates(sessionId)
-      .catch((error: unknown) => {
-        this.logger.error(
-          `[${sessionId}] Failed to flush Codex proposed plan updates: ${formatErrorMessage(error, {
-            includeStack: true,
-          })}`
-        );
-      })
-      .finally(() => {
-        state.codexProposedPlanFlushInFlight = null;
-        if (state.codexProposedPlanBuffer.size > 0) {
-          this.scheduleCodexProposedPlanFlush(sessionId);
-        }
-      });
-
-    state.codexProposedPlanFlushInFlight = flushPromise;
-    return flushPromise;
-  }
-
-  private async flushCodexProposedPlanUpdatesNow(sessionId: SessionId): Promise<void> {
-    const state = this.store.get(sessionId);
-    this.clearScheduledCodexProposedPlanFlush(sessionId);
-
-    while (true) {
-      if (!state.codexProposedPlanFlushInFlight) {
-        if (state.codexProposedPlanBuffer.size === 0) {
-          return;
-        }
-        void this.startCodexProposedPlanFlush(sessionId);
-      }
-
-      const inFlight = state.codexProposedPlanFlushInFlight;
-      if (!inFlight) {
-        return;
-      }
-
-      await inFlight;
-      this.clearScheduledCodexProposedPlanFlush(sessionId);
-
-      if (state.codexProposedPlanBuffer.size === 0 && !state.codexProposedPlanFlushInFlight) {
-        return;
-      }
-    }
-  }
-
-  private async flushCodexProposedPlanUpdates(sessionId: SessionId): Promise<void> {
-    // Same ordering barrier as flushACPUpdates — this path can also create the
-    // assistant entry (applyMessageContentsBatch with a target entry id).
-    await this.awaitTurnHistoryGate(sessionId);
-    const state = this.store.get(sessionId);
-    this.clearScheduledCodexProposedPlanFlush(sessionId);
-    if (state.codexProposedPlanBuffer.size === 0) {
-      return;
-    }
-
-    const snapshots = [...state.codexProposedPlanBuffer.values()];
-    state.codexProposedPlanBuffer.clear();
-
-    // Group snapshots by their target entry so applyMessageContentsBatch runs
-    // once per entry instead of N times (each invocation rebuilds entryStates).
-    const groups = new Map<
-      string,
-      { targetEntryId: string | undefined; plans: (typeof snapshots)[number]['plan'][] }
-    >();
-    for (const snapshot of snapshots) {
-      const key = snapshot.targetEntryId ?? '';
-      const group = groups.get(key);
-      if (group) {
-        group.plans.push(snapshot.plan);
-      } else {
-        groups.set(key, { targetEntryId: snapshot.targetEntryId, plans: [snapshot.plan] });
-      }
-    }
-
-    const sessionDoc = await this.workspaceDocument.getOrCreateSessionDoc(sessionId);
-    await sessionDoc.updateHistory((history) => {
-      let next = history;
-      for (const group of groups.values()) {
-        next = applyMessageContentsBatch(next, group.plans, {
-          ...(group.targetEntryId ? { targetAssistantEntryId: group.targetEntryId } : {}),
-          createId: () => group.targetEntryId ?? uuidV4(),
-          now: () => new Date(getServerNow()).toISOString(),
-        });
-      }
-      return next;
-    });
-
-    if (state.turn.phase === 'idle') {
-      await sessionDoc.setLastMessageAt();
-    } else {
-      state.pendingUnread = true;
     }
   }
 
@@ -2977,6 +2843,10 @@ export class MessageHandler {
       };
       if (typeof command.machineId === 'string') options.machine = command.machineId;
       if (typeof command.agentConfigId === 'string') options.agentConfig = command.agentConfigId;
+      if (typeof command.agentRoleId === 'string') options.agentRoleId = command.agentRoleId;
+      if (typeof command.agentRoleRevision === 'number') {
+        options.agentRoleRevision = command.agentRoleRevision;
+      }
       if (typeof command.useCurrentSessionAsParent === 'boolean') {
         options.useCurrentSessionAsParent = command.useCurrentSessionAsParent;
       }
@@ -3008,7 +2878,10 @@ export class MessageHandler {
       this.workspaceDocument,
       item.target.sessionId,
       prompt,
-      resolveTurnDispatchConfig({}),
+      {
+        ...resolveTurnDispatchConfig({}),
+        taskToolsEnabled: operation.frozenContinuationConfig.inputConfig.taskToolsEnabled === true,
+      },
       undefined,
       operation.requesterUserId,
       {
@@ -3120,6 +2993,18 @@ export class MessageHandler {
         );
       },
     });
+    this.filePreviewService = new FilePreviewService({
+      resolveWorkspace: async (sessionId) => {
+        const resolved = await this.resolveCodeCollabV2Workspace(sessionId);
+        return resolved.ok
+          ? {
+              ok: true,
+              ownerSessionId: resolved.ownerSessionId,
+              workspaceRoot: resolved.workspaceRoot,
+            }
+          : { ok: false, code: resolved.code, message: resolved.message };
+      },
+    });
     this.sessionManager.setRequestPermissionHandler((sessionId, requestId, request, agentClient) =>
       this.handleAgentPermissionRequest(sessionId, requestId, request, agentClient?.currentModel)
     );
@@ -3167,6 +3052,8 @@ export class MessageHandler {
       getActiveTurnId: (sessionId) => this.store.getActiveTurnId(sessionId),
       clearActiveTurnId: (sessionId, turnId) => this.clearActiveTurnIdIfMatches(sessionId, turnId),
       hasPromptOutputForTurn: (sessionId, turnId) => this.hasPromptOutputForTurn(sessionId, turnId),
+      observePromptOutputForTurn: (sessionId, turnId) =>
+        this.observePromptOutputForTurn(sessionId, turnId),
       buildAcpPromptBlocks: async (args) => await this.buildAcpPromptBlocks(args),
       applyAcpModeAndModel: async (session, acpConfig) =>
         await this.applyAcpModeAndModel(
@@ -3265,6 +3152,16 @@ export class MessageHandler {
       execution: this.executionService,
       sync: this.workspaceDocument,
       logger: this.logger,
+    });
+    this.machineFlockCommandWatcher = new MachineFlockCommandWatcher({
+      repo: this.workspaceDocument.repo,
+      docId: this.getMachineFlockDocIdForMachine(),
+      logContext: this.getMachineFlockLogContext(),
+      waitForRemoteAuthority: this.cloudPort.kind !== 'local',
+      logger: this.logger,
+      onEvents: (events, { authoritative }) =>
+        this.rescanMachineCommands(getMachineCommandEventImpact(events), authoritative),
+      onReady: () => this.rescanMachineCommands(),
     });
     this.previewService = new PreviewService({
       logger: this.logger,
@@ -3482,6 +3379,7 @@ export class MessageHandler {
         cancelSessionPreparation: async (args) =>
           await this.cancelSessionPreparationWithAccessCheck(args),
         resolveCodeCollabOwnerSessionId: this.resolveCodeCollabV2OwnerSessionId,
+        previewFile: async (request) => await this.filePreviewService.previewFile(request),
         openCodeCollabText: async (request) => await this.codeCollabV2Service.openText(request),
         refreshCodeCollabText: async (request) =>
           await this.codeCollabV2Service.refreshText(request),
@@ -3591,6 +3489,7 @@ export class MessageHandler {
       logger: this.logger,
       workspaceId: this.workspaceId,
       machineId: this.machineId,
+      forkOperationStore: createFileSessionForkOperationStore(),
       isSourceBusy: (sessionId) => {
         const live = resolveSessionLiveStatus({
           presence: this.sessionActivePresence.getStatus(sessionId),
@@ -3600,6 +3499,11 @@ export class MessageHandler {
         return live.state !== 'unknown';
       },
     });
+    void this.sessionForkService.recoverPendingForks().catch((error: unknown) => {
+      this.logger.debug(
+        `[session-fork] Failed to recover pending forks: ${formatErrorMessage(error)}`
+      );
+    });
     this.sessionEditAndResendService = new SessionEditAndResendService({
       workspaceDocument: this.workspaceDocument,
       sessionManager: this.sessionManager,
@@ -3608,7 +3512,9 @@ export class MessageHandler {
       logger: this.logger,
       workspaceId: this.workspaceId,
       machineId: this.machineId,
-      enqueueDispatch: (sessionId) => this.sessionDispatchWatcher.enqueueSessionCheck(sessionId),
+      enqueueDispatch: (sessionId) => {
+        void this.sessionDispatchWatcher.enqueueSessionCheck(sessionId);
+      },
     });
     this.operationCoordinator = new LodyOperationCoordinator({
       workspaceId: this.workspaceId,
@@ -3628,6 +3534,7 @@ export class MessageHandler {
     // This prevents dispatch from racing ahead of local session startup prerequisites.
     this.setupArchiveWatcher();
     this.setupDeleteWatcher();
+    void this.machineFlockCommandWatcher.start();
   }
 
   /**
@@ -3639,7 +3546,8 @@ export class MessageHandler {
     try {
       const machineRoomId = getMachineRoomId(this.machineId);
       const machineMeta = (await this.workspaceDocument.repo.getDocMeta(machineRoomId))?.meta as
-        MachineMeta | undefined;
+        | MachineMeta
+        | undefined;
       const supportsStreamsRpc = !!this.machineRpcServer;
 
       const hasMeta = !!machineMeta;
@@ -3660,6 +3568,7 @@ export class MessageHandler {
         os: process.platform,
         rpcVersion: supportsStreamsRpc ? LORO_STREAMS_RPC_VERSION : undefined,
         supportsLocalProjectHistoryRpc: supportsStreamsRpc,
+        protocolCapabilities: CURRENT_MACHINE_PROTOCOL_CAPABILITIES,
         supportRegistryAgentTypes: this.supportRegistryAgentTypes,
         sessions: [],
       });
@@ -3751,7 +3660,7 @@ export class MessageHandler {
 
     this.sessionManager.on(
       'onRateLimitUpdate',
-      (machineId: MachineId, cliType: CliType, limits: UsageData) => {
+      (machineId: MachineId, cliType: CliType, limits: RateLimit) => {
         void this.workspaceDocument.updateRateLimits(machineId, cliType, limits);
       }
     );
@@ -3778,16 +3687,12 @@ export class MessageHandler {
       );
     });
 
-    this.sessionManager.on('onCodexProposedPlan', (sessionId, plan) => {
-      this.enqueueCodexProposedPlanUpdate(sessionId, plan);
+    this.sessionManager.on('onImageGenerationBegin', (sessionId, event) => {
+      this.handleImageGenerationBegin(sessionId, event);
     });
 
-    this.sessionManager.on('onCodexImageGenerationBegin', (sessionId, event) => {
-      this.handleCodexImageGenerationBegin(sessionId, event);
-    });
-
-    this.sessionManager.on('onCodexImageGenerationEnd', (sessionId, event) => {
-      this.handleCodexImageGenerationEnd(sessionId, event);
+    this.sessionManager.on('onImageGenerationEnd', (sessionId, event) => {
+      this.handleImageGenerationEnd(sessionId, event);
     });
 
     // Session error: flush ACP updates first, then set to idle (error is turn-level, recorded in history).
@@ -3854,78 +3759,27 @@ export class MessageHandler {
     return `workspaceId=${this.workspaceId}, machineId=${this.machineId}, docId=${docId}`;
   }
 
-  private setupMachineFlockCommandWatcher(): void {
-    if (this.machineFlockCommandWatcherPromise) {
-      return;
+  /**
+   * Drains the durable Machine Flock command queues.
+   *
+   * `impact` narrows the drain to the families a live event actually touched;
+   * an authoritative rejoin passes nothing and rescans everything, which is the
+   * only retry path for a queue whose earlier drain threw. Keep both callers on
+   * this one method: a new command family that reaches the event path but not
+   * the rejoin path fails silently — its queue simply never drains again.
+   */
+  private rescanMachineCommands(
+    impact?: ReturnType<typeof getMachineCommandEventImpact>,
+    authoritative = true
+  ): void {
+    if (!impact || impact.archive) void this.processArchiveRequests();
+    if (!impact || impact.delete) void this.processDeleteRequests();
+    if (!impact || impact.deleteLocalProject) void this.processDeleteLocalProjectRequests();
+    // A stale local setup row must not outrun a remote cancellation, so provider
+    // setup drains only once the command room has established remote authority.
+    if ((!impact || impact.providerSetup) && authoritative) {
+      void this.providerSetupManager.kick();
     }
-
-    // Cloud/dual mode must apply the first remote snapshot before replaying a
-    // durable setup, otherwise a stale local row can outrun a remote
-    // cancellation. The OSS local platform has no remote transport by design;
-    // its opened local Flock state is already the authoritative replay source.
-    this.providerSetupProcessingReady = this.cloudPort.kind === 'local';
-    const flockDocId = this.getMachineFlockDocIdForMachine();
-    const flockContext = this.getMachineFlockLogContext();
-    this.machineFlockCommandWatcherPromise = (async () => {
-      const handle = await this.workspaceDocument.repo.openFlockDoc(flockDocId);
-      this.machineFlockCommandUnsubscribe = handle.flock.subscribe((batch) => {
-        const events = (batch as { events?: MachineFlockEvent[] }).events ?? [];
-        const impact = getMachineCommandEventImpact(events);
-        if (impact.archive) {
-          void this.processArchiveRequests();
-        }
-        if (impact.delete) {
-          void this.processDeleteRequests();
-        }
-        if (impact.deleteLocalProject) {
-          void this.processDeleteLocalProjectRequests();
-        }
-        if (impact.providerSetup && this.providerSetupProcessingReady) {
-          void this.providerSetupManager.kick();
-        }
-      });
-      this.machineFlockCommandRoomSub = await handle.joinRoom();
-      if (this.providerSetupProcessingReady) {
-        // Process setup rows restored from the local SQLite-backed repo. New
-        // rows arriving over the local data plane are handled by the watcher.
-        void this.providerSetupManager.kick();
-      } else {
-        // Binding, not classic: in cloud/dual mode this stays pending while the
-        // Streams transport is detached, then settles after the first remote
-        // snapshot once it attaches.
-        void streamsRoomBinding(this.machineFlockCommandRoomSub).firstSyncedWithRemote.then(
-          () => {
-            void this.processArchiveRequests();
-            void this.processDeleteRequests();
-            void this.processDeleteLocalProjectRequests();
-            // A restart can have a stale local setup that was cancelled remotely.
-            // Do not resume it until the first remote snapshot has been applied.
-            this.providerSetupProcessingReady = true;
-            void this.providerSetupManager.kick();
-          },
-          (error) => {
-            this.logger.debug(
-              `[machine-flock] Command room initial sync failed (${flockContext}): ${formatErrorMessage(
-                error,
-                { includeStack: true }
-              )}`
-            );
-          }
-        );
-      }
-      this.logger.debug(`[machine-flock] Command watcher registered (${flockContext})`);
-      void this.processArchiveRequests();
-      void this.processDeleteRequests();
-      void this.processDeleteLocalProjectRequests();
-    })().catch((error) => {
-      this.machineFlockCommandWatcherPromise = null;
-      this.logger.error(
-        `[machine-flock] Failed to start command watcher (${flockContext}): ${formatErrorMessage(
-          error,
-          { includeStack: true }
-        )}`
-      );
-    });
   }
 
   private async readMachineFlockCommandRows(): Promise<MachineFlockRowMap> {
@@ -4019,7 +3873,6 @@ export class MessageHandler {
     if (this.archiveWatchHandle) {
       return;
     }
-    this.setupMachineFlockCommandWatcher();
     const machineRoomId = getMachineRoomId(this.machineId);
     this.archiveWatchHandle = this.workspaceDocument.repo.watch(
       (event) => {
@@ -4184,7 +4037,8 @@ export class MessageHandler {
     }
 
     const machineMeta = (await this.workspaceDocument.repo.getDocMeta(machineRoomId))?.meta as
-      MachineLegacyMetaFields | undefined;
+      | MachineLegacyMetaFields
+      | undefined;
     if (!machineMeta?.needToArchiveSessions?.[sessionId]) {
       if (!removedFlockRow) {
         this.logger.debug(`[archive] Archive request already cleared (${sessionId})`);
@@ -4497,7 +4351,6 @@ export class MessageHandler {
     if (this.deleteWatchHandle) {
       return;
     }
-    this.setupMachineFlockCommandWatcher();
     const machineRoomId = getMachineRoomId(this.machineId);
     this.deleteWatchHandle = this.workspaceDocument.repo.watch(
       (event) => {
@@ -4734,7 +4587,8 @@ export class MessageHandler {
     }
 
     const machineMeta = (await this.workspaceDocument.repo.getDocMeta(machineRoomId))?.meta as
-      MachineLegacyMetaFields | undefined;
+      | MachineLegacyMetaFields
+      | undefined;
     if (!machineMeta?.needToDeleteSessions?.[sessionId]) {
       if (removedFlockRow || removedLaunchConfigRow) {
         this.logger.debug(`[delete] Delete Flock request removed (${sessionId})`);
@@ -5881,7 +5735,6 @@ export class MessageHandler {
       await this.flushSessionContextWindowUsage(sessionId);
       await this.flushACPUpdatesNow(sessionId);
       await this.flushThreadGoalHistoryPersists(sessionId);
-      await this.flushCodexProposedPlanUpdatesNow(sessionId);
       await this.flushCodexGeneratedImageUploads(sessionId);
       if (state.pendingUnread) {
         state.pendingUnread = false;
@@ -6162,7 +6015,8 @@ export class MessageHandler {
 
       const machineRoomId = getMachineRoomId(this.machineId);
       const machineMeta = (await this.workspaceDocument.repo.getDocMeta(machineRoomId))?.meta as
-        MachineMeta | undefined;
+        | MachineMeta
+        | undefined;
       const existingName = machineMeta?.name?.trim();
       // The CLI startup name is only a bootstrap default. Settings-page renames own the
       // persisted display name, so reconnect/registration must not overwrite synced edits.
@@ -6176,6 +6030,7 @@ export class MessageHandler {
         os: process.platform,
         rpcVersion: supportsStreamsRpc ? LORO_STREAMS_RPC_VERSION : machineMeta?.rpcVersion,
         supportsLocalProjectHistoryRpc: supportsStreamsRpc,
+        protocolCapabilities: CURRENT_MACHINE_PROTOCOL_CAPABILITIES,
         supportRegistryAgentTypes: this.supportRegistryAgentTypes,
         sessions: machineMeta?.sessions ?? [],
       });
@@ -6580,6 +6435,9 @@ export class MessageHandler {
     };
 
     switch (request.method) {
+      case 'code-collab/get-file-index':
+        await assertOwner(request.params.sessionId as SessionId);
+        return await this.codeCollabV2Service.getFileIndex(request.params);
       case 'code-collab/open-text':
         await assertOwner(request.params.sessionId as SessionId);
         return await this.codeCollabV2Service.openText(request.params);
@@ -6607,6 +6465,14 @@ export class MessageHandler {
       case 'code-collab/lsp-references':
         await assertOwner(request.params.sessionId as SessionId);
         return await this.codeCollabV2Service.lspReferences();
+      case 'file/preview':
+        await assertOwner(request.params.sessionId as SessionId);
+        return await this.filePreviewService.previewFile(request.params);
+      case 'file/preview-local':
+        await assertOwner(request.params.sessionId as SessionId);
+        return await this.filePreviewService.previewFile(request.params, {
+          allowArbitraryPaths: true,
+        });
       case 'session/cancel': {
         const result = await this.executionService.cancelSession({
           type: 'session/cancel',
@@ -7545,15 +7411,21 @@ export class MessageHandler {
 
     const uploadedFiles: UploadedSessionFile[] = [];
     const failures: string[] = [];
+    const canonicalWorkspaceRoot = await fs.promises.realpath(workspaceRoot);
     for (const file of validatedFiles) {
       try {
-        uploadedFiles.push(
-          await this.uploadValidatedSessionFile({
-            workspaceId: this.workspaceId,
-            sessionId,
-            file,
-          })
+        const uploaded = await this.uploadValidatedSessionFile({
+          workspaceId: this.workspaceId,
+          sessionId,
+          file,
+        });
+        // Validation above canonicalized the path and proved containment. Keep
+        // only the workspace-relative provenance in history so a local Lody
+        // client can reopen the live artifact without publishing a host path.
+        const sourcePath = normalizeSessionFileSourcePath(
+          path.relative(canonicalWorkspaceRoot, file.absolutePath)
         );
+        uploadedFiles.push({ ...uploaded, sourcePath });
       } catch (error) {
         failures.push(`${file.fileName}: ${formatErrorMessage(error)}`);
       }
@@ -7798,6 +7670,11 @@ export class MessageHandler {
           this.logger.error(
             `[${sessionId}] Backfill gave up for ${fileId}; block stays local (pending on other devices)`
           );
+          return;
+        }
+        // Revocation/offline transitions deliberately abort the upload. Do not
+        // pay a retry delay when this task is no longer authorized to retry.
+        if (this.sessionFileBackfillStopped || !this.remoteBackfillEnabled) {
           return;
         }
         await delay(sessionFileBackfillDelayMs(attempt));
@@ -8387,6 +8264,7 @@ export class MessageHandler {
     availableCommands?: NonNullable<MachineAcpCapabilitiesRefreshResponse['availableCommands']>;
     sessionFork: boolean;
     modelReasoningEfforts?: Record<string, string[]>;
+    capabilitySourceVersion?: string;
   }> {
     return fetchAcpCapabilities(
       cliType,
@@ -8905,11 +8783,19 @@ export class MessageHandler {
     if (usesAcpProvidedSessionTitle(cliType, agentType)) {
       return;
     }
-    if (this.titleGenerationInFlight.has(sessionId)) {
+    const existingGeneration = this.titleGenerationInFlight.get(sessionId);
+    if (existingGeneration) {
+      try {
+        await existingGeneration;
+      } catch (error) {
+        this.logger.debug(
+          `[${sessionId}] Existing session title generation failed: ${formatErrorMessage(error)}`
+        );
+      }
       return;
     }
-    this.titleGenerationInFlight.add(sessionId);
-    try {
+
+    const generation = (async (): Promise<string | null> => {
       const sessionDoc = await this.workspaceDocument.getOrCreateSessionDoc(sessionId);
       const meta = await sessionDoc.getMetaState();
       const existingTitle = meta?.title?.trim();
@@ -8918,7 +8804,7 @@ export class MessageHandler {
         this.logger.debug(
           `[${sessionId}] Skipping session title generation because title already set: ${existingTitle}`
         );
-        return;
+        return meta?.titleSource === 'generated' ? existingTitle : null;
       }
 
       this.logger.debug(`[${sessionId}] Generating session title because title is missing`);
@@ -8936,7 +8822,7 @@ export class MessageHandler {
       });
       if (!title) {
         this.logger.debug(`[${sessionId}] Session title generation returned empty result`);
-        return;
+        return null;
       }
       // Conditional write: a title may have landed while generation was in flight
       // (agent-pushed title, user rename); only a draft may still be replaced.
@@ -8945,15 +8831,24 @@ export class MessageHandler {
         this.logger.debug(
           `[${sessionId}] Skipping generated title because title changed while generation was in flight`
         );
-        return;
+      } else {
+        this.logger.debug(`[${sessionId}] Session title stored in metadata: ${title}`);
       }
-      this.logger.debug(`[${sessionId}] Session title stored in metadata: ${title}`);
+      // The generated value is still safe to reuse for a branch name even when a
+      // concurrent user rename prevented it from being written as the session title.
+      return title;
+    })();
+    this.titleGenerationInFlight.set(sessionId, generation);
+    try {
+      await generation;
     } catch (error) {
       this.logger.debug(
         `[${sessionId}] Failed to generate/store session title: ${formatErrorMessage(error)}`
       );
     } finally {
-      this.titleGenerationInFlight.delete(sessionId);
+      if (this.titleGenerationInFlight.get(sessionId) === generation) {
+        this.titleGenerationInFlight.delete(sessionId);
+      }
     }
   }
 
@@ -9530,11 +9425,7 @@ export class MessageHandler {
     this.archiveWatchHandle = null;
     this.deleteWatchHandle?.unsubscribe();
     this.deleteWatchHandle = null;
-    this.machineFlockCommandUnsubscribe?.();
-    this.machineFlockCommandUnsubscribe = null;
-    this.machineFlockCommandRoomSub?.unsubscribe();
-    this.machineFlockCommandRoomSub = null;
-    this.machineFlockCommandWatcherPromise = null;
+    this.machineFlockCommandWatcher.stop();
     this.providerSetupManager.stop();
     this.sessionActivePresence.clearAll();
     // Terminating sessions is the producer barrier: agent callbacks may still
@@ -9573,11 +9464,16 @@ export class MessageHandler {
     let metaCustomAcp: CustomAcpLaunchSpec | undefined;
     let metaRuntimeOverrides: BuiltinRuntimeOverrides | undefined;
     let metaAgentConfigId: AgentConfigId | undefined;
+    let reusableTitlePromise: Promise<string | null> | undefined;
     try {
       const sessionDoc = await this.workspaceDocument.getOrCreateSessionDoc(sessionId);
       const meta = await sessionDoc.getMetaState();
       metaBranchName = meta?.branchName?.trim() || null;
       metaAgentConfigId = meta?.agentConfigId;
+      const generatedMetaTitle = meta?.titleSource === 'generated' ? meta.title?.trim() : '';
+      reusableTitlePromise = generatedMetaTitle
+        ? Promise.resolve(generatedMetaTitle)
+        : this.titleGenerationInFlight.get(sessionId);
       const agentConfig = metaAgentConfigId
         ? await this.workspaceDocument.getAgentConfigById(metaAgentConfigId)
         : null;
@@ -9591,7 +9487,7 @@ export class MessageHandler {
       });
       metaCustomAcp = agentConfig?.customAcp ?? legacyLaunchConfig?.customAcp;
       metaRuntimeOverrides = agentConfig?.runtimeOverrides ?? legacyLaunchConfig?.runtimeOverrides;
-      if (metaBranchName && !metaBranchName.startsWith('session/')) {
+      if (metaBranchName && !isManagedWorktreeBranchName(metaBranchName)) {
         return;
       }
     } catch (error) {
@@ -9610,7 +9506,8 @@ export class MessageHandler {
       20_000,
       resolvedTitleConfig,
       metaCustomAcp,
-      metaRuntimeOverrides
+      metaRuntimeOverrides,
+      reusableTitlePromise
     );
     if (!branchName) {
       this.logger.debug(`[${sessionId}] Skipping branch rename: name generation timed out`);
@@ -9622,9 +9519,9 @@ export class MessageHandler {
     if (!currentBranch || currentBranch === branchName) {
       return;
     }
-    if (!currentBranch.startsWith('session/')) {
+    if (!isManagedWorktreeBranchName(currentBranch)) {
       this.logger.debug(
-        `[${sessionId}] Skipping branch rename: not on a session branch (currentBranch=${currentBranch})`
+        `[${sessionId}] Skipping branch rename: not on a managed worktree branch (currentBranch=${currentBranch})`
       );
       return;
     }
@@ -9636,7 +9533,19 @@ export class MessageHandler {
     }
 
     try {
-      await session.exec('git', ['branch', '-m', currentBranch, branchName], workdir, false);
+      const renamedBranch = await renameBranchWithAvailableSuffix({
+        exec: session.exec.bind(session),
+        workdir,
+        currentBranch,
+        desiredBranchName: branchName,
+        maxLength: 50,
+      });
+      if (!renamedBranch) {
+        this.logger.debug(
+          `[${sessionId}] Skipping branch rename: branch changed or git rejected the rename`
+        );
+        return;
+      }
       await this.turnPostProcessingService.syncSessionBranchName(sessionId, session);
     } catch (error) {
       this.logger.debug(`[${sessionId}] Failed to rename branch: ${formatErrorMessage(error)}`);
@@ -9651,7 +9560,8 @@ export class MessageHandler {
     timeoutMs: number,
     titleConfig?: TitleGenerationConfig,
     customAcp?: CustomAcpLaunchSpec,
-    runtimeOverrides?: BuiltinRuntimeOverrides
+    runtimeOverrides?: BuiltinRuntimeOverrides,
+    reusableTitlePromise?: Promise<string | null>
   ): Promise<string | null> {
     let timeoutHandle: NodeJS.Timeout | null = null;
     const timeoutPromise = new Promise<null>((resolve) => {
@@ -9659,16 +9569,18 @@ export class MessageHandler {
     });
 
     const namePromise = (async (): Promise<string> => {
-      const title = await generateTitleIsolated({
-        cliType,
-        agentType,
-        customAcp,
-        runtimeOverrides,
-        taskPrompt,
-        logger: this.logger,
-        env,
-        titleConfig,
-      });
+      const title = reusableTitlePromise
+        ? await reusableTitlePromise
+        : await generateTitleIsolated({
+            cliType,
+            agentType,
+            customAcp,
+            runtimeOverrides,
+            taskPrompt,
+            logger: this.logger,
+            env,
+            titleConfig,
+          });
       const base = title ?? taskPrompt;
       return ensureValidBranchName(base, 'task');
     })();
@@ -9805,7 +9717,7 @@ export class MessageHandler {
    * wants to pause, so we should not automatically process the next message.
    */
   private async processMessageQueue(sessionId: SessionId): Promise<void> {
-    this.sessionDispatchWatcher.enqueueSessionCheck(sessionId);
+    void this.sessionDispatchWatcher.enqueueSessionCheck(sessionId);
   }
 
   // ============================================================================
@@ -9833,6 +9745,20 @@ export class MessageHandler {
     const hasFlushedOutput =
       state.acpFlushCountInTurn > 0 && this.store.getTurnId(sessionId) === turnId;
     return hasBufferedOutput || hasFlushedOutput;
+  }
+
+  /**
+   * Same observation as `hasPromptOutputForTurn`, but it distinguishes "this turn
+   * emitted nothing" from "we cannot tell". The two callers need opposite
+   * conservative answers on a missing session: prompt replay must refuse to
+   * retry, while the no-output guard must not accuse a turn it could not observe.
+   * `undefined` means unobservable — the transient state is gone.
+   */
+  observePromptOutputForTurn(sessionId: SessionId, turnId: string): boolean | undefined {
+    if (!this.store.has(sessionId)) {
+      return undefined;
+    }
+    return this.hasPromptOutputForTurn(sessionId, turnId);
   }
 
   /**

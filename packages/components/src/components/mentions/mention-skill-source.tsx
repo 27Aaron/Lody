@@ -8,6 +8,7 @@ import {
   type AgentConfigCliType,
   type ProjectSkill,
   type ProjectSkillScope,
+  type TextRewrite,
 } from '@lody/shared';
 import { currentWorkspaceIdAtom } from '@/atoms';
 import {
@@ -16,10 +17,14 @@ import {
   type ProjectSkillsStatus,
 } from '@/hooks/use-project-skills';
 import type { MentionProjectSource } from '@/components/mentions/mention-project-file-source';
-import { useMentionHydration } from '@/components/mentions/mention-hydration';
+import {
+  useMentionHydration,
+  type HydratedMentions,
+} from '@/components/mentions/mention-hydration';
 
 /**
- * `$`-triggered skill mention (phase 2 of docs/project-skills.md).
+ * Skill mentions, reachable directly through `$` and through the `@` category
+ * menu (phase 2 of docs/project-skills.md).
  *
  * Reuses the same discovery/SWR core as the Skills display tab via
  * `useProjectSkills`: the mention reads the CURRENT session project's skills
@@ -223,40 +228,48 @@ function forEachSkillMentionSpan(
   }
 }
 
-export function expandSkillMentionsInText(
+/**
+ * The `$token` -> skill-instruction rewrites this text implies.
+ *
+ * Separate from applying them because the caller needs both halves: the agent
+ * gets the instruction, and the transcript gets a span saying that region was
+ * once `$token`. Rewrites are described against `text` and applied in one pass
+ * with everything else — see `applyTextRewrites`.
+ */
+export function buildSkillMentionRewrites(
   text: string,
   items: readonly SkillMentionItem[],
   allowedDirs: ReadonlySet<string> | null
-): string {
+): TextRewrite[] {
   if (!text.includes(SKILL_MENTION_TRIGGER) || items.length === 0) {
-    return text;
+    return [];
   }
 
   const pathByToken = buildSkillMentionPathByToken(items, allowedDirs);
   if (pathByToken.size === 0) {
-    return text;
+    return [];
   }
 
-  let result = '';
-  let lastCopiedIndex = 0;
-
+  const rewrites: TextRewrite[] = [];
   forEachSkillMentionSpan(text, ({ token, start, tokenEnd }) => {
     const path = token ? pathByToken.get(token) : undefined;
     if (!path) {
       return false;
     }
-    // Already expanded (idempotent re-send) — skip the token, leave it as-is.
+    // Already expanded (idempotent re-send) — consume the token, rewrite nothing.
     if (SKILL_MENTION_PATH_ANNOTATION_RE.test(text.slice(tokenEnd))) {
       return true;
     }
-    result += text.slice(lastCopiedIndex, start);
-    result += `use ${SKILL_MENTION_PROMPT_PREFIX}${token} [${SKILL_MENTION_PATH_LABEL}](${formatSkillPathMarkdownDestination(path)})`;
-    lastCopiedIndex = tokenEnd;
+    rewrites.push({
+      start,
+      end: tokenEnd,
+      replacement: `use ${SKILL_MENTION_PROMPT_PREFIX}${token} [${SKILL_MENTION_PATH_LABEL}](${formatSkillPathMarkdownDestination(path)})`,
+      span: { kind: 'skill', label: `${SKILL_MENTION_TRIGGER}${token}`, target: token },
+    });
     return true;
   });
 
-  // When nothing matched, lastCopiedIndex stays 0 and this returns `text` verbatim.
-  return result + text.slice(lastCopiedIndex);
+  return rewrites;
 }
 
 function hasProjectSkillSource(source: MentionProjectSource | undefined): boolean {
@@ -272,11 +285,12 @@ function hasProjectSkillSource(source: MentionProjectSource | undefined): boolea
   return false;
 }
 
-export function useSkillMentionPromptExpansion(
+/** The skill rewrites for a given text, bound to the current project's skills. */
+export function useSkillMentionRewrites(
   source: MentionProjectSource | undefined,
   skillAgent: SkillMentionAgent | undefined,
   promptValue: string
-): (text: string) => string {
+): (text: string) => TextRewrite[] {
   const enableSkillMentions = hasProjectSkillSource(source) || Boolean(skillAgent?.machineId);
   const enabled = enableSkillMentions && promptValue.includes(SKILL_MENTION_TRIGGER);
   const { skillItems } = useMentionProjectSkills(source, enabled, skillAgent?.machineId);
@@ -289,7 +303,7 @@ export function useSkillMentionPromptExpansion(
   );
 
   return React.useCallback(
-    (text: string) => expandSkillMentionsInText(text, skillItems, allowedDirs),
+    (text: string) => buildSkillMentionRewrites(text, skillItems, allowedDirs),
     [allowedDirs, skillItems]
   );
 }
@@ -297,14 +311,14 @@ export function useSkillMentionPromptExpansion(
 export function hydrateSkillMentionsFromText(
   text: string,
   knownTokens: ReadonlySet<string>
-): { mentions: Array<{ value: string; start: number; end: number }>; values: string[] } {
-  const mentions: Array<{ value: string; start: number; end: number }> = [];
+): HydratedMentions {
+  const mentions: HydratedMentions['mentions'] = [];
   const values = new Set<string>();
   forEachSkillMentionSpan(text, ({ token, start, tokenEnd }) => {
     if (!token || !knownTokens.has(token)) {
       return false;
     }
-    mentions.push({ value: token, start, end: tokenEnd });
+    mentions.push({ value: token, start, end: tokenEnd, kind: 'skill' });
     values.add(token);
     return true;
   });
@@ -312,10 +326,10 @@ export function hydrateSkillMentionsFromText(
 }
 
 /** Collapse the project + global SWR states into the single status/error the
-   `$` menu renders. `idle` (a disabled source — e.g. global skipped for a local
-   chat, or project skipped for a plain-agent chat) is ignored so the menu
-   reflects whichever scopes are actually fetching. */
-function mergeMentionSkillState(
+   skill menu renders. `idle` (a disabled source — e.g. global skipped for a
+   local chat, or project skipped for a plain-agent chat) is ignored so the
+   menu reflects whichever scopes are actually fetching. */
+export function mergeMentionSkillState(
   states: ReadonlyArray<{ status: ProjectSkillsStatus; error?: string }>
 ): { status: ProjectSkillsStatus; error?: string } {
   const active = states.filter((state) => state.status !== 'idle');
@@ -328,7 +342,11 @@ function mergeMentionSkillState(
   if (active.some((state) => state.status === 'refreshing')) {
     return { status: 'refreshing' };
   }
-  if (active.every((state) => state.status === 'error')) {
+  // A successful empty scope must not hide another scope's failure. The menu
+  // decides below whether discovered items are sufficient to remain usable;
+  // with zero items this error becomes an actionable message instead of the
+  // misleading "No results" state.
+  if (active.some((state) => state.status === 'error')) {
     return { status: 'error', error: active.find((state) => state.error)?.error };
   }
   return { status: 'ready' };
@@ -346,9 +364,9 @@ function mergeMentionSkillState(
  *   the separate global fetch because its own scan already includes that
  *   machine's globals (avoids double-listing).
  *
- * Gated by `enabled` so we only scan/fetch once the user actually engages the
- * `$` trigger (or a draft already contains a `$` token), mirroring the display
- * tab's lazy SWR.
+ * Gated by `enabled` so we only scan/fetch once the user actually engages a
+ * skill-menu route (or a draft already contains a `$` token), mirroring the
+ * display tab's lazy SWR.
  */
 export function useMentionProjectSkills(
   source: MentionProjectSource | undefined,

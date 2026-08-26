@@ -5,7 +5,9 @@ import { Button } from '@/ui/button';
 
 /**
  * The global toast surface. Toasts render neutral (no accent color) with a
- * subtle border and an inline close button tucked inside on the right.
+ * subtle border and an inline close button tucked inside on the right, aligned
+ * with the title line. An action button takes a full-width row of its own below
+ * the text so a wrapping description keeps the toast's full width.
  */
 const meta: Meta<typeof Toaster> = {
   title: 'UI/Toaster',
@@ -45,6 +47,21 @@ const meta: Meta<typeof Toaster> = {
         }
       >
         Show toast with description
+      </Button>
+      <Button
+        variant="outline"
+        onClick={() =>
+          toast.success('cursor connected successfully.', {
+            description:
+              'This machine is private by default. Share it from device settings when teammates should be able to use it.',
+            action: {
+              label: 'Open machine settings',
+              onClick: () => {},
+            },
+          })
+        }
+      >
+        Show toast with description and action
       </Button>
     </div>
   ),

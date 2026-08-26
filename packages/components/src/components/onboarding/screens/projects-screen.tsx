@@ -1,13 +1,15 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAtomValue, useSetAtom } from 'jotai';
-import { useCloudAction } from '@lody/platform/react';
+import { useCloudAction, usePlatformCapability } from '@lody/platform/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Check, ExternalLink, FolderPlus, Github, Loader2 } from 'lucide-react';
+import type { LocalProjectId, MachineId } from '@lody/shared';
 import { cloudOperations } from '@/lib/cloud-api-operations';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { activeWorkspaceRuntimeAtom } from '@/atoms/runtime';
+import type { DesktopOnboardingProjectSelection } from '@/atoms/onboarding';
 import { currentWorkspaceIdAtom, currentWorkspaceSlugAtom } from '@/atoms/workspace-context';
 import {
   localCliStartingAtom,
@@ -24,6 +26,8 @@ import { OnboardingShell, OnboardingBackButton, OnboardingNextButton } from '../
 
 export interface ProjectsScreenLocalEntry {
   key: string;
+  machineId: MachineId;
+  localProjectId: LocalProjectId;
   name: string;
   detail: string;
 }
@@ -50,10 +54,12 @@ export interface ProjectsScreenViewProps {
   localImportDisabledHint?: string;
   /** Whether the connect-GitHub action is enabled (workspace ready). */
   canConnectGitHub: boolean;
+  selectedProjectKey?: string | null;
+  onSelectProject?: (selection: DesktopOnboardingProjectSelection) => void;
   onAddLocal: () => void;
   onConnectGitHub: () => void;
   onBack: () => void;
-  onComplete: () => void;
+  onComplete: (selection: DesktopOnboardingProjectSelection) => void;
 }
 
 export function ProjectsScreenView({
@@ -64,6 +70,8 @@ export function ProjectsScreenView({
   canImportLocal,
   localImportDisabledHint,
   canConnectGitHub,
+  selectedProjectKey,
+  onSelectProject,
   onAddLocal,
   onConnectGitHub,
   onBack,
@@ -73,6 +81,12 @@ export function ProjectsScreenView({
 
   const totalProjects = local.length + github.length;
   const hasAnyProject = totalProjects > 0;
+  const resolvedSelectedProjectKey =
+    selectedProjectKey ??
+    (local[0] ? `local:${local[0].key}` : github[0] ? `github:${github[0].key}` : null);
+  const previewProjectName =
+    local.find((entry) => `local:${entry.key}` === resolvedSelectedProjectKey)?.name ??
+    github.find((entry) => `github:${entry.key}` === resolvedSelectedProjectKey)?.name;
 
   return (
     <OnboardingShell
@@ -83,18 +97,53 @@ export function ProjectsScreenView({
         'onboarding.projects.description',
         'Add at least one project so Lody knows where to work.'
       )}
+      previewIdentity={previewProjectName ? { projectName: previewProjectName } : undefined}
+      previewState={{
+        projectStatus:
+          importing || connectingGitHub ? 'importing' : hasAnyProject ? 'ready' : 'missing',
+      }}
       secondaryAction={<OnboardingBackButton onClick={onBack} />}
       primaryAction={
         <OnboardingNextButton
           finish
-          onClick={onComplete}
-          disabled={!hasAnyProject}
-          label={t('onboarding.projects.finish', 'Finish')}
+          onClick={() => {
+            const selectedLocal = local.find(
+              (entry) => `local:${entry.key}` === resolvedSelectedProjectKey
+            );
+            if (selectedLocal) {
+              onComplete({
+                kind: 'local',
+                machineId: selectedLocal.machineId,
+                localProjectId: selectedLocal.localProjectId,
+                name: selectedLocal.name,
+              });
+              return;
+            }
+            const selectedGitHub = github.find(
+              (entry) => `github:${entry.key}` === resolvedSelectedProjectKey
+            );
+            if (selectedGitHub) {
+              onComplete({
+                kind: 'github',
+                repoFullName: selectedGitHub.key,
+                name: selectedGitHub.name,
+              });
+            }
+          }}
+          disabled={!hasAnyProject || resolvedSelectedProjectKey === null}
+          label={t('common.next', 'Next')}
         />
       }
     >
       <div className="flex flex-col gap-4">
-        {hasAnyProject ? <ExistingProjectList local={local} github={github} /> : null}
+        {hasAnyProject ? (
+          <ExistingProjectList
+            local={local}
+            github={github}
+            selectedProjectKey={resolvedSelectedProjectKey}
+            onSelect={onSelectProject ?? (() => undefined)}
+          />
+        ) : null}
 
         <div className="grid gap-3 sm:grid-cols-2">
           <ActionCard
@@ -153,7 +202,7 @@ export function ProjectsScreenView({
 
 interface ProjectsScreenProps {
   onBack: () => void;
-  onComplete: () => void;
+  onComplete: (selection: DesktopOnboardingProjectSelection) => void;
 }
 
 export function ProjectsScreen({ onBack, onComplete }: ProjectsScreenProps) {
@@ -170,16 +219,45 @@ export function ProjectsScreen({ onBack, onComplete }: ProjectsScreenProps) {
     workspaceId ? { workspaceId } : 'skip'
   );
   const createGitHubInstallState = useCloudAction(cloudOperations.github.createGitHubInstallState);
+  const canUseGitHub = usePlatformCapability('githubIntegration');
 
   const { projects: localProjectIndex } = useVisibleLocalProjects();
   const localProjectList = useMemo(
-    () => Array.from(localProjectIndex.values()),
-    [localProjectIndex]
+    () =>
+      Array.from(localProjectIndex.values()).filter(
+        (entry) => localMachineId !== null && entry.machineId === localMachineId
+      ),
+    [localMachineId, localProjectIndex]
   );
   const repoList = useMemo(() => repos ?? [], [repos]);
 
   const [importing, setImporting] = useState(false);
   const [connectingGitHub, setConnectingGitHub] = useState(false);
+  const [selectedProject, setSelectedProject] = useState<DesktopOnboardingProjectSelection | null>(
+    null
+  );
+
+  useEffect(() => {
+    if (selectedProject) return;
+    const firstLocal = localProjectList[0];
+    if (firstLocal) {
+      setSelectedProject({
+        kind: 'local',
+        machineId: firstLocal.machineId,
+        localProjectId: firstLocal.project.id,
+        name: firstLocal.project.name || firstLocal.project.id,
+      });
+      return;
+    }
+    const firstRepo = repoList[0];
+    if (firstRepo) {
+      setSelectedProject({
+        kind: 'github',
+        repoFullName: firstRepo.fullName,
+        name: firstRepo.fullName,
+      });
+    }
+  }, [localProjectList, repoList, selectedProject]);
 
   const isElectron = isElectronRenderer();
   const selectLocalProjectDirectory = isElectron
@@ -210,12 +288,15 @@ export function ProjectsScreen({ onBack, onComplete }: ProjectsScreenProps) {
         const result = await selectAndWriteLocalProject({
           runtime,
           selectDirectory: selectLocalProjectDirectory,
-          timeoutMessage: t(
-            'localProjects.add.timeout',
-            'The machine did not respond in time.'
-          ),
+          timeoutMessage: t('localProjects.add.timeout', 'The machine did not respond in time.'),
         });
         if (!result) return;
+        setSelectedProject({
+          kind: 'local',
+          machineId: result.machineId,
+          localProjectId: result.localProjectId,
+          name: result.name,
+        });
         const machineId = result.machineId;
         if (machineId && workspaceId !== null) {
           setLocalProbeResult({
@@ -231,14 +312,7 @@ export function ProjectsScreen({ onBack, onComplete }: ProjectsScreenProps) {
         setImporting(false);
       }
     })();
-  }, [
-    canImportLocal,
-    selectLocalProjectDirectory,
-    runtime,
-    setLocalProbeResult,
-    t,
-    workspaceId,
-  ]);
+  }, [canImportLocal, selectLocalProjectDirectory, runtime, setLocalProbeResult, t, workspaceId]);
 
   const handleConnectGitHub = useCallback(() => {
     if (workspaceId === null) return;
@@ -278,6 +352,8 @@ export function ProjectsScreen({ onBack, onComplete }: ProjectsScreenProps) {
     () =>
       localProjectList.map((entry) => ({
         key: entry.key,
+        machineId: entry.machineId,
+        localProjectId: entry.project.id,
         name: entry.project.name || entry.project.id,
         detail: entry.project.rootPath || entry.machine.name || '',
       })),
@@ -304,7 +380,15 @@ export function ProjectsScreen({ onBack, onComplete }: ProjectsScreenProps) {
       connectingGitHub={connectingGitHub}
       canImportLocal={canImportLocal}
       localImportDisabledHint={localImportDisabledHint}
-      canConnectGitHub={workspaceId !== null}
+      canConnectGitHub={canUseGitHub && workspaceId !== null}
+      selectedProjectKey={
+        selectedProject?.kind === 'local'
+          ? `local:${selectedProject.machineId}:${selectedProject.localProjectId}`
+          : selectedProject
+            ? `github:${selectedProject.repoFullName}`
+            : null
+      }
+      onSelectProject={setSelectedProject}
       onAddLocal={handleAddLocalProject}
       onConnectGitHub={handleConnectGitHub}
       onBack={onBack}
@@ -316,9 +400,16 @@ export function ProjectsScreen({ onBack, onComplete }: ProjectsScreenProps) {
 interface ExistingProjectListProps {
   local: ProjectsScreenLocalEntry[];
   github: ProjectsScreenGitHubEntry[];
+  selectedProjectKey: string | null;
+  onSelect: (selection: DesktopOnboardingProjectSelection) => void;
 }
 
-function ExistingProjectList({ local, github }: ExistingProjectListProps) {
+function ExistingProjectList({
+  local,
+  github,
+  selectedProjectKey,
+  onSelect,
+}: ExistingProjectListProps) {
   const { t } = useTranslation();
   const items = useMemo(
     () => [
@@ -329,7 +420,7 @@ function ExistingProjectList({ local, github }: ExistingProjectListProps) {
   );
 
   return (
-    <div className="rounded-xl border border-border/60 bg-card/40">
+    <div className="rounded-lg border border-border/60 bg-card/40">
       <div className="flex items-center justify-between gap-2 px-4 py-2.5 text-xs font-medium tracking-wider text-muted-foreground/80">
         <span>{t('onboarding.projects.connectedHeading', 'Connected')}</span>
         <span className="text-[11px] tracking-normal normal-case text-muted-foreground/70">
@@ -354,20 +445,44 @@ function ExistingProjectList({ local, github }: ExistingProjectListProps) {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -6 }}
               transition={{ duration: 0.2 }}
-              className="flex items-center gap-3 px-4 py-2.5"
+              className="px-2 py-1.5"
             >
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted/50">
-                {item.kind === 'local' ? (
-                  <FolderPlus className="h-4 w-4 text-muted-foreground" />
-                ) : (
-                  <Github className="h-4 w-4 text-muted-foreground" />
+              <button
+                type="button"
+                onClick={() =>
+                  onSelect(
+                    item.kind === 'local'
+                      ? {
+                          kind: 'local',
+                          machineId: item.machineId,
+                          localProjectId: item.localProjectId,
+                          name: item.name,
+                        }
+                      : { kind: 'github', repoFullName: item.key, name: item.name }
+                  )
+                }
+                className={cn(
+                  'flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left',
+                  selectedProjectKey === `${item.kind}:${item.key}`
+                    ? 'bg-primary/10 ring-1 ring-primary/40'
+                    : 'hover:bg-muted/60'
                 )}
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium text-foreground">{item.name}</div>
-                <div className="truncate text-xs text-muted-foreground">{item.detail}</div>
-              </div>
-              <Check className="h-3.5 w-3.5 shrink-0 text-primary" />
+              >
+                <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted/50">
+                  {item.kind === 'local' ? (
+                    <FolderPlus className="size-4 text-muted-foreground" />
+                  ) : (
+                    <Github className="size-4 text-muted-foreground" />
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium text-foreground">{item.name}</div>
+                  <div className="truncate text-xs text-muted-foreground">{item.detail}</div>
+                </div>
+                {selectedProjectKey === `${item.kind}:${item.key}` ? (
+                  <Check className="size-4 shrink-0 text-primary" />
+                ) : null}
+              </button>
             </motion.li>
           ))}
         </AnimatePresence>
@@ -403,7 +518,7 @@ function ActionCard({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        'group relative flex w-full flex-col items-start gap-2 rounded-xl border bg-card/40 p-4 text-left transition-all',
+        'group relative flex w-full flex-col items-start gap-2 rounded-lg border bg-card/40 p-4 text-left transition-all',
         'border-border/60 hover:border-primary/50 hover:bg-card/70',
         'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring',
         'disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:border-border/60 disabled:hover:bg-card/40'

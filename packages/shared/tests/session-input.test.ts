@@ -11,8 +11,9 @@ import {
   inputBlocksToHistoryItems,
   normalizeSessionInputBlocks,
   resolveSessionConversationConfig,
+  resolveSessionTaskToolsEnabled,
 } from '../src/session-input';
-import { normalizeSessionTurnInputConfig } from '../src/message-schemas';
+import { normalizeSessionTurnInputConfig, SessionFileBlockSchema } from '../src/message-schemas';
 import { sessionDocSchema } from '../src/schema';
 import type {
   CommentReferencePayload,
@@ -95,6 +96,7 @@ const r2FilePayload: SessionFilePayload = {
   sizeBytes: 4096,
   sha256: 'a'.repeat(64),
   textPreview: false,
+  sourcePath: 'artifacts/report.pdf',
   transport: 'r2',
   uploadedAt: 1_700_000_000_000,
 };
@@ -188,6 +190,32 @@ describe('session-input helpers', () => {
       modelId: 'model-b',
       configOptionValues: { approval: 'never' },
     });
+  });
+
+  it('resolves the frozen Task tool gate with legacy inputs disabled', () => {
+    expect(
+      resolveSessionTaskToolsEnabled([
+        {
+          id: 'turn-1',
+          role: 'user',
+          inputConfig: {
+            prompt: 'create a task',
+            cliType: 'builtin',
+            agentType: 'codex',
+            taskToolsEnabled: true,
+          },
+        },
+      ])
+    ).toBe(true);
+    expect(
+      resolveSessionTaskToolsEnabled([
+        {
+          id: 'legacy-turn',
+          role: 'user',
+          inputConfig: { prompt: 'hello', cliType: 'builtin', agentType: 'codex' },
+        },
+      ])
+    ).toBe(false);
   });
 
   it('ignores invalid and unconfigured history when resolving conversation config', () => {
@@ -343,6 +371,7 @@ describe('session-input helpers', () => {
         sizeBytes: 4096,
         sha256: 'a'.repeat(64),
         textPreview: false,
+        sourcePath: 'artifacts/report.pdf',
         transport: 'r2',
         uploadedAt: 1_700_000_000_000,
       },
@@ -350,6 +379,16 @@ describe('session-input helpers', () => {
 
     // r2 transport carries no machineId; it must not leak back in.
     expect(historyItemsToInputBlocks(historyItems)).toEqual(inputBlocks);
+  });
+
+  it('accepts only workspace-relative agent upload provenance', () => {
+    expect(SessionFileBlockSchema.safeParse(r2FilePayload).success).toBe(true);
+
+    for (const sourcePath of ['/tmp/report.pdf', '../report.pdf', 'C:\\tmp\\report.pdf']) {
+      expect(SessionFileBlockSchema.safeParse({ ...r2FilePayload, sourcePath }).success).toBe(
+        false
+      );
+    }
   });
 
   it('round-trips local file blocks (with machineId) through history items', () => {
@@ -422,9 +461,7 @@ describe('session-input helpers', () => {
             : {
                 ...turn,
                 items: turn.items?.map((item) =>
-                  item.type === 'file'
-                    ? { ...item, transport: 'r2', machineId: undefined }
-                    : item
+                  item.type === 'file' ? { ...item, transport: 'r2', machineId: undefined } : item
                 ),
               }
         ),
@@ -543,6 +580,7 @@ describe('session-input helpers', () => {
       modeId: undefined,
       modelId: undefined,
       configOptionValues: undefined,
+      mcpServerIds: undefined,
       issuePRMentions: undefined,
       resume: undefined,
     });
@@ -563,6 +601,7 @@ describe('session-input helpers', () => {
       modeId: undefined,
       modelId: undefined,
       configOptionValues: undefined,
+      mcpServerIds: undefined,
       issuePRMentions: undefined,
       resume: undefined,
     });

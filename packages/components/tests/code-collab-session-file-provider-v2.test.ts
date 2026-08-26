@@ -6,6 +6,8 @@ import type {
   CodeCollabV2OpenTextOk,
   CodeCollabV2RefreshTextResponse,
   CodeCollabV2SaveTextResponse,
+  FilePreviewV3Ok,
+  FilePreviewV3Response,
   SessionId,
 } from '@lody/shared';
 import {
@@ -41,11 +43,62 @@ function textResult(
   };
 }
 
+function previewOk(
+  text: string,
+  digest: CodeCollabV2FileDigest,
+  path = 'src/app.ts'
+): FilePreviewV3Ok {
+  return {
+    status: 'ok',
+    v: 3,
+    path,
+    digest,
+    kind: 'text',
+    content: {
+      encoding: 'utf8-plain',
+      text,
+      rawBytes: new TextEncoder().encode(text).byteLength,
+    },
+    format: { eol: 'lf' },
+    sizeBytes: new TextEncoder().encode(text).byteLength,
+    readonly: true,
+  };
+}
+
+function previewBinary(path: string, bytes: Uint8Array, mimeType: string): FilePreviewV3Ok {
+  return {
+    status: 'ok',
+    v: 3,
+    path,
+    digest: DIGEST_1,
+    kind: 'binary',
+    content: {
+      encoding: 'base64',
+      data: btoa(String.fromCharCode(...bytes)),
+      rawBytes: bytes.byteLength,
+    },
+    mimeType,
+    sizeBytes: bytes.byteLength,
+    readonly: true,
+  };
+}
+
 function createRuntime(
   overrides: Partial<CodeCollabSessionFileProviderRuntime> = {}
 ): CodeCollabSessionFileProviderRuntime {
   return {
     sessionId: SESSION_ID,
+    previewFile: vi.fn(async (path: string, knownDigest?: string) =>
+      knownDigest === DIGEST_1
+        ? ({
+            status: 'unchanged',
+            v: 3,
+            path,
+            digest: DIGEST_1,
+            sizeBytes: 4,
+          } satisfies FilePreviewV3Response)
+        : previewOk('one\n', DIGEST_1, path)
+    ),
     openText: vi.fn(async () => textResult('ok', 'one\n', DIGEST_1) as CodeCollabV2OpenTextOk),
     refreshText: vi.fn(async () => ({
       status: 'up_to_date',
@@ -110,12 +163,19 @@ function createRuntime(
 }
 
 describe('CodeCollabSessionFileProvider v2', () => {
-  it('uses workspace path as file id and refreshes opened text by digest', async () => {
+  it('uses workspace path as file id and revalidates opened text by digest', async () => {
     const runtime = createRuntime({
-      refreshText: vi
+      previewFile: vi
         .fn()
-        .mockResolvedValueOnce({ status: 'up_to_date', path: 'src/app.ts', digest: DIGEST_1 })
-        .mockResolvedValueOnce(textResult('updated', 'two\n', DIGEST_2)),
+        .mockResolvedValueOnce(previewOk('one\n', DIGEST_1))
+        .mockResolvedValueOnce({
+          status: 'unchanged',
+          v: 3,
+          path: 'src/app.ts',
+          digest: DIGEST_1,
+          sizeBytes: 4,
+        } satisfies FilePreviewV3Response)
+        .mockResolvedValueOnce(previewOk('two\n', DIGEST_2)),
     });
     const provider = new CodeCollabSessionFileProvider({
       runtime,
@@ -145,19 +205,135 @@ describe('CodeCollabSessionFileProvider v2', () => {
       status: 'ready',
       snapshot: { kind: 'text', text: 'one\n', eol: 'lf' },
     });
-    expect(runtime.openText).toHaveBeenCalledWith('src/app.ts');
+    expect(runtime.previewFile).toHaveBeenCalledWith('src/app.ts', undefined);
 
     const same = await provider.openFile('src/app.ts');
     expect(same).toMatchObject({
       status: 'ready',
       snapshot: { kind: 'text', text: 'one\n', eol: 'lf' },
     });
-    expect(runtime.refreshText).toHaveBeenCalledWith('src/app.ts', DIGEST_1);
+    expect(runtime.previewFile).toHaveBeenLastCalledWith('src/app.ts', DIGEST_1);
 
     const updated = await provider.openFile('src/app.ts');
     expect(updated).toMatchObject({
       status: 'ready',
       snapshot: { kind: 'text', text: 'two\n', eol: 'lf' },
+    });
+    // Preview must never touch the Code Collab read path: activating it is what
+    // this change removed.
+    expect(runtime.openText).not.toHaveBeenCalled();
+    expect(runtime.refreshText).not.toHaveBeenCalled();
+  });
+
+  it('previews a binary image file the file index marked as binary', async () => {
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01]);
+    const runtime = createRuntime({
+      previewFile: vi.fn(async () => previewBinary('assets/logo.png', bytes, 'image/png')),
+    });
+    const provider = new CodeCollabSessionFileProvider({
+      runtime,
+      role: 'write',
+      fileTree: { 'assets/logo.png': { kind: 'binary' } },
+    });
+
+    // The index entry must stay openable — a preview-blocking reason here is what
+    // made images unclickable in the tree.
+    expect(await provider.listFiles()).toEqual([
+      expect.objectContaining({ path: 'assets/logo.png', kind: 'binary' }),
+    ]);
+    expect((await provider.listFiles())[0]?.unavailableReason).toBeUndefined();
+
+    const opened = await provider.openFile('assets/logo.png');
+    expect(opened).toMatchObject({
+      status: 'ready',
+      entry: { kind: 'binary', readonly: true },
+      snapshot: { kind: 'binary', mimeType: 'image/png' },
+    });
+    expect(
+      opened.status === 'ready' && opened.snapshot.kind === 'binary'
+        ? Array.from(opened.snapshot.bytes ?? [])
+        : null
+    ).toEqual(Array.from(bytes));
+  });
+
+  it('marks an external preview readonly so the editor cannot offer an impossible save', async () => {
+    // Preview serves temp/scratch roots; `save-text` refuses everything outside the
+    // workspace. Without this, an unindexed /tmp file resolves to a writable entry
+    // and the user loses the edit at save time.
+    const runtime = createRuntime({
+      previewFile: vi.fn(async () => ({
+        ...previewOk('scratch\n', DIGEST_1, '/tmp/scratch/plan.md'),
+        external: true,
+      })),
+    });
+    const provider = new CodeCollabSessionFileProvider({
+      runtime,
+      role: 'write',
+      fileTree: {},
+    });
+
+    const opened = await provider.openFile('/tmp/scratch/plan.md');
+    expect(opened).toMatchObject({
+      status: 'ready',
+      entry: { kind: 'text', readonly: true },
+    });
+
+    // An in-workspace text file keeps its index-derived editability.
+    const inWorkspace = new CodeCollabSessionFileProvider({
+      runtime: createRuntime(),
+      role: 'write',
+      fileTree: { 'src/app.ts': true },
+    });
+    await expect(inWorkspace.openFile('src/app.ts')).resolves.toMatchObject({
+      entry: { readonly: false },
+    });
+  });
+
+  it('reports an oversize preview as unavailable rather than a partial file', async () => {
+    const runtime = createRuntime({
+      previewFile: vi.fn(
+        async () =>
+          ({
+            status: 'error',
+            v: 3,
+            code: 'too_large',
+            message: 'File is too large to preview.',
+            path: 'big.bin',
+            sizeBytes: 100,
+            limitBytes: 10,
+          }) satisfies FilePreviewV3Response
+      ),
+    });
+    const provider = new CodeCollabSessionFileProvider({
+      runtime,
+      role: 'write',
+      fileTree: { 'big.bin': true },
+    });
+
+    await expect(provider.openFile('big.bin')).resolves.toMatchObject({
+      status: 'unavailable',
+      reason: 'text-too-large',
+      message: 'File is too large to preview.',
+    });
+  });
+
+  it('surfaces a rejected out-of-workspace path as permission denied', async () => {
+    const runtime = createRuntime({
+      previewFile: vi.fn(
+        async () =>
+          ({
+            status: 'error',
+            v: 3,
+            code: 'path_not_allowed',
+            message: 'File is outside the workspace.',
+          }) satisfies FilePreviewV3Response
+      ),
+    });
+    const provider = new CodeCollabSessionFileProvider({ runtime, role: 'write', fileTree: {} });
+
+    await expect(provider.openFile('/etc/passwd')).resolves.toMatchObject({
+      status: 'unavailable',
+      reason: 'permission-denied',
     });
   });
 
@@ -165,14 +341,14 @@ describe('CodeCollabSessionFileProvider v2', () => {
     const textState = createCodeCollabSessionFileProviderTextState({
       maxOpenTextCacheBytes: 8,
     });
-    const openText = vi.fn<CodeCollabSessionFileProviderRuntime['openText']>(async (path) =>
-      textResult('ok', `${path[0] ?? 'x'}123`, DIGEST_1, path)
-    );
-    const refreshText = vi.fn<CodeCollabSessionFileProviderRuntime['refreshText']>(
-      async (path, digest) => ({ status: 'up_to_date', path, digest })
+    const previewFile = vi.fn<CodeCollabSessionFileProviderRuntime['previewFile']>(
+      async (path, knownDigest) =>
+        knownDigest === DIGEST_1
+          ? { status: 'unchanged', v: 3, path, digest: DIGEST_1, sizeBytes: 4 }
+          : previewOk(`${path[0] ?? 'x'}123`, DIGEST_1, path)
     );
     const provider = new CodeCollabSessionFileProvider({
-      runtime: createRuntime({ openText, refreshText }),
+      runtime: createRuntime({ previewFile }),
       role: 'write',
       fileTree: {
         'a.ts': true,
@@ -188,10 +364,15 @@ describe('CodeCollabSessionFileProvider v2', () => {
     await provider.openFile('c.ts');
     await provider.openFile('b.ts');
 
-    expect(refreshText).toHaveBeenCalledTimes(1);
-    expect(refreshText).toHaveBeenCalledWith('a.ts', DIGEST_1);
-    expect(openText).toHaveBeenCalledTimes(4);
-    expect(openText.mock.calls.map(([path]) => path)).toEqual(['a.ts', 'b.ts', 'c.ts', 'b.ts']);
+    // Only the second `a.ts` open still had a cached digest to revalidate against;
+    // the evicted entries had to be read in full again.
+    expect(previewFile.mock.calls.map(([path, digest]) => [path, digest])).toEqual([
+      ['a.ts', undefined],
+      ['b.ts', undefined],
+      ['a.ts', DIGEST_1],
+      ['c.ts', undefined],
+      ['b.ts', undefined],
+    ]);
     expect(textState.openCache.byteSize).toBeLessThanOrEqual(8);
   });
 
@@ -257,7 +438,7 @@ describe('CodeCollabSessionFileProvider v2', () => {
     await firstProvider.openFile('src/app.ts');
     await secondProvider.saveText('src/app.ts', 'mine\n');
 
-    expect(secondRuntime.openText).not.toHaveBeenCalled();
+    expect(secondRuntime.previewFile).not.toHaveBeenCalled();
     expect(saveText).toHaveBeenCalledWith(
       'src/app.ts',
       DIGEST_1,
@@ -434,5 +615,48 @@ describe('CodeCollabSessionFileProvider v2', () => {
         expect.objectContaining({ path: 'src/app.ts', kind: 'text', add: 3, del: 1 }),
       ],
     });
+  });
+
+  it('keeps both spellings of a resolved open current across a save', async () => {
+    // The machine resolves `Readme.md` to `README.md`. The viewer tab keeps the
+    // requested spelling while `entry.fileId` carries the machine's, so the
+    // save arrives under one key and the next change-check under the other.
+    // Both must see the post-save digest, or the pre-check reports our own
+    // save as an external change.
+    const savedDigest = `sha256:${'3'.repeat(64)}` as CodeCollabV2FileDigest;
+    const refreshText = vi.fn<CodeCollabSessionFileProviderRuntime['refreshText']>(
+      async (_path: string, digest: string) =>
+        digest === savedDigest
+          ? { status: 'up_to_date', path: 'README.md', digest: savedDigest }
+          : (textResult('updated', 'stale\n', DIGEST_2, 'README.md') as Extract<
+              CodeCollabV2RefreshTextResponse,
+              { status: 'updated' }
+            >)
+    );
+    const runtime = createRuntime({
+      previewFile: vi.fn(async () => previewOk('one\n', DIGEST_1, 'README.md')),
+      refreshText,
+      saveText: vi.fn(async () => ({
+        status: 'ok',
+        path: 'README.md',
+        digest: savedDigest,
+        rawBytes: 5,
+      })),
+    });
+    const provider = new CodeCollabSessionFileProvider({ runtime, role: 'write', fileTree: {} });
+
+    const opened = await provider.openFile('Readme.md');
+    expect(opened).toMatchObject({ status: 'ready', entry: { fileId: 'README.md' } });
+
+    await expect(provider.saveText('README.md', 'mine\n')).resolves.toMatchObject({
+      status: 'ready',
+    });
+
+    // The requested spelling still answers the change-check with the NEW digest.
+    await expect(provider.checkTextChanged('Readme.md')).resolves.toMatchObject({
+      status: 'up_to_date',
+      digest: savedDigest,
+    });
+    expect(refreshText).toHaveBeenLastCalledWith('Readme.md', savedDigest);
   });
 });

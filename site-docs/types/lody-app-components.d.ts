@@ -518,7 +518,9 @@ declare module '@/components/shared/option-selector' {
 declare module '@/components/shared/acp-selector-options' {
   import type { AcpSessionSelectOption } from '@/components/shared/acp-session-select';
 
-  export const CODEX_PLAN_MODE_CONFIG_ID: 'plan-mode';
+  export const CODEX_COLLABORATION_MODE_CONFIG_ID: 'collaboration_mode';
+  export const CODEX_COLLABORATION_MODE_DEFAULT_VALUE: 'default';
+  export const CODEX_COLLABORATION_MODE_PLAN_VALUE: 'plan';
   export const CODEX_FAST_MODE_CONFIG_ID: 'fast-mode';
 
   export type AcpConfigOptionValue = string | boolean;

@@ -1,5 +1,4 @@
 import type { Meta, StoryObj } from '@storybook/react';
-import { useMemo } from 'react';
 import { MarkdownRenderer } from '@/components/ai-gui/markdown-renderer';
 import { TerminalComponent } from '@/components/ai-gui/terminal-component';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/ui/select';
@@ -8,11 +7,10 @@ import { Input } from '@/ui/input';
 import { DiffViewer } from '@/ui/diff-viewer/diff-viewer';
 import { File as FileViewer, type FileProps } from '@pierre/diffs/react';
 import {
-  useBundledVSCodeThemes,
+  useActiveVSCodeThemeId,
   useActiveVSCodeDiffThemeName,
   useResolvedTheme,
   useTheme,
-  type ResolvedTheme,
 } from '@/theme-provider';
 
 const meta = {
@@ -77,19 +75,10 @@ const fileViewerFile: FileProps<undefined>['file'] = {
 };
 
 function VSCodeThemeProbe() {
-  const { theme, setTheme, vscodeThemeSelection, setVSCodeThemeId } = useTheme();
+  const { theme, setTheme } = useTheme();
   const resolvedTheme = useResolvedTheme();
   const activeDiffThemeName = useActiveVSCodeDiffThemeName();
-  const bundledThemes = useBundledVSCodeThemes();
-  const selectableThemes = useMemo(
-    () =>
-      bundledThemes.filter((bundledTheme) =>
-        isSelectableForResolvedMode(bundledTheme.type, resolvedTheme)
-      ),
-    [bundledThemes, resolvedTheme]
-  );
-  const activeVSCodeThemeId =
-    resolvedTheme === 'dark' ? vscodeThemeSelection.darkThemeId : vscodeThemeSelection.lightThemeId;
+  const activeVSCodeThemeId = useActiveVSCodeThemeId();
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -101,7 +90,7 @@ function VSCodeThemeProbe() {
               Active mode: {resolvedTheme}; active theme: {activeVSCodeThemeId ?? 'Lody default'}
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div>
             <Select value={theme} onValueChange={(value) => setTheme(value as typeof theme)}>
               <SelectTrigger className="w-[150px]">
                 <SelectValue />
@@ -110,28 +99,6 @@ function VSCodeThemeProbe() {
                 <SelectItem value="light">Light shell</SelectItem>
                 <SelectItem value="dark">Dark shell</SelectItem>
                 <SelectItem value="system">System shell</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select
-              value={activeVSCodeThemeId ?? 'lody-default'}
-              onValueChange={(value) =>
-                setVSCodeThemeId(resolvedTheme, value === 'lody-default' ? undefined : value)
-              }
-            >
-              <SelectTrigger className="w-[220px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="lody-default">Lody default colors</SelectItem>
-                {activeVSCodeThemeId &&
-                !selectableThemes.some((themeOption) => themeOption.id === activeVSCodeThemeId) ? (
-                  <SelectItem value={activeVSCodeThemeId}>{activeVSCodeThemeId}</SelectItem>
-                ) : null}
-                {selectableThemes.map((themeOption) => (
-                  <SelectItem key={themeOption.id} value={themeOption.id}>
-                    {themeOption.label}
-                  </SelectItem>
-                ))}
               </SelectContent>
             </Select>
           </div>
@@ -193,11 +160,6 @@ function VSCodeThemeProbe() {
     </div>
   );
 }
-
-const isSelectableForResolvedMode = (themeType: string, resolvedTheme: ResolvedTheme) =>
-  resolvedTheme === 'dark'
-    ? themeType === 'dark' || themeType === 'hcDark'
-    : themeType === 'light' || themeType === 'hcLight';
 
 export const Probe: Story = {
   render: () => <VSCodeThemeProbe />,

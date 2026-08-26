@@ -8,6 +8,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   memo,
   type MouseEvent as ReactMouseEvent,
+  type MutableRefObject,
   type ReactNode,
   useCallback,
   useContext,
@@ -24,6 +25,7 @@ import {
 } from '@/components/shared/zoomable-image-viewer';
 import { useIsMessageSendingVisible } from './message-send-status-context';
 import {
+  getCopyTextFromMessageItems,
   getTextContentFromMessageItems,
   getUserTextRenderSlice,
   getVisibleAssistantTextContent,
@@ -32,7 +34,7 @@ import {
 import { useAtomValue } from 'jotai';
 import { getRpcDeliveredTurnKey, rpcDeliveredTurnsAtom } from '@/atoms/session-dispatch-delivery';
 import { selectAtom } from 'jotai/utils';
-import { VList, type VListHandle } from 'virtua';
+import { Virtualizer, type VirtualizerHandle } from 'virtua';
 import {
   type AgentConfigCliType,
   type ChatFailedCode,
@@ -52,7 +54,7 @@ import {
   type WorkspaceId,
   getSessionLaunchConfigLegacyFields,
   getSessionRoomId,
-  isBuiltinAgentType,
+  isManagedBuiltinAgentType,
   type CommentReferencePayload,
   type VisualAnnotationReferencePayload,
   sanitizeGoalObjective,
@@ -69,6 +71,18 @@ import { getAgentMetaByIdAtomFamily } from '@/atoms/agents';
 import { sessionMetaAtomFamily } from '@/atoms/doc-meta';
 import { authTokenAtom } from '@/atoms/runtime';
 import { useStickyScroll } from '@/hooks/use-sticky-scroll';
+import { ConversationOutlineRail } from './conversation-outline-rail';
+import { useLatestRef } from '@/hooks/use-latest-ref';
+import { observeResizeOnAnimationFrame } from '@/lib/resize-observer';
+import {
+  buildConversationOutline,
+  buildOutlineAnchors,
+  resolveActiveOutlineIndex,
+  reuseConversationOutline,
+  reuseOutlineAnchors,
+  type ConversationOutlineAnchor,
+  type ConversationOutlineEntry,
+} from '@/lib/conversation-outline';
 import {
   AlertCircle,
   ArrowDown,
@@ -109,6 +123,11 @@ import { OpenAIIcon } from '@/components/icons/openai-icon';
 import { AgentIcon } from '@/components/icons/agent-icon';
 import { AssistantEditedFiles, type AssistantEditedFileEntry } from './assistant-edited-files';
 import {
+  SessionForkDestinationPopover,
+  type SessionForkDestination,
+  type SessionForkWorktreeAvailability,
+} from '@/components/sessions/session-fork-destination-menu';
+import {
   buildAssistantMessageRenderItems,
   type AssistantMessageRenderItem,
 } from './assistant-message-render-items';
@@ -127,6 +146,8 @@ import { type DurationUnitLabels, formatDurationCompact } from '@/lib/format-dur
 import { resolveSessionHistoryDurationMs } from '@/lib/session-history-duration';
 import { cn } from '@/lib/utils';
 import { ConversationColumn } from '@/components/shared/conversation-column';
+import { SessionRelationCard } from '@/components/shared/session-relation-card';
+import type { SessionNavigationTarget } from '@/lib/session-navigation';
 import { AcpAuthenticationPanel } from '@/components/settings/acp-authentication-panel';
 import { formatConversationTimestamp } from '@/lib/format-conversation-timestamp';
 import { toIntlLocale } from '@/lib/intl-locale';
@@ -149,7 +170,14 @@ import {
 } from './session-file-preview-dialog';
 import { downloadSessionFile, fetchSessionFilePreview } from '@/lib/session-file-download';
 import { getMachineMetaByIdAtomFamily } from '@/atoms/machines';
-import type { MachineId, SessionFilePayload, TaskProposalMeta } from '@lody/shared';
+import { isHtmlSessionFile } from '@/lib/session-file-presentation';
+import type {
+  MachineId,
+  MessageTextSpan,
+  SessionFilePayload,
+  TaskProposalMeta,
+} from '@lody/shared';
+import { MessageTextWithChips } from '@/components/mentions/message-text-chips';
 import { isNativeIOSAppShell } from '@/lib/native-platform';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/ui/tooltip';
 import { Popover, PopoverContent, PopoverTrigger } from '@/ui/popover';
@@ -166,11 +194,11 @@ import { shouldRenderSystemRowItem } from './message-content-guards';
 import { getChatFailedDiagnosticCopy } from './chat-failed-diagnostic-copy';
 import { extractReadableChatFailedMessage } from './chat-failed-error-report';
 import { ChatFailedDetailDialog } from './chat-failed-detail-dialog';
-import type { ConversationFontSize } from '@/atoms/settings';
+import { DEFAULT_CONVERSATION_FONT_SIZE, type ConversationFontSize } from '@/atoms/settings';
 import {
-  CONVERSATION_TEXT_FONT_SIZE_CLASSES,
-  CONVERSATION_MONO_FONT_SIZE_CLASSES,
-  USER_TEXT_COLLAPSED_HEIGHT_BY_FONT_SIZE,
+  conversationMonoFontSizeStyle,
+  conversationTextFontSizeStyle,
+  userTextCollapsedHeight,
 } from './conversation-font-size-classes';
 import { useSessionPin } from '@/components/sessions/session-pin-context';
 import { useIsMobile } from '@/hooks/use-mobile';
@@ -259,6 +287,15 @@ export type MessageFileDiffEntriesByTurn = Readonly<
 
 const EMPTY_EDITED_FILE_ENTRIES: readonly AssistantEditedFileEntry[] = [];
 
+/** How close an outline jump has to land before it counts as arrived. */
+const OUTLINE_JUMP_TOLERANCE_PX = 2;
+/**
+ * One correction is normally enough — arriving measures the target's rows, so
+ * the re-issued jump uses real offsets. The bound only exists so a target that
+ * genuinely cannot reach the top (the list's tail) stops retrying.
+ */
+const OUTLINE_JUMP_MAX_CORRECTIONS = 3;
+
 export type ChatStreamItem = SessionMessageItem | EmptySessionItem;
 
 type AssistantVirtualContent =
@@ -342,6 +379,8 @@ export interface SessionChatStreamViewProps {
   items: ChatStreamItem[];
   sessionId: SessionId;
   className?: string;
+  /** Scrolls as the first conversation row (for example, Session provenance). */
+  leadingContent?: ReactNode;
   emptyState?: ReactNode;
   onAtBottomChange?: (atBottom: boolean) => void;
   showScrollToLatest?: boolean;
@@ -349,16 +388,22 @@ export interface SessionChatStreamViewProps {
   renderMessageRow: (args: { message: SessionHistoryParsed; sessionId: SessionId }) => ReactNode;
   onFileDiffClick?: (turnId: string, filePath: string) => void;
   onFilePathClick?: (filePath: string) => void;
+  /** Returns true when an HTML attachment click was routed to a richer surface. */
+  onOpenHtmlFile?: (file: SessionFilePayload) => boolean;
   lastAssistantMessageId?: string | null;
   lastCompletedAssistantMessageId?: string | null;
   messageFileDiffEntriesByTurn?: MessageFileDiffEntriesByTurn;
   assistantActions?: AssistantMessageAction[];
   assistantActionsMessageId?: string | null;
-  onForkLastAssistant?: (turnId: string) => void;
+  onForkLastAssistant?: (turnId: string, destination?: SessionForkDestination) => void;
+  forkWorktreeAvailability?: SessionForkWorktreeAvailability;
+  onForkWorktreeMenuOpen?: () => void;
   forkingAssistantMessageId?: string | null;
   agentActivityLabel?: string | null;
   agentActivityTone?: AgentActivityTone;
   conversationFontSize?: ConversationFontSize;
+  /** Skips one auto-follow caused by the session composer changing height. */
+  skipNextViewportResizeAutoScrollRef?: MutableRefObject<boolean>;
   /**
    * When true, prevents sticky auto-scroll from fighting programmatic scrolls
    * (e.g. during search result navigation).
@@ -366,7 +411,10 @@ export interface SessionChatStreamViewProps {
   suppressStickyAutoScrollRef?: React.RefObject<boolean>;
 }
 
-const SessionChatSendContext = createContext<((message: ClientToServer) => void) | null>(null);
+const SessionChatActionContext = createContext<{
+  sendMessage?: (message: ClientToServer) => void;
+  openHtmlFile?: (file: SessionFilePayload) => boolean;
+}>({});
 const SessionImagePreviewContext = createContext<{
   openImagePreview: (imageKey: string) => void;
 } | null>(null);
@@ -1064,7 +1112,7 @@ export const buildChatVirtualRows = ({
 /**
  * Chat virtual scroll using Virtua library.
  *
- * IMPORTANT: Do NOT dynamically toggle VList's `shift` prop — it causes
+ * IMPORTANT: Do NOT dynamically toggle Virtua's `shift` prop — it causes
  * element overlap bugs (Virtua bug #284). We use shift={false} since chat
  * messages are appended to the end.
  *
@@ -1080,6 +1128,7 @@ export const SessionChatStreamView = forwardRef<
       items,
       sessionId,
       className,
+      leadingContent,
       emptyState,
       onAtBottomChange,
       showScrollToLatest = true,
@@ -1087,21 +1136,25 @@ export const SessionChatStreamView = forwardRef<
       renderMessageRow,
       onFileDiffClick,
       onFilePathClick,
+      onOpenHtmlFile,
       lastAssistantMessageId = null,
       lastCompletedAssistantMessageId = null,
       messageFileDiffEntriesByTurn,
       assistantActions,
       assistantActionsMessageId = null,
       onForkLastAssistant,
+      forkWorktreeAvailability = 'hidden',
+      onForkWorktreeMenuOpen,
       forkingAssistantMessageId,
       agentActivityLabel = null,
       agentActivityTone = 'primary',
-      conversationFontSize = 'default',
+      conversationFontSize = DEFAULT_CONVERSATION_FONT_SIZE,
+      skipNextViewportResizeAutoScrollRef,
       suppressStickyAutoScrollRef,
     },
     ref
   ) => {
-    const vlistRef = useRef<VListHandle>(null);
+    const vlistRef = useRef<VirtualizerHandle>(null);
     const scrollRootRef = useRef<HTMLDivElement>(null);
     const { t } = useTranslation();
     const search = useSessionSearch();
@@ -1110,13 +1163,26 @@ export const SessionChatStreamView = forwardRef<
     const [assistantExpansionVersion, setAssistantExpansionVersion] = useState(0);
     const [hoveredAssistantMessageId, setHoveredAssistantMessageId] = useState<string | null>(null);
     const pendingExpandedGroupRowKeyRef = useRef<string | null>(null);
-    const groupExpansionScrollTokenRef = useRef(0);
     const groupExpansionAutoScrollSuppressedRef = useRef(false);
+    const releaseGroupExpansionSuppressionRef = useRef(false);
+    /**
+     * An outline jump in flight. Declared here, beside the other suppression
+     * state, because `autoScrollSuppressedRef` below reads it — see
+     * `handleOutlineJump` for what maintains it.
+     */
+    const pendingOutlineJumpRef = useRef<{ rowIndex: number; attempts: number } | null>(null);
+    /**
+     * Every reason this component has to stop follow-output. Group expansion
+     * releases in the layout effect of its own commit; an outline jump releases
+     * when the jump finishes (see `pendingOutlineJumpRef`), because an event
+     * handler cannot count on a commit happening at all.
+     */
     const autoScrollSuppressedRef = useMemo(
       () => ({
         get current() {
           return (
             groupExpansionAutoScrollSuppressedRef.current ||
+            pendingOutlineJumpRef.current !== null ||
             Boolean(suppressStickyAutoScrollRef?.current)
           );
         },
@@ -1135,7 +1201,6 @@ export const SessionChatStreamView = forwardRef<
         });
         if (expanded) {
           pendingExpandedGroupRowKeyRef.current = `assistant:${messageId}:${groupKey}:header`;
-          groupExpansionScrollTokenRef.current += 1;
           groupExpansionAutoScrollSuppressedRef.current = true;
         }
         setAssistantExpansionVersion((version) => version + 1);
@@ -1154,7 +1219,6 @@ export const SessionChatStreamView = forwardRef<
         });
         if (expanded) {
           pendingExpandedGroupRowKeyRef.current = `assistant:${messageId}:${segmentKey}:worked-header`;
-          groupExpansionScrollTokenRef.current += 1;
           groupExpansionAutoScrollSuppressedRef.current = true;
         }
         setAssistantExpansionVersion((version) => version + 1);
@@ -1190,6 +1254,37 @@ export const SessionChatStreamView = forwardRef<
       lastAssistantMessageId,
       messageFileDiffEntriesByTurn,
     ]);
+    const leadingRowCount = leadingContent == null ? 0 : 1;
+
+    /**
+     * The gap between the viewport's scroll space and Virtua's item-offset
+     * space — the viewport's top padding (`--conversation-top-inset` plus
+     * `py-6`), which Virtua does not account for. Measured from the DOM rather
+     * than assumed, and only on mount / viewport resize; see
+     * `measureItemOffsetDelta`.
+     */
+    const itemOffsetDeltaRef = useRef(0);
+
+    /**
+     * Put a row's top at the viewport's top edge.
+     *
+     * THE one place that turns a row index into a scroll, so every jump in this
+     * component lands in the same coordinate space that
+     * `resolveActiveOutlineIndex` reads positions back out of. Without the
+     * `offset` compensation a jump settles a padding's worth low, and the
+     * outline rail then reports the round BEFORE the one that was asked for.
+     * (`scrollViewportToRealBottom` compensates the bottom padding the same way.)
+     */
+    const scrollRowToTop = useCallback(
+      (rowIndex: number, smooth = false) => {
+        vlistRef.current?.scrollToIndex(rowIndex + leadingRowCount, {
+          align: 'start',
+          smooth,
+          offset: itemOffsetDeltaRef.current,
+        });
+      },
+      [leadingRowCount]
+    );
 
     useLayoutEffect(() => {
       const rowKey = pendingExpandedGroupRowKeyRef.current;
@@ -1203,61 +1298,210 @@ export const SessionChatStreamView = forwardRef<
       }
 
       pendingExpandedGroupRowKeyRef.current = null;
-      const scrollToken = groupExpansionScrollTokenRef.current;
-      const scrollToGroupHeader = () => {
-        vlistRef.current?.scrollToIndex(rowIndex, { align: 'start', smooth: false });
-      };
-      requestAnimationFrame(scrollToGroupHeader);
-      window.setTimeout(() => {
-        if (groupExpansionScrollTokenRef.current !== scrollToken) return;
-        scrollToGroupHeader();
-        requestAnimationFrame(() => {
-          if (groupExpansionScrollTokenRef.current === scrollToken) {
-            groupExpansionAutoScrollSuppressedRef.current = false;
-          }
-        });
-      }, 180);
+      // Descendant layout effects run before this parent effect, so Virtua has
+      // committed and measured the expanded row set when this call runs.
+      scrollRowToTop(rowIndex);
+      releaseGroupExpansionSuppressionRef.current = true;
       return undefined;
-    }, [virtualRows]);
+    }, [scrollRowToTop, virtualRows]);
 
-    // Compute a lightweight signal that changes when the last message's content
-    // grows during streaming. Without this, contentChangeKey only reflects
-    // items.length (which stays the same during streaming) and the auto-scroll
-    // useEffect never fires — leaving scroll-to-bottom entirely dependent on
-    // the ResizeObserver, which can miss updates with virtual list internals.
-    const contentSignal = useMemo(() => {
-      const lastItem = items[items.length - 1];
-      if (lastItem?.type !== 'message') return 0;
-      return lastItem.message.items.reduce((n, item) => {
-        if (item.type === 'text' || item.type === 'thought') return n + item.text.length;
-        if (item.type === 'tool_call') return n + (item.content?.length ?? 0);
-        return n + 1;
-      }, 0);
-    }, [items]);
-
-    const { isSticky, scrollToBottom, handleScroll } = useStickyScroll({
+    const {
+      scrollRef: scrollContainerRef,
+      scrollElement: scrollViewportElement,
+      isSticky,
+      scrollToBottom,
+      handleScroll,
+    } = useStickyScroll({
       sessionId,
       vlistRef,
-      scrollRootRef,
-      itemCount: virtualRows.length + (shouldShowAgentActivity ? 1 : 0),
-      contentChangeKey: `${virtualRows.length}-${shouldShowAgentActivity}-${contentSignal}-${conversationFontSize}`,
-      scrollContainerClass: 'chat-scrollbar',
+      // `leadingContent` is a real first Virtua row, so it counts here — sticky
+      // scroll otherwise targets an index short of the true bottom.
+      itemCount: virtualRows.length + leadingRowCount + (shouldShowAgentActivity ? 1 : 0),
       onAtBottomChange,
+      skipNextViewportResizeAutoScrollRef,
       suppressAutoScrollRef: autoScrollSuppressedRef,
     });
+
+    // useStickyScroll's layout effect runs before this one in hook order and
+    // consumes the suppression for the expansion commit. Release it at the end
+    // of that same commit instead of guessing when Virtua settles with a timer.
+    useLayoutEffect(() => {
+      if (!releaseGroupExpansionSuppressionRef.current) return;
+      releaseGroupExpansionSuppressionRef.current = false;
+      groupExpansionAutoScrollSuppressedRef.current = false;
+    });
+
+    // ---- Outline rail ------------------------------------------------------
+    // The left table of contents. Everything here is derived from `items` and
+    // from Virtua's index math; the rail never inspects the DOM of the message
+    // rows, because virtualization means most rounds have no DOM at all.
+    const isMobile = useIsMobile();
+    const previousOutlineRef = useRef<readonly ConversationOutlineEntry[] | undefined>(undefined);
+    const outlineEntries = useMemo(() => {
+      // `items` gets a new identity on every streamed delta, so this runs at
+      // token rate. `buildConversationOutline` is per-message memoized and
+      // `reuseConversationOutline` hands back the previous ARRAY when nothing
+      // visible changed, which is what keeps the tick list from re-rendering.
+      const next = reuseConversationOutline(
+        previousOutlineRef.current,
+        buildConversationOutline(items)
+      );
+      previousOutlineRef.current = next;
+      return next;
+    }, [items]);
+    const previousAnchorsRef = useRef<readonly ConversationOutlineAnchor[] | undefined>(undefined);
+    const outlineAnchors = useMemo(() => {
+      // `virtualRows` is rebuilt per delta, so this runs at token rate too;
+      // reusing the array keeps everything derived from it identity-stable.
+      const next = reuseOutlineAnchors(
+        previousAnchorsRef.current,
+        buildOutlineAnchors(virtualRows, outlineEntries)
+      );
+      previousAnchorsRef.current = next;
+      return next;
+    }, [outlineEntries, virtualRows]);
+    const [activeOutlineIndex, setActiveOutlineIndex] = useState(-1);
+
+    // Measured, not assumed: the rect difference also absorbs any border or
+    // start spacer, which a `padding-top` read would miss. Never on a scroll
+    // path — `getBoundingClientRect` forces layout.
+    const measureItemOffsetDelta = useCallback(() => {
+      const content = scrollViewportElement?.firstElementChild;
+      if (!scrollViewportElement || !(content instanceof HTMLElement)) return;
+      itemOffsetDeltaRef.current =
+        content.getBoundingClientRect().top -
+        scrollViewportElement.getBoundingClientRect().top +
+        scrollViewportElement.scrollTop;
+    }, [scrollViewportElement]);
+
+    const syncActiveOutlineIndex = useCallback(() => {
+      const vlist = vlistRef.current;
+      if (!vlist || outlineAnchors.length === 0) {
+        setActiveOutlineIndex(-1);
+        return;
+      }
+      // `scrollSize` / `viewportSize` are the scroller's own cached
+      // scrollHeight / offsetHeight, so this costs no layout read.
+      const maxScrollOffset = vlist.scrollSize - vlist.viewportSize;
+      const isAtEnd = maxScrollOffset > 0 && vlist.scrollOffset >= maxScrollOffset - 2;
+      // O(log rounds) offset lookups, and setState bails out when the round is
+      // unchanged — which it is for the overwhelming majority of scroll events.
+      const next = resolveActiveOutlineIndex(
+        outlineAnchors,
+        (rowIndex) => vlist.getItemOffset(rowIndex + leadingRowCount),
+        vlist.scrollOffset - itemOffsetDeltaRef.current,
+        isAtEnd
+      );
+      setActiveOutlineIndex(next);
+    }, [leadingRowCount, outlineAnchors]);
+
+    // Read the sync through a ref so this effect keys on the ELEMENT alone.
+    // Depending on the callback would re-run it — two `getBoundingClientRect`
+    // and an observer teardown/rebuild — on every streamed delta, which is
+    // exactly the forced layout the measurement comment above rules out.
+    const syncActiveOutlineIndexRef = useLatestRef(syncActiveOutlineIndex);
+    const measureItemOffsetDeltaRef = useLatestRef(measureItemOffsetDelta);
+    useEffect(() => {
+      if (!scrollViewportElement) return undefined;
+      const remeasure = () => {
+        measureItemOffsetDeltaRef.current();
+        syncActiveOutlineIndexRef.current();
+      };
+      remeasure();
+      return observeResizeOnAnimationFrame(scrollViewportElement, remeasure);
+    }, [measureItemOffsetDeltaRef, scrollViewportElement, syncActiveOutlineIndexRef]);
+
+    /** How far a pending jump still is from its target, in item-offset space. */
+    const outlineJumpDrift = useCallback(
+      (rowIndex: number): number => {
+        const vlist = vlistRef.current;
+        if (!vlist) return 0;
+        const targetOffset = vlist.getItemOffset(rowIndex + leadingRowCount);
+        return Math.abs(vlist.scrollOffset - itemOffsetDeltaRef.current - targetOffset);
+      },
+      [leadingRowCount]
+    );
+
+    /**
+     * A jump into rows Virtua has never measured lands on ESTIMATED offsets.
+     * Virtua does re-issue internally as measurements arrive, but it gives up
+     * after 150ms of silence (`core/index.js`), and a React commit plus the
+     * ResizeObserver round trip for a screenful of message rows routinely takes
+     * longer than that — so a far jump settles a round short. Arriving is what
+     * measures the rows, so re-issuing once the scroll settles converges.
+     *
+     * While a jump is pending it also suppresses follow-output, so a jump upward
+     * out of a sticky conversation is not pulled straight back to the bottom.
+     * Tying suppression to this ref rather than to a render is deliberate: the
+     * release must not depend on a commit that React can skip.
+     */
+    const handleOutlineJump = useCallback(
+      (outlineIndex: number) => {
+        const anchor = outlineAnchors.find((item) => item.outlineIndex === outlineIndex);
+        if (!anchor) return;
+        pendingOutlineJumpRef.current = { rowIndex: anchor.rowIndex, attempts: 0 };
+        scrollRowToTop(anchor.rowIndex);
+        // Clicking the round already at the top scrolls nowhere, so no
+        // `onScrollEnd` will arrive to clear the pending jump — and suppression
+        // would stay armed until some unrelated render happened to release it.
+        if (outlineJumpDrift(anchor.rowIndex) <= OUTLINE_JUMP_TOLERANCE_PX) {
+          pendingOutlineJumpRef.current = null;
+        }
+        setActiveOutlineIndex(outlineIndex);
+      },
+      [outlineAnchors, outlineJumpDrift, scrollRowToTop]
+    );
+
+    const handleStreamScrollEnd = useCallback(() => {
+      const pending = pendingOutlineJumpRef.current;
+      if (!pending) return;
+      if (
+        outlineJumpDrift(pending.rowIndex) <= OUTLINE_JUMP_TOLERANCE_PX ||
+        pending.attempts >= OUTLINE_JUMP_MAX_CORRECTIONS
+      ) {
+        // Not settling within the bound means the target simply cannot reach the
+        // top — the last rounds are shorter than the viewport, so the scroll
+        // clamps. Stop rather than retry against a wall.
+        pendingOutlineJumpRef.current = null;
+        return;
+      }
+      pendingOutlineJumpRef.current = {
+        rowIndex: pending.rowIndex,
+        attempts: pending.attempts + 1,
+      };
+      scrollRowToTop(pending.rowIndex);
+    }, [outlineJumpDrift, scrollRowToTop]);
+
+    // Any real input abandons the correction: a reader who starts scrolling
+    // must never be yanked back by a jump they have already moved on from.
+    useEffect(() => {
+      if (!scrollViewportElement) return undefined;
+      const abandon = () => {
+        pendingOutlineJumpRef.current = null;
+      };
+      const options = { passive: true } as const;
+      scrollViewportElement.addEventListener('wheel', abandon, options);
+      scrollViewportElement.addEventListener('touchstart', abandon, options);
+      scrollViewportElement.addEventListener('keydown', abandon, options);
+      return () => {
+        scrollViewportElement.removeEventListener('wheel', abandon);
+        scrollViewportElement.removeEventListener('touchstart', abandon);
+        scrollViewportElement.removeEventListener('keydown', abandon);
+      };
+    }, [scrollViewportElement]);
 
     // Desktop-only top fade: shown only when content has scrolled under the top
     // edge, so it reads as "more conversation above" without dimming the first
     // message while the list sits at its start. setState with an unchanged
     // boolean bails out, so per-scroll-event updates are effectively free.
-    const isMobile = useIsMobile();
     const [isScrolledFromTop, setIsScrolledFromTop] = useState(false);
     const handleStreamScroll = useCallback(
       (offset: number) => {
         handleScroll(offset);
         setIsScrolledFromTop(offset > 0);
+        syncActiveOutlineIndex();
       },
-      [handleScroll]
+      [handleScroll, syncActiveOutlineIndex]
     );
 
     const scrollToIndex = useCallback(
@@ -1283,12 +1527,9 @@ export const SessionChatStreamView = forwardRef<
           virtualIndex = virtualRows.findIndex((row) => row.messageIndex === messageIndex);
         }
         if (virtualIndex === -1) return;
-        vlistRef.current?.scrollToIndex(virtualIndex, {
-          align: 'start',
-          smooth: smooth ?? true,
-        });
+        scrollRowToTop(virtualIndex, smooth ?? true);
       },
-      [activeSearchBlockId, items, virtualRows]
+      [activeSearchBlockId, items, scrollRowToTop, virtualRows]
     );
 
     useImperativeHandle(ref, () => ({ scrollToBottom, scrollToIndex }), [
@@ -1333,12 +1574,18 @@ export const SessionChatStreamView = forwardRef<
       }),
       []
     );
-
+    const chatActionContextValue = useMemo(
+      () => ({
+        ...(sendMessage ? { sendMessage } : {}),
+        ...(onOpenHtmlFile ? { openHtmlFile: onOpenHtmlFile } : {}),
+      }),
+      [onOpenHtmlFile, sendMessage]
+    );
     const hasOnlyEmptyItem = items.length === 1 && items[0]?.type === 'empty';
 
-    if (!items.length || (hasOnlyEmptyItem && emptyState)) {
+    if ((!items.length || (hasOnlyEmptyItem && emptyState)) && leadingContent == null) {
       return (
-        <SessionChatSendContext.Provider value={sendMessage ?? null}>
+        <SessionChatActionContext.Provider value={chatActionContextValue}>
           <SessionImagePreviewContext.Provider value={imagePreviewContextValue}>
             <ContainerQueryProvider
               ref={scrollRootRef}
@@ -1351,21 +1598,21 @@ export const SessionChatStreamView = forwardRef<
               )}
             </ContainerQueryProvider>
           </SessionImagePreviewContext.Provider>
-        </SessionChatSendContext.Provider>
+        </SessionChatActionContext.Provider>
       );
     }
 
     return (
-      <SessionChatSendContext.Provider value={sendMessage ?? null}>
+      <SessionChatActionContext.Provider value={chatActionContextValue}>
         <SessionImagePreviewContext.Provider value={imagePreviewContextValue}>
           <ContainerQueryProvider
             ref={scrollRootRef}
             className={cn('relative bg-background', className)}
           >
-            <VList
-              ref={vlistRef}
-              // Virtua sets only overflow-y:auto. CSS otherwise computes the
-              // untouched x axis to auto too, letting any wide row pan the
+            <div
+              ref={scrollContainerRef}
+              // Keep x overflow explicit: overflow-y:auto otherwise computes
+              // the untouched x axis to auto too, letting any wide row pan the
               // entire conversation instead of its own nested scroller.
               className="chat-scrollbar h-full overflow-x-hidden py-5 sm:py-6"
               // Mobile session page floats a frosted header over the list;
@@ -1373,74 +1620,103 @@ export const SessionChatStreamView = forwardRef<
               // branch) pads the scroll content so the first message clears the
               // header at rest while later content scrolls under it and blurs.
               // Unset elsewhere → falls back to py-6's 1.5rem, a no-op.
-              style={{ paddingTop: 'calc(var(--conversation-top-inset, 0px) + 1.5rem)' }}
-              shift={false}
-              onScroll={handleStreamScroll}
-              // Pre-render extra items outside the viewport to reduce blank areas
-              // during fast scrolling (especially on mobile). This is 4x Virtua's
-              // default (200px) — generous, but deliberately not the previous 2000px:
-              // an oversized buffer keeps a huge set of still-resizing rows mounted,
-              // which widens the window where Virtua's offsets are mid-recompute and
-              // rows can transiently overlap. 800 keeps ~2 viewports of headroom.
-              bufferSize={800}
+              style={{
+                display: 'block',
+                overflowY: 'auto',
+                contain: 'strict',
+                width: '100%',
+                height: '100%',
+                paddingTop: 'calc(var(--conversation-top-inset, 0px) + 1.5rem)',
+              }}
             >
-              {virtualRows.map((row) => {
-                if (row.type === 'standard') {
-                  // Standard rows are only ever system or user messages
-                  // (assistant turns are flattened into `assistant` rows below),
-                  // so they carry no per-turn file diffs or last-assistant
-                  // quick actions.
+              <Virtualizer
+                ref={vlistRef}
+                shift={false}
+                onScroll={handleStreamScroll}
+                onScrollEnd={handleStreamScrollEnd}
+                // Pre-render extra items outside the viewport to reduce blank areas
+                // during fast scrolling (especially on mobile). This is 4x Virtua's
+                // default (200px) — generous, but deliberately not the previous 2000px:
+                // an oversized buffer keeps a huge set of still-resizing rows mounted,
+                // which widens the window where Virtua's offsets are mid-recompute and
+                // rows can transiently overlap. 800 keeps ~2 viewports of headroom.
+                bufferSize={800}
+              >
+                {leadingContent == null ? null : (
+                  <div data-conversation-leading-content="">{leadingContent}</div>
+                )}
+                {virtualRows.map((row) => {
+                  if (row.type === 'standard') {
+                    // Standard rows are only ever system or user messages
+                    // (assistant turns are flattened into `assistant` rows below),
+                    // so they carry no per-turn file diffs or last-assistant
+                    // quick actions.
+                    return (
+                      <ChatItem
+                        key={row.key}
+                        item={row.item}
+                        renderMessageRow={renderMessageRow}
+                        noMessagesLabel={noMessagesLabel}
+                        emptyState={emptyState}
+                      />
+                    );
+                  }
+
+                  const canForkAssistantMessage =
+                    row.item.message.finished === true &&
+                    (row.item.message.id === lastCompletedAssistantMessageId ||
+                      Boolean(row.item.message.acpTurnId));
+                  const fileDiffOverride =
+                    messageFileDiffEntriesByTurn === undefined
+                      ? undefined
+                      : (messageFileDiffEntriesByTurn[row.item.message.id] ??
+                        EMPTY_EDITED_FILE_ENTRIES);
                   return (
-                    <ChatItem
+                    <AssistantChatItem
                       key={row.key}
-                      item={row.item}
-                      renderMessageRow={renderMessageRow}
-                      noMessagesLabel={noMessagesLabel}
-                      emptyState={emptyState}
+                      row={row}
+                      fileDiffOverride={fileDiffOverride}
+                      assistantActions={resolveAssistantMessageActions(
+                        row.item.message.id,
+                        assistantActionsMessageId,
+                        assistantActions
+                      )}
+                      onFork={canForkAssistantMessage ? onForkLastAssistant : undefined}
+                      forkWorktreeAvailability={forkWorktreeAvailability}
+                      onForkWorktreeMenuOpen={onForkWorktreeMenuOpen}
+                      isForking={forkingAssistantMessageId === row.item.message.id}
+                      onFileDiffClick={onFileDiffClick}
+                      onFilePathClick={onFilePathClick}
+                      onGroupExpandedChange={handleAssistantGroupExpandedChange}
+                      onWorkedGroupExpandedChange={handleAssistantWorkedGroupExpandedChange}
+                      isTurnHovered={hoveredAssistantMessageId === row.item.message.id}
+                      onTurnHoverChange={handleAssistantTurnHoverChange}
+                      conversationFontSize={conversationFontSize}
                     />
                   );
-                }
-
-                const canForkAssistantMessage =
-                  row.item.message.finished === true &&
-                  (row.item.message.id === lastCompletedAssistantMessageId ||
-                    Boolean(row.item.message.acpTurnId));
-                const fileDiffOverride =
-                  messageFileDiffEntriesByTurn === undefined
-                    ? undefined
-                    : (messageFileDiffEntriesByTurn[row.item.message.id] ??
-                      EMPTY_EDITED_FILE_ENTRIES);
-                return (
-                  <AssistantChatItem
-                    key={row.key}
-                    row={row}
-                    fileDiffOverride={fileDiffOverride}
-                    assistantActions={resolveAssistantMessageActions(
-                      row.item.message.id,
-                      assistantActionsMessageId,
-                      assistantActions
-                    )}
-                    onFork={canForkAssistantMessage ? onForkLastAssistant : undefined}
-                    isForking={forkingAssistantMessageId === row.item.message.id}
-                    onFileDiffClick={onFileDiffClick}
-                    onFilePathClick={onFilePathClick}
-                    onGroupExpandedChange={handleAssistantGroupExpandedChange}
-                    onWorkedGroupExpandedChange={handleAssistantWorkedGroupExpandedChange}
-                    isTurnHovered={hoveredAssistantMessageId === row.item.message.id}
-                    onTurnHoverChange={handleAssistantTurnHoverChange}
-                    conversationFontSize={conversationFontSize}
-                  />
-                );
-              })}
-              {shouldShowAgentActivity && agentActivityLabel && (
-                <AgentActivityRow label={agentActivityLabel} tone={agentActivityTone} />
-              )}
-            </VList>
+                })}
+                {shouldShowAgentActivity && agentActivityLabel && (
+                  <AgentActivityRow label={agentActivityLabel} tone={agentActivityTone} />
+                )}
+              </Virtualizer>
+            </div>
             {/* Top fade into the bg-background canvas above (desktop only),
                 hinting that the conversation continues past the top edge. */}
             {!isMobile && isScrolledFromTop ? (
               <div className="pointer-events-none absolute inset-x-0 top-0 h-12 bg-gradient-to-b from-background to-transparent" />
             ) : null}
+            {/* Round outline. An overlay SIBLING of the scroll viewport, never a
+                Virtua row — and never a child of the viewport either, because
+                sticky scroll takes the content element from that div's
+                `firstElementChild`. Touch has no hover, so mobile is excluded
+                rather than shipped without its preview card. */}
+            {isMobile ? null : (
+              <ConversationOutlineRail
+                entries={outlineEntries}
+                activeIndex={activeOutlineIndex}
+                onJumpToRound={handleOutlineJump}
+              />
+            )}
             {showScrollToLatest && !isSticky && (
               /* Full-bleed overlay; ConversationColumn carries the shared
                  horizontal gutter so the button lines up with the composer. */
@@ -1472,7 +1748,7 @@ export const SessionChatStreamView = forwardRef<
             />
           </ContainerQueryProvider>
         </SessionImagePreviewContext.Provider>
-      </SessionChatSendContext.Provider>
+      </SessionChatActionContext.Provider>
     );
   }
 );
@@ -1485,11 +1761,11 @@ export const MessageRowView = memo(function MessageRowView({
   user,
   onNavigateSession,
   onEdit,
-  conversationFontSize = 'default',
+  conversationFontSize = DEFAULT_CONVERSATION_FONT_SIZE,
 }: {
   message: SessionHistoryParsed;
   sessionId: SessionId;
-  onNavigateSession?: (sessionId: SessionId) => void;
+  onNavigateSession?: (target: SessionNavigationTarget) => void;
   onEdit?: (message: SessionHistoryParsed, text: string) => Promise<boolean>;
   user?: SessionChatUser;
   conversationFontSize?: ConversationFontSize;
@@ -1545,7 +1821,7 @@ const SystemMessageRowView = ({
 }: {
   message: SessionHistoryParsed;
   sessionId: SessionId;
-  onNavigateSession?: (sessionId: SessionId) => void;
+  onNavigateSession?: (target: SessionNavigationTarget) => void;
 }) => {
   const tasksEnabled = useAtomValue(tasksFeatureEnabledAtom);
   const systemItems = message.items.flatMap((item, itemIndex) =>
@@ -1580,17 +1856,54 @@ const SystemMessageRowView = ({
             script={item}
           />
         ) : (
-          <OperationCompletionView key={`${item.deliveryId}-${itemIndex}`} completion={item} />
+          <OperationCompletionView
+            key={`${item.deliveryId}-${itemIndex}`}
+            completion={item}
+            onNavigateSession={onNavigateSession}
+          />
         )
       )}
     </div>
   );
 };
 
+const selectSessionTitle = (session: SessionMeta | null | undefined): string | null =>
+  session?.title?.trim() || null;
+
+const CreatedSessionOperationCard = ({
+  sessionId,
+  fallbackTitle,
+  onNavigateSession,
+}: {
+  sessionId: SessionId;
+  fallbackTitle?: string;
+  onNavigateSession?: (target: SessionNavigationTarget) => void;
+}) => {
+  const { t } = useTranslation();
+  const titleAtom = useMemo(
+    () => selectAtom(sessionMetaAtomFamily(getSessionRoomId(sessionId)), selectSessionTitle),
+    [sessionId]
+  );
+  const liveTitle = useAtomValue(titleAtom);
+  const title = liveTitle || fallbackTitle?.trim() || t('sessions.untitled', 'Untitled session');
+
+  return (
+    <SessionRelationCard
+      relation="opened"
+      label={t('sessions.openedBy.createdSession', 'Session created')}
+      sessionTitle={title}
+      actionLabel={t('sessions.openedBy.viewSession', 'View session')}
+      onAction={onNavigateSession ? () => onNavigateSession({ sessionId }) : undefined}
+    />
+  );
+};
+
 const OperationCompletionView = ({
   completion,
+  onNavigateSession,
 }: {
   completion: Extract<MessageContent, { type: 'operation_completion' }>;
+  onNavigateSession?: (target: SessionNavigationTarget) => void;
 }) => {
   const { t } = useTranslation();
   const resultItems =
@@ -1605,6 +1918,54 @@ const OperationCompletionView = ({
   const failedCompletion = completion.completion.type === 'error';
   const cancelledCompletion = completion.completion.type === 'cancelled';
   const StatusIcon = failedCompletion ? AlertCircle : cancelledCompletion ? Circle : CheckCircle2;
+  const createdSessions =
+    completion.operationKind === 'session_create' ||
+    completion.operationKind === 'session_create_many'
+      ? resultItems.flatMap((item) =>
+          item.status === 'succeeded'
+            ? [
+                {
+                  sessionId: item.target.sessionId,
+                  fallbackTitle: item.label,
+                },
+              ]
+            : []
+        )
+      : [];
+
+  if (createdSessions.length > 0) {
+    return (
+      <div className="flex flex-col gap-2" data-session-create-completion="">
+        {createdSessions.map((created) => (
+          <CreatedSessionOperationCard
+            key={created.sessionId}
+            sessionId={created.sessionId}
+            fallbackTitle={created.fallbackTitle}
+            onNavigateSession={onNavigateSession}
+          />
+        ))}
+        {failedCompletion || cancelledCompletion || failed > 0 || cancelled > 0 ? (
+          <div className="px-1 text-xs text-muted-foreground">
+            {failedCompletion
+              ? t('orchestration.operationFailed', { id: completion.operationId })
+              : cancelledCompletion
+                ? t('orchestration.operationCancelled', { id: completion.operationId })
+                : t('orchestration.operationItemSummary', {
+                    total: resultItems.length,
+                    succeeded,
+                    failed,
+                    cancelled,
+                  })}
+          </div>
+        ) : null}
+        {completion.continuation?.status === 'not_started' ? (
+          <div className="px-1 text-xs text-muted-foreground">
+            {t('orchestration.continuationNotStarted')}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
 
   return (
     <div className="border-border/70 bg-muted/30 flex items-start gap-2 border-y px-3 py-2 text-sm">
@@ -1666,7 +2027,7 @@ const SystemNoticeView = ({
 }: {
   notice: Extract<MessageContent, { type: 'system_notice' }>;
   sessionId: SessionId;
-  onNavigateSession?: (sessionId: SessionId) => void;
+  onNavigateSession?: (target: SessionNavigationTarget) => void;
 }) => {
   const { t } = useTranslation();
 
@@ -1685,12 +2046,20 @@ const SystemNoticeView = ({
       return (
         <div className="flex items-center gap-3 py-4 text-xs text-muted-foreground/75">
           <DashedNoticeRule />
-          <span className="shrink-0">
-            {t('sessions.systemNotices.forkOrigin.prefix', 'This conversation was forked from')}{' '}
+          {/* min-w-0 on the wrapper + truncate on the button: a long source
+              title ellipsizes inside the column instead of pushing past it and
+              clipping at the pane edge. Truncation must live on the button —
+              on the wrapper the whole button is one atomic inline box, so the
+              ellipsis would replace the entire title. */}
+          <span className="flex min-w-0 items-baseline gap-1">
+            <span className="shrink-0">
+              {t('sessions.systemNotices.forkOrigin.prefix', 'This conversation was forked from')}
+            </span>
             <button
               type="button"
-              className="font-medium text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-              onClick={() => onNavigateSession?.(meta.sourceSessionId)}
+              title={meta.sourceTitle}
+              className="min-w-0 truncate font-medium text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+              onClick={() => onNavigateSession?.({ sessionId: meta.sourceSessionId })}
             >
               {meta.sourceTitle}
             </button>
@@ -1834,6 +2203,11 @@ const ChatFailedNoticeView = ({
           'sessions.systemNotices.chatFailed.agentDisconnected',
           'Agent disconnected unexpectedly'
         );
+      case 'agent_no_output':
+        return t(
+          'sessions.systemNotices.chatFailed.agentNoOutput',
+          'The agent ended the turn without producing any output — you can retry your message'
+        );
       case 'turn_pre_prompt_failed':
         return t(
           'sessions.systemNotices.chatFailed.turnPrePromptFailed',
@@ -1846,6 +2220,11 @@ const ChatFailedNoticeView = ({
         );
       case 'machine_access_denied':
         return t('sessions.systemNotices.chatFailed.machineAccessDenied', 'Machine access denied');
+      case 'memory_pressure':
+        return t(
+          'sessions.systemNotices.chatFailed.memoryPressure',
+          'The machine is low on memory - free some memory and retry'
+        );
       case 'acp_auth_required':
         return t('sessions.systemNotices.chatFailed.acpAuthRequired', 'Authentication required');
       case 'acp_internal_error':
@@ -1854,6 +2233,11 @@ const ChatFailedNoticeView = ({
         return t(
           'sessions.systemNotices.chatFailed.acpUpstreamApiError',
           'Upstream API error — you can retry your message'
+        );
+      case 'acp_session_storage_incompatible':
+        return t(
+          'sessions.systemNotices.chatFailed.acpSessionStorageIncompatible',
+          'DeepSeek session storage uses incompatible compression — keep one format or use a separate DSH_HOME'
         );
       case 'acp_resource_not_found':
         return t(
@@ -1959,7 +2343,7 @@ const ChatFailedNoticeView = ({
       ) : null}
       {meta?.reason === 'acp_auth_required' &&
       sessionMeta?.cliType === 'builtin' &&
-      isBuiltinAgentType(sessionMeta.agentType) ? (
+      isManagedBuiltinAgentType(sessionMeta.agentType) ? (
         <AcpAuthenticationPanel
           machineId={sessionMeta.machineId}
           configId={sessionMeta.agentConfigId}
@@ -2179,7 +2563,8 @@ const UserMessageRowView = ({
   const handleCopy = useCallback(async () => {
     if (!hasTextContent) return;
 
-    const textContent = getTextContentFromMessageItems(message.items);
+    // The chip form, not the rewritten instruction the agent received.
+    const textContent = getCopyTextFromMessageItems(message.items);
     const ok = await writeTextToClipboard(textContent);
     if (!ok) return;
 
@@ -2614,7 +2999,9 @@ const WorkedGroupHeader = ({
         'group flex w-full items-center gap-1 rounded-md py-0.5 text-left transition-colors',
         /* Quieter than the answer body so process chrome does not compete. */
         'text-muted-foreground hover:bg-hover/40 hover:text-foreground',
-        'sm:gap-1.5 sm:pl-1.5 sm:pr-1'
+        /* No leading pad: this chevron shares the turn's left rail with
+           `ActivityGroupHeader` and the answer prose. */
+        'sm:gap-1.5 sm:pr-1'
       )}
       onClick={() => onExpandedChange(!expanded)}
       aria-expanded={expanded}
@@ -2781,6 +3168,67 @@ const AssistantThoughtVirtualRow = memo(function AssistantThoughtVirtualRow({
  */
 export const MOBILE_TURN_ACTION_LEADING_INSET_PX = 48;
 
+const AssistantForkButton = ({
+  turnId,
+  isForking,
+  worktreeAvailability,
+  onFork,
+  onWorktreeMenuOpen,
+}: {
+  turnId: string;
+  isForking?: boolean;
+  worktreeAvailability: SessionForkWorktreeAvailability;
+  onFork: (turnId: string, destination?: SessionForkDestination) => void;
+  onWorktreeMenuOpen?: () => void;
+}) => {
+  const { t } = useTranslation();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const offerWorktree = worktreeAvailability !== 'hidden';
+  const button = (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      className="h-7 w-7 text-muted-foreground hover:bg-hover hover:text-foreground"
+      onClick={offerWorktree ? undefined : () => onFork(turnId, 'shared')}
+      disabled={isForking}
+      aria-label={t('sessions.forkSession', 'Fork session')}
+    >
+      {isForking ? (
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+      ) : (
+        <GitFork className="h-3.5 w-3.5" />
+      )}
+    </Button>
+  );
+
+  if (!offerWorktree) {
+    return (
+      <TooltipProvider>
+        <Tooltip delayDuration={500}>
+          <TooltipTrigger asChild>{button}</TooltipTrigger>
+          <TooltipContent>{t('sessions.forkSession', 'Fork session')}</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    );
+  }
+
+  return (
+    <SessionForkDestinationPopover
+      open={menuOpen}
+      onOpenChange={(open) => {
+        setMenuOpen(open);
+        if (open) onWorktreeMenuOpen?.();
+      }}
+      worktreeAvailability={worktreeAvailability}
+      disabled={isForking}
+      onSelect={(destination) => onFork(turnId, destination)}
+    >
+      {button}
+    </SessionForkDestinationPopover>
+  );
+};
+
 const AssistantTurnFooter = ({
   message,
   sessionId,
@@ -2790,6 +3238,8 @@ const AssistantTurnFooter = ({
   showDuration,
   isTurnHovered,
   onFork,
+  forkWorktreeAvailability = 'hidden',
+  onForkWorktreeMenuOpen,
   isForking,
 }: {
   message: SessionHistoryParsed;
@@ -2799,7 +3249,9 @@ const AssistantTurnFooter = ({
   onFileDiffClick?: (turnId: string, filePath: string) => void;
   showDuration: boolean;
   isTurnHovered: boolean;
-  onFork?: (turnId: string) => void;
+  onFork?: (turnId: string, destination?: SessionForkDestination) => void;
+  forkWorktreeAvailability?: SessionForkWorktreeAvailability;
+  onForkWorktreeMenuOpen?: () => void;
   isForking?: boolean;
 }) => {
   const { t, i18n } = useTranslation();
@@ -2867,11 +3319,10 @@ const AssistantTurnFooter = ({
                action bar can ride on the answer's line leading. This is a
                bordered card, not text, so it needs its own separation: without
                it the card border lands flush against the answer's last line box
-               (measured 0px on mobile, where `px-0` also shares the text's left
-               edge — it read as part of the paragraph). 8px puts the visible gap
-               at ~10px, matching the block rhythm of the rest of the turn. */
+               (measured 0px, and since the card shares the text's left edge it
+               read as part of the paragraph). 8px puts the visible gap at ~10px,
+               matching the block rhythm of the rest of the turn. */
             'pt-2',
-            isMobile ? 'px-0' : 'px-2',
             isMobile && '[&>div]:rounded-lg [&>div]:border-border/40 [&>div]:bg-muted/10'
           )}
           onFileClick={
@@ -2883,7 +3334,7 @@ const AssistantTurnFooter = ({
         <div
           className={cn(
             'flex flex-wrap items-center justify-start text-[11px] text-muted-foreground',
-            isMobile ? 'min-h-6 gap-1' : 'min-h-7 gap-2 px-2',
+            isMobile ? 'min-h-6 gap-1' : 'min-h-7 gap-2',
             !isMobile && 'opacity-0 transition-opacity duration-150 focus-within:opacity-100',
             !isMobile && isTurnHovered && 'opacity-100'
           )}
@@ -2954,28 +3405,13 @@ const AssistantTurnFooter = ({
                 />
               ) : null}
               {onFork ? (
-                <TooltipProvider>
-                  <Tooltip delayDuration={500}>
-                    <TooltipTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7 text-muted-foreground hover:bg-hover hover:text-foreground"
-                        onClick={() => onFork?.(message.id)}
-                        disabled={isForking}
-                        aria-label={t('sessions.forkSession', 'Fork session')}
-                      >
-                        {isForking ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <GitFork className="h-3.5 w-3.5" />
-                        )}
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>{t('sessions.forkSession', 'Fork session')}</TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
+                <AssistantForkButton
+                  turnId={message.id}
+                  isForking={isForking}
+                  worktreeAvailability={forkWorktreeAvailability}
+                  onFork={onFork}
+                  onWorktreeMenuOpen={onForkWorktreeMenuOpen}
+                />
               ) : null}
             </div>
           ) : null}
@@ -3043,7 +3479,9 @@ interface AssistantChatItemProps {
   row: AssistantChatVirtualRow;
   fileDiffOverride?: readonly AssistantEditedFileEntry[];
   assistantActions?: AssistantMessageAction[];
-  onFork?: (turnId: string) => void;
+  onFork?: (turnId: string, destination?: SessionForkDestination) => void;
+  forkWorktreeAvailability?: SessionForkWorktreeAvailability;
+  onForkWorktreeMenuOpen?: () => void;
   isForking?: boolean;
   onFileDiffClick?: (turnId: string, filePath: string) => void;
   onFilePathClick?: (filePath: string) => void;
@@ -3125,6 +3563,8 @@ const areAssistantChatItemPropsEqual = (
   prev.onGroupExpandedChange === next.onGroupExpandedChange &&
   prev.onWorkedGroupExpandedChange === next.onWorkedGroupExpandedChange &&
   prev.onFork === next.onFork &&
+  prev.forkWorktreeAvailability === next.forkWorktreeAvailability &&
+  prev.onForkWorktreeMenuOpen === next.onForkWorktreeMenuOpen &&
   prev.isForking === next.isForking &&
   prev.isTurnHovered === next.isTurnHovered &&
   prev.onTurnHoverChange === next.onTurnHoverChange &&
@@ -3135,6 +3575,8 @@ const AssistantChatItem = memo(function AssistantChatItem({
   fileDiffOverride,
   assistantActions,
   onFork,
+  forkWorktreeAvailability,
+  onForkWorktreeMenuOpen,
   isForking,
   onFileDiffClick,
   onFilePathClick,
@@ -3191,7 +3633,6 @@ const AssistantChatItem = memo(function AssistantChatItem({
           onFilePathClick,
           conversationFontSize,
           coveredFilePaths,
-          flushHorizontal: isWorkedDetail,
         });
       }
       case 'activity_group_header':
@@ -3245,6 +3686,8 @@ const AssistantChatItem = memo(function AssistantChatItem({
             showDuration={content.showDuration}
             isTurnHovered={isTurnHovered}
             onFork={onFork}
+            forkWorktreeAvailability={forkWorktreeAvailability}
+            onForkWorktreeMenuOpen={onForkWorktreeMenuOpen}
             isForking={isForking}
           />
         );
@@ -3307,7 +3750,6 @@ const AssistantChatItem = memo(function AssistantChatItem({
         <div
           className={cn(
             'max-w-[800px] break-words',
-            CONVERSATION_TEXT_FONT_SIZE_CLASSES[conversationFontSize],
             /* Same inset the old process rail used, without the border. */
             isWorkedDetail && 'pl-2.5 sm:pl-3',
             /* L4 result: full contrast. Process: muted so answer pops. */
@@ -3318,6 +3760,7 @@ const AssistantChatItem = memo(function AssistantChatItem({
                 : 'text-foreground',
             hasWideContent && 'min-w-[480px]'
           )}
+          style={conversationTextFontSizeStyle(conversationFontSize)}
           data-native-selection-allow
         >
           {rowBody}
@@ -3535,13 +3978,11 @@ const renderAssistantContent = (
     onFilePathClick?: (filePath: string) => void;
     conversationFontSize?: ConversationFontSize;
     coveredFilePaths?: ReadonlySet<string>;
-    /** Align body with process group chevrons (no extra horizontal pad). */
-    flushHorizontal?: boolean;
   }
 ) => {
   const messageId = options?.messageId ?? 'assistant';
   const itemIndex = options?.itemIndex ?? 0;
-  const conversationFontSize = options?.conversationFontSize ?? 'default';
+  const conversationFontSize = options?.conversationFontSize ?? DEFAULT_CONVERSATION_FONT_SIZE;
 
   switch (content.type) {
     case 'text':
@@ -3549,8 +3990,6 @@ const renderAssistantContent = (
         <MarkdownBlock
           text={content.text}
           size={conversationFontSize}
-          /* Process-rail body: flush left so group chevrons align. */
-          classes={options?.flushHorizontal ? 'px-0 sm:px-0' : undefined}
           isStreaming={options?.isStreaming}
           onFilePathClick={options?.onFilePathClick}
           coveredFilePaths={options?.coveredFilePaths}
@@ -4042,6 +4481,7 @@ export const SessionFileGroup = ({
   const { t } = useTranslation();
   const workspaceId = useAtomValue(currentWorkspaceIdAtom) as WorkspaceId | null;
   const authToken = useAtomValue(authTokenAtom);
+  const { openHtmlFile } = useContext(SessionChatActionContext);
   const [previewFile, setPreviewFile] = useState<SessionFilePayload | null>(null);
   const [previewStatus, setPreviewStatus] = useState<SessionFilePreviewStatus>({ kind: 'loading' });
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
@@ -4069,6 +4509,9 @@ export const SessionFileGroup = ({
 
   const handlePreview = useCallback(
     (file: SessionFilePayload) => {
+      if (isHtmlSessionFile(file) && openHtmlFile?.(file)) {
+        return;
+      }
       setPreviewFile(file);
       setPreviewStatus({ kind: 'loading' });
       if (!workspaceId || !authToken) {
@@ -4105,7 +4548,7 @@ export const SessionFileGroup = ({
           });
         });
     },
-    [authToken, sessionId, t, workspaceId]
+    [authToken, openHtmlFile, sessionId, t, workspaceId]
   );
 
   // The send path caps at 8 files/message, but a block list synced from another
@@ -4194,6 +4637,7 @@ const renderUserContent = (
       return (
         <UserPlainTextBlock
           text={content.text}
+          spans={content.spans}
           fontSize={options.conversationFontSize}
           searchBlockId={getTextSearchBlockId(options.messageId, options.itemIndex)}
         />
@@ -4317,8 +4761,7 @@ const ToolTitleWithHighlight = ({ title, className }: { title: string; className
 // stability (via `useStableCallback`) and non-reaction to unrelated state.
 export const MarkdownBlock = memo(function MarkdownBlock({
   text,
-  size = 'default',
-  classes = '',
+  size = DEFAULT_CONVERSATION_FONT_SIZE,
   isStreaming = false,
   onFilePathClick,
   coveredFilePaths,
@@ -4326,7 +4769,6 @@ export const MarkdownBlock = memo(function MarkdownBlock({
 }: {
   text: string;
   size?: ConversationFontSize;
-  classes?: string;
   isStreaming?: boolean;
   onFilePathClick?: (filePath: string) => void;
   /** Paths already shown in the turn edited-files footer (dedupe chips). */
@@ -4337,30 +4779,33 @@ export const MarkdownBlock = memo(function MarkdownBlock({
     onFilePathClick?.(href);
   });
 
+  /* No horizontal pad and no wrapper: assistant prose shares the turn's left
+     rail with the activity/worked chevrons, the subagent card, and the footer.
+     See the "one left rail" note in AGENTS.md. */
   return (
-    <div className={cn('sm:px-2', classes)}>
-      <MarkdownRenderer
-        text={text}
-        size={size}
-        isStreaming={isStreaming}
-        onAgentFileLinkClick={onFilePathClick ? handleAgentFileLinkClick : undefined}
-        coveredFilePaths={coveredFilePaths}
-        searchBlockId={searchBlockId}
-      />
-    </div>
+    <MarkdownRenderer
+      text={text}
+      size={size}
+      isStreaming={isStreaming}
+      onAgentFileLinkClick={onFilePathClick ? handleAgentFileLinkClick : undefined}
+      coveredFilePaths={coveredFilePaths}
+      searchBlockId={searchBlockId}
+    />
   );
 });
 
 const UserPlainTextBlock = ({
   text,
+  spans,
   fontSize,
   searchBlockId,
 }: {
   text: string;
+  spans?: MessageTextSpan[];
   fontSize: ConversationFontSize;
   searchBlockId?: string;
 }) => {
-  const renderSlice = useMemo(() => getUserTextRenderSlice(text), [text]);
+  const renderSlice = useMemo(() => getUserTextRenderSlice(text, spans), [spans, text]);
   const isLong = renderSlice.isTruncated;
   const [isExpanded, setIsExpanded] = useState(false);
   const [prevText, setPrevText] = useState(text);
@@ -4372,6 +4817,9 @@ const UserPlainTextBlock = ({
   const isSearchActive = Boolean(searchMatch?.activeResultId);
   const isFullTextVisible = !isLong || isExpanded || isSearchActive;
   const renderedText = isFullTextVisible ? text : renderSlice.text;
+  // The slice remaps its spans onto the text it produced; the full text keeps
+  // the originals.
+  const renderedSpans = isFullTextVisible ? spans : renderSlice.spans;
 
   return (
     <div className="flex max-w-full justify-end sm:pl-2">
@@ -4384,20 +4832,27 @@ const UserPlainTextBlock = ({
             // wraps visually but does NOT shrink min-content, so it must not be set here —
             // it would win by source order and let the bubble overflow its column on every engine.
             'min-w-0 max-w-full whitespace-pre-wrap text-foreground [overflow-wrap:anywhere]',
-            CONVERSATION_TEXT_FONT_SIZE_CLASSES[fontSize],
             isLong && !isFullTextVisible ? 'overflow-hidden' : ''
           )}
-          style={
-            isLong && !isFullTextVisible
-              ? { maxHeight: USER_TEXT_COLLAPSED_HEIGHT_BY_FONT_SIZE[fontSize] }
-              : undefined
-          }
+          style={{
+            ...conversationTextFontSizeStyle(fontSize),
+            ...(isLong && !isFullTextVisible
+              ? { maxHeight: userTextCollapsedHeight(fontSize) }
+              : {}),
+          }}
           data-search-block-id={searchBlockId}
         >
-          {searchBlockId ? (
-            <SearchHighlightedText blockId={searchBlockId} text={renderedText} />
+          {/* Search wins over chips: both want to split the same string, and a
+              match that lands inside a chip has nowhere to paint. Chips come
+              back the moment the search closes. */}
+          {isSearchActive || !renderedSpans?.length ? (
+            searchBlockId ? (
+              <SearchHighlightedText blockId={searchBlockId} text={renderedText} />
+            ) : (
+              renderedText
+            )
           ) : (
-            renderedText
+            <MessageTextWithChips text={renderedText} spans={renderedSpans} />
           )}
         </div>
         {isLong ? (
@@ -4567,7 +5022,7 @@ export const ProposedPlanBlock = ({
   messageId,
   itemIndex,
   onFilePathClick,
-  fontSize = 'default',
+  fontSize = DEFAULT_CONVERSATION_FONT_SIZE,
 }: {
   plan: ProposedPlanMessage;
   messageId: string;
@@ -4730,10 +5185,8 @@ const PlanEntryRow = ({
     <div className="flex flex-col gap-1 rounded-md border border-border/60 bg-background/60 p-2.5">
       <div className="flex items-center justify-between gap-1.5">
         <div
-          className={cn(
-            'flex items-center gap-1.5 font-medium',
-            CONVERSATION_TEXT_FONT_SIZE_CLASSES[fontSize]
-          )}
+          className="flex items-center gap-1.5 font-medium"
+          style={conversationTextFontSizeStyle(fontSize)}
         >
           <StatusIcon className={cn('h-4 w-4 flex-none shrink-0', statusMeta.className)} />
           <span className="break-words">{entry.content}</span>
@@ -5114,9 +5567,9 @@ const ToolCallCard = memo(function ToolCallCard({
               <pre
                 className={cn(
                   'rounded-md bg-muted/40 p-2',
-                  inlineOutput ? 'overflow-x-auto' : 'max-h-60 overflow-auto',
-                  CONVERSATION_MONO_FONT_SIZE_CLASSES[fontSize]
+                  inlineOutput ? 'overflow-x-auto' : 'max-h-60 overflow-auto'
                 )}
+                style={conversationMonoFontSizeStyle(fontSize)}
               >
                 {formatJsonValue(toolCall.rawOutput)}
               </pre>
@@ -5187,10 +5640,8 @@ const ToolCallContentRenderer = ({
   if (block.type === 'terminal') {
     return (
       <div
-        className={cn(
-          'flex items-center gap-2 rounded-md border border-border/60 bg-muted/30 p-3 text-muted-foreground',
-          CONVERSATION_TEXT_FONT_SIZE_CLASSES[fontSize]
-        )}
+        className="flex items-center gap-2 rounded-md border border-border/60 bg-muted/30 p-3 text-muted-foreground"
+        style={conversationTextFontSizeStyle(fontSize)}
       >
         <Terminal className="h-4 w-4" />
         Terminal output is streaming in your CLI
@@ -5314,10 +5765,8 @@ const StandardToolContentBlock = ({
       if (!href) {
         return (
           <div
-            className={cn(
-              'flex items-center gap-2 rounded-md border border-border/60 bg-muted/20 p-3 text-muted-foreground',
-              CONVERSATION_TEXT_FONT_SIZE_CLASSES[fontSize]
-            )}
+            className="flex items-center gap-2 rounded-md border border-border/60 bg-muted/20 p-3 text-muted-foreground"
+            style={conversationTextFontSizeStyle(fontSize)}
           >
             <FileText className="h-4 w-4" />
             {content.title || content.name}
@@ -5329,10 +5778,8 @@ const StandardToolContentBlock = ({
           href={href}
           target="_blank"
           rel="noopener noreferrer"
-          className={cn(
-            'flex items-center gap-2 rounded-md border border-border/60 bg-muted/20 p-3 text-primary',
-            CONVERSATION_TEXT_FONT_SIZE_CLASSES[fontSize]
-          )}
+          className="flex items-center gap-2 rounded-md border border-border/60 bg-muted/20 p-3 text-primary"
+          style={conversationTextFontSizeStyle(fontSize)}
         >
           <FileText className="h-4 w-4" />
           {content.title || content.name}
@@ -5358,7 +5805,8 @@ const StandardToolContentBlock = ({
             href={href}
             target="_blank"
             rel="noopener noreferrer"
-            className={cn('text-primary', CONVERSATION_TEXT_FONT_SIZE_CLASSES[fontSize])}
+            className="text-primary"
+            style={conversationTextFontSizeStyle(fontSize)}
           >
             Download blob
           </a>
@@ -5450,7 +5898,7 @@ const StructuredObject = ({
   value,
   dense = false,
   unbounded = false,
-  fontSize = 'default',
+  fontSize = DEFAULT_CONVERSATION_FONT_SIZE,
 }: {
   label: string;
   value: Record<string, unknown>;
@@ -5467,11 +5915,11 @@ const StructuredObject = ({
         className={cn(
           'rounded-md bg-muted/40',
           unbounded ? 'overflow-x-auto' : 'max-h-60 overflow-auto',
-          dense ? 'p-2' : 'p-3',
-          dense
-            ? CONVERSATION_MONO_FONT_SIZE_CLASSES[fontSize]
-            : CONVERSATION_TEXT_FONT_SIZE_CLASSES[fontSize]
+          dense ? 'p-2' : 'p-3'
         )}
+        style={
+          dense ? conversationMonoFontSizeStyle(fontSize) : conversationTextFontSizeStyle(fontSize)
+        }
       >
         {formatJsonValue(value)}
       </pre>

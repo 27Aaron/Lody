@@ -5,7 +5,17 @@ import { performance } from 'perf_hooks';
 import { Logger } from '@/utils/logger';
 import * as acp from '@agentclientprotocol/sdk';
 import { z } from 'zod';
-import { SessionUsageUpdate, UsageData } from 'acp-extension-core';
+import {
+  LODY_EXTENSION_METHODS,
+  LODY_TOOL_NAMES,
+  type LodyExtensionCapabilities,
+  type LodyElicitationMeta,
+  type LodySubagentTask,
+  type RateLimit,
+  type RateLimitsGetRequest,
+  type RateLimitsSnapshot,
+  type SessionUsageUpdate,
+} from 'acp-extension-core';
 import {
   ACPSessionId,
   MODEL_THOUGHT_LEVEL_META_KEY,
@@ -13,7 +23,6 @@ import {
   type AcpConfigOptionValue,
   type AcpSessionNotification,
   type AgentConfigCliType,
-  type MessageContent,
   type SessionGoalContent,
   type SessionTurnInputConfig,
   sanitizeGoalObjective,
@@ -25,9 +34,12 @@ import {
   type ModelInfo,
   parseAskUserQuestionElicitationRequest,
   buildAskUserQuestionElicitationResponse,
+  formatMcpResolutionProblem,
   getServerNow,
 } from '@lody/shared';
 import { getLocalControlSocketPath } from '@lody/shared/node/local-ipc';
+import { getLodyMcpHttpEndpoint } from '@/mcp/lody-mcp-http-server';
+import { buildLodyMcpHttpHeaders } from '@/mcp/lody-mcp-http-protocol';
 import { TerminalManager } from '@/session/terminal-manager';
 import { reportError } from 'src/utils/telemetry';
 import { formatErrorMessage } from '@/utils/format-error';
@@ -50,10 +62,8 @@ import {
   readLegacySessionModelState,
   type LegacySessionModelState,
 } from './acp-capability-normalization';
-import {
-  CLAUDE_TASK_LIFECYCLE_EXTENSION_METHOD,
-  convertClaudeTaskLifecycleNotification,
-} from './claude-task-lifecycle';
+import { convertClaudeTaskLifecycleNotification } from './claude-task-lifecycle';
+import { convertKimiTaskLifecycleNotification } from './kimi-task-lifecycle';
 import {
   buildSteerRequestMeta,
   findActiveSteerConfigMismatch,
@@ -61,6 +71,12 @@ import {
   parseSteerAppliedParams,
   type AcknowledgedSteerCapability,
 } from './acknowledged-steer';
+import type { SessionMcpCatalogSelector } from './session-mcp-resolver';
+import {
+  parseLodyExtensionCapabilities,
+  parseLodyExtensionMessage,
+  parseRateLimitsSnapshot,
+} from './lody-acp-extension';
 
 /**
  * Checks if an error is a transport-related error that may be transient.
@@ -348,7 +364,16 @@ const LegacyCodexGoalSnapshotSchema = z.object({
   createdAt: z.number().optional(),
   updatedAt: z.number().optional(),
 });
-const NeutralGoalSnapshotSchema = z.object({
+const LodyGoalSnapshotSchema = z.object({
+  objective: z.string(),
+  status: z.enum(['active', 'paused', 'blocked', 'limited', 'complete']),
+  tokenBudget: z.number().nullable().optional(),
+  tokensUsed: z.number().optional(),
+  timeUsedSeconds: z.number().optional(),
+  createdAtEpochSeconds: z.number().nonnegative().optional(),
+  updatedAtEpochSeconds: z.number().nonnegative().optional(),
+});
+const LegacyNeutralGoalSnapshotSchema = z.object({
   objective: z.string(),
   status: z.enum(['active', 'paused', 'blocked', 'limited', 'complete']),
   controlMethod: z.literal('_session/goal'),
@@ -367,22 +392,41 @@ const CodexRetryErrorSchema = z.object({
   }),
 });
 
-const CodexSessionWarningSchema = z.object({
+const LodyNoticeSchema = z.object({
+  notice: z.object({
+    level: z.enum(['info', 'warning', 'error']),
+    message: z.string(),
+    source: z.string().optional(),
+  }),
+});
+
+const LegacyCodexSessionWarningSchema = z.object({
   warning: z.object({
     message: z.string(),
     source: z.enum(['warning', 'configWarning']).optional(),
   }),
 });
 
-export type AgentSessionWarning = z.infer<typeof CodexSessionWarningSchema>['warning'];
+const LodySessionTitleSchema = z.object({
+  titleSource: z.enum(['explicit', 'generated', 'fallback', 'unset']),
+});
 
-const CodexProposedPlanParamsSchema = z.object({
-  schemaVersion: z.literal(1),
-  sessionId: z.string(),
-  turnId: z.string(),
-  markdown: z.string(),
-  status: z.enum(['delta', 'completed', 'cleared']),
-  isLatest: z.boolean(),
+export type AgentSessionWarning = {
+  message: string;
+  source?: string;
+};
+
+const LodySubagentTaskSchema = z.object({
+  taskId: z.string().min(1),
+  description: z.string(),
+  status: z.enum(['running', 'completed', 'failed', 'timed_out', 'killed', 'lost']),
+  agentId: z.string().optional(),
+  subagentType: z.string().optional(),
+  modelId: z.string().optional(),
+  thinkingEffort: z.string().optional(),
+  startedAtEpochSeconds: z.number(),
+  endedAtEpochSeconds: z.number().nullable(),
+  stopReason: z.string().optional(),
 });
 
 export type SteerApplicationLease = {
@@ -408,12 +452,12 @@ type ActivePromptCompletion = {
   promise: Promise<acp.PromptResponse | undefined>;
 };
 
-export type CodexImageGenerationBeginEvent = {
+export type ImageGenerationBeginEvent = {
   acpSessionId: ACPSessionId;
   callId: string;
 };
 
-export type CodexImageGenerationEndEvent = {
+export type ImageGenerationEndEvent = {
   acpSessionId: ACPSessionId;
   callId: string;
   status: string;
@@ -426,8 +470,7 @@ export type CodexImageGenerationEndEvent = {
   };
 };
 
-const CODEX_IMAGE_GENERATION_TOOL_TITLE = 'Image generation';
-const CODEX_IMAGE_GENERATION_REVISED_PROMPT_PREFIX = 'Revised prompt: ';
+const IMAGE_GENERATION_REVISED_PROMPT_PREFIX = 'Revised prompt: ';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -461,7 +504,7 @@ function parseRawOutputRecord(rawOutput: unknown): Record<string, unknown> | und
   }
 }
 
-function extractCodexImageGenerationRawOutputFields(rawOutput: unknown): {
+function extractImageGenerationRawOutputFields(rawOutput: unknown): {
   revisedPrompt?: string;
   savedPath?: string;
   status?: string;
@@ -479,22 +522,20 @@ function extractCodexImageGenerationRawOutputFields(rawOutput: unknown): {
 }
 
 /**
- * Extract Codex image-generation metadata from the `content` array of a
+ * Extract image-generation metadata from the standard tool-call `content` array: a
  * tool_call / tool_call_update: a leading "Revised prompt: …" text block and
- * an image block whose `uri` is the on-disk saved path. codex-acp 0.15 also
- * exposes the same fields via `rawOutput` — see
- * extractCodexImageGenerationRawOutputFields — which the caller merges in as
- * a fallback so we do not depend on the inline image payload shape.
+ * an image block whose `uri` is the on-disk saved path. `rawOutput` may carry
+ * the same fields for clients that need the saved path without decoding content.
  */
-function extractCodexImageGenerationContentFields(content: unknown): {
+function extractImageGenerationContentFields(content: unknown): {
   revisedPrompt?: string;
   savedPath?: string;
-  image?: CodexImageGenerationEndEvent['image'];
+  image?: ImageGenerationEndEvent['image'];
 } {
   if (!Array.isArray(content)) return {};
   let revisedPrompt: string | undefined;
   let savedPath: string | undefined;
-  let image: CodexImageGenerationEndEvent['image'];
+  let image: ImageGenerationEndEvent['image'];
   for (const block of content) {
     if (!isRecord(block) || block.type !== 'content') continue;
     const inner = block.content;
@@ -502,9 +543,9 @@ function extractCodexImageGenerationContentFields(content: unknown): {
     if (inner.type === 'text' && typeof inner.text === 'string') {
       if (
         revisedPrompt === undefined &&
-        inner.text.startsWith(CODEX_IMAGE_GENERATION_REVISED_PROMPT_PREFIX)
+        inner.text.startsWith(IMAGE_GENERATION_REVISED_PROMPT_PREFIX)
       ) {
-        revisedPrompt = inner.text.slice(CODEX_IMAGE_GENERATION_REVISED_PROMPT_PREFIX.length);
+        revisedPrompt = inner.text.slice(IMAGE_GENERATION_REVISED_PROMPT_PREFIX.length);
       }
     } else if (
       inner.type === 'image' &&
@@ -525,7 +566,11 @@ function extractCodexImageGenerationContentFields(content: unknown): {
   return { revisedPrompt, savedPath, image };
 }
 
-interface AgentClientOptions {
+/**
+ * Turns a loaded workspace MCP catalog into the servers this agent can mount.
+ * Synchronous: everything that needs I/O already happened in the load phase.
+ */
+export interface AgentClientOptions {
   sessionId: SessionId;
   workspaceId?: WorkspaceId;
   machineId?: MachineId;
@@ -535,9 +580,16 @@ interface AgentClientOptions {
     cliType: AgentConfigCliType;
     agentType: string;
   };
+  /** Config selected before ACP session establishment. */
+  configOptionValues?: SessionTurnInputConfig['configOptionValues'];
+  /** Whether this Agent session mounts the built-in Lody Task MCP tools. */
+  taskToolsEnabled?: boolean;
   /** Launcher family (npx/uvx/local) for ACP startup analytics; non-PII. */
   launcher?: AcpLauncher;
-  /** Set to false to disable terminal capability advertisement. Defaults to true. */
+  /**
+   * Overrides terminal capability advertisement. Builtin Grok defaults to false so its
+   * adapter uses the native local runner; other agents default to true.
+   */
   terminalEnabled?: boolean;
   onStartupStage?: (event: AcpStartupStageEvent) => void;
   onUpdateMessage(message: AcpSessionNotification): void;
@@ -547,14 +599,19 @@ interface AgentClientOptions {
   ): Promise<acp.RequestPermissionResponse>;
   onUsageUpdate?(usage: SessionUsageUpdate): void;
   onContextWindowUsageUpdate?(usage: SessionContextWindowUsage): void;
-  onRateLimitUpdate?(limits: UsageData): void;
+  onRateLimitUpdate?(limits: RateLimit): void;
   onThreadGoalUpdated?(goal: SessionGoalContent): void;
   onThreadGoalCleared?(threadId: string): void;
   onSessionTitleUpdate?(title: string): void;
   onAgentWarning?(warning: AgentSessionWarning): void;
-  onCodexProposedPlan?(plan: Extract<MessageContent, { type: 'proposed_plan' }>): void;
-  onCodexImageGenerationBegin?(event: CodexImageGenerationBeginEvent): void;
-  onCodexImageGenerationEnd?(event: CodexImageGenerationEndEvent): void;
+  /**
+   * Starts loading the workspace MCP catalog. Invoked BEFORE `initialize`, so
+   * its remote sync overlaps process spawn and the handshake; the resolved
+   * selector is applied once the agent has advertised its MCP capabilities.
+   */
+  loadExternalMcpServers?(): Promise<SessionMcpCatalogSelector>;
+  onImageGenerationBegin?(event: ImageGenerationBeginEvent): void;
+  onImageGenerationEnd?(event: ImageGenerationEndEvent): void;
   onWriteTextFile?(event: AcpWriteTextFileEvidence): void | Promise<void>;
 }
 
@@ -573,9 +630,11 @@ export class AgentClient implements acp.Client {
   private acpSessionId: string | null = null;
   private supportsResume = false;
   private supportsLoadSession = false;
+  private supportsHttpMcp = false;
   private supportsClose = false;
   private supportsFork = false;
   private supportsForkAtTurn = false;
+  private lodyExtensionCapabilities: LodyExtensionCapabilities = {};
   private authMethods: acp.AuthMethod[] = [];
   private authenticationRequired = false;
   private acknowledgedSteerCapability: AcknowledgedSteerCapability | null = null;
@@ -583,24 +642,29 @@ export class AgentClient implements acp.Client {
   private steerApplicationBarrier: Promise<void> | null = null;
   private activePromptCompletion: ActivePromptCompletion | null = null;
   private sessionWorkdir: string | null = null;
+  private agentMcpCapabilities: acp.McpCapabilities | undefined;
   /** Session config options returned by the agent; the source of model/mode choices and names. */
   private configOptions: acp.SessionConfigOption[] = [];
+  /** Desired config retained across same-client replacement sessions. */
+  private readonly configOptionValues: NonNullable<SessionTurnInputConfig['configOptionValues']>;
   /** Legacy top-level `models` state proves that `session/set_model` is supported. */
   private legacySessionModelState: LegacySessionModelState | null = null;
   public currentModel?: ModelInfo;
   /**
-   * Tool-call IDs that we've identified as Codex image generations (by their
-   * "Image generation" title on the initial tool_call). We need this so the
+   * Tool-call IDs identified by the canonical Lody tool name. We need this so the
    * follow-up `tool_call_update` notifications — which never repeat the title —
    * can still be recognized and routed through the upload pipeline.
    */
-  private codexImageGenerationToolCallIds = new Set<string>();
+  private imageGenerationToolCallIds = new Set<string>();
   private activeCodexRetry: { sessionId: string; toolCallId: string } | null = null;
 
   constructor(private options: AgentClientOptions) {
     this.logger = options.logger;
     this.terminalManager = options.terminalManager;
-    this.terminalEnabled = options.terminalEnabled ?? true;
+    this.terminalEnabled =
+      options.terminalEnabled ??
+      !(options.agentConfig?.cliType === 'builtin' && options.agentConfig.agentType === 'grok');
+    this.configOptionValues = { ...(options.configOptionValues ?? {}) };
   }
 
   private describePromptDiagnosticContext(): string {
@@ -612,10 +676,36 @@ export class AgentClient implements acp.Client {
     )}`;
   }
 
-  private buildMcpServers(workdir: string) {
+  private buildBuiltinMcpServers(workdir: string): acp.McpServer[] {
     if (!this.options.workspaceId || !this.options.machineId) {
       return [];
     }
+
+    // Agents that advertise `mcpCapabilities.http` use the shared MCP HTTP
+    // host (one subprocess per daemon): same tool surface, instead of a full
+    // per-session CLI Node subprocess that only proxies back to the daemon.
+    // Anything else (and a daemon whose host is down or gave up) keeps the
+    // stdio entry below.
+    if (this.supportsHttpMcp) {
+      const endpoint = getLodyMcpHttpEndpoint();
+      if (endpoint) {
+        return [
+          {
+            type: 'http',
+            name: 'lody',
+            url: endpoint.url,
+            headers: buildLodyMcpHttpHeaders(endpoint, {
+              sessionId: this.options.sessionId,
+              workspaceId: this.options.workspaceId,
+              machineId: this.options.machineId,
+              workdir,
+              taskToolsEnabled: this.options.taskToolsEnabled === true,
+            }),
+          },
+        ];
+      }
+    }
+
     const cliEntrypoint = process.argv[1];
     if (!cliEntrypoint) {
       return [];
@@ -626,6 +716,10 @@ export class AgentClient implements acp.Client {
       { name: 'LODY_MCP_MACHINE_ID', value: this.options.machineId },
       { name: 'LODY_MCP_SOCKET_PATH', value: getLocalControlSocketPath() },
       { name: 'LODY_MCP_WORKDIR', value: workdir },
+      {
+        name: 'LODY_MCP_TASK_TOOLS_ENABLED',
+        value: this.options.taskToolsEnabled === true ? '1' : '0',
+      },
     ];
 
     // ACP MCP config is an explicit environment allowlist. The MCP subprocess
@@ -657,6 +751,36 @@ export class AgentClient implements acp.Client {
         env,
       },
     ];
+  }
+
+  private async buildMcpServers(
+    workdir: string,
+    externalLoad: Promise<SessionMcpCatalogSelector> | undefined
+  ): Promise<acp.McpServer[]> {
+    const builtin = this.buildBuiltinMcpServers(workdir);
+    if (!externalLoad) {
+      return builtin;
+    }
+
+    try {
+      const external = (await externalLoad)({
+        http: this.agentMcpCapabilities?.http === true,
+      });
+      for (const problem of external.problems) {
+        this.options.onAgentWarning?.({
+          message: formatMcpResolutionProblem(problem),
+          source: 'configWarning',
+        });
+      }
+      return [...builtin, ...(external.servers as acp.McpServer[])];
+    } catch (error) {
+      const message = `Workspace MCP servers could not be loaded (${formatErrorMessage(
+        error
+      )}). The agent started with only the built-in Lody server.`;
+      this.logger.debug(`[${this.options.sessionId}] ${message}`);
+      this.options.onAgentWarning?.({ message, source: 'configWarning' });
+      return builtin;
+    }
   }
 
   async requestPermission(
@@ -702,11 +826,16 @@ export class AgentClient implements acp.Client {
         : undefined;
     const requestId = randomUUID();
     const firstQuestion = elicitation.meta.questions[0];
-    const autoResolveAt =
+    const autoResolveAtEpochSeconds =
       typeof elicitation.autoResolutionMs === 'number' &&
       Number.isFinite(elicitation.autoResolutionMs)
-        ? getServerNow() + Math.max(0, elicitation.autoResolutionMs)
+        ? Math.floor((getServerNow() + Math.max(0, elicitation.autoResolutionMs)) / 1000)
         : undefined;
+    const lodyElicitation = {
+      version: 1,
+      questions: elicitation.meta.questions,
+      ...(autoResolveAtEpochSeconds !== undefined ? { autoResolveAtEpochSeconds } : {}),
+    } satisfies LodyElicitationMeta;
     const syntheticRequest: acp.RequestPermissionRequest = {
       sessionId,
       toolCall: {
@@ -721,28 +850,11 @@ export class AgentClient implements acp.Client {
         { kind: 'allow_once', name: 'Submit answers', optionId: 'answer' },
         { kind: 'reject_once', name: 'Cancel', optionId: 'cancel' },
       ],
-      _meta:
-        elicitation.meta.source === 'codex'
-          ? {
-              codex: {
-                requestUserInput: {
-                  version: elicitation.meta.version,
-                  allowCustomAnswer: elicitation.meta.allowCustomAnswer,
-                  questions: elicitation.meta.questions,
-                  ...(autoResolveAt !== undefined ? { autoResolveAt } : {}),
-                },
-              },
-            }
-          : {
-              claudeCode: {
-                requestType: 'askUserQuestion',
-                askUserQuestion: {
-                  version: elicitation.meta.version,
-                  allowCustomAnswer: elicitation.meta.allowCustomAnswer,
-                  questions: elicitation.meta.questions,
-                },
-              },
-            },
+      _meta: {
+        lody: {
+          elicitation: lodyElicitation,
+        },
+      },
     };
 
     this.logger.debug(
@@ -785,9 +897,9 @@ export class AgentClient implements acp.Client {
       this.completeCodexRetryStatus();
     }
 
-    if (this.handleCodexImageGenerationNotification(notification)) {
-      // handleCodexImageGenerationNotification has already routed the data
-      // to onCodexImageGenerationBegin/End. Suppress the raw notification so
+    if (this.handleImageGenerationNotification(notification)) {
+      // handleImageGenerationNotification has already routed the data
+      // to onImageGenerationBegin/End. Suppress the raw notification so
       // the inline base64 image never lands in the session history doc — the
       // host's upload pipeline attaches the image as an image_group instead.
       return;
@@ -808,10 +920,14 @@ export class AgentClient implements acp.Client {
     }
 
     let goalContainer: unknown;
-    let source: 'ACP' | 'legacy Codex';
-    if ('goal' in meta) {
+    let source: 'Lody' | 'legacy ACP' | 'legacy Codex';
+    const lodyMeta = meta.lody;
+    if (typeof lodyMeta === 'object' && lodyMeta !== null && 'goal' in lodyMeta) {
+      goalContainer = lodyMeta;
+      source = 'Lody';
+    } else if ('goal' in meta) {
       goalContainer = meta;
-      source = 'ACP';
+      source = 'legacy ACP';
     } else {
       const codexMeta = meta.codex;
       if (
@@ -826,7 +942,12 @@ export class AgentClient implements acp.Client {
       source = 'legacy Codex';
     }
 
-    const goalSchema = source === 'ACP' ? NeutralGoalSnapshotSchema : LegacyCodexGoalSnapshotSchema;
+    const goalSchema =
+      source === 'Lody'
+        ? LodyGoalSnapshotSchema
+        : source === 'legacy ACP'
+          ? LegacyNeutralGoalSnapshotSchema
+          : LegacyCodexGoalSnapshotSchema;
     const parsed = z.object({ goal: goalSchema.nullable() }).safeParse(goalContainer);
     if (!parsed.success) {
       this.logger.debug(
@@ -854,29 +975,42 @@ export class AgentClient implements acp.Client {
       tokenBudget: goal.tokenBudget ?? null,
       ...(goal.tokensUsed !== undefined ? { tokensUsed: goal.tokensUsed } : {}),
       ...(goal.timeUsedSeconds !== undefined ? { timeUsedSeconds: goal.timeUsedSeconds } : {}),
-      ...(goal.createdAt !== undefined ? { createdAt: goal.createdAt } : {}),
-      ...(goal.updatedAt !== undefined ? { updatedAt: goal.updatedAt } : {}),
+      ...('createdAtEpochSeconds' in goal && goal.createdAtEpochSeconds !== undefined
+        ? { createdAt: goal.createdAtEpochSeconds * 1_000 }
+        : 'createdAt' in goal && goal.createdAt !== undefined
+          ? { createdAt: goal.createdAt }
+          : {}),
+      ...('updatedAtEpochSeconds' in goal && goal.updatedAtEpochSeconds !== undefined
+        ? { updatedAt: goal.updatedAtEpochSeconds * 1_000 }
+        : 'updatedAt' in goal && goal.updatedAt !== undefined
+          ? { updatedAt: goal.updatedAt }
+          : {}),
     });
   }
 
   /**
-   * The Codex adapter forwards app-server `warning`/`configWarning` notifications as
-   * structured `_meta.codex.warning` metadata (kept out of agent text so history and
-   * titles stay clean). Forward it so the host can record it as a warning notice.
+   * Forward structured notices so the host can record warnings without adding
+   * provider diagnostics to persisted agent text.
    */
   private handleCodexWarningSessionInfoUpdate(notification: AcpSessionNotification): void {
-    if (!this.isCodexAgent() || notification.update.sessionUpdate !== 'session_info_update') {
+    if (notification.update.sessionUpdate !== 'session_info_update') {
       return;
     }
-    const codexMeta = notification.update._meta?.codex;
-    if (typeof codexMeta !== 'object' || codexMeta === null || !('warning' in codexMeta)) {
+    const lodyMeta = notification.update._meta?.lody;
+    const canonical = LodyNoticeSchema.safeParse(lodyMeta);
+    if (canonical.success) {
+      if (canonical.data.notice.level === 'warning' || canonical.data.notice.level === 'error') {
+        this.options.onAgentWarning?.({
+          message: canonical.data.notice.message,
+          ...(canonical.data.notice.source ? { source: canonical.data.notice.source } : {}),
+        });
+      }
       return;
     }
-    const parsed = CodexSessionWarningSchema.safeParse(codexMeta);
+
+    if (!this.isCodexAgent()) return;
+    const parsed = LegacyCodexSessionWarningSchema.safeParse(notification.update._meta?.codex);
     if (!parsed.success) {
-      this.logger.debug(
-        `[${this.options.sessionId}] Dropping invalid Codex warning session info: ${parsed.error.message}`
-      );
       return;
     }
     this.options.onAgentWarning?.(parsed.data.warning);
@@ -904,7 +1038,7 @@ export class AgentClient implements acp.Client {
           title: 'Codex retrying',
           kind: 'other',
           status: 'in_progress',
-          _meta: { lody: { activityKind: 'codex_retry' } },
+          _meta: { lody: { activity: { version: 1, kind: 'retry' } } },
         },
       })
     );
@@ -935,14 +1069,13 @@ export class AgentClient implements acp.Client {
           sessionUpdate: 'tool_call_update',
           toolCallId: active.toolCallId,
           status: 'completed',
-          _meta: { lody: { activityKind: 'codex_retry' } },
+          _meta: { lody: { activity: { version: 1, kind: 'retry' } } },
         },
       })
     );
   }
 
-  private handleCodexImageGenerationNotification(notification: AcpSessionNotification): boolean {
-    if (!this.isCodexAgent()) return false;
+  private handleImageGenerationNotification(notification: AcpSessionNotification): boolean {
     const update = notification.update;
     if (update.sessionUpdate !== 'tool_call' && update.sessionUpdate !== 'tool_call_update') {
       return false;
@@ -951,11 +1084,12 @@ export class AgentClient implements acp.Client {
     if (typeof callId !== 'string' || callId.length === 0) return false;
 
     const isBegin = update.sessionUpdate === 'tool_call';
-    const isImageGenByTitle =
-      typeof update.title === 'string' && update.title === CODEX_IMAGE_GENERATION_TOOL_TITLE;
-    const isTracked = this.codexImageGenerationToolCallIds.has(callId);
+    const lodyMeta = isRecord(update._meta?.lody) ? update._meta.lody : undefined;
+    const isCanonicalImageGeneration = lodyMeta?.toolName === LODY_TOOL_NAMES.imageGeneration;
+    const isLegacyCodexImageGeneration = this.isCodexAgent() && update.title === 'Image generation';
+    const isTracked = this.imageGenerationToolCallIds.has(callId);
     if (isBegin) {
-      if (!isImageGenByTitle) return false;
+      if (!isCanonicalImageGeneration && !isLegacyCodexImageGeneration) return false;
     } else if (!isTracked) {
       return false;
     }
@@ -963,20 +1097,20 @@ export class AgentClient implements acp.Client {
     const acpSessionId = (notification.sessionId ?? this.acpSessionId) as ACPSessionId | null;
     if (!acpSessionId || !this.isCurrentAcpSession(acpSessionId)) {
       this.logger.debug(
-        `[${this.options.sessionId}] Dropping Codex image generation notification for mismatched ACP session: ${acpSessionId}`
+        `[${this.options.sessionId}] Dropping image generation notification for mismatched ACP session: ${acpSessionId}`
       );
       // Still suppress so the inline base64 doesn't leak into history.
       return true;
     }
 
     const rawOutput = (update as { rawOutput?: unknown }).rawOutput;
-    const rawFields = extractCodexImageGenerationRawOutputFields(rawOutput);
+    const rawFields = extractImageGenerationRawOutputFields(rawOutput);
     const status = typeof update.status === 'string' ? update.status : rawFields.status;
     const isTerminalStatus = status === 'completed' || status === 'failed';
 
     if (isBegin && !isTracked) {
-      this.codexImageGenerationToolCallIds.add(callId);
-      this.options.onCodexImageGenerationBegin?.({ acpSessionId, callId });
+      this.imageGenerationToolCallIds.add(callId);
+      this.options.onImageGenerationBegin?.({ acpSessionId, callId });
     }
 
     // Any notification that arrives after begin (or a fresh `tool_call` with
@@ -984,7 +1118,7 @@ export class AgentClient implements acp.Client {
     // on session resume) carries the end-state payload.
     const carriesEndPayload = !isBegin || isTerminalStatus || Array.isArray(update.content);
     if (carriesEndPayload && status) {
-      const contentFields = extractCodexImageGenerationContentFields(update.content);
+      const contentFields = extractImageGenerationContentFields(update.content);
       const image =
         contentFields.image ??
         (rawFields.imageData
@@ -994,7 +1128,7 @@ export class AgentClient implements acp.Client {
               ...(rawFields.savedPath ? { uri: rawFields.savedPath } : {}),
             }
           : undefined);
-      this.options.onCodexImageGenerationEnd?.({
+      this.options.onImageGenerationEnd?.({
         acpSessionId,
         callId,
         status,
@@ -1005,7 +1139,7 @@ export class AgentClient implements acp.Client {
     }
 
     if (isTerminalStatus) {
-      this.codexImageGenerationToolCallIds.delete(callId);
+      this.imageGenerationToolCallIds.delete(callId);
     }
 
     return true;
@@ -1145,6 +1279,64 @@ export class AgentClient implements acp.Client {
     await this.terminalManager.killTerminal(params.sessionId, params.terminalId);
     return {};
   }
+
+  async getRateLimits(request: RateLimitsGetRequest = {}): Promise<RateLimitsSnapshot> {
+    if (this.lodyExtensionCapabilities.rateLimits?.query !== true) {
+      throw new Error('[ACP_RATE_LIMITS_UNSUPPORTED] Agent did not advertise rate-limit queries');
+    }
+    const connection = this.connection;
+    if (!connection) {
+      throw new Error('[ACP_RATE_LIMITS_UNAVAILABLE] ACP connection is not initialized');
+    }
+    const response = await connection.request<Record<string, unknown>, RateLimitsGetRequest>(
+      LODY_EXTENSION_METHODS.rateLimitsGet,
+      request
+    );
+    return parseRateLimitsSnapshot(response);
+  }
+
+  async listSubagents(activeOnly = false): Promise<readonly LodySubagentTask[]> {
+    const result = await this.requestSubagentExtension<{ tasks?: unknown }>(
+      LODY_EXTENSION_METHODS.subagentsList,
+      { activeOnly }
+    );
+    return z.array(LodySubagentTaskSchema).parse(result.tasks);
+  }
+
+  async cancelSubagent(taskId: string, reason?: string): Promise<void> {
+    await this.requestSubagentExtension(LODY_EXTENSION_METHODS.subagentsCancel, {
+      taskId,
+      reason,
+    });
+  }
+
+  async getSubagentOutput(taskId: string, tail?: number): Promise<string> {
+    const result = await this.requestSubagentExtension<{ output?: unknown }>(
+      LODY_EXTENSION_METHODS.subagentsOutput,
+      { taskId, tail }
+    );
+    return z.string().parse(result.output);
+  }
+
+  private async requestSubagentExtension<T extends Record<string, unknown>>(
+    method: string,
+    params: Record<string, unknown>
+  ): Promise<T> {
+    const subagents = this.lodyExtensionCapabilities.subagents;
+    const supported =
+      (method === LODY_EXTENSION_METHODS.subagentsList && subagents?.list === true) ||
+      (method === LODY_EXTENSION_METHODS.subagentsCancel && subagents?.cancel === true) ||
+      (method === LODY_EXTENSION_METHODS.subagentsOutput && subagents?.output === true);
+    if (!supported) {
+      throw new Error('[ACP_SUBAGENT_UNSUPPORTED] Agent did not advertise subagent management');
+    }
+    const sessionId = this.acpSessionId;
+    const connection = this.connection;
+    if (!sessionId || !connection) {
+      throw new Error('[ACP_SUBAGENT_UNAVAILABLE] ACP session is not connected');
+    }
+    return connection.request<T, Record<string, unknown>>(method, { sessionId, ...params });
+  }
   async extMethod(
     method: string,
     params: Record<string, unknown>
@@ -1169,61 +1361,60 @@ export class AgentClient implements acp.Client {
     method: string,
     params: Record<string, unknown>
   ): Promise<void> {
-    // rust acp will add '_'
-    const resolvedMethod = method.startsWith('_') ? method.slice(1) : method;
-    if (resolvedMethod === this.acknowledgedSteerCapability?.appliedNotificationMethod) {
-      await this.handleSteerApplied(resolvedMethod, params);
+    const logicalMethod = method.startsWith('_') ? method.slice(1) : method;
+    if (logicalMethod === this.acknowledgedSteerCapability?.appliedNotificationMethod) {
+      await this.handleSteerApplied(logicalMethod, params);
       return;
     }
-    switch (resolvedMethod) {
-      case 'acp_ext:session_usage_update': {
-        const p = params as SessionUsageUpdate;
-        if (p.modelUsage == null && this.currentModel) {
-          p.modelUsage = {
-            [this.currentModel.modelId]: toModelUsageFromUsage(p.usage),
-          };
-        } else {
-          p.modelUsage = sanitizeModelUsage(p.modelUsage);
+    const event = parseLodyExtensionMessage({
+      method,
+      params,
+      sessionId: this.acpSessionId ?? this.options.sessionId,
+      provider: this.options.agentConfig?.agentType ?? 'unknown',
+    });
+    if (!event) {
+      this.logger.debug(`[${this.options.sessionId}] Ignoring extension message ${logicalMethod}`);
+      return;
+    }
+    switch (event.type) {
+      case 'usage': {
+        const modelUsage =
+          event.update.modelUsage == null && this.currentModel
+            ? { [this.currentModel.modelId]: toModelUsageFromUsage(event.update.usage) }
+            : sanitizeModelUsage(event.update.modelUsage);
+        this.options.onUsageUpdate?.({ ...event.update, modelUsage });
+        return;
+      }
+      case 'rateLimits':
+        for (const rateLimit of event.snapshot.rateLimits) {
+          this.options.onRateLimitUpdate?.(rateLimit);
         }
-        this.options.onUsageUpdate?.(p);
-        break;
-      }
-      case 'acp_ext:session_rate_limits': {
-        // only codex
-        const limits = params as UsageData | undefined;
-        // {
-        //           planName: null,
-        //             limitName: "GPT-5.3-Codex-Spark",
-        //               limitId: "codex_bengalfox",
-        //                 fiveHour: 0,
-        //                   sevenDay: 3,
-        //                     fiveHourResetAt: 1772607985,
-        //                       sevenDayResetAt: 1773023790,
-        // }
-        //         {
-        //           planName: null,
-        //             limitName: null,
-        //               limitId: "codex",
-        //                 fiveHour: 10,
-        //                   sevenDay: 25,
-        //                     fiveHourResetAt: 1772603484,
-        //                       sevenDayResetAt: 1773116209,
-        // }
-        if (limits) this.options.onRateLimitUpdate?.(limits);
-        break;
-      }
-      case 'acp_ext:codex_proposed_plan': {
-        this.tryHandleCodexProposedPlanExtension(resolvedMethod, params);
-        break;
-      }
-      case CLAUDE_TASK_LIFECYCLE_EXTENSION_METHOD: {
-        this.tryHandleClaudeTaskLifecycleExtension(resolvedMethod, params);
-        break;
-      }
-      default:
-        this.logger.debug(
-          `[${this.options.sessionId}] Ignoring extension message ${resolvedMethod}`
+        return;
+      case 'legacyProposedPlan':
+        this.options.onUpdateMessage(
+          parseSessionNotification({
+            sessionId: event.plan.sessionId,
+            update:
+              event.plan.status === 'cleared'
+                ? { sessionUpdate: 'plan_removed', planId: event.plan.turnId }
+                : {
+                    sessionUpdate: 'plan_update',
+                    plan: {
+                      type: 'markdown',
+                      planId: event.plan.turnId,
+                      content: event.plan.markdown,
+                    },
+                  },
+          })
         );
+        return;
+      case 'legacyTaskLifecycle':
+        if (event.provider === 'claude') {
+          this.tryHandleClaudeTaskLifecycleExtension(logicalMethod, event.params);
+        } else {
+          this.tryHandleKimiTaskLifecycleExtension(logicalMethod, event.params);
+        }
+        return;
     }
   }
 
@@ -1286,38 +1477,50 @@ export class AgentClient implements acp.Client {
     this.options.onUpdateMessage(result.notification);
   }
 
-  private tryHandleCodexProposedPlanExtension(
+  private tryHandleKimiTaskLifecycleExtension(
     method: string,
     params: Record<string, unknown>
   ): void {
-    if (!this.options.onCodexProposedPlan) return;
-    const result = CodexProposedPlanParamsSchema.safeParse(params);
-    if (!result.success) {
+    const result = convertKimiTaskLifecycleNotification(params);
+    if (!result.ok) {
       this.logger.debug(
-        `[${this.options.sessionId}] Dropping invalid Codex proposed plan update from ${method}: ${result.error.message}`
+        `[${this.options.sessionId}] Dropping invalid Kimi task lifecycle update from ${method}: ${result.reason}`
       );
       return;
     }
-    this.options.onCodexProposedPlan({
-      type: 'proposed_plan',
-      turnId: result.data.turnId,
-      markdown: result.data.markdown,
-      status: result.data.status,
-      isLatest: result.data.isLatest,
-    });
-  }
-
-  /** Forward titles from builtin adapters that own session title generation. */
-  private handleAgentSessionTitleUpdate(notification: AcpSessionNotification): void {
-    if (
-      !usesAcpProvidedSessionTitle(
-        this.options.agentConfig?.cliType,
-        this.options.agentConfig?.agentType
-      ) ||
-      notification.update.sessionUpdate !== 'session_info_update'
-    ) {
+    if (!this.isCurrentAcpSession(result.notification.sessionId)) {
+      this.logger.debug(
+        `[${this.options.sessionId}] Dropping Kimi task lifecycle update for mismatched ACP session: ${result.notification.sessionId}`
+      );
       return;
     }
+    this.options.onUpdateMessage(result.notification);
+  }
+
+  /** Forward native titles only when their source is authoritative. */
+  private handleAgentSessionTitleUpdate(notification: AcpSessionNotification): void {
+    if (notification.update.sessionUpdate !== 'session_info_update') {
+      return;
+    }
+
+    const ownsTitleGeneration = usesAcpProvidedSessionTitle(
+      this.options.agentConfig?.cliType,
+      this.options.agentConfig?.agentType
+    );
+    const lodyTitleMeta = LodySessionTitleSchema.safeParse(notification.update._meta?.lody);
+    const legacyCodexTitleMeta = this.isCodexAgent()
+      ? z
+          .object({ titleSource: z.enum(['explicit', 'fallback', 'unset', 'unknown']) })
+          .safeParse(notification.update._meta?.codex)
+      : null;
+    const isExplicitProviderTitle =
+      (lodyTitleMeta.success && lodyTitleMeta.data.titleSource === 'explicit') ||
+      (legacyCodexTitleMeta?.success === true &&
+        legacyCodexTitleMeta.data.titleSource === 'explicit');
+    if (!ownsTitleGeneration && !isExplicitProviderTitle) {
+      return;
+    }
+
     const title =
       typeof notification.update.title === 'string' ? notification.update.title.trim() : '';
     if (!title) {
@@ -1328,6 +1531,37 @@ export class AgentClient implements acp.Client {
 
   private isCodexAgent(): boolean {
     return this.options.agentConfig?.agentType === 'codex';
+  }
+
+  private getGrokClientIdentifier(): string | undefined {
+    return this.options.agentConfig?.cliType === 'builtin' &&
+      this.options.agentConfig.agentType === 'grok'
+      ? `lody:${this.options.sessionId}`
+      : undefined;
+  }
+
+  private getSessionStartMeta(forkSessionTurnId?: string) {
+    const clientIdentifier = this.getGrokClientIdentifier();
+    const lody = {
+      ...(forkSessionTurnId !== undefined
+        ? { forkAtTurn: { version: 1 as const, turnId: forkSessionTurnId } }
+        : {}),
+      ...(Object.keys(this.configOptionValues).length > 0
+        ? {
+            sessionConfig: {
+              version: 1 as const,
+              configOptionValues: { ...this.configOptionValues },
+            },
+          }
+        : {}),
+    };
+    if (clientIdentifier === undefined && Object.keys(lody).length === 0) return {};
+    return {
+      _meta: {
+        ...(clientIdentifier !== undefined ? { clientIdentifier } : {}),
+        ...(Object.keys(lody).length > 0 ? { lody } : {}),
+      },
+    };
   }
 
   private isCurrentAcpSession(acpSessionId: string): boolean {
@@ -1364,6 +1598,8 @@ export class AgentClient implements acp.Client {
   ): Promise<acp.NewSessionResponse> {
     const connection = new acp.ClientSideConnection(() => this, stream);
     this.connection = connection;
+    const grokClientIdentifier = this.getGrokClientIdentifier();
+    const sessionStartMeta = this.getSessionStartMeta();
     this.logger.debug(
       `[${this.options.sessionId}] Starting ACP client (workdir=${workdir} resumeSessionId=${
         resumeSessionId ?? 'none'
@@ -1389,6 +1625,15 @@ export class AgentClient implements acp.Client {
     };
     const startupStart = performance.now();
 
+    // Off the critical path on purpose: loading the workspace MCP catalog is a
+    // remote sync plus a document read, and nothing in it depends on the
+    // `initialize` response — only the selection applied afterwards does. Start
+    // it here so it overlaps the handshake instead of stalling `newSession`.
+    // The rejection handler is attached immediately because an `initialize`
+    // failure below would otherwise leave this promise unobserved.
+    const externalMcpLoad = this.options.loadExternalMcpServers?.();
+    externalMcpLoad?.catch(() => undefined);
+
     const initStart = performance.now();
     this.options.onStartupStage?.({ type: 'initialize_start' });
 
@@ -1403,6 +1648,7 @@ export class AgentClient implements acp.Client {
         withAbort(
           connection.initialize({
             protocolVersion: acp.PROTOCOL_VERSION,
+            ...(grokClientIdentifier ? { _meta: { clientIdentifier: grokClientIdentifier } } : {}),
             clientCapabilities: {
               terminal: this.terminalEnabled,
               plan: {},
@@ -1425,16 +1671,6 @@ export class AgentClient implements acp.Client {
               // existing AskUserQuestion permission UI.
               elicitation: {
                 form: {},
-              },
-              _meta: {
-                // Legacy AskUserQuestion-via-permission capability for Claude
-                // < 0.44.0; ignored by newer builds (which key off `elicitation`).
-                claudeCode: {
-                  askUserQuestion: true,
-                },
-                codex: {
-                  requestUserInput: true,
-                },
               },
             },
           }),
@@ -1460,6 +1696,7 @@ export class AgentClient implements acp.Client {
     );
     this.logger.debug(`[${this.options.sessionId}] ACP initialize response received`);
     this.authMethods = [...(initResponse.authMethods ?? [])];
+    this.agentMcpCapabilities = initResponse.agentCapabilities?.mcpCapabilities;
 
     const loadSessionCapability = initResponse.agentCapabilities?.loadSession;
     this.supportsLoadSession = !!loadSessionCapability;
@@ -1467,6 +1704,7 @@ export class AgentClient implements acp.Client {
 
     const resumeCapability = initResponse.agentCapabilities?.sessionCapabilities?.resume;
     this.supportsResume = !!resumeCapability;
+    this.supportsHttpMcp = initResponse.agentCapabilities?.mcpCapabilities?.http === true;
     captureAcpProtocolInitCompleted({
       ...startupAnalyticsProps,
       initDurationMs,
@@ -1477,27 +1715,13 @@ export class AgentClient implements acp.Client {
     this.supportsClose = !!closeCapability;
     const forkCapability = initResponse.agentCapabilities?.sessionCapabilities?.fork;
     this.supportsFork = !!forkCapability;
-    const forkAtTurnCapability = z
-      .object({
-        _meta: z
-          .object({
-            lody: z
-              .object({
-                forkAtTurn: z.object({
-                  version: z.literal(1),
-                }),
-              })
-              .partial(),
-          })
-          .partial(),
-      })
-      .safeParse(initResponse.agentCapabilities);
-    this.supportsForkAtTurn =
-      forkAtTurnCapability.success &&
-      forkAtTurnCapability.data._meta?.lody?.forkAtTurn?.version === 1;
-    this.acknowledgedSteerCapability = parseAcknowledgedSteerCapability(
-      initResponse.agentCapabilities?._meta as Record<string, unknown> | null | undefined
-    );
+    const extensionMeta = initResponse.agentCapabilities?._meta as
+      | Record<string, unknown>
+      | null
+      | undefined;
+    this.lodyExtensionCapabilities = parseLodyExtensionCapabilities(extensionMeta);
+    this.supportsForkAtTurn = this.lodyExtensionCapabilities.forkAtTurn?.version === 1;
+    this.acknowledgedSteerCapability = parseAcknowledgedSteerCapability(extensionMeta);
     const hasCloseMethod = typeof connection.closeSession === 'function';
     const hasForkMethod = typeof connection.unstable_forkSession === 'function';
     this.logger.debug(
@@ -1522,7 +1746,7 @@ export class AgentClient implements acp.Client {
     const newSessionStart = performance.now();
     this.options.onStartupStage?.({ type: 'new_session_start' });
     let sessionResponse: acp.NewSessionResponse;
-    const mcpServers = this.buildMcpServers(workdir);
+    const mcpServers = await this.buildMcpServers(workdir, externalMcpLoad);
 
     const canLoadSession = this.supportsLoadSession && hasLoadSessionMethod;
     const canResumeSession = this.supportsResume && hasResumeMethod;
@@ -1601,18 +1825,7 @@ export class AgentClient implements acp.Client {
               sessionId: forkSessionId as unknown as acp.SessionId,
               cwd: workdir,
               mcpServers,
-              ...(forkSessionTurnId
-                ? {
-                    _meta: {
-                      lody: {
-                        forkAtTurn: {
-                          version: 1,
-                          turnId: forkSessionTurnId,
-                        },
-                      },
-                    },
-                  }
-                : {}),
+              ...this.getSessionStartMeta(forkSessionTurnId),
             }),
             startupAbort
           ),
@@ -1662,6 +1875,7 @@ export class AgentClient implements acp.Client {
               sessionId: resumeSessionId,
               cwd: workdir,
               mcpServers,
+              ...sessionStartMeta,
             }),
             startupAbort
           ),
@@ -1720,6 +1934,7 @@ export class AgentClient implements acp.Client {
               sessionId: resumeSessionId,
               cwd: workdir,
               mcpServers,
+              ...sessionStartMeta,
             }),
             startupAbort
           ),
@@ -1778,7 +1993,10 @@ export class AgentClient implements acp.Client {
 
       try {
         sessionResponse = await withTimeout(
-          withAbort(connection.newSession({ cwd: workdir, mcpServers }), startupAbort),
+          withAbort(
+            connection.newSession({ cwd: workdir, mcpServers, ...sessionStartMeta }),
+            startupAbort
+          ),
           this.logger,
           'connection.newSession',
           this.options.sessionId,
@@ -1854,11 +2072,11 @@ export class AgentClient implements acp.Client {
       throw new Error('[ACP_SESSION_UNAVAILABLE] Current ACP session is not ready');
     }
 
-    const mcpServers = this.buildMcpServers(workdir);
+    const mcpServers = await this.buildMcpServers(workdir, this.options.loadExternalMcpServers?.());
     if (!forkSessionTurnId) {
       try {
         return await withTimeout(
-          connection.newSession({ cwd: workdir, mcpServers }),
+          connection.newSession({ cwd: workdir, mcpServers, ...this.getSessionStartMeta() }),
           this.logger,
           'connection.newSession.editAndResend',
           this.options.sessionId,
@@ -1885,14 +2103,7 @@ export class AgentClient implements acp.Client {
           sessionId: sourceSessionId as unknown as acp.SessionId,
           cwd: workdir,
           mcpServers,
-          _meta: {
-            lody: {
-              forkAtTurn: {
-                version: 1,
-                turnId: forkSessionTurnId,
-              },
-            },
-          },
+          ...this.getSessionStartMeta(forkSessionTurnId),
         }),
         this.logger,
         'connection.unstable_forkSession.editAndResend',
@@ -2250,6 +2461,8 @@ export class AgentClient implements acp.Client {
         this.currentModel = this.resolveModelInfo(this.currentModel.modelId);
       }
     }
+
+    if (result) this.configOptionValues[configId] = value;
 
     this.logger.debug(
       `[${this.options.sessionId}] ACP session config option set: ${configId}=${value}`

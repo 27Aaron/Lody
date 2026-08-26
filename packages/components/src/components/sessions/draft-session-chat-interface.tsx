@@ -26,6 +26,7 @@ import {
 import { getAllAgentConfigAtom } from '@/atoms';
 import { docMetaCacheReadyAtom } from '@/atoms/doc-meta';
 import { canShowSubscriptionRateLimits } from '@/lib/session-usage';
+import { canShowCodexResetForecast } from '@/lib/codex-reset-forecast';
 import { useResolvedTheme } from '../../theme-provider';
 import { SessionChatInputArea, type SessionChatInputAreaHandle } from './session-chat-input-area';
 import { useSessionAcpSelectorContext } from '@/hooks/use-session-acp-selector-context';
@@ -42,6 +43,7 @@ import {
   useAcpSessionConfigSelectionState,
   useReconcileAcpSessionConfigSelection,
 } from '@/hooks/use-acp-session-config-selection';
+import { filterAcpSessionConfigOptionValues } from '@/lib/acp-session-config-selection';
 import { useComposerCycleCommands } from '@/hooks/use-composer-cycle-commands';
 import { ChildTabEmptyState } from './child-tab-empty-state';
 import { useSessionDoc } from '@/hooks/use-session-doc';
@@ -91,6 +93,7 @@ export type DraftSessionChatInterfaceHandle = {
   setInputText: (text: string) => void;
   focusInput: () => void;
   addCommentReference: (reference: CommentReferencePayload) => boolean;
+  insertSessionMention: (sessionId: string) => boolean;
 };
 
 export const DraftSessionChatInterface = memo(
@@ -139,6 +142,10 @@ export const DraftSessionChatInterface = memo(
         selectedModelId,
         configOptionValues,
       });
+      const dispatchConfigOptionValues = useMemo(
+        () => filterAcpSessionConfigOptionValues(configOptionValues, configOptionSelectors),
+        [configOptionSelectors, configOptionValues]
+      );
       const agentConfigs = useAtomValue(getAllAgentConfigAtom);
       const docMetaCacheReady = useAtomValue(docMetaCacheReadyAtom);
       const { doc: parentSessionDoc, ready: parentSessionDocReady } = useSessionDoc(
@@ -332,7 +339,7 @@ export const DraftSessionChatInterface = memo(
           runtimeOverrides: sessionAgentConfig?.runtimeOverrides,
           modeId: selectedModeId,
           modelId: selectedModelId,
-          configOptionValues,
+          configOptionValues: dispatchConfigOptionValues,
           configOptionSelectors,
         }),
         [
@@ -344,7 +351,7 @@ export const DraftSessionChatInterface = memo(
           sessionAgentConfig?.runtimeOverrides,
           draft.id,
           draft.sessionId,
-          configOptionValues,
+          dispatchConfigOptionValues,
           selectedModeId,
           selectedModelId,
         ]
@@ -397,6 +404,9 @@ export const DraftSessionChatInterface = memo(
           addCommentReference: (reference: CommentReferencePayload) => {
             return inputAreaRef.current?.addCommentReference(reference) ?? false;
           },
+          insertSessionMention: (sessionId: string) => {
+            return inputAreaRef.current?.insertSessionMention(sessionId) ?? false;
+          },
         }),
         [buildSendPayload, draft.prompt, onSendDraft]
       );
@@ -427,6 +437,17 @@ export const DraftSessionChatInterface = memo(
               })
                 ? sessionMachine?.raceLimits
                 : undefined
+            }
+            /* Judged here, with the resolved config: a side chat can run a
+               Codex-compatible provider whose identity `cliType`/`agentType`
+               alone would not reveal. */
+            showCodexResetForecast={
+              (!draft.agentConfigId || !!sessionAgentConfig) &&
+              canShowCodexResetForecast({
+                cliType: draft.cliType,
+                agentType: draft.agentType,
+                config: sessionAgentConfig,
+              })
             }
             configOptionSelectors={configOptionSelectors}
             configOptionValues={configOptionValues}

@@ -3,6 +3,19 @@
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('../src/components/mentions/mention-session-source', async (importOriginal) => ({
+  ...(await importOriginal()),
+  useSessionMentionItems: () => [],
+}));
+
+// Agent Roles read the visible-machine index, which needs the authenticated
+// Convex context; the same reason the session source above is stubbed.
+vi.mock('../src/components/mentions/mention-agent-role-source', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  useAgentRoleMentionItems: () => [],
+}));
+
 import { ChatLandingView } from '../src/components/chat/chat-landing-view';
 import { initI18n } from '../src/i18n';
 
@@ -55,6 +68,7 @@ describe('ChatLandingView submission feedback', () => {
           submissionPending,
           submitLabel: 'Send',
           submittingLabel: 'Sending',
+          errorLabels: { tryAgain: 'Crash fallback retry' },
         })
       );
     });
@@ -64,12 +78,22 @@ describe('ChatLandingView submission feedback', () => {
     await render(true);
 
     const textarea = container?.querySelector('textarea');
+    expect(
+      Array.from(container?.querySelectorAll('button') ?? []).some(
+        (button) => button.textContent === 'Crash fallback retry'
+      )
+    ).toBe(false);
     expect(textarea?.value).toBe('');
     expect(textarea?.disabled).toBe(true);
     expect(container?.querySelector('button[aria-label="Sending"]')).not.toBeNull();
 
     await render(false);
 
+    expect(
+      Array.from(container?.querySelectorAll('button') ?? []).some(
+        (button) => button.textContent === 'Crash fallback retry'
+      )
+    ).toBe(false);
     expect(container?.querySelector('textarea')?.value).toBe('preserved draft');
     expect(container?.querySelector('textarea')?.disabled).toBe(false);
     expect(container?.querySelector('button[aria-label="Send"]')).not.toBeNull();

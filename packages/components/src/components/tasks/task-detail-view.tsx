@@ -651,9 +651,7 @@ export function TaskDetailView({ embedded = false }: TaskDetailViewProps) {
         key={taskId}
         value={body}
         disabled={!ready}
-        onCommit={(next) => {
-          void setTaskBody(taskId, next);
-        }}
+        onCommit={(next) => setTaskBody(taskId, next)}
         onQuoteSelection={setPendingQuote}
         onImagePaste={handleImageUpload}
         imageAccept={TASK_IMAGE_ACCEPT}

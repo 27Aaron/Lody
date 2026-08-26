@@ -188,6 +188,31 @@ export const OPEN_SOURCE_ATTRIBUTION_BUNDLE: OpenSourceAttributionBundle = {
       "noticePath": "packages/components/src/lib/vscode-theme/bundled/themes/vscode-defaults/LICENSE.txt"
     },
     {
+      "id": "pkg-emojibase-data-mit",
+      "kind": "package",
+      "scope": "production-dependency",
+      "name": "emojibase-data",
+      "license": "MIT",
+      "homepage": "https://emojibase.dev",
+      "author": "Miles Johnson",
+      "description": "Aggregated emoji, shortcode, and emoticon data.",
+      "versions": [
+        "17.0.0"
+      ]
+    },
+    {
+      "id": "pkg-frimousse-mit",
+      "kind": "package",
+      "scope": "production-dependency",
+      "name": "frimousse",
+      "license": "MIT",
+      "homepage": "https://frimousse.liveblocks.io",
+      "description": "A lightweight, unstyled, and composable emoji picker for React.",
+      "versions": [
+        "0.3.0"
+      ]
+    },
+    {
       "id": "vendored-icons-vscode-symbols",
       "kind": "vendored",
       "scope": "vendored-icon-set",

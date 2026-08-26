@@ -676,13 +676,32 @@ export function parseNpxPackageSpec(spec: string | undefined): NpxPackageSpec | 
 }
 
 /**
- * Recover the installed package spec from a built `npx` arg list. The spec is the token
- * immediately after `-y`/`--yes`, matching how launch args are assembled.
+ * Recover the primary installed package spec from a built `npx` arg list.
+ * Single-package launches put it immediately after `-y`/`--yes`; composed
+ * launches use one or more `--package` selectors followed by a bin name.
  */
 export function parseNpxPackageSpecFromArgs(args: readonly string[]): NpxPackageSpec | undefined {
   const yesIndex = args.findIndex((arg) => arg === '-y' || arg === '--yes');
   if (yesIndex === -1) {
     return undefined;
   }
-  return parseNpxPackageSpec(args[yesIndex + 1]);
+  const directSpec = parseNpxPackageSpec(args[yesIndex + 1]);
+  if (directSpec) {
+    return directSpec;
+  }
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === '--package' || arg === '-p') {
+      const packageSpec = parseNpxPackageSpec(args[index + 1]);
+      if (packageSpec) return packageSpec;
+      index += 1;
+      continue;
+    }
+    if (arg?.startsWith('--package=')) {
+      const packageSpec = parseNpxPackageSpec(arg.slice('--package='.length));
+      if (packageSpec) return packageSpec;
+    }
+  }
+  return undefined;
 }

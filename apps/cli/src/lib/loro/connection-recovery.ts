@@ -13,6 +13,7 @@ import type { Logger } from '@/utils/logger';
 
 import {
   STREAMS_TRANSPORT_ID,
+  isRecoverableStreamsRoomStatus,
   streamsRoomBinding,
   type StreamsRoomBinding,
 } from './streams-room-binding';
@@ -105,14 +106,7 @@ type LoroConnectionRecoveryControllerOptions = {
   onMetaRoomReady: () => void;
 };
 
-// 'detached' is deliberately NOT recoverable: it means the 'streams' transport
-// is not attached to the room at all (offline / pre-attach), and reconnecting
-// cannot change that — only `repo.addTransport` can. Recovery must not spin on
-// it. Statuses MUST be read from the 'streams' binding (streamsRoomBinding):
-// the classic surface reports a detached binding as 'disconnected', which this
-// predicate would wrongly treat as recoverable.
-const isRecoverableMetaRoomStatus = (status: RepoTransportRoomStatus | null): boolean =>
-  status === 'disconnected' || status === 'error';
+const isRecoverableMetaRoomStatus = isRecoverableStreamsRoomStatus;
 
 /**
  * What the CLI believes about the Streams plane, as a first-class state.

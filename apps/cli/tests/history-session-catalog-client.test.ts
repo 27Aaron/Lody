@@ -1,10 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import * as acp from '@agentclientprotocol/sdk';
 import type { SessionInfo } from '@agentclientprotocol/sdk';
+import type { ACPSessionId } from '@lody/shared';
 
 import { resolveACPProcessLaunch, resolveACPProcessLaunchAsync } from '../src/agent/setting';
 import {
   dedupeHistorySessionsById,
   listPaginatedHistorySessions,
+  requestHistorySessionReplay,
   resolveHistoryACPProcessLaunch,
 } from '../src/lib/history-session-catalog-client';
 
@@ -104,6 +107,92 @@ describe('history session catalog client', () => {
       ['session-1', 'New title'],
       ['session-2', 'Other'],
     ]);
+  });
+});
+
+describe('requestHistorySessionReplay', () => {
+  const acpSessionId = 'session-1' as ACPSessionId;
+  const codexProvider = { cliType: 'builtin', agentType: 'codex' } as const;
+
+  function initializeResponse(
+    overrides: Partial<acp.InitializeResponse> = {}
+  ): acp.InitializeResponse {
+    return {
+      protocolVersion: acp.PROTOCOL_VERSION,
+      agentCapabilities: {},
+      authMethods: [],
+      ...overrides,
+    };
+  }
+
+  it('uses the advertised Lody read-only method for builtin Codex', async () => {
+    const request = vi.fn(async () => ({}));
+    const loadSession = vi.fn(async () => ({}));
+
+    await requestHistorySessionReplay({
+      provider: codexProvider,
+      acpSessionId,
+      cwd: '/repo/project',
+      connection: { request, loadSession } as never,
+      initResponse: initializeResponse({
+        agentCapabilities: {
+          _meta: {
+            lody: {
+              sessionHistory: {
+                version: 1,
+                method: '_lody/session/history/read',
+              },
+            },
+          },
+        },
+      }),
+    });
+
+    expect(request).toHaveBeenCalledWith('_lody/session/history/read', {
+      sessionId: acpSessionId,
+    });
+    expect(loadSession).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when builtin Codex does not advertise the read-only method', async () => {
+    const request = vi.fn(async () => ({}));
+    const loadSession = vi.fn(async () => ({}));
+
+    await expect(
+      requestHistorySessionReplay({
+        provider: codexProvider,
+        acpSessionId,
+        cwd: '/repo/project',
+        connection: { request, loadSession } as never,
+        initResponse: initializeResponse({
+          agentCapabilities: { loadSession: true },
+        }),
+      })
+    ).rejects.toThrow('agentCapabilities._meta.lody.sessionHistory version 1');
+    expect(request).not.toHaveBeenCalled();
+    expect(loadSession).not.toHaveBeenCalled();
+  });
+
+  it('keeps loadSession for non-Codex providers', async () => {
+    const request = vi.fn(async () => ({}));
+    const loadSession = vi.fn(async () => ({}));
+
+    await requestHistorySessionReplay({
+      provider: { cliType: 'registry', agentType: 'auggie' },
+      acpSessionId,
+      cwd: '/repo/project',
+      connection: { request, loadSession } as never,
+      initResponse: initializeResponse({
+        agentCapabilities: { loadSession: true },
+      }),
+    });
+
+    expect(request).not.toHaveBeenCalled();
+    expect(loadSession).toHaveBeenCalledWith({
+      sessionId: acpSessionId,
+      cwd: '/repo/project',
+      mcpServers: [],
+    });
   });
 });
 

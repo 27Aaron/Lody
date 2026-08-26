@@ -80,6 +80,38 @@ async function deleteMarker(sessionId: SessionId): Promise<void> {
   await rm(getMarkerPath(sessionId), { force: true });
 }
 
+/**
+ * Serializes marker read-check-act sequences per session within this process.
+ *
+ * Every mutation in this module is a read-check-act on the same marker file, and
+ * two flows for one session legitimately overlap: a superseded preparation's
+ * dispose racing its replacement's materialization, or a durable claim racing
+ * the stale-marker sweep. Unserialized, the stale dispose can read the marker
+ * before the replacement rewrites it and then delete the worktree the
+ * replacement just materialized — the prepared session later starts against a
+ * path that no longer exists on disk. Cross-process writers are not serialized
+ * here; the durable adopter's on-disk existence check and the sweep's staleness
+ * window bound that boundary.
+ */
+const sessionMarkerLocks = new Map<string, Promise<unknown>>();
+
+async function withSessionMarkerLock<T>(sessionId: SessionId, fn: () => Promise<T>): Promise<T> {
+  const previous = sessionMarkerLocks.get(sessionId) ?? Promise.resolve();
+  const run = previous.then(fn);
+  const tail = run.then(
+    () => undefined,
+    () => undefined
+  );
+  sessionMarkerLocks.set(sessionId, tail);
+  try {
+    return await run;
+  } finally {
+    if (sessionMarkerLocks.get(sessionId) === tail) {
+      sessionMarkerLocks.delete(sessionId);
+    }
+  }
+}
+
 function buildManagerConfig(
   marker: SpeculativeWorktreeMarker,
   logger: Logger
@@ -176,75 +208,96 @@ export async function materializeSpeculativeWorktree(args: {
   logger: Logger;
 }): Promise<PreparedWorktree> {
   const target = buildTarget(args);
-  let previousMarker = await readMarker(args.sessionId);
-  if (
-    previousMarker &&
-    previousMarker.workspaceId === args.workspaceId &&
-    previousMarker.machineId === args.machineId &&
-    !markerMatchesTarget(previousMarker, target)
-  ) {
-    await disposeMarker(previousMarker, args.logger);
-    previousMarker = null;
-  }
-  const worktreeAlreadyExisted = args.manager.hasWorktree(args.sessionId);
-  const ownsWorktree =
-    previousMarker?.workspaceId === args.workspaceId &&
-    previousMarker.machineId === args.machineId &&
-    markerMatchesTarget(previousMarker, target)
-      ? previousMarker.ownsWorktree
-      : !worktreeAlreadyExisted;
-  const marker: SpeculativeWorktreeMarker = {
-    version: SPECULATIVE_WORKTREE_MARKER_VERSION,
-    preparationId: args.preparationId,
-    sessionId: args.sessionId,
-    workspaceId: args.workspaceId,
-    machineId: args.machineId,
-    repoId: target.repoId,
-    source: target.source,
-    ...(target.baseBranch ? { baseBranch: target.baseBranch } : {}),
-    ownsWorktree,
-    phase: 'speculative',
-    createdAtMs: Date.now(),
-  };
-  await writeMarker(marker);
+  // The whole materialization holds the session marker lock, so a superseded
+  // preparation's late dispose is ordered strictly before or after it — it can
+  // no longer read the old marker, lose the race to this rewrite, and then
+  // delete the worktree this call just materialized.
+  const info = await withSessionMarkerLock(args.sessionId, async () => {
+    let previousMarker = await readMarker(args.sessionId);
+    if (
+      previousMarker &&
+      previousMarker.workspaceId === args.workspaceId &&
+      previousMarker.machineId === args.machineId &&
+      !markerMatchesTarget(previousMarker, target)
+    ) {
+      await disposeMarker(previousMarker, args.logger);
+      previousMarker = null;
+    }
+    const worktreeAlreadyExisted = args.manager.hasWorktree(args.sessionId);
+    const ownsWorktree =
+      previousMarker?.workspaceId === args.workspaceId &&
+      previousMarker.machineId === args.machineId &&
+      markerMatchesTarget(previousMarker, target)
+        ? previousMarker.ownsWorktree
+        : !worktreeAlreadyExisted;
+    const marker: SpeculativeWorktreeMarker = {
+      version: SPECULATIVE_WORKTREE_MARKER_VERSION,
+      preparationId: args.preparationId,
+      sessionId: args.sessionId,
+      workspaceId: args.workspaceId,
+      machineId: args.machineId,
+      repoId: target.repoId,
+      source: target.source,
+      ...(target.baseBranch ? { baseBranch: target.baseBranch } : {}),
+      ownsWorktree,
+      phase: 'speculative',
+      createdAtMs: Date.now(),
+    };
+    await writeMarker(marker);
 
-  try {
-    await args.manager.ensureRepo({ brokerAuth: await args.resolveBrokerAuth?.() });
-    const info = await args.manager.createWorktree(
-      args.sessionId,
-      args.baseBranch,
-      args.restoreBranchName
-    );
-    let claimed = false;
-    let disposed = false;
-    return {
-      info,
-      claim: async () => {
-        if (claimed || disposed) return;
-        claimed = true;
-      },
-      dispose: async () => {
-        if (claimed || disposed) return;
-        disposed = true;
+    try {
+      await args.manager.ensureRepo({ brokerAuth: await args.resolveBrokerAuth?.() });
+      return await args.manager.createWorktree(
+        args.sessionId,
+        args.baseBranch,
+        args.restoreBranchName
+      );
+    } catch (error) {
+      const current = await readMarker(args.sessionId);
+      if (current?.preparationId === args.preparationId) {
+        await disposePreparedMarker(current, args.manager).catch((cleanupError: unknown) => {
+          args.logger.debug(
+            `[${args.sessionId}] Failed to clean speculative worktree after materialization error: ${formatErrorMessage(
+              cleanupError
+            )}`
+          );
+        });
+      }
+      throw error;
+    }
+  });
+
+  let claimed = false;
+  let disposed = false;
+  return {
+    info,
+    claim: async () => {
+      if (claimed || disposed) return;
+      claimed = true;
+    },
+    dispose: async () => {
+      if (claimed || disposed) return;
+      disposed = true;
+      await withSessionMarkerLock(args.sessionId, async () => {
         const current = await readMarker(args.sessionId);
         if (current?.preparationId !== args.preparationId) return;
         await disposePreparedMarker(current, args.manager);
-      },
-    };
-  } catch (error) {
-    const current = await readMarker(args.sessionId);
-    if (current?.preparationId === args.preparationId) {
-      await disposePreparedMarker(current, args.manager).catch((cleanupError: unknown) => {
-        args.logger.debug(
-          `[${args.sessionId}] Failed to clean speculative worktree after materialization error: ${formatErrorMessage(
-            cleanupError
-          )}`
-        );
       });
-    }
-    throw error;
-  }
+    },
+  };
 }
+
+/**
+ * How a durable session's claim of a speculative worktree resolved.
+ *
+ * - `claimed`: the marker matched the durable target and setup is still pending.
+ * - `no-marker`: nothing to claim (never prepared, already completed, or a
+ *   foreign workspace/machine marker that is not ours to touch).
+ * - `mismatch`: the marker was built for a DIFFERENT target and was disposed —
+ *   including its worktree directory. The caller must not use a prepared
+ *   worktree after this outcome; the cold path has to rebuild it.
+ */
+export type SpeculativeWorktreeClaimOutcome = 'claimed' | 'no-marker' | 'mismatch';
 
 /**
  * Marks the worktree as durably owned while preserving the fact that setup has
@@ -257,22 +310,24 @@ export async function claimSpeculativeWorktreeForDurableSession(args: {
   machineId: MachineId;
   target: SpeculativeWorktreeTarget;
   logger: Logger;
-}): Promise<boolean> {
-  const marker = await readMarker(args.sessionId);
-  if (!marker || marker.workspaceId !== args.workspaceId || marker.machineId !== args.machineId) {
-    return false;
-  }
-  if (!markerMatchesTarget(marker, args.target)) {
-    await disposeMarker(marker, args.logger);
-    return false;
-  }
-  if (marker.phase !== 'durable-pending-setup') {
-    await writeMarker({
-      ...marker,
-      phase: 'durable-pending-setup',
-    });
-  }
-  return true;
+}): Promise<SpeculativeWorktreeClaimOutcome> {
+  return await withSessionMarkerLock(args.sessionId, async () => {
+    const marker = await readMarker(args.sessionId);
+    if (!marker || marker.workspaceId !== args.workspaceId || marker.machineId !== args.machineId) {
+      return 'no-marker';
+    }
+    if (!markerMatchesTarget(marker, args.target)) {
+      await disposeMarker(marker, args.logger);
+      return 'mismatch';
+    }
+    if (marker.phase !== 'durable-pending-setup') {
+      await writeMarker({
+        ...marker,
+        phase: 'durable-pending-setup',
+      });
+    }
+    return 'claimed';
+  });
 }
 
 export async function completeSpeculativeWorktreeSetup(args: {
@@ -281,15 +336,17 @@ export async function completeSpeculativeWorktreeSetup(args: {
   machineId: MachineId;
   target: SpeculativeWorktreeTarget;
 }): Promise<void> {
-  const marker = await readMarker(args.sessionId);
-  if (
-    marker?.phase === 'durable-pending-setup' &&
-    marker.workspaceId === args.workspaceId &&
-    marker.machineId === args.machineId &&
-    markerMatchesTarget(marker, args.target)
-  ) {
-    await deleteMarker(args.sessionId);
-  }
+  await withSessionMarkerLock(args.sessionId, async () => {
+    const marker = await readMarker(args.sessionId);
+    if (
+      marker?.phase === 'durable-pending-setup' &&
+      marker.workspaceId === args.workspaceId &&
+      marker.machineId === args.machineId &&
+      markerMatchesTarget(marker, args.target)
+    ) {
+      await deleteMarker(args.sessionId);
+    }
+  });
 }
 
 export async function recoverStaleSpeculativeWorktrees(args: {
@@ -316,15 +373,33 @@ export async function recoverStaleSpeculativeWorktrees(args: {
         JSON.parse(await readFile(markerPath, 'utf8')) as unknown
       );
       if (!parsed.success) continue;
-      const marker = parsed.data;
-      if (marker.workspaceId !== args.workspaceId || marker.machineId !== args.machineId) continue;
-      const sessionId = marker.sessionId as SessionId;
+      const candidate = parsed.data;
+      if (candidate.workspaceId !== args.workspaceId || candidate.machineId !== args.machineId) {
+        continue;
+      }
+      const sessionId = candidate.sessionId as SessionId;
       if (args.isActiveSession?.(sessionId)) continue;
-      if (nowMs - marker.createdAtMs < SPECULATIVE_WORKTREE_STALE_MS) continue;
+      if (nowMs - candidate.createdAtMs < SPECULATIVE_WORKTREE_STALE_MS) continue;
       if (await args.isDurableSession(sessionId)) {
         continue;
       }
-      await disposeMarker(marker, args.logger);
+      await withSessionMarkerLock(sessionId, async () => {
+        // Re-read under the lock: while this sweep waited, a new preparation or
+        // a durable claim may have rewritten the marker. Disposing from the
+        // stale directory-listing snapshot would delete a live worktree.
+        const marker = await readMarker(sessionId);
+        if (
+          !marker ||
+          marker.preparationId !== candidate.preparationId ||
+          marker.workspaceId !== args.workspaceId ||
+          marker.machineId !== args.machineId
+        ) {
+          return;
+        }
+        if (args.isActiveSession?.(sessionId)) return;
+        if (nowMs - marker.createdAtMs < SPECULATIVE_WORKTREE_STALE_MS) return;
+        await disposeMarker(marker, args.logger);
+      });
     } catch (error) {
       args.logger.debug(
         `Failed to recover stale speculative worktree marker ${entry}: ${formatErrorMessage(error)}`

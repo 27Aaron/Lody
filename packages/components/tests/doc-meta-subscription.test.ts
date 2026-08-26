@@ -47,19 +47,17 @@ type RepoWatchEvent =
       by: 'live';
     };
 
+type CompatRepoEntry = Record<string, unknown> & { docId: string; meta: Record<string, unknown> };
+
 class CompatRepoDouble {
   private readonly listeners = new Set<(event: RepoWatchEvent) => void>();
 
   constructor(
-    private readonly entries: Array<
-      Record<string, unknown> & { docId: string; meta: Record<string, unknown> }
-    >,
+    private readonly entries: CompatRepoEntry[],
     private readonly snapshots = new Map<string, Record<string, unknown> | undefined>()
   ) {}
 
-  async listDoc(): Promise<
-    Array<Record<string, unknown> & { docId: string; meta: Record<string, unknown> }>
-  > {
+  async listDoc(): Promise<CompatRepoEntry[]> {
     return this.entries.map((entry) => ({ ...entry, meta: { ...entry.meta } }));
   }
 
@@ -84,6 +82,22 @@ class CompatRepoDouble {
     for (const listener of this.listeners) {
       listener(event);
     }
+  }
+}
+
+/** Emits a live event from inside the bootstrap scan, after the snapshot is captured. */
+class ScanRacingRepoDouble extends CompatRepoDouble {
+  constructor(
+    entries: CompatRepoEntry[],
+    private readonly duringScan: () => void
+  ) {
+    super(entries);
+  }
+
+  override async listDoc(): Promise<CompatRepoEntry[]> {
+    const snapshot = await super.listDoc();
+    this.duringScan();
+    return snapshot;
   }
 }
 
@@ -135,6 +149,43 @@ const createRuntime = (repo: LoroRepo): WorkspaceRuntime =>
   }) as WorkspaceRuntime;
 
 describe('docMetaSubscriptionAtom', () => {
+  it('observes archive updates that land while the bootstrap snapshot is being read', async () => {
+    const sessionId = 'archived-during-bootstrap' as SessionId;
+    const docId = getSessionRoomId(sessionId);
+    const repo: ScanRacingRepoDouble = new ScanRacingRepoDouble(
+      [
+        {
+          docId,
+          exists: true,
+          meta: {
+            id: sessionId,
+            title: 'Archived during bootstrap',
+            createdAt: '2026-08-12T00:00:00.000Z',
+            isArchived: false,
+          },
+        },
+      ],
+      () => {
+        repo.emit({ kind: 'doc-metadata', docId, patch: { isArchived: true }, by: 'live' });
+      }
+    );
+
+    const store = createStore();
+    const unmount = store.sub(docMetaSubscriptionAtom, () => {});
+
+    try {
+      store.set(runtimeAtom, createRuntime(repo as unknown as LoroRepo));
+      await flush();
+
+      expect(store.get(docMetaCacheReadyAtom)).toBe(true);
+      expect(store.get(sessionMetaCacheAtom)[docId]?.isArchived).toBe(true);
+      expect(store.get(sessionListAtom).map((session) => session.id)).not.toContain(sessionId);
+      expect(store.get(archivedSessionListAtom).map((session) => session.id)).toContain(sessionId);
+    } finally {
+      unmount();
+    }
+  });
+
   it('immediately projects same-repo archive and restore writes into session lists', async () => {
     const repo = await LoroRepo.create({});
     const sessionId = 'local-archive-session' as SessionId;

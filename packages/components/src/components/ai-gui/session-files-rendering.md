@@ -12,6 +12,12 @@ File attachments use `file` blocks; the product contract is in
 - `view.tsx` `SessionFileGroup` owns atoms/download/preview-fetch and resolves the pending
   machine name. Both render switches and `UserChatBubble` route `file` blocks through it.
   Upload/download/preview helpers: `@/lib/session-file-{upload,download,presentation}.ts`.
+- Agent-uploaded blocks may carry a workspace-relative `sourcePath` proven by the CLI's
+  containment check. It is provenance for reopening the live file, never a download path.
+  HTML clicks use it only for same-machine Sessions and enter the existing rendered file
+  preview. Remote HTML clicks reuse an active Browser connection; an available reported
+  candidate requires an explicit confirmation before creating its tunnel. Missing provenance
+  or preview state falls back to the ordinary attachment preview instead of guessing.
 - `@/lib/session-file-download.ts` `downloadSessionFile` branches by platform
   (`isNativeAppShell()`): web/electron uses blob + `<a download>`; native mobile routes to
   `@/lib/session-file-native-save.ts` (Capacitor Filesystem chunked base64 write to the

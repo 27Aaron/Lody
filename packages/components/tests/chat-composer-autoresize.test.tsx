@@ -4,6 +4,18 @@ import { act, createRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('../src/components/mentions/mention-session-source', async (importOriginal) => ({
+  ...(await importOriginal()),
+  useSessionMentionItems: () => [],
+}));
+
+// Agent Roles read the visible-machine index, which needs the authenticated
+// Convex context; the same reason the session source above is stubbed.
+vi.mock('../src/components/mentions/mention-agent-role-source', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  useAgentRoleMentionItems: () => [],
+}));
+
 import { ChatComposer } from '../src/components/chat/chat-composer';
 import { initI18n } from '../src/i18n';
 
@@ -39,6 +51,7 @@ describe('ChatComposer auto resize', () => {
 
   it('grows through 11 rows and becomes internally scrollable after that', async () => {
     const promptRef = createRef<HTMLTextAreaElement>();
+    const skipNextViewportResizeAutoScrollRef = { current: false };
     const renderComposer = (promptValue: string) => (
       <ChatComposer
         variant="session"
@@ -49,6 +62,7 @@ describe('ChatComposer auto resize', () => {
         primaryAction={null}
         autoResize
         maxRows={11}
+        skipNextViewportResizeAutoScrollRef={skipNextViewportResizeAutoScrollRef}
       />
     );
 
@@ -56,6 +70,7 @@ describe('ChatComposer auto resize', () => {
 
     const textarea = promptRef.current;
     expect(textarea).toBeInstanceOf(HTMLTextAreaElement);
+    expect(skipNextViewportResizeAutoScrollRef.current).toBe(false);
     textarea!.style.lineHeight = '24px';
     let scrollHeight = 240;
     Object.defineProperty(textarea, 'scrollHeight', {
@@ -67,6 +82,7 @@ describe('ChatComposer auto resize', () => {
 
     expect(textarea?.style.height).toBe('240px');
     expect(textarea?.style.overflowY).toBe('hidden');
+    expect(skipNextViewportResizeAutoScrollRef.current).toBe(true);
 
     scrollHeight = 288;
     await act(async () => root.render(renderComposer('twelve\n'.repeat(12))));

@@ -1,11 +1,14 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAtom } from 'jotai';
-import { Moon, SquareTerminal, Sun } from 'lucide-react';
+import { Monitor, Moon, SquareTerminal, Sun } from 'lucide-react';
 
 import {
   conversationFontSizeAtom,
+  CONVERSATION_FONT_SIZE_MAX,
+  CONVERSATION_FONT_SIZE_MIN,
   interfaceFontFamilyAtom,
+  normalizeConversationFontSize,
   normalizeTerminalFontSize,
   terminalFontFamilyAtom,
   terminalFontSizeAtom,
@@ -20,7 +23,7 @@ import { useIsMobile } from '@/hooks/use-mobile';
 import { buildInterfaceFontFamily, listSystemFontFamilies } from '@/lib/local-fonts';
 import { Input } from '@/ui/input';
 import { LanguageSelector } from '../../i18n';
-import { useTheme, type ResolvedTheme } from '../../theme-provider';
+import { useTheme, type Theme } from '../../theme-provider';
 import { settingContainerClass } from '.';
 import { CompactRow, CompactSection } from './compact-layout';
 import { PreviewSelect, type PreviewSelectOption } from './preview-select';
@@ -28,9 +31,9 @@ import { PreviewSelect, type PreviewSelectOption } from './preview-select';
 export type SystemFontLoadState = 'idle' | 'loading' | 'loaded' | 'error';
 
 export interface AppearanceSettingsViewProps {
-  theme: ResolvedTheme;
-  onThemePreview: (value: ResolvedTheme) => void;
-  onThemeCommit: (value: ResolvedTheme) => void;
+  theme: Theme;
+  onThemePreview: (value: Theme) => void;
+  onThemeCommit: (value: Theme) => void;
   onThemeCancel: () => void;
   conversationFontSize: ConversationFontSize;
   onConversationFontSizeChange: (value: ConversationFontSize) => void;
@@ -86,7 +89,7 @@ export function AppearanceSettingsView({
 }: AppearanceSettingsViewProps) {
   const { t } = useTranslation();
 
-  const themeOptions: PreviewSelectOption<ResolvedTheme>[] = [
+  const themeOptions: PreviewSelectOption<Theme>[] = [
     {
       value: 'light',
       label: (
@@ -105,20 +108,14 @@ export function AppearanceSettingsView({
         </div>
       ),
     },
-  ];
-
-  const conversationFontSizeOptions: PreviewSelectOption<ConversationFontSize>[] = [
     {
-      value: 'small',
-      label: t('settings.conversationFontSize.small', 'Small'),
-    },
-    {
-      value: 'default',
-      label: t('settings.conversationFontSize.default', 'Default'),
-    },
-    {
-      value: 'large',
-      label: t('settings.conversationFontSize.large', 'Large'),
+      value: 'system',
+      label: (
+        <div className="flex items-center gap-2">
+          <Monitor className="h-4 w-4" />
+          <span>{t('settings.theme.system')}</span>
+        </div>
+      ),
     },
   ];
 
@@ -189,7 +186,6 @@ export function AppearanceSettingsView({
                 {fontLoadStatus}
               </span>
             }
-            labelColumnClassName="sm:grid-cols-[minmax(0,1fr)_auto]"
           >
             <OptionSelector
               value={interfaceFontFamily}
@@ -233,13 +229,22 @@ export function AppearanceSettingsView({
             'settings.conversationFontSize.helper',
             'Adjusts message body text in conversations.'
           )}
-          labelColumnClassName="sm:grid-cols-[minmax(0,1fr)_auto]"
         >
-          <PreviewSelect
+          <Input
+            type="number"
+            min={CONVERSATION_FONT_SIZE_MIN}
+            max={CONVERSATION_FONT_SIZE_MAX}
+            step={1}
             value={conversationFontSize}
-            options={conversationFontSizeOptions}
-            onCommit={onConversationFontSizeChange}
-            triggerClassName="w-full sm:w-[220px]"
+            aria-label={t('settings.conversationFontSize.label', 'Conversation font size')}
+            className="w-24"
+            onChange={(event) => {
+              if (Number.isFinite(event.target.valueAsNumber)) {
+                onConversationFontSizeChange(
+                  normalizeConversationFontSize(event.target.valueAsNumber)
+                );
+              }
+            }}
           />
         </CompactRow>
       </CompactSection>
@@ -249,7 +254,6 @@ export function AppearanceSettingsView({
           <CompactRow
             label={t('settings.terminal.fontFamily.label', 'Font')}
             helper={fontLoadStatus}
-            labelColumnClassName="sm:grid-cols-[minmax(0,1fr)_auto]"
           >
             <OptionSelector
               value={terminalFontFamily}
@@ -286,10 +290,7 @@ export function AppearanceSettingsView({
               )}
             />
           </CompactRow>
-          <CompactRow
-            label={t('settings.terminal.fontSize.label', 'Font size')}
-            labelColumnClassName="sm:grid-cols-[minmax(0,1fr)_auto]"
-          >
+          <CompactRow label={t('settings.terminal.fontSize.label', 'Font size')}>
             <Input
               type="number"
               min={TERMINAL_FONT_SIZE_MIN}
@@ -343,7 +344,7 @@ export function AppearanceSettingsView({
 }
 
 function DesktopAppearanceSettings() {
-  const { theme, resolvedTheme, setTheme, previewTheme } = useTheme();
+  const { theme, setTheme, previewTheme } = useTheme();
   const [conversationFontSize, setConversationFontSize] = useAtom(conversationFontSizeAtom);
   const [interfaceFontFamily, setInterfaceFontFamily] = useAtom(interfaceFontFamilyAtom);
   const [terminalFontFamily, setTerminalFontFamily] = useAtom(terminalFontFamilyAtom);
@@ -351,17 +352,16 @@ function DesktopAppearanceSettings() {
   const [systemFontFamilies, setSystemFontFamilies] = useState<string[]>([]);
   const [systemFontLoadState, setSystemFontLoadState] = useState<SystemFontLoadState>('idle');
   const isElectron = typeof window !== 'undefined' && window.__LODY_ELECTRON__ === true;
-  const themeValue: ResolvedTheme = theme === 'system' ? resolvedTheme : theme;
-  const savedThemeRef = useRef<ResolvedTheme>(themeValue);
+  const savedThemeRef = useRef<Theme>(theme);
 
   const handleThemePreview = useCallback(
-    (value: ResolvedTheme) => {
+    (value: Theme) => {
       previewTheme(value);
     },
     [previewTheme]
   );
   const handleThemeCommit = useCallback(
-    (value: ResolvedTheme) => {
+    (value: Theme) => {
       savedThemeRef.current = value;
       setTheme(value);
     },
@@ -389,7 +389,7 @@ function DesktopAppearanceSettings() {
 
   return (
     <AppearanceSettingsView
-      theme={themeValue}
+      theme={theme}
       onThemePreview={handleThemePreview}
       onThemeCommit={handleThemeCommit}
       onThemeCancel={handleThemeCancel}

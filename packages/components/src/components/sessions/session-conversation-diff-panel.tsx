@@ -47,19 +47,29 @@ import { useGitHubReviewComments } from '@/hooks/use-github-review-comments';
 import { withGitHubOperationTokenRetry, withGitHubTokenRetry } from '@/lib/github-token';
 import { getPullRequestNumber, getSessionGitHubState } from '@/lib/session-github-state';
 import { SessionFileDiffNoticeCard } from './session-file-diff-notice-card';
+import { DiffFileHeaderActions } from '@/ui/diff-viewer/diff-file-header-actions';
 import type { SessionFileProvider } from '@/lib/session-file-provider';
 
 const DIFF_LOAD_SCROLL_PAUSE_MS = 500;
 const EMPTY_GITHUB_THREADS: GitHubReviewThread[] = [];
 
-function FileDiffSkeleton({ filePath }: { filePath: string }) {
+function FileDiffSkeleton({
+  filePath,
+  onOpenFile,
+}: {
+  filePath: string;
+  onOpenFile?: (path: string) => void;
+}) {
   return (
     <div className="w-full overflow-hidden rounded-xl border border-foreground/[0.12] bg-background shadow-[0_1px_2px_hsl(0_0%_0%/0.04)] dark:border-border">
       <div className="flex h-8 items-center gap-2 border-b border-foreground/[0.08] bg-background pl-1 pr-4 dark:border-border">
         <FileIcon filePath={filePath} className="h-4 w-4 shrink-0" />
-        <span className="min-w-0 flex-1 truncate text-sm text-foreground/90" title={filePath}>
-          {filePath}
-        </span>
+        <div className="flex min-w-0 flex-1 items-center gap-1">
+          <span className="min-w-0 truncate text-sm text-foreground/90" title={filePath}>
+            {filePath}
+          </span>
+          <DiffFileHeaderActions path={filePath} onOpenFile={onOpenFile} />
+        </div>
       </div>
       <div className="space-y-1.5 px-4 py-3">
         <Skeleton className="h-3 w-full" />
@@ -147,6 +157,7 @@ export type SessionConversationDiffPanelProps = {
   className?: string;
   fileProvider?: SessionFileProvider | null;
   fileProviderPending?: boolean;
+  onOpenFile?: (path: string) => void;
 };
 
 type DiffFileBlockProps = {
@@ -162,6 +173,7 @@ type DiffFileBlockProps = {
   commentCallbacks: DiffViewerCommentCallbacks;
   commentReferenceKeys: readonly string[];
   onCommentError: (error: unknown) => void;
+  onOpenFile?: (path: string) => void;
 };
 
 export function createConversationDiffViewerParseCacheKey(input: {
@@ -187,6 +199,7 @@ const DiffFileBlock = memo(function DiffFileBlock({
   commentCallbacks,
   commentReferenceKeys,
   onCommentError,
+  onOpenFile,
 }: DiffFileBlockProps) {
   const { t } = useTranslation();
   const diffViewerParseCacheKey = createConversationDiffViewerParseCacheKey({
@@ -196,7 +209,7 @@ const DiffFileBlock = memo(function DiffFileBlock({
   });
 
   if (!data) {
-    return <FileDiffSkeleton filePath={filePath} />;
+    return <FileDiffSkeleton filePath={filePath} onOpenFile={onOpenFile} />;
   }
 
   if (data.status === 'error') {
@@ -221,6 +234,7 @@ const DiffFileBlock = memo(function DiffFileBlock({
         commentCallbacks={commentCallbacks}
         commentReferenceKeys={commentReferenceKeys}
         onCommentError={onCommentError}
+        onOpenFile={onOpenFile}
         defaultOpen
         deferRenderUntilOpen
         parseCacheKey={diffViewerParseCacheKey}
@@ -245,6 +259,7 @@ const DiffFileBlock = memo(function DiffFileBlock({
         commentCallbacks={commentCallbacks}
         commentReferenceKeys={commentReferenceKeys}
         onCommentError={onCommentError}
+        onOpenFile={onOpenFile}
         defaultOpen
         deferRenderUntilOpen
         parseCacheKey={diffViewerParseCacheKey}
@@ -255,27 +270,24 @@ const DiffFileBlock = memo(function DiffFileBlock({
 
   if (data.oldSnapshot.kind === 'binary' || data.newSnapshot.kind === 'binary') {
     return (
-      <div className="space-y-2">
-        <div className="text-sm font-medium text-foreground">
-          {t('sessions.fileDiff.binary.title', 'Binary file')}
-        </div>
-        <div className="text-xs text-muted-foreground">
-          {t('sessions.fileDiff.binary.message', "This file is binary and can't be diffed yet.")}
-        </div>
-      </div>
+      <SessionFileDiffNoticeCard
+        filePath={filePath}
+        message={t(
+          'sessions.fileDiff.binary.message',
+          "This file is binary and can't be diffed yet."
+        )}
+        onOpenFile={onOpenFile}
+      />
     );
   }
 
   if (data.newSnapshot.kind === 'large' || data.oldSnapshot.kind === 'large') {
     return (
-      <div className="space-y-2">
-        <div className="text-sm font-medium text-foreground">
-          {t('sessions.fileDiff.large.title', 'Large file')}
-        </div>
-        <div className="text-xs text-muted-foreground">
-          {t('sessions.fileDiff.large.message', 'This file is too large (>1MB) to diff.')}
-        </div>
-      </div>
+      <SessionFileDiffNoticeCard
+        filePath={filePath}
+        message={t('sessions.fileDiff.large.message', 'This file is too large (>1MB) to diff.')}
+        onOpenFile={onOpenFile}
+      />
     );
   }
 
@@ -287,6 +299,7 @@ const DiffFileBlock = memo(function DiffFileBlock({
           'sessions.fileDiff.filtered.message',
           "This file type's diff has been filtered."
         )}
+        onOpenFile={onOpenFile}
       />
     );
   }
@@ -305,6 +318,7 @@ const DiffFileBlock = memo(function DiffFileBlock({
       commentCallbacks={commentCallbacks}
       commentReferenceKeys={commentReferenceKeys}
       onCommentError={onCommentError}
+      onOpenFile={onOpenFile}
       defaultOpen
       deferRenderUntilOpen
       responsiveSplit
@@ -334,6 +348,7 @@ function SessionConversationDiffPanelImpl({
   className,
   fileProvider,
   fileProviderPending,
+  onOpenFile,
 }: SessionConversationDiffPanelProps) {
   const { t } = useTranslation();
   const postHog = usePostHog();
@@ -654,6 +669,7 @@ function SessionConversationDiffPanelImpl({
         commentCallbacks={commentCallbacks}
         commentReferenceKeys={commentReferenceKeys}
         onCommentError={handleCommentError}
+        onOpenFile={onOpenFile}
       />
     </div>
   );
@@ -736,6 +752,7 @@ export const areSessionConversationDiffPanelPropsEqual = (
   prev.onSendToChat === next.onSendToChat &&
   prev.fileProvider === next.fileProvider &&
   prev.fileProviderPending === next.fileProviderPending &&
+  prev.onOpenFile === next.onOpenFile &&
   prev.fileDiffsPending === next.fileDiffsPending &&
   areFileDiffListsEqual(prev.fileDiffs, next.fileDiffs) &&
   areStringArraysEqual(

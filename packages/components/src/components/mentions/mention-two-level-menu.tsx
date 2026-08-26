@@ -11,20 +11,25 @@ import {
   GitPullRequest,
   MessageSquare,
   Terminal,
+  UserRoundCog,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useFireOnKeyChange, useFireOncePerCycle } from '@/hooks/use-fire-once';
 import { FileIcon, FolderIcon } from '@/components/icons/file-icons';
+import { AgentRoleDetailPane } from '@/components/sessions/agent-role-detail-pane';
 import { MentionContent, MentionItem, useMentionContext } from '@/ui/mention';
 import { useIsMentionMobile } from '@/ui/mention/mention-mobile-content';
 import {
   getCategoryNavigateText,
   getMentionViewCandidates,
   selectMentionMenuViewForTrigger,
+  selectMentionViewActivations,
   type MentionCandidate,
   type MentionCandidateDetail,
   type MentionCategory,
   type MentionIcon,
   type MentionMenuView,
+  type MentionSourceKey,
 } from '@/components/mentions/mention-registry';
 import {
   captureMentionCategoryEnter,
@@ -33,15 +38,62 @@ import {
   type MentionSurface,
 } from '@/components/mentions/mention-analytics';
 
+/**
+ * Starts each lazy source the open menu needs, at most once while it stays
+ * open; leaving and reopening starts a new refresh cycle. Which sources a view
+ * needs is `selectMentionViewActivations`' decision — the menu only owns the
+ * once-per-open policy and learns nothing about any individual source.
+ *
+ * Exported for tests; `MentionTwoLevelMenu` below is the only caller.
+ */
+export function useMentionCategoryActivation(
+  open: boolean,
+  view: MentionMenuView | null,
+  categories: readonly MentionCategory[]
+) {
+  const shouldActivateSource = useFireOncePerCycle<MentionSourceKey>(open);
+  const activateCategory = React.useCallback(
+    (category: MentionCategory) => {
+      const activation = category.activation;
+      if (!open || !activation || !shouldActivateSource(activation.sourceKey)) return;
+      activation.activate();
+    },
+    [open, shouldActivateSource]
+  );
+
+  React.useEffect(() => {
+    if (!open) return;
+    for (const activation of selectMentionViewActivations(view, categories)) {
+      if (!shouldActivateSource(activation.sourceKey)) continue;
+      activation.activate();
+    }
+  }, [categories, open, shouldActivateSource, view]);
+
+  return activateCategory;
+}
+
 function CandidateIcon({
   icon,
+  emoji,
   path,
   className,
 }: {
   icon: MentionIcon;
+  /** A candidate's own mark, shown INSTEAD of the category glyph. */
+  emoji?: string;
   path?: string;
   className?: string;
 }) {
+  if (emoji) {
+    return (
+      <span
+        aria-hidden="true"
+        className={cn(className, 'inline-flex items-center justify-center text-sm leading-none')}
+      >
+        {emoji}
+      </span>
+    );
+  }
   switch (icon) {
     case 'file':
       return <FileIcon filePath={path ?? ''} className={className} />;
@@ -57,6 +109,8 @@ function CandidateIcon({
       return <Terminal className={className} />;
     case 'session':
       return <MessageSquare className={className} />;
+    case 'agent_role':
+      return <UserRoundCog className={className} />;
     default:
       return null;
   }
@@ -64,12 +118,22 @@ function CandidateIcon({
 
 const ICON_CLASS = 'h-4 w-4 shrink-0 opacity-70';
 
-function CategoryRow({ category }: { category: MentionCategory }) {
+function CategoryRow({
+  category,
+  onNavigate,
+}: {
+  category: MentionCategory;
+  onNavigate?: (category: MentionCategory) => void;
+}) {
   return (
     <MentionItem
       value={`category:${category.id}`}
       label={category.label}
       navigateText={getCategoryNavigateText(category)}
+      // Navigation-item selection does not commit a mention. Start its lazy
+      // source synchronously, through the same once-per-open latch used by the
+      // view-derived fallback for typed/pasted `@skill:` prefixes.
+      onMentionNavigate={onNavigate ? () => onNavigate(category) : undefined}
     >
       <CandidateIcon icon={category.icon} className={ICON_CLASS} />
       <span className="min-w-0 flex-1 truncate text-sm font-medium">{category.label}</span>
@@ -94,7 +158,12 @@ function CandidateRow({
       navigateText={candidate.navigateText}
       onMentionSelect={onSelect}
     >
-      <CandidateIcon icon={candidate.icon} path={candidate.iconPath} className={ICON_CLASS} />
+      <CandidateIcon
+        icon={candidate.icon}
+        emoji={candidate.iconEmoji}
+        path={candidate.iconPath}
+        className={ICON_CLASS}
+      />
       <div className="flex min-w-0 flex-1 flex-col">
         <span
           className={cn(
@@ -122,8 +191,21 @@ function CandidateRow({
  * full-width strip with no hover, so it stays list-only.
  */
 function CandidateDetailPane({ detail }: { detail: MentionCandidateDetail }) {
+  // A Role is the composer's object, read with the composer's pane: same rows,
+  // same wording for the ids, same instruction block — sized to this menu.
+  if (detail.agentRole) {
+    return (
+      <AgentRoleDetailPane
+        role={detail.agentRole.role}
+        agentConfig={detail.agentRole.agentConfig}
+        machine={detail.agentRole.machine}
+        machineLabel={detail.agentRole.machineLabel}
+        className="h-[320px] w-[248px]"
+      />
+    );
+  }
   return (
-    <div className="scrollbar-pro max-h-[320px] w-[248px] shrink-0 overflow-y-auto border-l border-border px-3 py-2.5">
+    <div className="scrollbar-pro h-[320px] w-[248px] shrink-0 overflow-y-auto border-l border-border px-3 py-2.5 [scrollbar-gutter:stable]">
       <p className="truncate text-sm font-semibold text-foreground">{detail.title}</p>
       {detail.badges?.length ? (
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
@@ -212,12 +294,14 @@ export function MentionTwoLevelMenuBody({
   view,
   onBack,
   showBack,
+  onCategoryNavigate,
   onCandidateSelect,
   detail,
 }: {
   view: MentionMenuView;
   onBack: () => void;
   showBack: boolean;
+  onCategoryNavigate?: (category: MentionCategory) => void;
   onCandidateSelect?: (category: MentionCategory, rank: number) => void;
   /** Side panel for the highlighted candidate; omitted on mobile. */
   detail?: MentionCandidateDetail | null;
@@ -238,7 +322,7 @@ export function MentionTwoLevelMenuBody({
       return (
         <div className="scrollbar-pro max-h-[300px] overflow-y-auto">
           {view.categories.map((category) => (
-            <CategoryRow key={category.id} category={category} />
+            <CategoryRow key={category.id} category={category} onNavigate={onCategoryNavigate} />
           ))}
         </div>
       );
@@ -251,7 +335,7 @@ export function MentionTwoLevelMenuBody({
       return (
         <div className="scrollbar-pro max-h-[320px] overflow-y-auto">
           {view.categories.map((category) => (
-            <CategoryRow key={category.id} category={category} />
+            <CategoryRow key={category.id} category={category} onNavigate={onCategoryNavigate} />
           ))}
           {view.groups.map((group) => (
             <React.Fragment key={group.category.id}>
@@ -323,6 +407,8 @@ export function MentionTwoLevelMenu({
     [categories, open, search, trigger]
   );
 
+  const activateCategory = useMentionCategoryActivation(open, view, categories);
+
   // Highlight the first row whenever the level or result set changes, so Enter
   // always has a target. Keyed so typing does not re-highlight on every render.
   const highlightKey =
@@ -333,22 +419,19 @@ export function MentionTwoLevelMenu({
         : view.level === 'aggregate'
           ? `aggregate:${view.term}:${view.groups.length}`
           : `category:${view.category.id}:${view.term}:${view.candidates.length}`;
-  const lastHighlightKeyRef = React.useRef<string | null>(null);
+  const shouldHighlightFirst = useFireOnKeyChange<string | null>();
   const { getEnabledItems, onHighlightedItemChange } = context;
   React.useEffect(() => {
-    if (highlightKey === null) {
-      lastHighlightKeyRef.current = null;
-      return;
-    }
-    if (lastHighlightKeyRef.current === highlightKey) return;
-    lastHighlightKeyRef.current = highlightKey;
+    // Called first so closing the menu (`null`) is recorded as the previous key
+    // and reopening on the same view highlights again.
+    if (!shouldHighlightFirst(highlightKey) || highlightKey === null) return;
     const items = getEnabledItems();
     if (!items.length) return;
     requestAnimationFrame(() => {
       const first = getEnabledItems()[0] ?? null;
       if (first) onHighlightedItemChange(first);
     });
-  }, [getEnabledItems, highlightKey, onHighlightedItemChange]);
+  }, [getEnabledItems, highlightKey, onHighlightedItemChange, shouldHighlightFirst]);
 
   // The click equivalent of the primitive's Backspace/ArrowLeft contract; mobile
   // has no Backspace habit, so the second level always carries a visible way
@@ -376,40 +459,31 @@ export function MentionTwoLevelMenu({
   const analyticsBase = React.useMemo(() => ({ workspaceId, surface }), [surface, workspaceId]);
 
   // One `menu_open` per open, reset when it closes.
-  const menuOpenTrackedRef = React.useRef(false);
+  const shouldReportMenuOpen = useFireOncePerCycle<'menu-open'>(open);
   React.useEffect(() => {
-    if (!open) {
-      menuOpenTrackedRef.current = false;
-      return;
-    }
-    if (menuOpenTrackedRef.current) return;
-    menuOpenTrackedRef.current = true;
+    if (!open || !shouldReportMenuOpen('menu-open')) return;
     captureMentionMenuOpen(postHog, analyticsBase, {
       level: view?.level ?? 'none',
       categoryCount: categories.length,
     });
-  }, [analyticsBase, categories.length, open, postHog, view?.level]);
+  }, [analyticsBase, categories.length, open, postHog, shouldReportMenuOpen, view?.level]);
 
   // The first-to-second-level step. Reported from the resolved view rather than
   // the row callback: a navigation item never fires `onMentionSelect`, and this
-  // also covers the keyboard route into a category.
-  const enteredCategoryRef = React.useRef<string | null>(null);
+  // also covers the keyboard route into a category. Leaving a category and
+  // coming back is a real second entry, so this is key-change and not once-only.
+  const shouldReportCategoryEnter = useFireOnKeyChange<string | null>();
   const scopedCategoryId = view?.level === 'category' ? view.category.id : null;
   const scopedTermLength = view?.level === 'category' ? view.term.length : 0;
   React.useEffect(() => {
-    if (!scopedCategoryId) {
-      enteredCategoryRef.current = null;
-      return;
-    }
-    if (enteredCategoryRef.current === scopedCategoryId) return;
-    enteredCategoryRef.current = scopedCategoryId;
+    if (!shouldReportCategoryEnter(scopedCategoryId) || !scopedCategoryId) return;
     captureMentionCategoryEnter(postHog, analyticsBase, {
       category: scopedCategoryId,
       termLength: scopedTermLength,
     });
     // `scopedTermLength` is read at entry only; it must not re-fire on typing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [analyticsBase, postHog, scopedCategoryId]);
+  }, [analyticsBase, postHog, scopedCategoryId, shouldReportCategoryEnter]);
 
   const handleCandidateSelect = React.useCallback(
     (category: MentionCategory, rank: number) => {
@@ -442,6 +516,7 @@ export function MentionTwoLevelMenu({
         view={view}
         onBack={handleBack}
         showBack={showBack}
+        onCategoryNavigate={activateCategory}
         onCandidateSelect={handleCandidateSelect}
         detail={detail}
       />

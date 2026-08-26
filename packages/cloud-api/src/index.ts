@@ -74,6 +74,8 @@ export type OperationGitHubTokenResult =
   | { success: false; errorCode: GitHubTokenErrorCode; errorMessage: string };
 
 export type UsageRange = 'month' | 'day' | 'week' | 'total';
+/** Requested timeline bucket size. The server validates which sizes each range supports. */
+export type UsageTimelineGranularity = 'hour' | 'day';
 export type UsageSummary = {
   workspaceId: string;
   range: UsageRange;
@@ -86,22 +88,33 @@ export type UsageSummary = {
   }>;
 };
 
+export type UsageTimelineBucket = {
+  bucketStartMs: number;
+  bucketLabel: string;
+  tokens: number;
+  costUSD: number;
+  byModel: Array<{ modelId: string; tokens: number; costUSD: number }>;
+  byUser: Array<{ userId: string; tokens: number; costUSD: number }>;
+};
+
+/** Token-type split of a range total. Optional: not every deployment reports it. */
+export type UsageTokenBreakdown = {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
+  reasoningOutputTokens: number;
+};
+
 export type UsageTimeline = {
   workspaceId: string;
   range: UsageRange;
   startMs: number;
   endMs: number;
   bucketSizeMs: number;
-  totals: { tokens: number; costUSD: number };
+  totals: { tokens: number; costUSD: number; breakdown?: UsageTokenBreakdown };
   users: Record<string, { name?: string; email?: string; image?: string | null }>;
-  buckets: Array<{
-    bucketStartMs: number;
-    bucketLabel: string;
-    tokens: number;
-    costUSD: number;
-    byModel: Array<{ modelId: string; tokens: number; costUSD: number }>;
-    byUser: Array<{ userId: string; tokens: number; costUSD: number }>;
-  }>;
+  buckets: UsageTimelineBucket[];
 };
 
 export type UsageCalendar = {
@@ -187,6 +200,7 @@ type GitHubProfile = {
 type BillingOverview = {
   billingAccountId: string | null;
   planTier: PlanTier;
+  giftStackingSupported: boolean;
   checkoutPending: boolean;
   checkoutInterval: BillingInterval | null;
   offerKey:
@@ -198,6 +212,14 @@ type BillingOverview = {
   effectivePlanTier: PlanTier;
   entitlementSource: BillingEntitlementSource;
   promotionalEntitlementEndsAt: number | null;
+  giftStartsAt: number | null;
+  giftEndsAt: number | null;
+  nextBillingAt: number | null;
+  autoRenewAfterGift: boolean;
+  canResumeAfterGift: boolean;
+  scheduledBillingInterval: BillingInterval | null;
+  scheduleManaged: boolean;
+  subscriptionSetupPending: boolean;
   subscriptionStatus: string | null;
   billingInterval: BillingInterval | null;
   cancelAtPeriodEnd: boolean;
@@ -233,6 +255,24 @@ type UpcomingInvoicePreview = {
   creditApplied: { amount: number } | null;
 };
 
+/**
+ * Cost of adding one more workspace member. `not_billed` covers free
+ * workspaces and gift/enterprise entitlements that are not billed per seat;
+ * `billed` quotes the prorated charge applied when the invitation is accepted.
+ */
+type SeatInvitePreview =
+  | { status: 'not_billed'; reason: 'free' | 'covered' }
+  | {
+      status: 'billed';
+      interval: BillingInterval;
+      unitAmount: number;
+      proratedAmount: number | null;
+      currentPeriodEnd: number | null;
+      seatCount: number;
+      nextSeatCount: number;
+      nextRenewalAmount: number;
+    };
+
 export type CloudApi = {
   activity: {
     recordMyWorkspaceDailyActiveUser: Mutation<
@@ -262,7 +302,7 @@ export type CloudApi = {
   billing: {
     createCheckoutSession: Action<
       CheckoutUrls & { workspaceId: string; interval: BillingInterval },
-      { url: string }
+      { url: string; checkoutKind?: 'subscription' | 'gift_setup' }
     >;
     createPaidWorkspaceCheckout: Action<
       CheckoutUrls & { name: string; slug: string; interval: BillingInterval },
@@ -303,6 +343,7 @@ export type CloudApi = {
         pendingInvitationCount: number;
       } | null
     >;
+    getWorkspaceSeatInvitePreview: Query<{ workspaceId: string }, SeatInvitePreview | null>;
     listBillingInvoices: Action<
       { workspaceId: string },
       { invoices: BillingInvoiceRecord[]; upcoming: UpcomingInvoicePreview | null }
@@ -337,6 +378,7 @@ export type CloudApi = {
             | 'invalid_code'
             | 'rate_limited'
             | 'workspace_already_plus'
+            | 'subscription_not_eligible'
             | 'checkout_in_progress'
             | 'redemption_in_progress'
             | 'transfer_in_progress';
@@ -532,7 +574,10 @@ export type CloudApi = {
   };
   usage: {
     getWorkspaceUsageSummary: Query<{ workspaceId: string; range: UsageRange }, UsageSummary>;
-    getWorkspaceUsageTimeline: Query<{ workspaceId: string; range: UsageRange }, UsageTimeline>;
+    getWorkspaceUsageTimeline: Query<
+      { workspaceId: string; range: UsageRange; granularity?: UsageTimelineGranularity },
+      UsageTimeline
+    >;
     getWorkspaceUsageCalendar: Query<{ workspaceId: string }, UsageCalendar>;
     getWorkspaceUsageDay: Query<{ workspaceId: string; dayStartMs: number }, UsageDay>;
     getWorkspaceUsageSummaryBundleFromCliToken: Query<

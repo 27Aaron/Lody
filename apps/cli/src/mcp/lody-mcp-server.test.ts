@@ -4,18 +4,27 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  AGENT_ROLE_VERSION,
   SESSION_FILE_MAX_COUNT,
   TASK_LABEL_MAX_COUNT,
+  workspaceFlockKeys,
+  type AgentConfigId,
+  type AgentRole,
+  type AgentRoleId,
+  type MachineId,
   type SessionHistoryInput,
   type SessionId,
+  type SessionTurnInputConfig,
+  type WorkspaceId,
 } from '@lody/shared';
 import {
   LocalDaemonAvailabilityError,
   WORKSPACE_SYNC_UNAVAILABLE_MESSAGE,
   WorkspaceSyncUnavailableError,
 } from '@/lib/command-runtime';
+import type { LoroDocumentManager } from '@/lib/loro/doc';
 
-import { __lodyMcpServerInternals } from './lody-mcp-server';
+import { __lodyMcpServerInternals, buildLodyMcpServer } from './lody-mcp-server';
 
 const {
   TaskListToolInputSchema,
@@ -47,6 +56,10 @@ const {
   buildMcpCreateOptions,
   bindMcpCreateContext,
   buildMcpTurnDispatchConfig,
+  composeAgentRolePrompt,
+  loadWorkspaceAgentRoleCatalog,
+  resolveMcpSessionCreate,
+  buildResolvedMcpCreateCanonicalCommand,
   buildOperationTargetCancelArgs,
   summarizeAgentConfig,
   getSessionContext,
@@ -77,6 +90,58 @@ const createMcpContext = (): ReturnType<typeof getSessionContext> => ({
   sessionId: 'current-session-id',
   localControlSocketPath: '/tmp/lody-control.sock',
   workdir: '/tmp/workspace',
+  taskToolsEnabled: false,
+});
+
+const agentRole = (overrides: Partial<AgentRole> = {}): AgentRole => ({
+  v: AGENT_ROLE_VERSION,
+  id: 'reviewer' as AgentRoleId,
+  ownerUserId: 'user-1',
+  visibility: 'private',
+  name: 'Reviewer',
+  machineId: 'remote-machine' as MachineId,
+  agentConfigId: 'claude-opus' as AgentConfigId,
+  runConfig: {},
+  revision: 7,
+  createdAt: 1,
+  updatedAt: 1,
+  ...overrides,
+});
+
+const listPublishedToolNames = async (taskToolsEnabled: boolean): Promise<string[]> => {
+  const server = buildLodyMcpServer({ taskToolsEnabled });
+  const client = new Client({ name: 'task-gate-test-client', version: '1.0.0' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  try {
+    return (await client.listTools()).tools.map((tool) => tool.name);
+  } finally {
+    await Promise.all([client.close(), server.close()]);
+  }
+};
+
+describe('Lody Task MCP tool gate', () => {
+  const taskToolNames = [
+    'lody_task_list',
+    'lody_task_get',
+    'lody_task_create',
+    'lody_task_propose',
+    'lody_task_update',
+    'lody_task_edit_body',
+    'lody_task_comment',
+    'lody_task_upload_images',
+  ];
+
+  it('omits every Task tool while leaving the rest of Lody MCP available when disabled', async () => {
+    const names = await listPublishedToolNames(false);
+    expect(names).toContain('lody_feedback');
+    expect(names.filter((name) => name.startsWith('lody_task_'))).toEqual([]);
+  });
+
+  it('publishes the complete Task tool family when enabled', async () => {
+    const names = await listPublishedToolNames(true);
+    expect(names).toEqual(expect.arrayContaining(taskToolNames));
+  });
 });
 
 describe('lody_feedback input schema', () => {
@@ -434,6 +499,169 @@ describe('session MCP input schemas', () => {
         items: [{ prompt: 'review this', useCurrentSessionAsParent: true }],
       }).success
     ).toBe(false);
+  });
+
+  it('accepts Agent Role creates even when callers include Role-owned overrides', () => {
+    expect(
+      SessionCreateToolInputSchema.safeParse({
+        operationId: 'role-review-1',
+        prompt: 'review this',
+        agentRoleId: 'reviewer',
+      }).success
+    ).toBe(true);
+    expect(
+      SessionCreateToolInputSchema.safeParse({
+        operationId: 'role-review-1',
+        prompt: 'review this',
+        agentRoleId: 'reviewer',
+        modelId: 'opus',
+      }).success
+    ).toBe(true);
+    expect(
+      SessionCreateManyToolInputSchema.safeParse({
+        operationId: 'role-review-many-1',
+        defaults: { agentRoleId: 'reviewer' },
+        items: [{ prompt: 'one' }, { prompt: 'two', reasoningEffort: 'high' }],
+      }).success
+    ).toBe(true);
+  });
+
+  it('resolves an Agent Role directly from the workspace catalog', () => {
+    const role = agentRole({
+      runConfig: {
+        modeId: 'default',
+        modelId: 'opus',
+        configOptionValues: { reasoning_effort: 'medium' },
+      },
+      promptPrefix: 'Act as a careful reviewer.',
+    });
+    const frozenInputConfig = {} as SessionTurnInputConfig;
+    const resolved = resolveMcpSessionCreate(
+      {
+        operationId: 'role-review-1',
+        prompt: 'Review the current diff.',
+        agentRoleId: 'reviewer',
+        machineId: 'manual-machine',
+        agentConfigId: 'manual-agent',
+        modelId: 'manual-model',
+        reasoningEffort: 'high',
+        useCurrentSessionAsParent: false,
+      },
+      { chainDepth: 0, frozenInputConfig },
+      {
+        machineId: 'current-machine',
+        project: { kind: 'github', repoFullName: 'loro-dev/lody-oss', branch: 'feature/roles' },
+      },
+      role
+    );
+
+    expect(role.revision).toBe(7);
+    expect(resolved.prompt).toBe('Act as a careful reviewer.\n\nReview the current diff.');
+    expect(resolved.input).toMatchObject({
+      machineId: 'remote-machine',
+      agentConfigId: 'claude-opus',
+      useCurrentSessionAsParent: false,
+      workContext: {
+        kind: 'github',
+        repo: 'loro-dev/lody-oss',
+        branch: 'feature/roles',
+      },
+    });
+    expect(resolved.input).not.toHaveProperty('modelId');
+    expect(resolved.input).not.toHaveProperty('reasoningEffort');
+    expect(resolved.dispatchConfig).toEqual({
+      modeId: 'default',
+      modelId: 'opus',
+      configOptionValues: { reasoning_effort: 'medium' },
+      taskToolsEnabled: false,
+      inheritSessionDefaults: false,
+    });
+    expect(buildResolvedMcpCreateCanonicalCommand(resolved)).toMatchObject({
+      prompt: 'Act as a careful reviewer.\n\nReview the current diff.',
+      agentRoleId: 'reviewer',
+      agentRoleRevision: 7,
+      machineId: 'remote-machine',
+      agentConfigId: 'claude-opus',
+    });
+  });
+
+  it('loads Role rows from the workspace catalog without a Turn authorization record', async () => {
+    const role = agentRole();
+    const syncFlockDocOrThrow = vi.fn(async () => undefined);
+    const openFlockDoc = vi.fn(async () => ({
+      flock: {
+        scan: ({ prefix }: { prefix?: readonly unknown[] } = {}) =>
+          prefix?.[0] === 'agentRole'
+            ? [{ key: workspaceFlockKeys.agentRole(role.id), value: role }]
+            : [],
+      },
+    }));
+    const manager = {
+      syncFlockDocOrThrow,
+      repo: { openFlockDoc },
+    } as unknown as LoroDocumentManager;
+
+    const catalog = await loadWorkspaceAgentRoleCatalog(manager, 'workspace-id' as WorkspaceId);
+
+    expect(catalog.get(role.id)).toEqual(role);
+    expect(syncFlockDocOrThrow).toHaveBeenCalledWith('workspace-id:wf:workspace', {
+      timeoutMs: 10_000,
+      reason: 'mcp-agent-role-read',
+    });
+  });
+
+  it('keeps Local Project Role execution on its Machine and defaults to a child Session', () => {
+    const frozenInputConfig = {} as SessionTurnInputConfig;
+    const role = agentRole({
+      id: 'implementer' as AgentRoleId,
+      name: 'Implementer',
+      machineId: 'local-machine' as MachineId,
+      agentConfigId: 'codex' as AgentConfigId,
+      revision: 1,
+    });
+    const input = {
+      operationId: 'role-implement-1',
+      prompt: 'Implement this.',
+      agentRoleId: 'implementer',
+    } as const;
+    expect(
+      resolveMcpSessionCreate(
+        input,
+        { chainDepth: 0, frozenInputConfig },
+        {
+          machineId: 'local-machine',
+          project: { kind: 'local', localProjectId: 'project-id', useWorktree: true },
+        },
+        role
+      ).input.useCurrentSessionAsParent
+    ).toBe(true);
+    expect(() =>
+      resolveMcpSessionCreate(
+        input,
+        { chainDepth: 0, frozenInputConfig },
+        {
+          machineId: 'different-machine',
+          project: { kind: 'local', localProjectId: 'project-id', useWorktree: true },
+        },
+        role
+      )
+    ).toThrow(/Local Project's Machine/);
+    expect(composeAgentRolePrompt('  ', 'Implement this.')).toBe('Implement this.');
+  });
+
+  it('requires only that the Role id exists in the workspace catalog', () => {
+    expect(() =>
+      resolveMcpSessionCreate(
+        {
+          operationId: 'missing-role',
+          prompt: 'Review this.',
+          agentRoleId: 'reviewer',
+        },
+        { chainDepth: 0, frozenInputConfig: {} },
+        { machineId: 'current-machine', project: undefined },
+        undefined
+      )
+    ).toThrow(/does not exist in the workspace catalog/);
   });
 
   it('defers run config to capability resolution instead of guessing ACP option ids', () => {

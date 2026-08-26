@@ -489,6 +489,31 @@ describe('VSCode theme adapter', () => {
     expect(backgroundL - lightnessOf(vars['--input'])).toBeGreaterThanOrEqual(7);
     expect(backgroundL - lightnessOf(vars['--muted'])).toBeGreaterThanOrEqual(4);
     expect(backgroundL - lightnessOf(vars['--border'])).toBeGreaterThanOrEqual(8);
+
+    // …but an editable control does NOT recess: a gray field on a light canvas
+    // reads as disabled. It sits on the page color and is delimited by
+    // `--input-border` instead.
+    expect(lightnessOf(vars['--input-field'])).toBe(backgroundL);
+    expect(backgroundL - lightnessOf(vars['--input-border'])).toBeGreaterThanOrEqual(6);
+  });
+
+  it('never draws a form field darker than the page it sits on', async () => {
+    const lightnessOf = (channel: string | undefined): number => {
+      const match = channel?.match(/^-?[\d.]+\s+[\d.]+%\s+([\d.]+)%$/);
+      if (!match) throw new Error(`Not an HSL channel: ${channel}`);
+      return Number(match[1]);
+    };
+
+    for (const theme of await resolveBundledVSCodeThemes()) {
+      const vars = createLodyThemeCssVariables(theme);
+      expect(lightnessOf(vars['--input-field']), theme.id).toBeGreaterThanOrEqual(
+        lightnessOf(vars['--background'])
+      );
+      // Dark themes keep the raised `input.background` they already ship.
+      expect(lightnessOf(vars['--input-field']), theme.id).toBeGreaterThanOrEqual(
+        lightnessOf(vars['--input'])
+      );
+    }
   });
 
   it('keeps selectable sidebars visibly offset from the main background', async () => {

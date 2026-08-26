@@ -2,7 +2,7 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import os from 'os';
 import { randomUUID } from 'node:crypto';
-import { version } from '../../package.json';
+import { version } from '@/pkg';
 import { Logger, createHybridLogger, getLogger } from '../utils/logger';
 import { registerProcessCleanup, reportError, unregisterProcessCleanup } from '../utils/telemetry';
 import {
@@ -68,6 +68,7 @@ import { consumeElectronBootstrapCredentials } from '../electron-bootstrap-env';
 import { createLocalCloudPort, type CloudPort, type PlatformKind } from '@lody/platform';
 import { createCloudCliPort } from '@/lib/cloud-cli-port';
 import { configureManagedAgentRuntimeManager } from '@/agent/managed-agent-runtime';
+import { configureManagedRuntimeUpdateCoordinator } from '@/agent/managed-runtime-update-coordinator';
 
 type StartAuthMethod =
   | 'api_key'
@@ -90,6 +91,7 @@ const EXIT_CODE_ALREADY_RUNNING = 3;
 function logCliDetectionResults(logger: Logger, availability: CliAvailability): void {
   logger.debug('Local agent auth detection results:');
   logger.debug(`kimi: ${availability.kimi || 'not found'}`);
+  logger.debug(`grok: ${availability.grok || 'not found'}`);
   logger.debug(`claude: ${availability.claude || 'not found'}`);
   logger.debug(`codex: ${availability.codex || 'not found'}`);
 }
@@ -102,7 +104,7 @@ export const startCommand = new Command('start')
   .option('--machine-name <name>', 'Machine name to register (defaults to hostname)')
   .option(
     '--cli-types <types...>',
-    'Specify CLI types to register: `kimi`, `claude`, or `codex`',
+    'Specify CLI types to register: `kimi`, `grok`, `claude`, or `codex`',
     (value, previous: string[]) => {
       if (!previous) {
         return [value as CliType];
@@ -219,6 +221,7 @@ export const startCommand = new Command('start')
     const cliDetectionStartedAt = Date.now();
     const cliAvailability = {
       kimi: 'managed-runtime',
+      grok: 'managed-runtime',
       claude: checkClaude(),
       codex: checkCodex(),
     };
@@ -228,6 +231,7 @@ export const startCommand = new Command('start')
     logCliDetectionResults(logger, cliAvailability);
     captureAgentServiceEvent('agent_service_cli_detection', {
       kimi_available: true,
+      grok_available: true,
       claude_available: Boolean(cliAvailability.claude),
       codex_available: Boolean(cliAvailability.codex),
     });
@@ -254,7 +258,7 @@ export const startCommand = new Command('start')
 
     if (cliSelection.invalid.length > 0) {
       logger.error(
-        `Unknown CLI types: ${cliSelection.invalid.join(', ')}. Supported values: kimi, claude, codex.`
+        `Unknown CLI types: ${cliSelection.invalid.join(', ')}. Supported values: kimi, grok, claude, codex.`
       );
       process.exit(1);
     }
@@ -561,12 +565,18 @@ async function startAgentService(
     });
   }
 
-  configureManagedAgentRuntimeManager({
+  const managedRuntimeManager = configureManagedAgentRuntimeManager({
     runtimeBaseUrl: cloudPort.runtimeArtifacts.baseUrl,
   });
 
   let fleet: LodyFleet;
+  const managedRuntimeUpdates = configureManagedRuntimeUpdateCoordinator({
+    manager: managedRuntimeManager,
+    logger,
+  });
   try {
+    await managedRuntimeManager.prepareCache();
+    await managedRuntimeUpdates.start();
     fleet = new LodyFleet({
       logger,
       builtinAgentConfigCliTypes,
@@ -582,6 +592,7 @@ async function startAgentService(
       onProcessLifecycleAction: (action) => triggerProcessLifecycleAction?.(action),
     });
   } catch (error) {
+    await managedRuntimeUpdates.shutdown();
     await cloudPort.dispose();
     throw error;
   }
@@ -593,6 +604,7 @@ async function startAgentService(
   };
   registerProcessCleanup(async () => {
     eventLoopLagMonitor.stop();
+    await managedRuntimeUpdates.shutdown();
     await fleet.shutdown();
     await closeForegroundHostLease();
   });
@@ -610,6 +622,7 @@ async function startAgentService(
       unregisterProcessCleanup();
       stopActivePing();
       eventLoopLagMonitor.stop();
+      await managedRuntimeUpdates.shutdown();
       await fleet.shutdown();
       await closeForegroundHostLease();
     },
@@ -723,6 +736,7 @@ async function startAgentService(
     unregisterProcessCleanup();
     stopActivePing();
     eventLoopLagMonitor.stop();
+    await managedRuntimeUpdates.shutdown();
     await fleet.shutdown().catch((err: unknown) => {
       logger.error('Cleanup failed:', err);
     });

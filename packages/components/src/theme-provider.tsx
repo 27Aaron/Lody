@@ -1,4 +1,13 @@
-import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useState,
+} from 'react';
+import { ThemeProvider as NextThemesProvider, useTheme as useNextTheme } from 'next-themes';
 import {
   DEFAULT_VSCODE_THEME_SELECTION,
   applyVSCodeThemeCssVariables,
@@ -10,20 +19,26 @@ import {
   resolveBundledVSCodeThemes,
   registerLodyVSCodeThemeForDiffs,
   type LodyResolvedVSCodeTheme,
-  type VSCodeThemeMode,
-  type VSCodeThemeSelection,
 } from '@/lib/vscode-theme';
 
-type Theme = 'dark' | 'light' | 'system';
+export type Theme = 'dark' | 'light' | 'system';
+export type ResolvedTheme = 'light' | 'dark';
+
+export const THEME_CYCLE_ORDER: readonly Theme[] = ['light', 'dark', 'system'];
+
+export function nextCycledTheme(current: Theme): Theme {
+  const index = THEME_CYCLE_ORDER.indexOf(current);
+  return THEME_CYCLE_ORDER[(index + 1) % THEME_CYCLE_ORDER.length];
+}
 
 /**
- * The app ships exactly two themes: Lody Light (cool white) and Vesper
- * (dark). The underlying VS Code theme selection is FIXED — users only choose
- * light vs dark, so there is no per-mode theme picker, nothing is persisted,
- * and the setters below are inert. The bundled VS Code theme machinery stays
- * only to drive syntax colors for the editor/diff/terminal at these two ids.
+ * The app ships exactly two palettes: Lody Light (cool white) and Vesper
+ * (dark). Users pick light, dark, or system (follow the OS). The underlying
+ * VS Code theme selection is FIXED — there is no per-mode theme picker or
+ * persistence. The bundled VS Code theme machinery stays only to drive syntax
+ * colors for the editor/diff/terminal at these two ids.
  */
-const FIXED_VSCODE_THEME_SELECTION: VSCodeThemeSelection = DEFAULT_VSCODE_THEME_SELECTION;
+const FIXED_VSCODE_THEME_SELECTION = DEFAULT_VSCODE_THEME_SELECTION;
 
 type ThemeProviderProps = {
   children: React.ReactNode;
@@ -37,36 +52,17 @@ type ThemeProviderState = {
   setTheme: (theme: Theme) => void;
   /** Apply theme visually without persisting to localStorage. */
   previewTheme: (theme: Theme) => void;
-  vscodeThemeSelection: VSCodeThemeSelection;
-  setVSCodeThemeSelection: (selection: VSCodeThemeSelection) => void;
-  setVSCodeThemeId: (mode: VSCodeThemeMode, themeId: string | undefined) => void;
-  /** Apply VS Code theme visually without persisting to localStorage. */
-  previewVSCodeThemeId: (mode: VSCodeThemeMode, themeId: string | undefined) => void;
 };
-
-export type ResolvedTheme = 'light' | 'dark';
 
 const initialState: ThemeProviderState = {
   theme: 'system',
   resolvedTheme: 'light',
   setTheme: () => null,
   previewTheme: () => null,
-  vscodeThemeSelection: FIXED_VSCODE_THEME_SELECTION,
-  setVSCodeThemeSelection: () => null,
-  setVSCodeThemeId: () => null,
-  previewVSCodeThemeId: () => null,
 };
 
 const ThemeProviderContext = createContext<ThemeProviderState>(initialState);
 const useIsomorphicLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
-const COLOR_SCHEME_QUERY = '(prefers-color-scheme: dark)';
-
-function getSystemResolvedTheme(): ResolvedTheme {
-  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
-    return 'light';
-  }
-  return window.matchMedia(COLOR_SCHEME_QUERY).matches ? 'dark' : 'light';
-}
 
 function parseStoredTheme(value: string | null): Theme | null {
   if (value === 'dark' || value === 'light' || value === 'system') {
@@ -75,71 +71,73 @@ function parseStoredTheme(value: string | null): Theme | null {
   return null;
 }
 
-function readStoredTheme(storageKey: string): Theme | null {
-  if (typeof window === 'undefined') {
-    return null;
-  }
-  try {
-    return parseStoredTheme(window.localStorage.getItem(storageKey));
-  } catch {
-    return null;
-  }
-}
-
-function writeStoredTheme(storageKey: string, theme: Theme): void {
-  if (typeof window === 'undefined') {
-    return;
-  }
-  try {
-    window.localStorage.setItem(storageKey, theme);
-  } catch {
-    // Ignore storage failures on restricted browsers.
-  }
-}
-
-const getActiveVSCodeThemeId = (
-  resolvedTheme: ResolvedTheme,
-  vscodeThemeSelection: VSCodeThemeSelection
-): string | undefined => {
+const getActiveVSCodeThemeId = (resolvedTheme: ResolvedTheme): string | undefined => {
   return resolvedTheme === 'dark'
-    ? vscodeThemeSelection.darkThemeId
-    : vscodeThemeSelection.lightThemeId;
+    ? FIXED_VSCODE_THEME_SELECTION.darkThemeId
+    : FIXED_VSCODE_THEME_SELECTION.lightThemeId;
 };
 
 export function ThemeProvider({
   children,
   defaultTheme = 'system',
   storageKey = 'vite-ui-theme',
-  ...props
 }: ThemeProviderProps) {
-  const [theme, setTheme] = useState<Theme>(() => readStoredTheme(storageKey) ?? defaultTheme);
-  const [systemResolvedTheme, setSystemResolvedTheme] =
-    useState<ResolvedTheme>(getSystemResolvedTheme);
-  const resolvedTheme = theme === 'system' ? systemResolvedTheme : theme;
+  const [previewedTheme, setPreviewedTheme] = useState<Theme>();
+  const isElectron = typeof window !== 'undefined' && window.__LODY_ELECTRON__ === true;
+
+  return (
+    <NextThemesProvider
+      attribute="class"
+      defaultTheme={defaultTheme}
+      enableColorScheme={false}
+      enableSystem
+      forcedTheme={previewedTheme}
+      storageKey={storageKey}
+      themes={['light', 'dark']}
+      // Electron's CSP intentionally rejects inline scripts. Its native-theme
+      // bridge supplies the initial resolved theme immediately after mount.
+      scriptProps={isElectron ? { type: 'application/json' } : undefined}
+    >
+      <LodyThemeProvider
+        defaultTheme={defaultTheme}
+        previewedTheme={previewedTheme}
+        setPreviewedTheme={setPreviewedTheme}
+      >
+        {children}
+      </LodyThemeProvider>
+    </NextThemesProvider>
+  );
+}
+
+type LodyThemeProviderProps = {
+  children: React.ReactNode;
+  defaultTheme: Theme;
+  previewedTheme: Theme | undefined;
+  setPreviewedTheme: (theme: Theme | undefined) => void;
+};
+
+function LodyThemeProvider({
+  children,
+  defaultTheme,
+  previewedTheme,
+  setPreviewedTheme,
+}: LodyThemeProviderProps) {
+  const {
+    theme: storedThemeValue,
+    systemTheme: browserSystemTheme,
+    setTheme: setStoredTheme,
+  } = useNextTheme();
+  const storedTheme = parseStoredTheme(storedThemeValue ?? null) ?? defaultTheme;
+  const theme = previewedTheme ?? storedTheme;
+  const [nativeSystemTheme, setNativeSystemTheme] = useState<ResolvedTheme>();
+
+  const browserResolvedTheme: ResolvedTheme = browserSystemTheme === 'dark' ? 'dark' : 'light';
+  const resolvedTheme = theme === 'system' ? (nativeSystemTheme ?? browserResolvedTheme) : theme;
 
   useEffect(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
-      return undefined;
-    }
-
-    const mediaQuery = window.matchMedia(COLOR_SCHEME_QUERY);
-    const handleSystemThemeChange = (event: MediaQueryListEvent) => {
-      setSystemResolvedTheme(event.matches ? 'dark' : 'light');
-    };
-
-    setSystemResolvedTheme(mediaQuery.matches ? 'dark' : 'light');
-
-    if (typeof mediaQuery.addEventListener === 'function') {
-      mediaQuery.addEventListener('change', handleSystemThemeChange);
-      return () => {
-        mediaQuery.removeEventListener('change', handleSystemThemeChange);
-      };
-    }
-
-    mediaQuery.addListener(handleSystemThemeChange);
-    return () => {
-      mediaQuery.removeListener(handleSystemThemeChange);
-    };
+    return window.api?.onNativeThemeUpdated?.((resolved) => {
+      setNativeSystemTheme(resolved);
+    });
   }, []);
 
   useIsomorphicLayoutEffect(() => {
@@ -147,31 +145,18 @@ export function ThemeProvider({
 
     root.classList.remove('light', 'dark');
     root.classList.add(resolvedTheme);
-  }, [resolvedTheme]);
+    root.style.colorScheme = theme === 'system' ? 'light dark' : resolvedTheme;
+  }, [resolvedTheme, theme]);
 
   // On Electron, keep the OS-drawn window chrome (notably the Windows title bar)
-  // matching the in-app theme. A no-op on web where `window.api` is undefined.
+  // matching the in-app theme. Preserve `system` as the native source.
   useEffect(() => {
-    window.api?.setNativeTheme?.(resolvedTheme);
-  }, [resolvedTheme]);
-
-  useEffect(() => {
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === storageKey && e.newValue !== theme) {
-        setTheme(parseStoredTheme(e.newValue) ?? defaultTheme);
-      }
-    };
-
-    window.addEventListener('storage', handleStorageChange);
-
-    return () => {
-      window.removeEventListener('storage', handleStorageChange);
-    };
-  }, [defaultTheme, storageKey, theme]);
+    window.api?.setNativeTheme?.(theme);
+  }, [theme]);
 
   useIsomorphicLayoutEffect(() => {
     const root = window.document.documentElement;
-    const activeThemeId = getActiveVSCodeThemeId(resolvedTheme, FIXED_VSCODE_THEME_SELECTION);
+    const activeThemeId = getActiveVSCodeThemeId(resolvedTheme);
     if (!activeThemeId) {
       return undefined;
     }
@@ -187,38 +172,34 @@ export function ThemeProvider({
     };
   }, [resolvedTheme]);
 
-  const value = {
-    theme,
-    resolvedTheme,
-    setTheme: (nextTheme: Theme) => {
-      writeStoredTheme(storageKey, nextTheme);
-      setTheme(nextTheme);
+  const setTheme = useCallback(
+    (nextTheme: Theme) => {
+      setPreviewedTheme(undefined);
+      setStoredTheme(nextTheme);
     },
-    previewTheme: (previewThemeValue: Theme) => {
-      setTheme(previewThemeValue);
-    },
-    // Theme selection is fixed to the two bundled themes; these remain on the
-    // context for API compatibility but intentionally do nothing.
-    vscodeThemeSelection: FIXED_VSCODE_THEME_SELECTION,
-    setVSCodeThemeSelection: () => {},
-    setVSCodeThemeId: () => {},
-    previewVSCodeThemeId: () => {},
-  };
-
-  return (
-    <ThemeProviderContext.Provider {...props} value={value}>
-      {children}
-    </ThemeProviderContext.Provider>
+    [setPreviewedTheme, setStoredTheme]
   );
+  const previewTheme = useCallback(
+    (nextTheme: Theme) => {
+      setPreviewedTheme(nextTheme);
+    },
+    [setPreviewedTheme]
+  );
+
+  const value = useMemo<ThemeProviderState>(
+    () => ({
+      theme,
+      resolvedTheme,
+      setTheme,
+      previewTheme,
+    }),
+    [previewTheme, resolvedTheme, setTheme, theme]
+  );
+
+  return <ThemeProviderContext.Provider value={value}>{children}</ThemeProviderContext.Provider>;
 }
 
-export const useTheme = () => {
-  const context = useContext(ThemeProviderContext);
-
-  if (context === undefined) throw new Error('useTheme must be used within a ThemeProvider');
-
-  return context;
-};
+export const useTheme = () => useContext(ThemeProviderContext);
 
 export const useResolvedTheme = (): ResolvedTheme => {
   return useTheme().resolvedTheme;
@@ -226,10 +207,7 @@ export const useResolvedTheme = (): ResolvedTheme => {
 
 export const useActiveVSCodeThemeId = (): string | undefined => {
   const resolvedTheme = useResolvedTheme();
-  const { vscodeThemeSelection } = useTheme();
-  return resolvedTheme === 'dark'
-    ? vscodeThemeSelection.darkThemeId
-    : vscodeThemeSelection.lightThemeId;
+  return getActiveVSCodeThemeId(resolvedTheme);
 };
 
 export const useActiveVSCodeTheme = (): LodyResolvedVSCodeTheme | undefined => {

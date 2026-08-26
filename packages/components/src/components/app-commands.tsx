@@ -1,4 +1,4 @@
-import { useLocation, useRouter } from '@tanstack/react-router';
+import { useRouter } from '@tanstack/react-router';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { useTranslation } from 'react-i18next';
 import { currentWorkspaceSlugAtom, settingsDialogOpenAtom } from '@/atoms';
@@ -9,7 +9,7 @@ import { getAppCurrentPathWithSearch } from '@/lib/app-location';
 import { isSettingsPath, resolveSettingsCloseTo } from '@/lib/settings-navigation';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { useOpenSettings } from '@/hooks/use-open-settings';
-import { useTheme } from '../theme-provider';
+import { nextCycledTheme, useTheme } from '../theme-provider';
 
 /**
  * App-shell commands that aren't tied to a single session: browser-style history
@@ -21,12 +21,11 @@ import { useTheme } from '../theme-provider';
 export function AppCommands() {
   const { t } = useTranslation();
   const router = useRouter();
-  const location = useLocation();
   const workspaceSlug = useAtomValue(currentWorkspaceSlugAtom);
   const isMobile = useIsMobile();
   const settingsModalOpen = useAtomValue(settingsDialogOpenAtom);
   const { openSettings, closeSettings } = useOpenSettings();
-  const { resolvedTheme, setTheme } = useTheme();
+  const { theme, setTheme } = useTheme();
 
   // window.history.back()/forward() (not router.history — TanStack doesn't expose it);
   // both are safe no-ops at the history boundaries, so no `when` gating is needed.
@@ -51,9 +50,8 @@ export function AppCommands() {
     title: t('commands.app.cycleTheme', 'Cycle Theme'),
     category: 'View',
     keybindings: getCommandKeybindings('app.cycleTheme'),
-    // Only light + dark exist now, so "cycle" is a straight toggle.
     run: () => {
-      setTheme(resolvedTheme === 'dark' ? 'light' : 'dark');
+      setTheme(nextCycledTheme(theme));
     },
   });
 
@@ -114,8 +112,11 @@ export function AppCommands() {
         return;
       }
       // Mobile: settings is a full-page route — toggle by navigating.
-      if (isSettingsPath(location.pathname, workspaceSlug)) {
-        const closeTo = resolveSettingsCloseTo((location.search as { from?: string }).from);
+      // Read the location at command time instead of subscribing: this component
+      // renders null and has no render-time need for it.
+      const { pathname, search } = router.state.location;
+      if (isSettingsPath(pathname, workspaceSlug)) {
+        const closeTo = resolveSettingsCloseTo((search as { from?: string }).from);
         if (closeTo) {
           void router.navigate({ to: closeTo });
         } else {

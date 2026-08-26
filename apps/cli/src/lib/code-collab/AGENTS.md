@@ -15,7 +15,11 @@ directory.
   Git All Changes uses the owner base; non-Git uses local diff evidence only when a
   trustworthy base exists.
   Shared file tree/All Changes uses owner-session Flock stream
-  `<workspace-id>:fi:<master-session-id>` (one row per path). Successful changes or
+  `<workspace-id>:fi:<master-session-id>` (one row per path). A row whose path key
+  carries U+FFFD came from a byte stream decoded across a chunk boundary, not from
+  a scan; it is its own LWW key, so a correct republish cannot overwrite it. The
+  shared helpers hide it on read and delete it on the next write — do not "restore"
+  such rows. Successful changes or
   targeted repairs advance signal stream `<workspace-id>:fis:<master-session-id>`;
   the named Flock bridge in `apps/cli/src/lib/loro/doc.ts` lets Electron invalidate
   and refresh its Machine RPC snapshot. Both streams have 180-day TTL and must not
@@ -78,7 +82,12 @@ directory.
   Badge and clickable content both derive from these exact events, never Git stats.
 - Machine RPC is the integration boundary. Local/Electron direct transport can be
   added below that RPC abstraction, but file operations still route to the single CLI
-  service.
+  service. In particular, local `code-collab/get-file-index` scans/builds the initial
+  tree and All Changes snapshot without awaiting Flock publication, then queues a
+  force-reconcile of that fresh in-memory state without delaying the response. This
+  repairs a durable file-index Flock that became stale while the CLI was stopped;
+  Flock remains the durable replication path for remote consumers and local renderer
+  invalidation after that initial snapshot.
 - Non-Git All Changes reconstruction is bounded before SQLite decompresses a snapshot:
   at most four paths run concurrently, one request retains at most 8 MiB of raw cached
   snapshots by default, and over-limit paths are returned as deferred for single-file

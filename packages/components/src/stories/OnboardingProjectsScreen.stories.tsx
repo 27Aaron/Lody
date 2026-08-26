@@ -19,8 +19,20 @@ function ProjectsPreviewWrapper({ children }: { children: React.ReactNode }) {
 }
 
 const localProjects: ProjectsScreenLocalEntry[] = [
-  { key: 'm1:lody', name: 'lody', detail: '/Users/dev/code/lody' },
-  { key: 'm1:notes', name: 'notes', detail: '/Users/dev/work/notes' },
+  {
+    key: 'm1:lody',
+    machineId: 'm1' as never,
+    localProjectId: 'lody' as never,
+    name: 'lody',
+    detail: '/Users/dev/code/lody',
+  },
+  {
+    key: 'm1:notes',
+    machineId: 'm1' as never,
+    localProjectId: 'notes' as never,
+    name: 'notes',
+    detail: '/Users/dev/work/notes',
+  },
 ];
 
 const githubRepos: ProjectsScreenGitHubEntry[] = [
@@ -30,6 +42,8 @@ const githubRepos: ProjectsScreenGitHubEntry[] = [
 
 const manyLocalProjects: ProjectsScreenLocalEntry[] = Array.from({ length: 5 }, (_, i) => ({
   key: `m1:proj-${i}`,
+  machineId: 'm1' as never,
+  localProjectId: `proj-${i}` as never,
   name: `project-${i}`,
   detail: `/Users/dev/code/project-${i}`,
 }));

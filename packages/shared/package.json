@@ -32,6 +32,10 @@
       "types": "./src/electron-ipc.ts",
       "import": "./src/electron-ipc.ts"
     },
+    "./proxy-env": {
+      "types": "./src/proxy-env.ts",
+      "import": "./src/proxy-env.ts"
+    },
     "./browser-url": {
       "types": "./src/browser-url.ts",
       "import": "./src/browser-url.ts"
@@ -39,6 +43,18 @@
     "./local-loro-data-plane": {
       "types": "./src/local-loro-data-plane.ts",
       "import": "./src/local-loro-data-plane.ts"
+    },
+    "./local-loro-data-plane-server": {
+      "types": "./src/local-loro-data-plane-server.ts",
+      "import": "./src/local-loro-data-plane-server.ts"
+    },
+    "./local-loro-data-plane-scheduler": {
+      "types": "./src/local-loro-data-plane-scheduler.ts",
+      "import": "./src/local-loro-data-plane-scheduler.ts"
+    },
+    "./local-loro-transport": {
+      "types": "./src/local-loro-transport.ts",
+      "import": "./src/local-loro-transport.ts"
     },
     "./local-machine-rpc": {
       "types": "./src/local-machine-rpc.ts",
@@ -59,6 +75,10 @@
     "./platform-kind": {
       "types": "./src/platform-kind.ts",
       "import": "./src/platform-kind.ts"
+    },
+    "./deepseek-harness": {
+      "types": "./src/deepseek-harness.ts",
+      "import": "./src/deepseek-harness.ts"
     },
     "./analytics": {
       "types": "./src/analytics/index.ts",
@@ -98,6 +118,7 @@
   "dependencies": {
     "@bokuweb/zstd-wasm": "^0.0.27",
     "@loro-dev/streams-crdt": "catalog:",
+    "acp-extension-dsh": "workspace:*",
     "better-auth": "catalog:",
     "cross-spawn": "^7.0.6",
     "dockerode": "^4.0.9",

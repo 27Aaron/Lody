@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ChangeEvent,
   type ClipboardEvent,
   type KeyboardEvent,
   type ReactNode,
@@ -25,6 +26,8 @@ import {
   InFlightDedupe,
   normalizeSessionInputBlocks,
   type AgentConfigMeta,
+  type AgentRole,
+  type AgentRoleId,
   githubFetchBranches,
   type LocalProjectGitState,
   type LocalProjectId,
@@ -106,7 +109,35 @@ import {
   githubBranchesCache,
   persistAgentSessionDefaults,
 } from '@/lib/local-storage-cache';
+import { filterAcpSessionConfigOptionValues } from '@/lib/acp-session-config-selection';
+import {
+  buildRecentRunConfigItems,
+  describeRunConfigSelection,
+  getRecentRunConfigKey,
+  readRecentRunConfigs,
+  recordRecentRunConfig,
+  resolveApplicableConfigOptionValues,
+  sanitizeConfigOptionValues,
+  type RecentRunConfigRecord,
+} from '@/lib/recent-run-configs';
+import {
+  buildComposerAgentRoleItems,
+  doesAgentRolePinPermissionMode,
+  isComposerAgentRoleApplied,
+  resolvePendingAgentRoleSelection,
+} from '@/lib/composer-agent-roles';
+import { buildAgentRoleFormValueFromRunConfig } from '@/lib/agent-role-form';
+import {
+  AgentRoleEditorDialog,
+  openAgentRoleEditorForCreate,
+  openAgentRoleEditorForEdit,
+  type AgentRoleEditorState,
+} from '@/components/settings/agent-role-editor-dialog';
 import { useAcpSelectorOptions } from '@/hooks/use-acp-selector-options';
+import {
+  useAgentRoleAvailability,
+  useWorkspaceAgentRoles,
+} from '@/hooks/use-workspace-agent-roles';
 import { useAvailableCommands } from '@/hooks/use-available-commands';
 import { useOrganization } from '@/hooks/useOrganization';
 import { useResolvedTheme } from '../../theme-provider';
@@ -144,11 +175,11 @@ import {
   getPastedTextDraftsAfterInsertion,
   insertPastedTextDraft,
   normalizePastedTextDraft,
-  restorePastedTextDraftsToValue,
   sanitizePastedTextDrafts,
   shouldCapturePastedTextDraft,
   type PastedTextDraft,
 } from '@/lib/pasted-text-draft';
+import { wrapPastedTextChipLabel } from '@/components/mentions/mention-chips';
 
 import { ErrorBoundary } from '@/components/error-boundary';
 import { ChatLandingView, type ChatLandingHintType } from './chat-landing-view';
@@ -158,11 +189,15 @@ import {
   useKnownIssuePrItems,
 } from '@/components/mentions/issue-pr-hash-mention';
 import { useMentionPromptExpansion } from '@/components/mentions/mention-expansion';
+import type { Mention as MentionRange } from '@/ui/mention/index';
+import {
+  arePersistedMentionRangesEqual,
+  toPersistedMentionRanges,
+} from '@/components/mentions/mention-persistence';
 import { useChatLandingImageDraft } from '@/hooks/use-chat-landing-image-draft';
 import { useChatLandingFileDraft } from '@/hooks/use-chat-landing-file-draft';
 import { useChatLandingDraftSession } from '@/hooks/use-chat-landing-draft-session';
 import { useSessionPreparation } from '@/hooks/use-session-preparation';
-import { SESSION_IMAGE_ACCEPT } from '@/lib/session-image-upload';
 import { getCommandKeybindings, useCommand } from '@/lib/commands';
 import { isElectronRenderer } from '@/lib/electron';
 import { withGitHubTokenRetry } from '@/lib/github-token';
@@ -192,6 +227,7 @@ import {
 import { getChatComposerPromptPlaceholderKey } from '@/lib/chat-composer-placeholder';
 import { splitImageAndFileAttachments } from '@/lib/file-drop';
 import { canShowSubscriptionRateLimits } from '@/lib/session-usage';
+import { canShowCodexResetForecast } from '@/lib/codex-reset-forecast';
 import { createMachinePairing } from '@/lib/cli-api-key';
 import { ContextSwitch, type SessionContextType } from './context-switch';
 import {
@@ -206,6 +242,7 @@ import {
   DesktopPermissionModeButton,
   DesktopRunConfigMenu,
 } from '@/components/sessions/desktop-run-config-menu';
+import { resolvePermissionModeFace } from '@/lib/permission-mode-face';
 import { SessionUsagePopover } from '@/components/sessions/session-usage-popover';
 import { MachinePairingDialog } from './machine-pairing-dialog';
 import {
@@ -247,6 +284,7 @@ import { MobileWorkspaceSwitcherSheet } from '@/components/mobile/mobile-workspa
 import { MobileCreateWorkspaceSheet } from '@/components/mobile/mobile-create-workspace-sheet';
 import { MobileSessionRunConfig } from '@/components/mobile/mobile-session-run-config';
 import { ChatComposer } from '@/components/chat/chat-composer';
+import { useSessionMcpSelection } from '@/hooks/use-session-mcp-selection';
 import {
   MobileProjectFileBrowser,
   type MobileProjectFileBrowserHandle,
@@ -269,6 +307,7 @@ import {
 } from '@/components/mobile/mobile-inline-picker';
 import {
   buildChildSessionsByParent,
+  buildSidebarOpenerRowResolver,
   getEffectiveSessionActivitySummary,
   getLatestPullRequestInfo,
 } from '@/components/sessions/session-list-rows';
@@ -510,6 +549,7 @@ function WorkspaceChatLanding({
   const multiWorkspaceAvailable = useAppCapability('multiWorkspace');
   const currentUser = useAtomValue(userAtom);
   const userId = currentUser?.id;
+  const tasksFeatureEnabled = useAtomValue(tasksFeatureEnabledAtom);
   const { activeOrganization, organizations, switchOrganization } = useOrganization({
     targetSlug: workspaceSlug,
   });
@@ -550,7 +590,7 @@ function WorkspaceChatLanding({
   const machinePairingStatus =
     observedMachinePairing === null
       ? 'expired'
-      : observedMachinePairing?.status ?? (machinePairing ? 'pending' : null);
+      : (observedMachinePairing?.status ?? (machinePairing ? 'pending' : null));
   const pairedMachineId = observedMachinePairing?.machineId as MachineId | undefined;
   const runtimeInitializing = useAtomValue(runtimeInitializingAtom);
   const controlConnectionState = useAtomValue(lodyControlConnectionStateAtom);
@@ -619,6 +659,7 @@ function WorkspaceChatLanding({
   const reconcileSharingReview = useCloudMutation(cloudOperations.inbox.reconcileSharingReview);
   const markInboxItemRead = useCloudMutation(cloudOperations.inbox.markRead);
   const dismissInboxItem = useCloudMutation(cloudOperations.inbox.dismiss);
+  const suppressSharingReview = useCloudMutation(cloudOperations.inbox.suppressSharingReview);
   const handleShareLocalProjectWithTeam = useCallback(
     async (selection: LocalProjectSelection) => {
       if (!workspaceId) throw new Error('Workspace is not ready');
@@ -642,8 +683,11 @@ function WorkspaceChatLanding({
   const liveSessionStatuses = useMemo(() => {
     const next = new Map<string, SessionStatus>();
     for (const session of visibleAllActiveSessions) {
-      const status = findFreshSessionPresenceState(presenceStates, session.id, presenceNowMs)
-        ?.status;
+      const status = findFreshSessionPresenceState(
+        presenceStates,
+        session.id,
+        presenceNowMs
+      )?.status;
       if (status) {
         next.set(session.id, status);
       }
@@ -892,6 +936,33 @@ function WorkspaceChatLanding({
     () => sanitizePastedTextDrafts(sessionState.pastedTextDrafts),
     [sessionState.pastedTextDrafts]
   );
+  /**
+   * Committed mention ranges, kept for the before-send rewrite. `@path` and
+   * `#123` survive into the sent text unchanged, so the range is the only
+   * record that the region was ever a mention.
+   *
+   * The persisted copy is the only copy. It is narrower than the live range —
+   * no `pasted_text`, no kindless range — and neither rewrite builder wants
+   * either of those: pasted text is rebuilt from `pastedTextDrafts`, and a
+   * range with no kind has nothing to dispatch on. Holding a second live list
+   * beside it would be two states updated from one callback that must not
+   * drift, which is the bug `session-chat-input-area.tsx` documents.
+   */
+  const persistedMentionRanges = sessionState.mentionRanges;
+  const handleMentionRangesChange = useCallback(
+    (ranges: MentionRange[]) => {
+      // Stored with the prompt so a returning draft does not have to have its
+      // mentions recognised again from the text — which only works once each
+      // source has loaded, and not at all for one that never does.
+      const persisted = toPersistedMentionRanges(ranges);
+      setSessionState((prev) =>
+        arePersistedMentionRangesEqual(prev.mentionRanges ?? [], persisted)
+          ? prev
+          : { ...prev, mentionRanges: persisted }
+      );
+    },
+    [setSessionState]
+  );
   const [composerStatus, setComposerStatus] = useState<{
     message: ReactNode;
     tone: 'error' | 'warning' | 'info';
@@ -935,6 +1006,7 @@ function WorkspaceChatLanding({
   const [selectedMachineId, setSelectedMachineId] = useState<MachineId | null>(null);
   const [selectedAgent, setSelectedAgent] = useState<AgentSelection | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const mcpSelection = useSessionMcpSelection(undefined, { disabled: submitting });
   // The project selector always uses the machine-aware picker so multi-machine
   // workspaces can choose the target explicitly. Standalone Electron entry
   // points such as the sidebar and onboarding may still use the native dialog.
@@ -970,6 +1042,7 @@ function WorkspaceChatLanding({
      (settings ≠ where you go to create something new). */
   const [mobileCreateWorkspaceOpen, setMobileCreateWorkspaceOpen] = useState(false);
   const {
+    state: sessionConfigSelectionState,
     selectedModeId,
     selectedModelId,
     configOptionValues,
@@ -1190,15 +1263,13 @@ function WorkspaceChatLanding({
     ensureSessionId: ensureDraftSessionId,
     resetSessionId: resetDraftSessionId,
   } = useChatLandingDraftSession();
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
   const {
-    fileInputRef,
     imageItems,
     hasBlockingImages,
     hasUploadedImages,
     canAddMoreImages,
     addFiles,
-    handleOpenImagePicker,
-    handleFileInputChange,
     handlePromptPaste: handleImagePromptPaste,
     handleRemoveImage,
     handleRetryImage,
@@ -1213,14 +1284,11 @@ function WorkspaceChatLanding({
     ensureSessionId: ensureDraftSessionId,
   });
   const {
-    fileInputRef: fileAttachmentInputRef,
     fileItems,
     hasBlockingFiles,
     hasUploadedFiles,
     canAddMoreFiles,
     addFiles: addFileAttachments,
-    handleOpenFilePicker,
-    handleFileInputChange: handleFileAttachmentInputChange,
     handleRemoveFile,
     handleRetryFile,
     clearPendingFiles,
@@ -1274,9 +1342,11 @@ function WorkspaceChatLanding({
       const result = insertPastedTextDraft({
         currentValue,
         pastedText: normalizedText,
-        displayText: t('composer.pastedTextInlineLabel', '[Pasted {{charCount}} chars]', {
-          charCount: numberFormatter.format(getPastedTextCharacterCount(normalizedText)),
-        }),
+        displayText: wrapPastedTextChipLabel(
+          t('composer.pastedTextInlineLabel', '[Pasted {{charCount}} chars]', {
+            charCount: numberFormatter.format(getPastedTextCharacterCount(normalizedText)),
+          })
+        ),
         selectionStart,
         selectionEnd,
       });
@@ -1447,6 +1517,10 @@ function WorkspaceChatLanding({
     machine: selectedMachine,
   });
   const { modeOptions, modelOptions, configOptionSelectors } = selectorOptions;
+  const dispatchConfigOptionValues = useMemo(
+    () => filterAcpSessionConfigOptionValues(configOptionValues, configOptionSelectors),
+    [configOptionSelectors, configOptionValues]
+  );
   const selectedRateLimits =
     selectedConfig &&
     canShowSubscriptionRateLimits({
@@ -1456,18 +1530,186 @@ function WorkspaceChatLanding({
     })
       ? selectedMachine?.raceLimits
       : undefined;
+  // The landing knows the picked provider's full config, so eligibility is
+  // decided here rather than from `cliType`/`agentType` further down.
+  const showCodexResetForecast =
+    !!selectedConfig &&
+    canShowCodexResetForecast({
+      cliType: selectedConfig.cliType,
+      agentType: selectedConfig.agentType,
+      config: selectedConfig,
+    });
   const selectedModelLabel = modelOptions.find((option) => option.value === selectedModelId)?.label;
-  const selectedAgentDefaults = useMemo(
-    () => (selectedAgent ? agentDefaultsCache.get(selectedAgent.agentId) ?? {} : {}),
-    [selectedAgent]
-  );
+  /* ── Agent Role selection ──
+     A Role is one packaged run configuration, so picking one flows through the
+     SAME preference channel as this agent's remembered defaults rather than a
+     second apply path: the reconcile pass seeds mode/model/options from the
+     Role before paint, and an option the agent no longer supports falls back to
+     the agent's own value there — visibly — instead of being forced in.
+
+     `token` makes re-picking the same Role after hand-editing a knob a new
+     preference, and the preference deliberately OUTLIVES `activeAgentRole`
+     below: clearing it on a hand edit would re-seed the very value the user
+     just changed. */
+  const { roles: workspaceAgentRoles, synced: agentRolesSynced } = useWorkspaceAgentRoles();
+  /* Whether the stored Role has been resolved yet. Until it has, the composer
+     has no opinion to persist — see `selectedAgentRoleId` on the defaults hook. */
+  const [agentRoleRestored, setAgentRoleRestored] = useState(false);
+  /* The Role editor is a Dialog, so it is hosted OUT here rather than inside the
+     run-config dropdown: a Dialog rendered in menu content unmounts with the
+     menu the moment it opens. */
+  const [agentRoleEditor, setAgentRoleEditor] = useState<AgentRoleEditorState | null>(null);
+  const { resolve: resolveAgentRoleAvailability } = useAgentRoleAvailability(workspaceAgentRoles);
+  useEffect(() => {
+    setAgentRoleRestored(false);
+  }, [workspaceId]);
+  const agentRolePreferenceTokenRef = useRef(0);
+  /* The preference NAMES a Role; it does not hold a copy of one. Editing a Role
+     bumps its `revision`, which rides in `preferenceRevision` below, so the
+     composer re-seeds from what the Role says NOW — a captured copy would keep
+     running the old values under the edited Role's name. A deleted Role simply
+     stops resolving. */
+  const [agentRolePreference, setAgentRolePreference] = useState<{
+    roleId: AgentRoleId;
+    token: number;
+  } | null>(null);
+  /* A Role binds `machineId + agentConfigId` exactly, so its preference applies
+     only while the composer is on that agent. Derived rather than cleared: a
+     Role never re-points at whichever agent happens to be selected. */
+  const activeAgentRolePreference = useMemo(() => {
+    if (!agentRolePreference || !selectedAgent) return null;
+    const role = workspaceAgentRoles.find((entry) => entry.id === agentRolePreference.roleId);
+    if (!role) return null;
+    const bound =
+      role.agentConfigId === selectedAgent.agentId && role.machineId === selectedAgent.machineId;
+    return bound ? { role, token: agentRolePreference.token } : null;
+  }, [agentRolePreference, selectedAgent, workspaceAgentRoles]);
+  const selectedAgentDefaults = useMemo(() => {
+    const roleRunConfig = activeAgentRolePreference?.role.runConfig;
+    if (roleRunConfig) {
+      return {
+        modeId: roleRunConfig.modeId ?? null,
+        modelId: roleRunConfig.modelId ?? null,
+        configOptionValues: roleRunConfig.configOptionValues,
+      };
+    }
+    return selectedAgent ? (agentDefaultsCache.get(selectedAgent.agentId) ?? {}) : {};
+  }, [activeAgentRolePreference, selectedAgent]);
   useReconcileAcpSessionConfigSelection({
     targetKey: selectedAgent ? `${selectedAgent.machineId}:${selectedAgent.agentId}` : null,
-    preferenceRevision: selectedAgent?.agentId ?? 'none',
+    preferenceRevision: activeAgentRolePreference
+      ? `role:${activeAgentRolePreference.role.id}:${activeAgentRolePreference.role.revision}:${activeAgentRolePreference.token}`
+      : (selectedAgent?.agentId ?? 'none'),
     preferences: selectedAgentDefaults,
     selectorOptions,
     dispatch: dispatchSessionConfigSelection,
   });
+  /* The Role the composer IS, not the one last clicked. The footer names a Role
+     only while every value that Role pins is still what will run, so moving a
+     knob — or an unsupported pin falling back — takes the name away instead of
+     leaving it claiming a configuration that is no longer the Role's. */
+  const activeAgentRole = useMemo(() => {
+    const role = activeAgentRolePreference?.role;
+    if (!role) return null;
+    return isComposerAgentRoleApplied(role, {
+      agentSelection: selectedAgent,
+      modeId: selectedModeId,
+      modelId: selectedModelId,
+      configOptionValues,
+    })
+      ? role
+      : null;
+  }, [
+    activeAgentRolePreference,
+    configOptionValues,
+    selectedAgent,
+    selectedModeId,
+    selectedModelId,
+  ]);
+
+  /* ── Recently used run configurations ──
+     Device-local history of whole combinations (agent + model + every config
+     option) the user has actually started a chat with, surfaced at the top of
+     the desktop run-config menu. */
+  const [recentRunConfigRecords, setRecentRunConfigRecords] = useState<RecentRunConfigRecord[]>([]);
+  useEffect(() => {
+    setRecentRunConfigRecords(readRecentRunConfigs(workspaceId));
+  }, [workspaceId]);
+  const currentRunConfigFace = useMemo(
+    () =>
+      describeRunConfigSelection({
+        modelOptions,
+        selectedModelId,
+        configOptionSelectors,
+        configOptionValues,
+      }),
+    [configOptionSelectors, configOptionValues, modelOptions, selectedModelId]
+  );
+  const currentRunConfigKey = useMemo(
+    () =>
+      selectedAgent
+        ? getRecentRunConfigKey({
+            agentId: selectedAgent.agentId,
+            machineId: selectedAgent.machineId,
+            modelId: currentRunConfigFace.modelId,
+            configOptionValues: sanitizeConfigOptionValues(dispatchConfigOptionValues),
+            agentRoleId: activeAgentRole?.id ?? null,
+          })
+        : null,
+    [activeAgentRole, currentRunConfigFace.modelId, dispatchConfigOptionValues, selectedAgent]
+  );
+  /* Picking an entry switches the agent first; its model and options can only
+     be applied after that agent's own reconcile pass has seeded the selection
+     state, or the seeded defaults would overwrite them. */
+  const [pendingRecentRunConfig, setPendingRecentRunConfig] =
+    useState<RecentRunConfigRecord | null>(null);
+  useEffect(() => {
+    if (!pendingRecentRunConfig || !selectedAgent) return;
+    if (
+      selectedAgent.agentId !== pendingRecentRunConfig.agentId ||
+      selectedAgent.machineId !== pendingRecentRunConfig.machineId
+    ) {
+      setPendingRecentRunConfig(null);
+      return;
+    }
+    if (
+      sessionConfigSelectionState.targetKey !==
+      `${selectedAgent.machineId}:${selectedAgent.agentId}`
+    ) {
+      return;
+    }
+    // A cold agent reports no models until its capabilities resolve; applying
+    // then would silently drop the recorded model. Wait — unless the user has
+    // meanwhile picked a model themselves, which outranks the entry.
+    if (pendingRecentRunConfig.modelId && modelOptions.length === 0) {
+      if (sessionConfigSelectionState.model.origin === 'user') {
+        setPendingRecentRunConfig(null);
+      }
+      return;
+    }
+    setPendingRecentRunConfig(null);
+    if (
+      pendingRecentRunConfig.modelId &&
+      modelOptions.some((option) => option.value === pendingRecentRunConfig.modelId)
+    ) {
+      setSelectedModelName(pendingRecentRunConfig.modelId);
+    }
+    for (const { configId, value } of resolveApplicableConfigOptionValues(
+      pendingRecentRunConfig,
+      configOptionSelectors
+    )) {
+      handleConfigOptionChange(configId, value);
+    }
+  }, [
+    configOptionSelectors,
+    handleConfigOptionChange,
+    modelOptions,
+    pendingRecentRunConfig,
+    selectedAgent,
+    sessionConfigSelectionState.model.origin,
+    sessionConfigSelectionState.targetKey,
+    setSelectedModelName,
+  ]);
   const availableCommands = useAvailableCommands({
     configId: selectedConfig?.id,
     cliType: selectedConfig?.cliType,
@@ -1778,6 +2020,7 @@ function WorkspaceChatLanding({
     setSelectedLocalProject: handleSelectedLocalProjectChange,
     selectedLocalBranch,
     setSelectedLocalBranch: handleSelectedLocalBranchChange,
+    selectedAgentRoleId: agentRoleRestored ? (activeAgentRole?.id ?? null) : undefined,
   });
 
   // ── Auto-select first repo when none selected ──
@@ -1984,13 +2227,13 @@ function WorkspaceChatLanding({
       project_kind: contextType,
       repo_id_hash: contextType === 'github' ? hashAnalyticsId(selectedRepo) : null,
       local_project_id:
-        contextType === 'local' ? selectedLocalProject?.localProjectId ?? null : null,
-      machine_id: contextType === 'local' ? selectedLocalProject?.machineId ?? null : null,
+        contextType === 'local' ? (selectedLocalProject?.localProjectId ?? null) : null,
+      machine_id: contextType === 'local' ? (selectedLocalProject?.machineId ?? null) : null,
       has_git_branch:
         contextType === 'local'
           ? localGitStateError
             ? null
-            : activeLocalGitState?.git ?? null
+            : (activeLocalGitState?.git ?? null)
           : true,
     });
   }, [
@@ -2495,6 +2738,19 @@ function WorkspaceChatLanding({
     },
     [addFileAttachments, addFiles]
   );
+  const handleAttachmentInputChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const files = Array.from(event.target.files ?? []);
+      if (files.length > 0) {
+        handleImageDrop(files);
+      }
+      event.target.value = '';
+    },
+    [handleImageDrop]
+  );
+  const handleOpenAttachmentPicker = useCallback(() => {
+    attachmentInputRef.current?.click();
+  }, []);
 
   const handleConnectGitRepo = useCallback(() => {
     openSettings('github');
@@ -2536,12 +2792,12 @@ function WorkspaceChatLanding({
         workspace_id: workspaceId ?? null,
         machine_id:
           contextType === 'local'
-            ? selectedLocalProject?.machineId ?? selectedAgent?.machineId ?? null
-            : selectedAgent?.machineId ?? null,
+            ? (selectedLocalProject?.machineId ?? selectedAgent?.machineId ?? null)
+            : (selectedAgent?.machineId ?? null),
         agent_config_id: selectedAgent?.agentId ?? null,
         repo_id_hash: contextType === 'github' ? hashAnalyticsId(selectedRepo) : null,
         local_project_id:
-          contextType === 'local' ? selectedLocalProject?.localProjectId ?? null : null,
+          contextType === 'local' ? (selectedLocalProject?.localProjectId ?? null) : null,
         ...extra,
       });
     },
@@ -2566,10 +2822,17 @@ function WorkspaceChatLanding({
       return;
     }
 
-    const restoredPrompt = restorePastedTextDraftsToValue(prompt, pastedTextDrafts);
-    const expandedPrompt = expandSkillMentionsForPrompt(restoredPrompt);
+    // One pass: pasted placeholders, `$skill`, `@session:`, and the mentions
+    // that need no rewrite all resolve against the same original text, and the
+    // spans record where each landed. `normalizeSessionInputBlocks` re-anchors
+    // them across its trim.
+    const expandedPrompt = expandSkillMentionsForPrompt({
+      text: prompt,
+      mentions: persistedMentionRanges ?? [],
+      pastedTextDrafts,
+    });
     const inputBlocks = normalizeSessionInputBlocks(
-      buildInputBlocks(expandedPrompt, buildFileInputBlocks()),
+      buildInputBlocks(expandedPrompt.text, buildFileInputBlocks(), expandedPrompt.spans),
       ''
     );
     const promptText = extractPromptPreviewFromInputBlocks(inputBlocks);
@@ -2587,10 +2850,10 @@ function WorkspaceChatLanding({
       contextType === 'local'
         ? selectedMachineId && isSelectedMachineValid
           ? selectedMachineId
-          : selectedLocalProject?.machineId ?? null
+          : (selectedLocalProject?.machineId ?? null)
         : selectedMachineId && isSelectedMachineValid
-        ? selectedMachineId
-        : null;
+          ? selectedMachineId
+          : null;
     if (!scopedMachineId || selectedAgent.machineId !== scopedMachineId) {
       captureSessionInputBlocked('missing_machine');
       setComposerError(t('chat.validation.missingMachine'));
@@ -2686,7 +2949,13 @@ function WorkspaceChatLanding({
         .map((line) => line.trim())
         .find((line) => line.length > 0)
         ?.slice(0, 50);
-      const promptPayload = buildAgentPrompt(promptText, selectedConfig.prompt ?? '');
+      /* Agent config prompt, then the Role's instruction, then the task — the
+         Role speaks for how this agent is being used, so it sits between the
+         two. A Role only reaches here while it is still what will run. */
+      const promptPayload = buildAgentPrompt(
+        promptText,
+        buildAgentPrompt(activeAgentRole?.promptPrefix ?? '', selectedConfig.prompt ?? '')
+      );
       const issuePRMentions = extractIssuePRMentionsFromText(
         promptText,
         knownIssuePrItems,
@@ -2697,10 +2966,12 @@ function WorkspaceChatLanding({
         prompt: promptPayload,
         cliType: selectedConfig.cliType,
         agentType: selectedConfig.agentType,
-        modeId: modeOptions.length > 0 ? selectedModeId ?? undefined : undefined,
-        modelId: modelOptions.length > 0 ? selectedModelId ?? undefined : undefined,
-        configOptionValues,
+        modeId: modeOptions.length > 0 ? (selectedModeId ?? undefined) : undefined,
+        modelId: modelOptions.length > 0 ? (selectedModelId ?? undefined) : undefined,
+        configOptionValues: dispatchConfigOptionValues,
         issuePRMentions,
+        mcpServerIds: mcpSelection.selectedIds,
+        taskToolsEnabled: tasksFeatureEnabled,
       });
       const pendingHistoryEntry = buildPendingUserHistoryEntry({
         userId,
@@ -2736,6 +3007,11 @@ function WorkspaceChatLanding({
           branchName: contextType === 'github' ? githubBranch : localWorktreeBranch,
           title: draftTitle,
           titleSource: draftTitle ? 'draft' : undefined,
+          // Provenance only: the dispatch config above is already frozen, so a
+          // Role edited or deleted later cannot change how this session runs.
+          ...(activeAgentRole
+            ? { agentRoleId: activeAgentRole.id, agentRoleRevision: activeAgentRole.revision }
+            : {}),
         },
         pendingHistoryEntry
       );
@@ -2745,8 +3021,29 @@ function WorkspaceChatLanding({
       persistAgentSessionDefaults(selectedAgent.agentId, {
         modeId: modeOptions.length > 0 ? selectedModeId : null,
         modelId: modelOptions.length > 0 ? selectedModelId : null,
-        configOptionValues,
+        configOptionValues: dispatchConfigOptionValues,
       });
+      // A recent entry is a configuration the user actually RAN, so it is
+      // recorded here — after the session was accepted — not when a knob moves.
+      setRecentRunConfigRecords(
+        recordRecentRunConfig(
+          workspaceId,
+          {
+            agentId: selectedAgent.agentId,
+            machineId: selectedAgent.machineId,
+            modelId: currentRunConfigFace.modelId,
+            modelLabel: currentRunConfigFace.modelLabel,
+            reasoningLabel: currentRunConfigFace.reasoningLabel,
+            planOn: currentRunConfigFace.planOn,
+            fastOn: currentRunConfigFace.fastOn,
+            configOptionValues: sanitizeConfigOptionValues(dispatchConfigOptionValues),
+            // A Role is one of these combinations, so it is recorded as one —
+            // as the Role, not as the values it happened to set.
+            agentRoleId: activeAgentRole?.id ?? null,
+          },
+          Date.now()
+        )
+      );
       handoffSessionPreparation(sessionId);
 
       capturePostHogEvent(postHog, 'session/start_requested', {
@@ -2966,7 +3263,7 @@ function WorkspaceChatLanding({
     [localProjectMachineId, selectedMachineId, isSelectedMachineValid]
   );
   const localProjectSelectorMachineId =
-    contextType === 'local' ? selectedMachineId ?? localProjectMachineId : null;
+    contextType === 'local' ? (selectedMachineId ?? localProjectMachineId) : null;
   const localProjectSelectorEmptyText = t(
     getEmptyLocalProjectsMessageKey(Boolean(localProjectSelectorMachineId))
   );
@@ -3031,8 +3328,8 @@ function WorkspaceChatLanding({
   const worktreeUnavailableReason = loadingLocalGitState
     ? t('chat.workdir.checkingGit', 'Checking whether this project is a git repository.')
     : activeLocalGitState?.git === false
-    ? t('chat.workdir.notGitRepo', 'This local project is not a git repository.')
-    : localGitStateError ?? undefined;
+      ? t('chat.workdir.notGitRepo', 'This local project is not a git repository.')
+      : (localGitStateError ?? undefined);
 
   const topWorktreeNode =
     contextType === 'github' && selectedRepo ? (
@@ -3103,6 +3400,190 @@ function WorkspaceChatLanding({
     () => (scopedMachineId ? [scopedMachineId] : undefined),
     [scopedMachineId]
   );
+  /* Roles offered for the machine this chat will start on. Scoped to that one
+     machine because a Role binds its execution site exactly — a Role from
+     another machine could only move the chat off the selected one. */
+  const composerAgentRoleItems = useMemo(
+    () =>
+      buildComposerAgentRoleItems({
+        roles: workspaceAgentRoles,
+        machineId: scopedMachineId,
+        agentConfigs: executorConfigs,
+        resolveAvailability: resolveAgentRoleAvailability,
+      }),
+    [executorConfigs, resolveAgentRoleAvailability, scopedMachineId, workspaceAgentRoles]
+  );
+  const handleAgentRoleSelect = useCallback(
+    (roleId: AgentRoleId | null) => {
+      // Leaving a Role clears the NAME, not the configuration: the values it
+      // seeded are now the user's own, and silently rolling them back would
+      // undo choices they never asked to undo.
+      if (roleId === null) {
+        setAgentRolePreference(null);
+        return;
+      }
+      const item = composerAgentRoleItems.find((entry) => entry.role.id === roleId);
+      // An unavailable Role is listed so its owner can see why it cannot run;
+      // it is never something the composer quietly starts a chat with.
+      if (!item || item.availability.kind !== 'available') return;
+      const { role } = item;
+      agentRolePreferenceTokenRef.current += 1;
+      setPendingRecentRunConfig(null);
+      setSelectedAgent({ agentId: role.agentConfigId, machineId: role.machineId });
+      setAgentRolePreference({ roleId: role.id, token: agentRolePreferenceTokenRef.current });
+    },
+    [composerAgentRoleItems]
+  );
+
+  /* Creating a Role from the composer opens on the configuration already in
+     front of the user — "save what I am about to run" is the whole reason the
+     entry point is here rather than only in Settings. */
+  const handleAgentRoleCreate = useCallback(() => {
+    setAgentRoleEditor(
+      openAgentRoleEditorForCreate(
+        buildAgentRoleFormValueFromRunConfig({
+          machineId: selectedAgent?.machineId ?? scopedMachineId,
+          agentConfigId: selectedAgent?.agentId ?? null,
+          modeId: selectedModeId,
+          modelId: modelOptions.length > 0 ? selectedModelId : null,
+          configOptionValues: sanitizeConfigOptionValues(dispatchConfigOptionValues),
+        })
+      )
+    );
+  }, [
+    dispatchConfigOptionValues,
+    modelOptions.length,
+    scopedMachineId,
+    selectedAgent,
+    selectedModeId,
+    selectedModelId,
+  ]);
+  const handleAgentRoleEdit = useCallback(
+    (roleId: AgentRoleId) => {
+      const role = composerAgentRoleItems.find((entry) => entry.role.id === roleId)?.role;
+      if (role) setAgentRoleEditor(openAgentRoleEditorForEdit(role));
+    },
+    [composerAgentRoleItems]
+  );
+  /* Creating a Role from the composer means "use this now", so the new Role is
+     selected as soon as the composer can offer it. Deferred rather than
+     immediate: the write resolves on durability while the catalog snapshot
+     arrives on its own tick, so the Role is not in the list yet at that moment. */
+  const [pendingAgentRoleSelection, setPendingAgentRoleSelection] = useState<AgentRoleId | null>(
+    null
+  );
+  const handleAgentRoleSaved = useCallback((role: AgentRole, { created }: { created: boolean }) => {
+    if (created) setPendingAgentRoleSelection(role.id);
+  }, []);
+  useEffect(() => {
+    if (!pendingAgentRoleSelection) return;
+    const outcome = resolvePendingAgentRoleSelection({
+      roleId: pendingAgentRoleSelection,
+      items: composerAgentRoleItems,
+      isInCatalog: workspaceAgentRoles.some((role) => role.id === pendingAgentRoleSelection),
+    });
+    if (outcome === 'wait') return;
+    setPendingAgentRoleSelection(null);
+    if (outcome === 'select') handleAgentRoleSelect(pendingAgentRoleSelection);
+  }, [
+    composerAgentRoleItems,
+    handleAgentRoleSelect,
+    pendingAgentRoleSelection,
+    workspaceAgentRoles,
+  ]);
+
+  /* Restore the last-used Role once, and only once the catalog can answer.
+     Until the workspace document has synced, "not in the list" means "not
+     loaded yet", so giving up then would silently drop the stored Role. */
+  useEffect(() => {
+    if (agentRoleRestored || !defaultsReady) return;
+    const storedRoleId = readChatLandingDefaults(workspaceId)?.agentRoleId as
+      | AgentRoleId
+      | undefined;
+    if (!storedRoleId) {
+      setAgentRoleRestored(true);
+      return;
+    }
+    const item = composerAgentRoleItems.find((entry) => entry.role.id === storedRoleId);
+    if (!item) {
+      if (agentRolesSynced) setAgentRoleRestored(true);
+      return;
+    }
+    setAgentRoleRestored(true);
+    handleAgentRoleSelect(storedRoleId);
+  }, [
+    agentRoleRestored,
+    agentRolesSynced,
+    composerAgentRoleItems,
+    defaultsReady,
+    handleAgentRoleSelect,
+    workspaceId,
+  ]);
+  const agentRolePinsPermissionMode = useMemo(() => {
+    if (!activeAgentRole) return false;
+    const { source } = resolvePermissionModeFace({
+      modeOptions,
+      selectedModeId,
+      configOptionSelectors,
+      configOptionValues,
+    });
+    return doesAgentRolePinPermissionMode(activeAgentRole, source);
+  }, [activeAgentRole, configOptionSelectors, configOptionValues, modeOptions, selectedModeId]);
+
+  /* Recent entries are offered only for agents the menu itself can select: one
+     recorded on another machine must not silently move the chat off the
+     selected one. */
+  const recentRunConfigAgentConfigs = useMemo(
+    () =>
+      scopedMachineId
+        ? executorConfigs.filter((config) => config.machineId === scopedMachineId)
+        : executorConfigs,
+    [executorConfigs, scopedMachineId]
+  );
+  /* Only Roles the composer could pick right now: a recorded Role entry whose
+     Role is gone or unavailable must drop out rather than re-running its values
+     without it. */
+  const selectableAgentRoles = useMemo(
+    () =>
+      composerAgentRoleItems
+        .filter((item) => item.availability.kind === 'available')
+        .map((item) => item.role),
+    [composerAgentRoleItems]
+  );
+  const recentRunConfigItems = useMemo(
+    () =>
+      buildRecentRunConfigItems({
+        records: recentRunConfigRecords,
+        agentConfigs: recentRunConfigAgentConfigs,
+        agentRoles: selectableAgentRoles,
+        currentKey: currentRunConfigKey,
+      }),
+    [currentRunConfigKey, recentRunConfigAgentConfigs, recentRunConfigRecords, selectableAgentRoles]
+  );
+  const handleRecentRunConfigSelect = useCallback(
+    (id: string) => {
+      const record = recentRunConfigRecords.find((entry) => getRecentRunConfigKey(entry) === id);
+      if (!record) return;
+      // Recorded AS a Role: re-apply the Role, not the values it set. Those
+      // values are only half of it — the instruction and the provenance ride
+      // with the Role, and re-running "the same knobs" would drop both.
+      if (record.agentRoleId) {
+        handleAgentRoleSelect(record.agentRoleId as AgentRoleId);
+        return;
+      }
+      const config = recentRunConfigAgentConfigs.find(
+        (entry) => entry.id === record.agentId && entry.machineId === record.machineId
+      );
+      if (!config) return;
+      // A recent entry and a Role are two whole configurations; the one just
+      // picked owns the selection, so the other stops driving it.
+      setAgentRolePreference(null);
+      setSelectedAgent({ agentId: config.id, machineId: config.machineId });
+      setPendingRecentRunConfig(record);
+    },
+    [handleAgentRoleSelect, recentRunConfigAgentConfigs, recentRunConfigRecords]
+  );
+
   const desktopMachineOptions = useMemo(
     () =>
       Array.from(selectableMachines.values()).map((machine) => ({
@@ -3203,20 +3684,40 @@ function WorkspaceChatLanding({
           configOptionSelectors={configOptionSelectors}
           configOptionValues={configOptionValues}
           onConfigOptionChange={handleConfigOptionChange}
-        />
-        <DesktopPermissionModeButton
+          recentRunConfigs={recentRunConfigItems}
+          onRecentRunConfigSelect={handleRecentRunConfigSelect}
           modeOptions={modeOptions}
           selectedModeId={selectedModeId}
-          onModeChange={setSelectedModeId}
-          configOptionSelectors={configOptionSelectors}
-          configOptionValues={configOptionValues}
-          onConfigOptionChange={handleConfigOptionChange}
+          agentRoles={{
+            items: composerAgentRoleItems,
+            selectedRoleId: activeAgentRole?.id ?? null,
+            onSelect: handleAgentRoleSelect,
+            onCreate: handleAgentRoleCreate,
+            onEdit: handleAgentRoleEdit,
+            machine: scopedMachineId ? (machines.get(scopedMachineId) ?? null) : null,
+          }}
         />
+        {/* Permission is part of what a Role pins, so behind one it stops being
+            a separate control and is stated in the Role's own face instead. It
+            stays a button when the Role pins nothing there — an agent with no
+            permission control leaves a Role nothing to own, and hiding the knob
+            then would take away one the Role never had. */}
+        {agentRolePinsPermissionMode ? null : (
+          <DesktopPermissionModeButton
+            modeOptions={modeOptions}
+            selectedModeId={selectedModeId}
+            onModeChange={setSelectedModeId}
+            configOptionSelectors={configOptionSelectors}
+            configOptionValues={configOptionValues}
+            onConfigOptionChange={handleConfigOptionChange}
+          />
+        )}
         <SessionUsagePopover
           rateLimits={selectedRateLimits}
           agentType={selectedConfig?.agentType ?? ''}
           modelId={selectedModelId}
           modelLabel={selectedModelLabel}
+          showCodexResetForecast={showCodexResetForecast}
           showRateLimitWithoutContext
         />
       </div>
@@ -3267,7 +3768,8 @@ function WorkspaceChatLanding({
           <span className="truncate">
             {isInitialDataLoading
               ? t('chat.machineSelector.loading', 'Loading machine...')
-              : mobileSheetSelectedMachineLabel ?? t('chat.machineSelector.placeholder', 'Machine')}
+              : (mobileSheetSelectedMachineLabel ??
+                t('chat.machineSelector.placeholder', 'Machine'))}
           </span>
         </>
       }
@@ -3492,6 +3994,12 @@ function WorkspaceChatLanding({
               cliType: selectedConfig?.cliType,
               agentType: selectedConfig?.agentType,
             }}
+            agentRoles={{
+              items: composerAgentRoleItems,
+              selectedRoleId: activeAgentRole?.id ?? null,
+              onSelect: handleAgentRoleSelect,
+              onCreate: handleAgentRoleCreate,
+            }}
           />
         </div>
         <SessionUsagePopover
@@ -3499,6 +4007,7 @@ function WorkspaceChatLanding({
           agentType={selectedConfig?.agentType ?? ''}
           modelId={selectedModelId}
           modelLabel={selectedModelLabel}
+          showCodexResetForecast={showCodexResetForecast}
           showRateLimitWithoutContext
           className="h-8 shrink-0"
         />
@@ -3580,8 +4089,8 @@ function WorkspaceChatLanding({
       selectedMachineId && isSelectedMachineValid
         ? selectedMachineId
         : contextType === 'local'
-        ? selectedLocalProject?.machineId ?? null
-        : null;
+          ? (selectedLocalProject?.machineId ?? null)
+          : null;
     return candidateMachineId === selectedAgent.machineId ? candidateMachineId : null;
   }, [
     contextType,
@@ -3630,9 +4139,19 @@ function WorkspaceChatLanding({
       buildSessionPreparationRunConfig({
         modeId: modeOptions.length > 0 ? selectedModeId : null,
         modelId: modelOptions.length > 0 ? selectedModelId : null,
-        configOptionValues,
+        configOptionValues: dispatchConfigOptionValues,
+        mcpServerIds: mcpSelection.selectedIds,
+        taskToolsEnabled: tasksFeatureEnabled,
       }),
-    [configOptionValues, modeOptions.length, modelOptions.length, selectedModeId, selectedModelId]
+    [
+      dispatchConfigOptionValues,
+      mcpSelection.selectedIds,
+      modeOptions.length,
+      modelOptions.length,
+      selectedModeId,
+      selectedModelId,
+      tasksFeatureEnabled,
+    ]
   );
   const { handoffToSession: handoffSessionPreparation } = useSessionPreparation({
     runtime,
@@ -3683,7 +4202,7 @@ function WorkspaceChatLanding({
     promptValue: prompt,
   });
   const promptPlaceholder = t(
-    getChatComposerPromptPlaceholderKey({ mentionSource, availableCommands })
+    getChatComposerPromptPlaceholderKey({ mentionSource, availableCommands, skillAgent })
   );
   const issuePrRepoFullName =
     contextType === 'local' ? selectedLocalProjectGithubRepoFullName : selectedRepo;
@@ -4043,6 +4562,15 @@ function WorkspaceChatLanding({
     () => buildChildSessionsByParent(visibleAllActiveSessions),
     [visibleAllActiveSessions]
   );
+  /* Precise opener id -> the LIST ROW to nest under. Needs the full active list
+     (child Tabs included), because a Tab that called `lody_session_create` has
+     no row of its own and the created Session must nest under the Tab's root.
+     Same resolver the desktop sidebar lists use — see
+     `sessions/session-list-rows.ts`. */
+  const mobileOpenerRowResolver = useMemo(
+    () => buildSidebarOpenerRowResolver(visibleAllActiveSessions),
+    [visibleAllActiveSessions]
+  );
 
   /* Mobile home Chat tab — every non-archived conversation across the
      workspace (local + GitHub + chat-only), sorted newest-first, in
@@ -4157,6 +4685,15 @@ function WorkspaceChatLanding({
           hasUnreadMessages: activity.hasUnreadMessages,
           isPinned: Boolean(session.isPinned),
           machineId: session.machineId,
+          /* Provenance for the list's opened-by tree. TWO fields, never
+             merged: the precise opener drives navigation, the row id drives
+             nesting. See `lib/session-opened-by-tree.ts`. */
+          openedBySessionId: session.openedBySessionId ?? null,
+          openedByRowSessionId:
+            session.openedByRootSessionId ??
+            mobileOpenerRowResolver(session.openedBySessionId) ??
+            session.openedBySessionId ??
+            null,
           projectKey,
           projectLabel,
           projectAvatarUrl,
@@ -4177,7 +4714,7 @@ function WorkspaceChatLanding({
              without breaking the row). */
           owner:
             teamMembersByUserId != null && session.userId
-              ? teamMembersByUserId.get(session.userId) ?? { id: session.userId }
+              ? (teamMembersByUserId.get(session.userId) ?? { id: session.userId })
               : undefined,
         };
       })
@@ -4204,6 +4741,7 @@ function WorkspaceChatLanding({
     chatExcludedRunning,
     chatScope,
     mobileChildSessionsByParent,
+    mobileOpenerRowResolver,
     liveSessionStatuses,
     mobileHomeShowArchived,
     onlineMachineIds,
@@ -4474,7 +5012,6 @@ function WorkspaceChatLanding({
   /* Developer-only beta gates drive the extra dock tabs on mobile home.
      When a gate is off, a stale selection must render as Chat — as if
      the tab were never built. Inbox also retains its team-workspace gate. */
-  const tasksFeatureEnabled = useAtomValue(tasksFeatureEnabledAtom);
   const inboxFeatureEnabled = useAtomValue(inboxFeatureEnabledAtom);
   const showMobileInbox = showProjectSharing && inboxFeatureEnabled;
   const effectiveMobileHomeTab: MobileHomeTab =
@@ -4525,7 +5062,7 @@ function WorkspaceChatLanding({
                 sharingReviewState.actionTarget === 'machines'
                   ? t('inbox.sharingReview.actionDevices', 'Review devices')
                   : sharingReviewState.actionTarget === 'projects'
-                  ? t('inbox.sharingReview.action', 'Review projects')
+                    ? t('inbox.sharingReview.action', 'Review projects')
                     : undefined,
             };
           }
@@ -4815,7 +5352,7 @@ function WorkspaceChatLanding({
   const projectUrlMachineId = preSelectedMachine ? (preSelectedMachine as MachineId) : null;
   const projectUrlProjectId = preSelectedProject ? (preSelectedProject as LocalProjectId) : null;
   const projectUrlRepoFullName =
-    projectUrlMachineId && projectUrlProjectId ? null : preSelectedRepo ?? null;
+    projectUrlMachineId && projectUrlProjectId ? null : (preSelectedRepo ?? null);
   const mobileProjectContext = useMemo<MobileProjectContext | null>(() => {
     if (!isMobile) return null;
     if (projectUrlMachineId && projectUrlProjectId) {
@@ -5045,19 +5582,29 @@ function WorkspaceChatLanding({
           hasUnreadMessages: activity.hasUnreadMessages,
           isPinned: Boolean(session.isPinned),
           machineId: session.machineId,
+          /* See the home Chat-tab builder: precise opener for navigation, row
+             id for nesting. An opener outside this project simply leaves the
+             created Session as a top-level row (the tree's orphan fallback). */
+          openedBySessionId: session.openedBySessionId ?? null,
+          openedByRowSessionId:
+            session.openedByRootSessionId ??
+            mobileOpenerRowResolver(session.openedBySessionId) ??
+            session.openedBySessionId ??
+            null,
           projectAvatarUrl,
           isWorktree: kind === 'local' && session.isWorktree === true,
           /* Owner avatar — see the home Chat-tab builder for rationale.
              Same team-scope-only behavior. */
           owner:
             teamMembersByUserId != null && session.userId
-              ? teamMembersByUserId.get(session.userId) ?? { id: session.userId }
+              ? (teamMembersByUserId.get(session.userId) ?? { id: session.userId })
               : undefined,
         };
       });
   }, [
     chatScope,
     mobileChildSessionsByParent,
+    mobileOpenerRowResolver,
     liveSessionStatuses,
     mobileProjectContext,
     mobileProjectShowArchived,
@@ -5313,20 +5860,29 @@ function WorkspaceChatLanding({
                   'Private machines and projects are only visible to you. Share the ones your teammates should be able to use.'
                 )}
         </p>
-        {sharingReviewState.actionTarget ? (
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+          {sharingReviewState.actionTarget ? (
+            <button
+              type="button"
+              className="text-xs font-semibold text-primary hover:underline"
+              onClick={() => {
+                void markInboxItemRead({ itemId: sharingReviewRow._id });
+                openSettings(sharingReviewState.actionTarget ?? 'projects');
+              }}
+            >
+              {sharingReviewState.actionTarget === 'machines'
+                ? t('inbox.sharingReview.actionDevices', 'Review machines')
+                : t('inbox.sharingReview.action', 'Review projects')}
+            </button>
+          ) : null}
           <button
             type="button"
-            className="mt-1.5 text-xs font-semibold text-primary hover:underline"
-            onClick={() => {
-              void markInboxItemRead({ itemId: sharingReviewRow._id });
-              openSettings(sharingReviewState.actionTarget ?? 'projects');
-            }}
+            className="text-xs font-medium text-muted-foreground hover:text-foreground hover:underline"
+            onClick={() => void suppressSharingReview({ itemId: sharingReviewRow._id })}
           >
-            {sharingReviewState.actionTarget === 'machines'
-              ? t('inbox.sharingReview.actionDevices', 'Review machines')
-              : t('inbox.sharingReview.action', 'Review projects')}
+            {t('inbox.sharingReview.neverRemind', "Don't remind me again")}
           </button>
-        ) : null}
+        </div>
       </div>
       <button
         type="button"
@@ -5396,18 +5952,17 @@ function WorkspaceChatLanding({
             promptEnterKeyHint={promptEnterKeyHint}
             pastedTextDrafts={submitting ? [] : pastedTextDrafts}
             onPastedTextDraftsChange={submitting ? undefined : setPastedTextDrafts}
+            onMentionRangesChange={handleMentionRangesChange}
+            persistedMentions={persistedMentionRanges}
             imageItems={submitting ? [] : imageItems}
-            imageAddDisabled={submitting || !canAddMoreImages}
-            imageAddAriaLabel={t('sessions.addImage', 'Add image')}
-            onImageAddClick={handleOpenImagePicker}
+            attachmentAddDisabled={submitting || (!canAddMoreImages && !canAddMoreFiles)}
+            onAttachmentAddClick={handleOpenAttachmentPicker}
             onImageRemove={submitting ? undefined : handleRemoveImage}
             onImageRetry={submitting ? undefined : handleRetryImage}
             fileItems={submitting ? [] : fileItems}
-            fileAddDisabled={submitting || !canAddMoreFiles}
-            fileAddAriaLabel={t('sessions.addFile', 'Add file')}
-            onFileAddClick={handleOpenFilePicker}
             onFileRemove={submitting ? undefined : handleRemoveFile}
             onFileRetry={submitting ? undefined : handleRetryFile}
+            mcp={mcpSelection.menu}
             footerSelector={mobileSheetFooterSelectorNode}
             statusMessage={visibleComposerStatus?.message}
             statusTone={visibleComposerStatus?.tone}
@@ -5456,19 +6011,11 @@ function WorkspaceChatLanding({
     return (
       <>
         <input
-          ref={fileInputRef}
-          type="file"
-          accept={SESSION_IMAGE_ACCEPT}
-          multiple
-          className="hidden"
-          onChange={handleFileInputChange}
-        />
-        <input
-          ref={fileAttachmentInputRef}
+          ref={attachmentInputRef}
           type="file"
           multiple
           className="hidden"
-          onChange={handleFileAttachmentInputChange}
+          onChange={handleAttachmentInputChange}
         />
         {mobileNewChatSheetNode}
         <MobileProjectScreen
@@ -5572,19 +6119,11 @@ function WorkspaceChatLanding({
     return (
       <>
         <input
-          ref={fileInputRef}
-          type="file"
-          accept={SESSION_IMAGE_ACCEPT}
-          multiple
-          className="hidden"
-          onChange={handleFileInputChange}
-        />
-        <input
-          ref={fileAttachmentInputRef}
+          ref={attachmentInputRef}
           type="file"
           multiple
           className="hidden"
-          onChange={handleFileAttachmentInputChange}
+          onChange={handleAttachmentInputChange}
         />
         <MobileHomeScreen
           workspace={mobileHomeWorkspace}
@@ -5825,19 +6364,11 @@ function WorkspaceChatLanding({
   return (
     <>
       <input
-        ref={fileInputRef}
-        type="file"
-        accept={SESSION_IMAGE_ACCEPT}
-        multiple
-        className="hidden"
-        onChange={handleFileInputChange}
-      />
-      <input
-        ref={fileAttachmentInputRef}
+        ref={attachmentInputRef}
         type="file"
         multiple
         className="hidden"
-        onChange={handleFileAttachmentInputChange}
+        onChange={handleAttachmentInputChange}
       />
       <ChatLandingView
         tone={tone}
@@ -5857,18 +6388,17 @@ function WorkspaceChatLanding({
         promptRef={promptTextareaRef}
         pastedTextDrafts={pastedTextDrafts}
         onPastedTextDraftsChange={setPastedTextDrafts}
+        onMentionRangesChange={handleMentionRangesChange}
+        persistedMentions={persistedMentionRanges}
         imageItems={imageItems}
-        imageAddDisabled={submitting || !canAddMoreImages}
-        imageAddAriaLabel={t('sessions.addImage', 'Add image')}
-        onImageAddClick={handleOpenImagePicker}
+        attachmentAddDisabled={submitting || (!canAddMoreImages && !canAddMoreFiles)}
+        onAttachmentAddClick={handleOpenAttachmentPicker}
         onImageRemove={handleRemoveImage}
         onImageRetry={handleRetryImage}
         fileItems={fileItems}
-        fileAddDisabled={submitting || !canAddMoreFiles}
-        fileAddAriaLabel={t('sessions.addFile', 'Add file')}
-        onFileAddClick={handleOpenFilePicker}
         onFileRemove={handleRemoveFile}
         onFileRetry={handleRetryFile}
+        mcp={mcpSelection.menu}
         topSelector={<div className="w-full min-w-0">{topSelectorNode}</div>}
         footerSelector={footerSelectorNode}
         bottomBar={bottomBarNode}
@@ -5938,7 +6468,7 @@ function WorkspaceChatLanding({
         status={machinePairingStatus}
         machineId={pairedMachineId}
         machineName={observedMachinePairing?.machineName}
-        command={machinePairingStatus === 'pending' ? machinePairing?.command ?? null : null}
+        command={machinePairingStatus === 'pending' ? (machinePairing?.command ?? null) : null}
         expiresAt={machinePairing?.expiresAt ?? null}
         creating={machinePairingCreating}
         createError={machinePairingCreateError}
@@ -5948,6 +6478,14 @@ function WorkspaceChatLanding({
           await cancelMachinePairingRequest({ requestId: machinePairing.requestId });
         }}
         onConfigureAgents={() => openSettings('agents')}
+      />
+      <AgentRoleEditorDialog
+        editor={agentRoleEditor}
+        accessibleRoles={workspaceAgentRoles}
+        onChange={setAgentRoleEditor}
+        onClose={() => setAgentRoleEditor(null)}
+        onSaved={handleAgentRoleSaved}
+        source="chat_landing"
       />
     </>
   );

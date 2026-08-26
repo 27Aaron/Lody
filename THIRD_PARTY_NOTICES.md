@@ -616,7 +616,7 @@ This list covers shipped production dependencies plus vendored third-party asset
   - Author: Ben Coe
   - Description: the mighty option parser used by yargs
 
-### MIT (787)
+### MIT (789)
 
 - `@antfu/install-pkg @ 1.1.0` — https://github.com/antfu/install-pkg#readme
   - Author: Anthony Fu
@@ -1503,6 +1503,9 @@ This list covers shipped production dependencies plus vendored third-party asset
 - `emoji-regex @ 8.0.0` — https://mths.be/emoji-regex
   - Author: Mathias Bynens
   - Description: A regular expression to match all Emoji-only symbols as per the Unicode Standard.
+- `emojibase-data @ 17.0.0` — https://emojibase.dev
+  - Author: Miles Johnson
+  - Description: Aggregated emoji, shortcode, and emoticon data.
 - `empathic @ 2.0.0` — https://github.com/lukeed/empathic#readme
   - Author: Luke Edwards
   - Description: A set of small and fast Node.js utilities to understand your pathing needs.
@@ -1593,6 +1596,8 @@ This list covers shipped production dependencies plus vendored third-party asset
 - `framer-motion @ 12.34.0` — https://github.com/motiondivision/motion#readme
   - Author: Matt Perry
   - Description: A simple and powerful JavaScript animation library
+- `frimousse @ 0.3.0` — https://frimousse.liveblocks.io
+  - Description: A lightweight, unstyled, and composable emoji picker for React.
 - `fs-constants @ 1.0.0` — https://github.com/mafintosh/fs-constants
   - Author: Mathias Buus
   - Description: Require constants across node and the browser

@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { clipboard, contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import { setupRenderer } from '@better-auth/electron/preload'
 import { randomUUID } from 'node:crypto'
@@ -7,6 +7,7 @@ import type {
   CheckForElectronUpdateResult,
   CopyImageToClipboardInput,
   CopyImageToClipboardResult,
+  DesktopOnboardingCompleteResult,
   ElectronCliState,
   ElectronAuthCallbackInput,
   ElectronAuthCallbackSession,
@@ -346,6 +347,8 @@ const api = {
     closeSession: (sessionId: string) => {
       ipcRenderer.send('lodyTerminal:closeSession', { sessionId })
     },
+    readClipboardText: () => clipboard.readText(),
+    writeClipboardText: (text: string) => clipboard.writeText(text),
     onData: (handler: (event: TerminalDataEvent) => void) =>
       subscribeTerminalEvent('data', handler),
     onExit: (handler: (event: TerminalExitEvent) => void) =>
@@ -522,6 +525,9 @@ const api = {
   getWindowFullscreen: async (): Promise<boolean> => {
     return await ipcRenderer.invoke('lodyWindow:getFullscreen')
   },
+  completeOnboarding: async (): Promise<DesktopOnboardingCompleteResult> => {
+    return await ipcRenderer.invoke('lodyOnboarding:complete')
+  },
   getNotificationPermissionStatus: async () => {
     return await ipcRenderer.invoke('lodyNotifications:getPermissionStatus')
   },
@@ -585,6 +591,15 @@ const api = {
   },
   setNativeTheme: (source: 'dark' | 'light' | 'system') => {
     ipcRenderer.send('lodyApp:setNativeTheme', source)
+  },
+  onNativeThemeUpdated: (handler: (resolved: 'light' | 'dark') => void) => {
+    const listener = (_event: unknown, resolved: unknown) => {
+      if (resolved === 'light' || resolved === 'dark') {
+        handler(resolved)
+      }
+    }
+    ipcRenderer.on('lodyApp:nativeThemeUpdated', listener)
+    return () => ipcRenderer.removeListener('lodyApp:nativeThemeUpdated', listener)
   },
   notifyRendererMounted: () => {
     try {

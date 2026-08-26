@@ -7,21 +7,38 @@ import {
 } from '@agentclientprotocol/sdk';
 import type { ToolCallContent as AcpToolCallContent, SessionMode } from '@agentclientprotocol/sdk';
 import type { PermissionOutcome } from './message';
-import type { AgentConfigId, SessionId } from './ids';
+import type { AgentConfigId, McpServerId, SessionId } from './ids';
+import type { MessageTextSpan } from './message-text-spans';
 import type { MinimalVisualAnnotationAnchor } from './visual-annotation-types';
 import type { WorktreeScriptPhase } from './project';
+import {
+  DEEPSEEK_HARNESS_AGENT_PRESETS,
+  DEEPSEEK_HARNESS_MODELS,
+  DEEPSEEK_HARNESS_PERMISSION_MODES,
+  DEEPSEEK_HARNESS_REASONING_OPTIONS,
+} from './deepseek-harness';
 
 export const MANAGED_BUILTIN_RUNTIMES = [
   { runtimeName: 'kimi-code', agentType: 'kimi', displayName: 'Kimi Code' },
+  { runtimeName: 'grok-build', agentType: 'grok', displayName: 'Grok' },
   { runtimeName: 'claude-code', agentType: 'claude', displayName: 'Claude Code' },
   { runtimeName: 'codex', agentType: 'codex', displayName: 'Codex' },
 ] as const;
 
 export type ManagedBuiltinRuntime = (typeof MANAGED_BUILTIN_RUNTIMES)[number];
 export type ManagedBuiltinRuntimeName = ManagedBuiltinRuntime['runtimeName'];
-export type BuiltinCliType = ManagedBuiltinRuntime['agentType'];
+export type ManagedBuiltinAgentType = ManagedBuiltinRuntime['agentType'];
+/** Legacy installed-CLI detection only covers Lody-managed builtin runtimes. */
+export type BuiltinCliType = ManagedBuiltinAgentType;
 export type CliType = BuiltinCliType;
-export type BuiltinAgentType = BuiltinCliType;
+
+export const BUILTIN_AGENTS = [
+  ...MANAGED_BUILTIN_RUNTIMES.map(({ agentType, displayName }) => ({ agentType, displayName })),
+  { agentType: 'deepseek', displayName: 'DeepSeek Harness' },
+] as const;
+
+export type BuiltinAgent = (typeof BUILTIN_AGENTS)[number];
+export type BuiltinAgentType = BuiltinAgent['agentType'];
 export type AgentConfigCliType = 'builtin' | 'registry' | 'custom';
 export type AgentType = string;
 
@@ -50,6 +67,7 @@ export type BuiltinRuntimeOverrides = {
   codexPath?: string;
   claudeCodeExecutable?: string;
   kimiPath?: string;
+  grokPath?: string;
 };
 
 export const isBuiltinRuntimeOverrides = (value: unknown): value is BuiltinRuntimeOverrides => {
@@ -60,12 +78,14 @@ export const isBuiltinRuntimeOverrides = (value: unknown): value is BuiltinRunti
     codexPath?: unknown;
     claudeCodeExecutable?: unknown;
     kimiPath?: unknown;
+    grokPath?: unknown;
   };
   return (
     (record.codexPath === undefined || typeof record.codexPath === 'string') &&
     (record.claudeCodeExecutable === undefined ||
       typeof record.claudeCodeExecutable === 'string') &&
-    (record.kimiPath === undefined || typeof record.kimiPath === 'string')
+    (record.kimiPath === undefined || typeof record.kimiPath === 'string') &&
+    (record.grokPath === undefined || typeof record.grokPath === 'string')
   );
 };
 
@@ -259,7 +279,7 @@ export type AcpCommandSummary = {
 };
 
 // Bump when cached ACP probes need to be invalidated across clients.
-export const ACP_CAPABILITY_CACHE_VERSION = 4;
+export const ACP_CAPABILITY_CACHE_VERSION = 5;
 
 export type AcpCapabilityAuthority = 'unavailable' | 'provisional' | 'authoritative';
 
@@ -291,6 +311,8 @@ export type AcpCapabilityCacheEntry = {
   availableCommands?: AcpCommandSummary[];
   /** True only when the runtime initialize response advertised `sessionCapabilities.fork`. */
   sessionFork?: boolean;
+  /** True when this Lody machine supports durable asynchronous forks into a new worktree. */
+  sessionForkWorktree?: boolean;
   fetchedAt: number;
 };
 
@@ -343,6 +365,14 @@ export const getAcpCapabilityCacheStaleReason = (
 };
 
 export const isBuiltinAgentType = (agentType: string): agentType is BuiltinAgentType =>
+  BUILTIN_AGENTS.some((agent) => agent.agentType === agentType);
+
+export const getBuiltinAgentByAgentType = (agentType: string): BuiltinAgent | undefined =>
+  BUILTIN_AGENTS.find((agent) => agent.agentType === agentType);
+
+export const isManagedBuiltinAgentType = (
+  agentType: string
+): agentType is ManagedBuiltinAgentType =>
   MANAGED_BUILTIN_RUNTIMES.some((runtime) => runtime.agentType === agentType);
 
 export const getManagedBuiltinRuntimeByAgentType = (
@@ -366,14 +396,16 @@ export const CODEX_AUTO_REVIEW_MODE_ID = 'agent-auto-review';
 
 const BUILTIN_DEFAULT_MODE_IDS: Record<BuiltinAgentType, string> = {
   kimi: 'auto',
+  grok: 'agent',
   claude: 'auto',
   codex: CODEX_AUTO_REVIEW_MODE_ID,
+  deepseek: 'workspace-write',
 };
 
 /**
- * Lody-owned mode default for builtin agents when a turn has no persisted
- * selection. Capability-aware callers should use it only when the adapter
- * offers the returned mode.
+ * Lody-owned mode default for builtin agents when a turn has no
+ * persisted selection. Capability-aware callers should use it only when the
+ * adapter offers the returned mode.
  */
 export const getBuiltinDefaultModeId = (
   cliType: AgentConfigCliType | null | undefined,
@@ -382,6 +414,53 @@ export const getBuiltinDefaultModeId = (
   cliType === 'builtin' && agentType && isBuiltinAgentType(agentType)
     ? BUILTIN_DEFAULT_MODE_IDS[agentType]
     : undefined;
+
+const DEEPSEEK_HARNESS_CONFIG_OPTIONS: AcpConfigOptionSummary[] = [
+  {
+    id: 'mode',
+    name: 'Permission',
+    description: 'Sandbox and approval policy for the session',
+    category: 'mode',
+    type: 'select',
+    currentValue: BUILTIN_DEFAULT_MODE_IDS.deepseek,
+    options: DEEPSEEK_HARNESS_PERMISSION_MODES.map((mode) => ({
+      value: mode.id,
+      name: mode.name,
+      description: mode.description,
+    })),
+  },
+  {
+    id: 'agent_preset',
+    name: 'Agent preset',
+    description: 'Tools, prompt, and capabilities composed for the session',
+    category: 'agent_preset',
+    type: 'select',
+    currentValue: 'standard',
+    options: DEEPSEEK_HARNESS_AGENT_PRESETS.map((preset) => ({ ...preset })),
+  },
+  {
+    id: 'model',
+    name: 'Model',
+    description: 'DeepSeek model used for the session',
+    category: 'model',
+    type: 'select',
+    currentValue: 'deepseek-v4-pro',
+    options: DEEPSEEK_HARNESS_MODELS.map((model) => ({
+      value: model.modelId,
+      name: model.name,
+      description: model.description,
+    })),
+  },
+  {
+    id: 'reasoning_effort',
+    name: 'Reasoning effort',
+    description: 'How much reasoning effort the model should use',
+    category: 'thought_level',
+    type: 'select',
+    currentValue: 'max',
+    options: DEEPSEEK_HARNESS_REASONING_OPTIONS.map((option) => ({ ...option })),
+  },
+];
 
 const CODEX_STATIC_MODES: StaticBuiltinAcpCapabilities['modes'] = [
   {
@@ -582,6 +661,7 @@ export function classifyPermissionModeFace(modeId: string | null | undefined): P
     case 'agent-auto-review':
       return { kind: 'auto', tone: 'neutral', render: 'auto-label' };
     case 'agent-full-access':
+    case 'danger-full-access':
       return { kind: 'full-access', tone: 'warning', render: 'icon' };
     // Claude (CLAUDE_STATIC_MODES)
     case 'auto':
@@ -596,6 +676,7 @@ export function classifyPermissionModeFace(modeId: string | null | undefined): P
       // "Don't Ask" skips the human approval prompt — flag it like full access.
       return { kind: 'deny', tone: 'warning', render: 'icon' };
     case 'yolo':
+    case 'always-approve':
       return { kind: 'full-access', tone: 'warning', render: 'icon' };
     // Unknown / third-party (not adapted): keep the face clean; full name shows
     // in the sheet.
@@ -614,6 +695,11 @@ const CLAUDE_STATIC_MODELS: StaticBuiltinAcpCapabilities['models'] = [
     modelId: 'opus',
     name: 'Opus',
     description: 'Claude Opus',
+  },
+  {
+    modelId: 'claude-fable-5[1m]',
+    name: 'Fable',
+    description: 'Claude Fable 5 with 1M context',
   },
   {
     modelId: 'sonnet',
@@ -708,6 +794,102 @@ const KIMI_STATIC_CONFIG_OPTIONS: AcpConfigOptionSummary[] = [
   },
 ];
 
+const GROK_STATIC_MODES: StaticBuiltinAcpCapabilities['modes'] = [
+  {
+    id: 'default',
+    name: 'Agent',
+    description: 'Use tools and make changes when needed',
+  },
+  {
+    id: 'plan',
+    name: 'Plan',
+    description: 'Plan and reason without modifying the workspace',
+  },
+];
+
+const GROK_STATIC_MODELS: StaticBuiltinAcpCapabilities['models'] = [
+  {
+    modelId: 'grok-4.6',
+    name: 'Grok 4.6',
+    description: "SpaceXAI's latest frontier model",
+  },
+  {
+    modelId: 'grok-4.5',
+    name: 'Grok 4.5',
+  },
+];
+
+const GROK_STATIC_CONFIG_OPTIONS: AcpConfigOptionSummary[] = [
+  {
+    id: 'interaction_mode',
+    name: 'Interaction Mode',
+    description: 'Controls whether the agent acts, plans, or answers read-only questions',
+    category: 'mode',
+    type: 'select',
+    currentValue: BUILTIN_DEFAULT_MODE_IDS.grok,
+    options: [
+      { value: 'agent', name: 'Agent', description: 'Use tools and make changes when needed' },
+      {
+        value: 'plan',
+        name: 'Plan',
+        description: 'Plan and reason without modifying the workspace',
+      },
+    ],
+  },
+  {
+    id: 'permission_mode',
+    name: 'Permission Mode',
+    description: 'Controls how protected tool actions are approved',
+    category: '_permission',
+    type: 'select',
+    currentValue: 'ask',
+    options: [
+      {
+        value: 'ask',
+        name: 'Ask Every Time',
+        description: 'Request approval before protected actions',
+      },
+      {
+        value: 'auto',
+        name: 'Auto',
+        description: 'Let Grok decide when approval is required (experimental)',
+      },
+      {
+        value: 'always-approve',
+        name: 'Always Approve',
+        description: 'Approve protected actions automatically',
+      },
+    ],
+  },
+  {
+    id: 'model',
+    name: 'Model',
+    description: 'Select the model used for this session',
+    category: 'model',
+    type: 'select',
+    currentValue: 'grok-4.6',
+    options: GROK_STATIC_MODELS.map((model) => ({
+      value: model.modelId,
+      name: model.name ?? model.modelId,
+      description: model.description,
+    })),
+  },
+  {
+    id: 'reasoning_effort',
+    name: 'Reasoning Effort',
+    description: 'Controls how much reasoning the model performs',
+    category: 'thought_level',
+    type: 'select',
+    currentValue: 'high',
+    options: [
+      { value: 'xhigh', name: 'X-High' },
+      { value: 'high', name: 'High' },
+      { value: 'medium', name: 'Medium' },
+      { value: 'low', name: 'Low' },
+    ],
+  },
+];
+
 const STATIC_BUILTIN_ACP_CAPABILITIES: Record<BuiltinAgentType, StaticBuiltinAcpCapabilities> = {
   claude: {
     modes: CLAUDE_STATIC_MODES,
@@ -723,6 +905,16 @@ const STATIC_BUILTIN_ACP_CAPABILITIES: Record<BuiltinAgentType, StaticBuiltinAcp
     modes: KIMI_STATIC_MODES,
     models: [],
     configOptions: KIMI_STATIC_CONFIG_OPTIONS,
+  },
+  grok: {
+    modes: GROK_STATIC_MODES,
+    models: GROK_STATIC_MODELS,
+    configOptions: GROK_STATIC_CONFIG_OPTIONS,
+  },
+  deepseek: {
+    modes: DEEPSEEK_HARNESS_PERMISSION_MODES.map((mode) => ({ ...mode })),
+    models: DEEPSEEK_HARNESS_MODELS.map((model) => ({ ...model })),
+    configOptions: DEEPSEEK_HARNESS_CONFIG_OPTIONS,
   },
 };
 
@@ -898,6 +1090,12 @@ export type ChatFailedReason =
   | 'memory_pressure'
   | 'acp_not_ready'
   | 'agent_disconnected'
+  // The prompt returned normally but the agent never emitted a single ACP
+  // update, so the turn produced nothing the user can see. Adapters are meant
+  // to surface an upstream failure as a JSON-RPC error; some swallow it and
+  // resolve the prompt instead (observed: an over-limit context answered with
+  // HTTP 400), which would otherwise be recorded as an ordinary completion.
+  | 'agent_no_output'
   | 'turn_pre_prompt_failed'
   | 'message_delivery_failed'
   | 'machine_access_denied' // requester is not authorized to use this machine (definitive backend deny)
@@ -905,6 +1103,7 @@ export type ChatFailedReason =
   | 'acp_auth_required' // -32000: Authentication required
   | 'acp_internal_error' // -32603: Internal JSON-RPC error
   | 'acp_upstream_api_error' // -32603 with upstream API error (500/529) - transient, retryable
+  | 'acp_session_storage_incompatible' // -32603 from an incompatible session-persistence root
   | 'acp_resource_not_found' // -32002: Resource not found
   | 'acp_request_cancelled' // -32800: Request cancelled
   | 'acp_method_not_found' // -32601: Method not found (protocol version mismatch)
@@ -934,7 +1133,7 @@ export type ChatFailedMeta = {
  */
 export type AgentWarningMeta = {
   message: string;
-  source?: 'warning' | 'configWarning';
+  source?: string;
 };
 
 export type SessionForkOriginMeta = {
@@ -1033,6 +1232,20 @@ export const SESSION_FILE_PREVIEW_FETCH_BYTES = 1024 * 1024;
  */
 export type SessionFileTransport = 'r2' | 'local';
 
+/**
+ * Agent-upload provenance must stay workspace-relative on every supported OS.
+ * Treat both slash styles as separators so a synced block cannot become an
+ * absolute or parent-traversing path when it reaches a different machine.
+ */
+export function isSessionFileSourcePath(value: string): boolean {
+  if (value.length === 0 || value.includes('\0')) return false;
+  const normalized = value.replace(/\\/g, '/');
+  if (normalized === '.' || normalized.startsWith('/') || /^[A-Za-z]:/.test(normalized)) {
+    return false;
+  }
+  return !normalized.split('/').some((segment) => segment === '..');
+}
+
 export type SessionFilePayload = {
   type: 'file';
   /** Unique identifier; also the relay-store key. Generated by the uploader. */
@@ -1047,6 +1260,13 @@ export type SessionFilePayload = {
   sha256: string;
   /** Whether the file is text-previewable (see session-file-text.ts). */
   textPreview: boolean;
+  /**
+   * Workspace-relative path of an agent-uploaded artifact. Present only when
+   * the uploader can prove the source stayed inside the Session workspace.
+   * This is provenance for reopening the live workspace file; downloads still
+   * use `fileId` and must never resolve bytes through this path.
+   */
+  sourcePath?: string;
   /** `r2` (in relay store) or `local` (pending backfill; `machineId` required). */
   transport: SessionFileTransport;
   /** The machine holding the bytes while `transport` is `local`. */
@@ -1130,6 +1350,8 @@ export type SessionInputBlock =
   | {
       type: 'text';
       text: string;
+      /** Mention regions of `text`. See `message-text-spans.ts`. */
+      spans?: MessageTextSpan[];
     }
   | ({
       type: 'image';
@@ -1164,6 +1386,14 @@ export type SubagentTaskUsage = {
 export type SubagentTaskPayload = {
   taskId: string;
   status: SubagentTaskStatus;
+  /** Provider-neutral task category published through `_meta.lody.task`. */
+  taskKind?: 'subagent' | 'background' | 'scheduled';
+  /** Human-readable worker or workflow identity. */
+  actor?: string;
+  parentTaskId?: string;
+  modelId?: string;
+  startedAtEpochSeconds?: number;
+  endedAtEpochSeconds?: number;
   /** The most recent lifecycle event applied to this task. */
   event?: SubagentTaskEvent;
   /** Parent tool_use id — links the task back to the spawning turn. */
@@ -1188,6 +1418,8 @@ export type MessageContent =
   | {
       type: 'text';
       text: string;
+      /** Mention regions of `text`. See `message-text-spans.ts`. */
+      spans?: MessageTextSpan[];
     }
   | ({
       type: 'image';
@@ -1222,6 +1454,13 @@ export type MessageContent =
       rawOutput?: { [k: string]: unknown };
       /** Small provider-neutral marker for tool-like status rows rendered in the transcript. */
       activityKind?: 'context_compaction' | 'codex_retry';
+      /**
+       * The agent's canonical name for this tool, when it published one. ACP
+       * `title` is human-facing — an agent that describes its calls puts the
+       * rendered schedule there — so anything that must recognize a specific
+       * tool reads this instead. See `collectPendingScheduledTasksFromHistory`.
+       */
+      toolName?: string;
       /**
        * IANA timezone of the machine that ran a scheduling tool (Cron / ScheduleWakeup),
        * captured at persist time. Cron expressions are local-time to that machine, so the
@@ -1330,6 +1569,10 @@ export type ACPSessionConfig = {
   modelId?: string;
   /** Config option values (configId → value) for setSessionConfigOption. */
   configOptionValues?: Record<string, AcpConfigOptionValue>;
+  /** Workspace MCP catalog ids selected for this session. */
+  mcpServerIds?: McpServerId[];
+  /** Whether the built-in Lody Task MCP tools are available to this Turn's Agent session. */
+  taskToolsEnabled?: boolean;
   issuePRMentions?: IssuePRMention[];
   // continue to chat
   resume?: ACPSessionId;

@@ -226,11 +226,15 @@ type QueuedSharedStateRefresh = {
   readonly resolved: ResolvedPath;
   readonly forcePublish: boolean;
   readonly persistAllChangesDiffStats: boolean;
+  /** Local IPC snapshot reads update in-memory state without awaiting Flock I/O. */
+  readonly publish: boolean;
 };
 
 type SharedStatePublishOptions = {
   readonly forcePublish?: boolean;
   readonly persistAllChangesDiffStats?: boolean;
+  /** Defaults to true. Local IPC snapshots deliberately skip this asynchronous side effect. */
+  readonly publish?: boolean;
 };
 
 type OwnerSharedStateRefreshQueue = {
@@ -349,19 +353,24 @@ export class CodeCollabV2Service {
     );
     const hasState = this.stateByOwnerSessionId.has(resolved.ownerSessionId);
     const hasActiveWatch = this.watchByOwnerSessionId.has(resolved.ownerSessionId);
-    if (!hasState || !hasActiveWatch) {
+    const activatedLocally = !hasState || !hasActiveWatch;
+    if (activatedLocally) {
       await this.enqueueSharedStateRefresh(resolved.ownerSessionId, {
         kind: 'full',
         resolved,
         forcePublish: false,
         persistAllChangesDiffStats: false,
+        // This response is the local authority snapshot. Flock publication is
+        // durable replication, not a prerequisite for an Electron local view.
+        publish: false,
       });
-    } else {
-      void this.ensureWorkspaceWatch(resolved).catch(() => undefined);
     }
+    // Keep normal watcher-driven Flock propagation alive, but do not make this
+    // local IPC read wait for subscription setup or a publication transaction.
+    void this.ensureWorkspaceWatch(resolved).catch(() => undefined);
     const state = this.getOwnerState(resolved.ownerSessionId);
-    return {
-      status: 'ok',
+    const snapshot = {
+      status: 'ok' as const,
       ownerSessionId: resolved.ownerSessionId,
       fileIndex: buildCodeCollabFileIndexState(
         cloneFileTreeState(state.fileTree),
@@ -369,6 +378,23 @@ export class CodeCollabV2Service {
       ),
       updatedAtMs: getServerNow(),
     };
+    if (activatedLocally) {
+      // A local IPC snapshot is authoritative for first paint, but an existing
+      // durable Flock replica can be stale after the CLI was stopped. Reconcile
+      // the freshly scanned in-memory state in the background so a later local
+      // Flock join converges back to this authority instead of preserving stale
+      // rows. This intentionally does not delay the RPC response.
+      void this.publishOwnerState(resolved.ownerSessionId, state, { forcePublish: true }).catch(
+        (error: unknown) => {
+          this.logger.debug(
+            `[code-collab] local file-index Flock repair failed ownerSessionId=${
+              resolved.ownerSessionId
+            }: ${formatErrorMessage(error)}`
+          );
+        }
+      );
+    }
+    return snapshot;
   }
 
   async refreshText(
@@ -532,6 +558,7 @@ export class CodeCollabV2Service {
       resolved,
       forcePublish: options.forcePublish === true,
       persistAllChangesDiffStats: false,
+      publish: true,
     });
   }
 
@@ -546,6 +573,7 @@ export class CodeCollabV2Service {
       resolved,
       forcePublish: false,
       persistAllChangesDiffStats: true,
+      publish: true,
     });
   }
 
@@ -730,6 +758,7 @@ export class CodeCollabV2Service {
             await this.refreshSharedStateNow(refresh.resolved, {
               forcePublish: refresh.forcePublish,
               persistAllChangesDiffStats: refresh.persistAllChangesDiffStats,
+              publish: refresh.publish,
             });
           }
         } catch (error) {
@@ -1336,12 +1365,14 @@ export class CodeCollabV2Service {
 
     replaceFileTreeEntries(state.fileTree, new Map(result.fileTreeEntries), fileTreeIndex);
     state.allChanges = result.allChanges;
-    await this.publishPreparedOwnerFileIndex(resolved.ownerSessionId, result.fileIndex, options, {
-      startedAtMs,
-      cloneMs: 0,
-      buildMs: 0,
-      workerMs,
-    });
+    if (options.publish !== false) {
+      await this.publishPreparedOwnerFileIndex(resolved.ownerSessionId, result.fileIndex, options, {
+        startedAtMs,
+        cloneMs: 0,
+        buildMs: 0,
+        workerMs,
+      });
+    }
     return {
       entries: result.fileTreeEntries.length,
       scanMs: result.scanMs,
@@ -1404,7 +1435,9 @@ export class CodeCollabV2Service {
   ): Promise<void> {
     state.allChanges = await this.computeAllChangesForResolvedWorkspace(resolved);
     await this.ensureAllChangesFileTreeEntries(resolved, state, options.fileTreeIndex);
-    await this.publishOwnerState(resolved.ownerSessionId, state, options);
+    if (options.publish !== false) {
+      await this.publishOwnerState(resolved.ownerSessionId, state, options);
+    }
   }
 
   private async computeAllChangesForResolvedWorkspace(
@@ -1635,6 +1668,7 @@ export class CodeCollabV2Service {
       resolved,
       forcePublish: false,
       persistAllChangesDiffStats: false,
+      publish: true,
     });
   }
 
@@ -2620,6 +2654,9 @@ function mergeQueuedSharedStateRefresh(
     forcePublish: current.forcePublish || next.forcePublish,
     persistAllChangesDiffStats:
       current.persistAllChangesDiffStats || next.persistAllChangesDiffStats,
+    // A normal refresh must still replicate when it coalesces with an IPC-only
+    // snapshot read; the inverse must never make normal work skip publication.
+    publish: current.publish || next.publish,
   };
 }
 

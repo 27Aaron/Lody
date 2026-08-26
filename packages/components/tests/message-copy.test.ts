@@ -1,6 +1,8 @@
 import type { MessageContent } from '@lody/shared';
 import { describe, expect, it } from 'vitest';
 import {
+  collapseMentionSpansForCopy,
+  getCopyTextFromMessageItems,
   getUserTextRenderSlice,
   getTextContentFromMessageItems,
   getVisibleAssistantTextContent,
@@ -17,6 +19,47 @@ describe('getTextContentFromMessageItems', () => {
     expect(
       getTextContentFromMessageItems([text('hidden progress'), text('   '), text('final reply')])
     ).toBe('hidden progress\n\nfinal reply');
+  });
+});
+
+describe('getCopyTextFromMessageItems', () => {
+  const rolePrompt = 'use lody mcp to create a session with agent role[id: role-1, name: Reviewer]';
+  const roleMessage: MessageContent = {
+    type: 'text',
+    text: `please ${rolePrompt} on this diff`,
+    spans: [
+      {
+        start: 7,
+        end: 7 + rolePrompt.length,
+        kind: 'agent_role',
+        label: 'Code-Reviewer',
+        target: 'role-1',
+      },
+    ],
+  };
+
+  it('copies a role mention as the chip the reader sees', () => {
+    expect(getCopyTextFromMessageItems([roleMessage])).toBe('please @Code-Reviewer on this diff');
+  });
+
+  it('leaves edit-and-resend reading the text the agent actually received', () => {
+    // Same items, different question: the composer needs the rewritten form,
+    // because a `@token` with no committed range would be sent as a word.
+    expect(getTextContentFromMessageItems([roleMessage])).toContain(rolePrompt);
+  });
+
+  it('keeps every other span expanded, including a pasted blob', () => {
+    const pasted: MessageContent = {
+      type: 'text',
+      text: 'here: the whole pasted log',
+      spans: [{ start: 6, end: 26, kind: 'pasted_text', label: 'Pasted 4,182 chars' }],
+    };
+    expect(getCopyTextFromMessageItems([pasted])).toBe('here: the whole pasted log');
+  });
+
+  it('is the plain text when a message carries no spans', () => {
+    expect(getCopyTextFromMessageItems([text('plain reply')])).toBe('plain reply');
+    expect(collapseMentionSpansForCopy('plain reply', undefined)).toBe('plain reply');
   });
 });
 

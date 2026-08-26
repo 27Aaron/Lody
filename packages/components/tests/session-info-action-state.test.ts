@@ -6,12 +6,11 @@ const BASE_INPUT = {
   hasExistingPr: false,
   workspaceDirty: false,
   hasChanges: false,
-  isWorktree: true,
   isAgentBusy: false,
 };
 
 describe('resolveSessionInfoBarGitHubActionIds', () => {
-  it('offers Create PR and Commit & Push for a dirty worktree without a PR', () => {
+  it('offers Create PR and Commit & Push for a dirty GitHub-capable workspace without a PR', () => {
     expect(
       resolveSessionInfoBarGitHubActionIds({
         ...BASE_INPUT,
@@ -21,7 +20,7 @@ describe('resolveSessionInfoBarGitHubActionIds', () => {
     ).toEqual(['create-pr', 'create-draft-pr', 'commit-and-push']);
   });
 
-  it('offers Create PR (but not Commit & Push) for a committed, clean worktree without a PR', () => {
+  it('offers Create PR (but not Commit & Push) for a committed, clean GitHub-capable workspace without a PR', () => {
     // The agent committed everything: tree is clean (not dirty) but there are
     // real committed changes to open a PR from. Create PR must still show;
     // Commit & Push must not, since there is nothing uncommitted to commit.
@@ -34,22 +33,11 @@ describe('resolveSessionInfoBarGitHubActionIds', () => {
     ).toEqual(['create-pr', 'create-draft-pr']);
   });
 
-  it('does not offer Create PR before the worktree has any changes', () => {
+  it('does not offer Create PR before the workspace has any changes', () => {
     expect(resolveSessionInfoBarGitHubActionIds(BASE_INPUT)).toEqual([]);
   });
 
-  it('offers only Commit & Push for a dirty non-worktree session without a PR', () => {
-    expect(
-      resolveSessionInfoBarGitHubActionIds({
-        ...BASE_INPUT,
-        isWorktree: false,
-        workspaceDirty: true,
-        hasChanges: true,
-      })
-    ).toEqual(['commit-and-push']);
-  });
-
-  it('keeps commit and push for a dirty PR worktree', () => {
+  it('keeps commit and push for a dirty PR workspace', () => {
     expect(
       resolveSessionInfoBarGitHubActionIds({
         ...BASE_INPUT,

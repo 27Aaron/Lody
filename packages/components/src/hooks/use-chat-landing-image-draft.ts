@@ -1,12 +1,5 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ChangeEvent,
-  type ClipboardEvent,
-} from 'react';
+import { useCallback, useEffect, useMemo, useState, type ClipboardEvent } from 'react';
+import type { MessageTextSpan } from '@lody/shared';
 import {
   SESSION_IMAGE_MAX_COUNT,
   type SessionId,
@@ -73,7 +66,6 @@ export function useChatLandingImageDraft(args: {
     ensureSessionId,
   } = args;
   const postHog = usePostHog();
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const imageUploadFailedLabel = t('sessions.imageUploadFailed', 'Image upload failed');
   const imageUploadMissingAuthLabel = t(
@@ -297,18 +289,6 @@ export function useChatLandingImageDraft(args: {
     ]
   );
 
-  const handleFileInputChange = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => {
-      const fileList = event.target.files;
-      if (!fileList) {
-        return;
-      }
-      handleAddFiles(Array.from(fileList));
-      event.target.value = '';
-    },
-    [handleAddFiles]
-  );
-
   const handlePromptPaste = useCallback(
     (event: ClipboardEvent<HTMLTextAreaElement>) => {
       if (isMobile) {
@@ -328,10 +308,6 @@ export function useChatLandingImageDraft(args: {
     },
     [handleAddFiles, isMobile]
   );
-
-  const handleOpenImagePicker = useCallback(() => {
-    fileInputRef.current?.click();
-  }, []);
 
   const handleRemoveImage = useCallback((localId: string) => {
     // The landing owns the shared draft session id, so removing the last image
@@ -381,7 +357,11 @@ export function useChatLandingImageDraft(args: {
   );
 
   const buildInputBlocks = useCallback(
-    (prompt: string, extraBlocks: SessionInputBlock[] = []): SessionInputBlock[] => {
+    (
+      prompt: string,
+      extraBlocks: SessionInputBlock[] = [],
+      spans?: MessageTextSpan[]
+    ): SessionInputBlock[] => {
       const uploadedImages = pendingImages
         .filter((image): image is PendingImage & { uploaded: SessionImagePayload } => {
           return image.status === 'uploaded' && !!image.uploaded;
@@ -390,24 +370,21 @@ export function useChatLandingImageDraft(args: {
       // Images first, then any caller-supplied blocks (e.g. file attachments),
       // then the prompt text — matching the in-session block ordering.
       const leadingBlocks = [...uploadedImages, ...extraBlocks];
-      const trimmedPrompt = prompt.trim();
-      if (!trimmedPrompt) {
-        return leadingBlocks;
-      }
-      return [...leadingBlocks, { type: 'text', text: trimmedPrompt }];
+      // Emitted untrimmed, spans still anchored to `prompt`. Every caller runs
+      // the result through `normalizeSessionInputBlocks`, which owns both the
+      // trim and the span re-anchor it forces — and drops the block entirely
+      // when nothing survives the trim.
+      return [...leadingBlocks, { type: 'text', text: prompt, ...(spans ? { spans } : {}) }];
     },
     [pendingImages]
   );
 
   return {
-    fileInputRef,
     imageItems,
     hasBlockingImages,
     hasUploadedImages,
     canAddMoreImages: pendingImages.length < SESSION_IMAGE_MAX_COUNT,
     addFiles: handleAddFiles,
-    handleOpenImagePicker,
-    handleFileInputChange,
     handlePromptPaste,
     handleRemoveImage,
     handleRetryImage,

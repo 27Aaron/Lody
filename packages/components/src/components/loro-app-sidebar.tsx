@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { startSessionMentionDrag } from '@/lib/session-mention-drag';
 import { useSidebarKeyboardNav } from '@/hooks/use-sidebar-keyboard-nav';
 import { SidebarKeyboardHighlight } from '@/components/sidebar-keyboard-highlight';
 import { useLocation, useRouter } from '@tanstack/react-router';
@@ -6,7 +7,6 @@ import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import {
   findFreshSessionPresenceState,
   resolveProjectGitHubRepo,
-  type ElectronUpdaterState,
   type LocalProjectId,
   type LocalProjectMeta,
   type MachineId,
@@ -23,13 +23,16 @@ import { resolveWorkspaceIdentityLogo } from '@/lib/workspace-identity';
 import { cn } from '@/lib/utils';
 import { formatCompactRelativeTime } from '@/lib/format-relative-time';
 import { isElectronRenderer, useElectronFullscreen } from '@/lib/electron';
+import { formatSessionTabSearch } from '@/lib/session-tab-url';
 import { openExternalUrl } from '@/lib/native-browser';
-import { LODY_DISCORD_URL } from '@/lib/lody-urls';
+import { getChangelogUrl, LODY_DISCORD_URL } from '@/lib/lody-urls';
 import { getCachedWorkspaceName } from '@/lib/local-storage-cache';
 import {
   languageAtom,
   ONLY_CHATS_KEY,
   sessionSidebarCodeChangesOnlyAtom,
+  sidebarCollapsedOpenedBySessionsAtom,
+  toggleSidebarCollapsedOpenedBySessionAtom,
   sidebarShowFullListAtom,
   setMobileDrawerOpenAtom,
   userAtom,
@@ -70,6 +73,9 @@ import {
   type SidebarUpdatedBucketKey,
   type SidebarUpdatedItem,
 } from '@/components/sidebar-updated-session-list';
+import { SidebarUpdateBanner } from '@/components/sidebar-update-banner';
+import { UpdateChangelogDialog } from '@/components/update-changelog-dialog';
+import { pickLocalizedReleaseNotes, readUpdateBannerState } from '@/lib/electron-update-banner';
 import { useElectronUpdaterState } from '@/hooks/use-electron-updater-state';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { useOpenSettings } from '@/hooks/use-open-settings';
@@ -101,6 +107,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/ui/tooltip';
 import { SwipeActionRow } from '@/components/shared/swipe-action-row';
 import {
   SessionList,
+  shallowEqualExceptKeys,
   type SessionListPullRequestOpen,
   type SessionListRepoMove,
   type SessionListRepoState,
@@ -108,6 +115,7 @@ import {
 import {
   buildChildSessionsByParent,
   buildSessionListRows,
+  buildSidebarOpenerRowResolver,
   getEffectiveSessionActivitySummary,
   getEffectiveLatestMessageAt,
   getLatestPullRequestInfo,
@@ -135,6 +143,7 @@ import { useOnlineMachineIds } from '@/hooks/use-machine-online-status';
 import { useStableNow } from '@/hooks/use-stable-now';
 import { writePreferredWorkspaceSlug } from '@/lib/workspace';
 import {
+  SessionOpenedByTreeRow,
   SessionPrIcon,
   SessionRowAuthorAvatar,
   SessionRowLeadingSlot,
@@ -142,7 +151,15 @@ import {
   SidebarRowArchiveButton,
   SidebarRowEndSlot,
   SidebarSectionHeader,
+  SessionRowOpenedByMenuItems,
+  buildSessionRowOpenedByTreeSlot,
+  type SessionRowOpenedByTreeSlot,
 } from '@/components/sidebar-row-shared';
+import {
+  buildOpenedBySessionTree,
+  hasOpenedByTreeNesting,
+  normalizeSessionRowId,
+} from '@/lib/session-opened-by-tree';
 import { SessionInfoHoverCard } from '@/components/session-info-hover-card';
 import { SessionShareDialog } from '@/components/session-sharing';
 import type { SessionSharingState } from '@/lib/session-sharing';
@@ -189,63 +206,6 @@ function getDocsLinkOrigin(): string {
     }
   }
   return DOCS_LINK_FALLBACK_ORIGIN;
-}
-
-function readDownloadedUpdaterVersion(state: ElectronUpdaterState | null): string | null {
-  if (!state || state.phase !== 'downloaded') return null;
-  const downloadedVersion = state.downloadedVersion?.trim();
-  if (downloadedVersion) return downloadedVersion;
-  const availableVersion = state.availableVersion?.trim();
-  return availableVersion || null;
-}
-
-function SidebarUpdateBanner({
-  title,
-  description,
-  changelogLabel,
-  restartLabel,
-  laterLabel,
-  isRestarting,
-  onRestart,
-  onLater,
-}: {
-  title: string;
-  description: string;
-  changelogLabel: string;
-  restartLabel: string;
-  laterLabel: string;
-  isRestarting: boolean;
-  onRestart: () => void;
-  onLater: () => void;
-}) {
-  return (
-    <div
-      className={cn(
-        'rounded-lg border border-border/80 bg-background/95 px-3 py-2 shadow-lg backdrop-blur-sm',
-        'supports-[backdrop-filter]:bg-background/85'
-      )}
-    >
-      <div className="text-sm font-semibold text-foreground">{title}</div>
-      <div className="mt-1 text-xs leading-relaxed text-muted-foreground">{description}</div>
-      <a
-        href="https://lody.ai/changelog"
-        target="_blank"
-        rel="noopener noreferrer"
-        className="mt-1 inline-flex text-xs font-medium text-primary underline-offset-2 hover:underline"
-      >
-        {changelogLabel}
-      </a>
-      <div className="mt-2 flex items-center justify-end gap-2">
-        <Button type="button" variant="ghost" size="sm" className="h-7 px-2.5" onClick={onLater}>
-          {laterLabel}
-        </Button>
-        <Button type="button" size="sm" className="h-7 px-2.5" onClick={onRestart}>
-          {isRestarting ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
-          {restartLabel}
-        </Button>
-      </div>
-    </div>
-  );
 }
 
 function getStableRepoFullNames(tasks: { repoFullName?: string | null }[]): string[] {
@@ -366,15 +326,24 @@ type LocalProjectSessionItemProps = {
   machineName?: string | null;
   /** Conversation creator, shown as the card's Author row (team scope only). */
   author?: { name?: string | null; image?: string | null } | null;
-  now: Date;
-  selectedSessionId: string | null;
+  /** Whether this row is the currently-open session (drives selected styling). */
+  isSelected: boolean;
   workspaceSlug: string | null;
-  onNavigate: (sessionId: string) => void;
+  onNavigate: (sessionId: string, tabSessionId?: string) => void;
   onArchive: (sessionId: string) => void;
   onRename?: (sessionId: string, nextTitle: string) => void | Promise<void>;
   onTogglePinned?: (sessionId: string, nextPinned: boolean) => void;
   onCopyUrl?: (sessionId: string) => void;
   onShareWithTeam?: (sessionId: string) => void;
+  /**
+   * Session that opened this one (`SessionMeta.openedBySessionId`). Present on
+   * MCP-created independent Sessions; drives the row's "go back to the opener"
+   * menu action even when the opener is not visible in this project list.
+   */
+  openerSessionId?: string | null;
+  /** Root route that owns `openerSessionId` when it is a child Tab. */
+  openerRootSessionId?: string | null;
+  openedByTree?: SessionRowOpenedByTreeSlot;
   sharing?: SessionSharingState;
   archiveTooltipLabel: string;
   archiveActionLabel: string;
@@ -392,14 +361,16 @@ const LocalProjectSessionItem = memo(function LocalProjectSessionItem({
   projectName,
   machineName,
   author,
-  now,
-  selectedSessionId,
+  isSelected,
   onNavigate,
   onArchive,
   onRename,
   onTogglePinned,
   onCopyUrl,
   onShareWithTeam,
+  openerSessionId,
+  openerRootSessionId,
+  openedByTree,
   sharing,
   archiveTooltipLabel,
   archiveActionLabel,
@@ -409,8 +380,10 @@ const LocalProjectSessionItem = memo(function LocalProjectSessionItem({
   const { t } = useTranslation();
   const moreActionsLabel = t('sessions.moreActions', 'More actions');
   const title = (session.title ?? '').trim() || defaultSessionTitle;
+  // Self-ticking on the shared sidebar timer: a tick re-renders only this row's
+  // time label, not every row in the project section.
+  const now = useStableNow(SIDEBAR_RELATIVE_TIME_REFRESH_MS);
   const relativeTime = formatCompactRelativeTime(effectiveLatestMessageAt, now);
-  const isSelected = session.id === selectedSessionId;
   const showSelectedState = isSelected && !isMobile;
   const showInlineArchive = !isMobile;
   const showWorktreeIcon = session.isWorktree === true;
@@ -427,6 +400,7 @@ const LocalProjectSessionItem = memo(function LocalProjectSessionItem({
   const canTogglePinned = typeof onTogglePinned === 'function';
   const canCopyUrl = typeof onCopyUrl === 'function';
   const hasContextMenuActions = !isMobile;
+  const openedByOpener = openedByTree?.kind === 'opener' ? openedByTree : null;
   const contextMenuLabels = useMemo(
     () => ({
       rename: t('sessions.contextMenu.rename', 'Rename'),
@@ -434,6 +408,7 @@ const LocalProjectSessionItem = memo(function LocalProjectSessionItem({
       unpin: t('sessions.contextMenu.unpin', 'Unpin Session'),
       archive: t('sessions.contextMenu.archive', 'Archive Session'),
       copyUrl: t('sessions.contextMenu.copyUrl', 'Copy Session URL'),
+      goToOpenerSession: t('sessions.contextMenu.goToOpenerSession', 'Go to Opener Session'),
       shareWithTeam: t('sessions.sharing.shareWithTeam', 'Share with team…'),
       onlyOwnerCanShare: t('sessions.sharing.onlyOwnerCanShare', 'Only the device owner can share'),
       registerDeviceToShare: t(
@@ -471,6 +446,9 @@ const LocalProjectSessionItem = memo(function LocalProjectSessionItem({
       tabIndex={0}
       aria-label={title}
       data-sidebar-session-id={session.id}
+      // Drag a conversation onto a chat surface to mention it there.
+      draggable
+      onDragStart={(event) => startSessionMentionDrag(event, { sessionId: session.id, title })}
       className={cn(
         'group w-full rounded-md px-2 text-left',
         'py-1',
@@ -498,6 +476,7 @@ const LocalProjectSessionItem = memo(function LocalProjectSessionItem({
           hasUnreadMessages={hasUnreadMessages}
           showMenuButton={hasContextMenuActions}
           menuLabel={moreActionsLabel}
+          openedByTree={openedByTree}
         />
         <div
           className="min-w-0 flex-1 flex items-center gap-1 truncate text-sm text-current"
@@ -553,6 +532,15 @@ const LocalProjectSessionItem = memo(function LocalProjectSessionItem({
     <ContextMenu>
       <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
       <ContextMenuContent className="min-w-[180px]">
+        <SessionRowOpenedByMenuItems
+          opener={openedByOpener}
+          goToOpener={
+            openerSessionId
+              ? () => onNavigate(openerRootSessionId ?? openerSessionId, openerSessionId)
+              : undefined
+          }
+          goToOpenerLabel={contextMenuLabels.goToOpenerSession}
+        />
         {canRename ? (
           <ContextMenuItem onSelect={beginRename}>
             <Pencil />
@@ -636,7 +624,6 @@ const LocalProjectSessionItem = memo(function LocalProjectSessionItem({
           title={title}
           isWorktree={showWorktreeIcon}
           latestMessageAt={effectiveLatestMessageAt}
-          now={now}
           repoFullName={prRepoFullName}
           folderName={projectName}
           machineName={machineName}
@@ -706,7 +693,6 @@ export type LocalProjectItemProps = {
   ) => { name?: string | null; image?: string | null } | null;
   formattedPath: string | null;
   defaultSessionTitle: string;
-  now: Date;
   selectedSessionId: string | null;
   removeProjectLabel: string;
   archiveTooltipLabel: string;
@@ -715,16 +701,43 @@ export type LocalProjectItemProps = {
   isMobile: boolean;
   toggleLabel: string;
   onNavigateProject: (machineId: MachineId, localProjectId: string) => void;
-  onNavigateSession: (sessionId: string) => void;
+  onNavigateSession: (sessionId: string, tabSessionId?: string) => void;
   onArchive: (sessionId: string) => void;
   onRenameSession?: (sessionId: string, nextTitle: string) => void | Promise<void>;
   onToggleSessionPinned?: (sessionId: string, nextPinned: boolean) => void;
   onCopySessionUrl?: (sessionId: string) => void;
   onShareSessionWithTeam?: (sessionId: string) => void;
   sessionSharingById?: ReadonlyMap<string, SessionSharingState>;
+  /** Opener session ids whose MCP-opened Sessions are collapsed in this list. */
+  collapsedOpenedBySessionIds: Record<string, boolean>;
+  onToggleOpenedBySessions: (openerSessionId: string) => void;
+  /**
+   * Maps a precise opener to the sidebar row that hosts the nesting. A Session
+   * opened from a child Tab resolves to that Tab's root Session, which is the
+   * one this list actually renders. Optional: a caller without a session cache
+   * degrades to nesting on the precise opener (identity), which is correct
+   * whenever that opener is already a root.
+   */
+  resolveOpenerRowId?: (openerSessionId: string | null | undefined) => string | null;
   onToggleCollapsed: (machineId: MachineId, localProjectId: LocalProjectId) => void;
   onRequestRemoval: (info: LocalProjectRemovalRequest) => void;
 };
+
+const LOCAL_PROJECT_SELECTION_PROP_KEYS: ReadonlySet<string> = new Set(['selectedSessionId']);
+
+/**
+ * `memo` equality for local-project sections: a `selectedSessionId` change only
+ * re-renders the project(s) containing the previously or newly selected row,
+ * instead of every project section in the sidebar. All other props fall back
+ * to identity comparison.
+ */
+function localProjectItemPropsEqual(prev: LocalProjectItemProps, next: LocalProjectItemProps) {
+  if (!shallowEqualExceptKeys(prev, next, LOCAL_PROJECT_SELECTION_PROP_KEYS)) return false;
+  if (prev.selectedSessionId === next.selectedSessionId) return true;
+  const contains = (id: string | null | undefined) =>
+    id != null && next.sessionsForProject.some((session) => session.id === id);
+  return !contains(prev.selectedSessionId) && !contains(next.selectedSessionId);
+}
 
 export const LocalProjectItem = memo(function LocalProjectItem({
   machineId,
@@ -740,7 +753,6 @@ export const LocalProjectItem = memo(function LocalProjectItem({
   resolveSessionAuthor,
   formattedPath,
   defaultSessionTitle,
-  now,
   selectedSessionId,
   removeProjectLabel,
   archiveTooltipLabel,
@@ -756,9 +768,34 @@ export const LocalProjectItem = memo(function LocalProjectItem({
   onCopySessionUrl,
   onShareSessionWithTeam,
   sessionSharingById = EMPTY_SESSION_SHARING_BY_ID,
+  collapsedOpenedBySessionIds,
+  onToggleOpenedBySessions,
+  // Default: nest on the precise opener, which is correct whenever it is a root.
+  resolveOpenerRowId = normalizeSessionRowId,
   onToggleCollapsed,
   onRequestRemoval,
 }: LocalProjectItemProps) {
+  const { t } = useTranslation();
+  // Same opened-by presentation the GitHub/Chats groups use: MCP-opened
+  // independent Sessions indent under the Session that created them, and a
+  // list with no such relationship keeps its previous flat geometry.
+  const sessionNodes = useMemo(
+    () =>
+      buildOpenedBySessionTree(sessionsForProject, {
+        getId: (session) => session.id,
+        // Nest under the opener's sidebar ROW, not necessarily the precise
+        // opener: a Session created from a child Tab belongs under that Tab's
+        // root Session, because child Tabs have no row here.
+        getOpenedBySessionId: (session) =>
+          session.openedByRootSessionId ?? resolveOpenerRowId(session.openedBySessionId),
+        isCollapsed: (openerId) => collapsedOpenedBySessionIds[openerId] === true,
+        // Same contract as the other lists: this section is sorted by latest
+        // activity, so an opener is ranked by its freshest opened Session.
+        rootRank: (session) => getEffectiveLatestMessageAt(session, childSessionsByParent),
+      }),
+    [childSessionsByParent, collapsedOpenedBySessionIds, resolveOpenerRowId, sessionsForProject]
+  );
+  const showTreeGutter = hasOpenedByTreeNesting(sessionNodes);
   const trimmedMachineName =
     typeof machineName === 'string' && machineName.trim() ? machineName.trim() : null;
   const ariaLabel = formattedPath
@@ -883,51 +920,64 @@ export const LocalProjectItem = memo(function LocalProjectItem({
 
       {!collapsed ? (
         <div className="flex flex-col gap-px">
-          {sessionsForProject.map((session) => {
+          {sessionNodes.map((node) => {
+            const session = node.item;
             const activity = getEffectiveSessionActivitySummary(
               session,
               childSessionsByParent,
               liveSessionStatuses
             );
+            const openedByTree = buildSessionRowOpenedByTreeSlot(node, t, () =>
+              onToggleOpenedBySessions(session.id)
+            );
             return (
-              <LocalProjectSessionItem
-                key={session.id}
-                session={session}
-                isWorking={activity.isWorking}
-                isWaitingPermission={activity.isWaitingPermission}
-                hasUnreadMessages={activity.hasUnreadMessages}
-                effectiveLatestMessageAt={activity.latestMessageAt}
-                defaultSessionTitle={defaultSessionTitle}
-                projectName={project.name}
-                machineName={trimmedMachineName}
-                author={resolveSessionAuthor?.(session) ?? null}
-                now={now}
-                selectedSessionId={selectedSessionId}
-                workspaceSlug={null}
-                onNavigate={onNavigateSession}
-                onArchive={onArchive}
-                onRename={onRenameSession}
-                onTogglePinned={onToggleSessionPinned}
-                onCopyUrl={onCopySessionUrl}
-                onShareWithTeam={onShareSessionWithTeam}
-                sharing={sessionSharingById.get(session.id)}
-                archiveTooltipLabel={archiveTooltipLabel}
-                archiveActionLabel={archiveActionLabel}
-                archiveConfirmLabel={archiveConfirmLabel}
-                isMobile={isMobile}
-              />
+              <SessionOpenedByTreeRow key={session.id} depth={node.depth} gutter={showTreeGutter}>
+                <LocalProjectSessionItem
+                  session={session}
+                  isWorking={activity.isWorking}
+                  isWaitingPermission={activity.isWaitingPermission}
+                  hasUnreadMessages={activity.hasUnreadMessages}
+                  effectiveLatestMessageAt={activity.latestMessageAt}
+                  defaultSessionTitle={defaultSessionTitle}
+                  projectName={project.name}
+                  machineName={trimmedMachineName}
+                  author={resolveSessionAuthor?.(session) ?? null}
+                  isSelected={session.id === selectedSessionId}
+                  workspaceSlug={null}
+                  onNavigate={onNavigateSession}
+                  onArchive={onArchive}
+                  onRename={onRenameSession}
+                  onTogglePinned={onToggleSessionPinned}
+                  onCopyUrl={onCopySessionUrl}
+                  onShareWithTeam={onShareSessionWithTeam}
+                  openerSessionId={session.openedBySessionId ?? null}
+                  openerRootSessionId={
+                    session.openedByRootSessionId ?? resolveOpenerRowId(session.openedBySessionId)
+                  }
+                  openedByTree={openedByTree}
+                  sharing={sessionSharingById.get(session.id)}
+                  archiveTooltipLabel={archiveTooltipLabel}
+                  archiveActionLabel={archiveActionLabel}
+                  archiveConfirmLabel={archiveConfirmLabel}
+                  isMobile={isMobile}
+                />
+              </SessionOpenedByTreeRow>
             );
           })}
         </div>
       ) : null}
     </div>
   );
-});
+}, localProjectItemPropsEqual);
 
 export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const router = useRouter();
-  const location = useLocation();
+  // Narrow subscription: the sidebar only derives state from pathname + search,
+  // so hash/history-state-only navigations no longer re-render the whole tree.
+  const location = useLocation({
+    select: (l) => ({ pathname: l.pathname, search: l.search }),
+  });
   const isMobile = useIsMobile();
   const multiWorkspaceAvailable = useAppCapability('multiWorkspace');
   const { openSettings } = useOpenSettings();
@@ -948,7 +998,14 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
       return null;
     }
   });
+  // Dismissing a download only hides the banner for that download; the
+  // `downloaded` banner (the one that can actually restart) comes back on its
+  // own, so this stays in memory instead of the persisted dismissal key.
+  const [dismissedDownloadingVersion, setDismissedDownloadingVersion] = useState<string | null>(
+    null
+  );
   const [isInstallingUpdate, setIsInstallingUpdate] = useState(false);
+  const [isChangelogOpen, setIsChangelogOpen] = useState(false);
 
   const defaultSessionTitle = t('sessions.untitled', 'Untitled session');
 
@@ -957,9 +1014,14 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
     setMobileDrawerOpen(false);
   }, [isMobile, setMobileDrawerOpen]);
 
-  const downloadedUpdaterVersion = useMemo(() => {
-    return readDownloadedUpdaterVersion(updaterState);
-  }, [updaterState]);
+  const updateBanner = useMemo(() => readUpdateBannerState(updaterState), [updaterState]);
+  // The changelog follows the language the UI actually rendered in, which is
+  // i18next's resolved language rather than the stored preference.
+  const resolvedLanguage = i18n.resolvedLanguage;
+  const updateReleaseNotes = useMemo(
+    () => pickLocalizedReleaseNotes(updaterState, resolvedLanguage),
+    [updaterState, resolvedLanguage]
+  );
 
   const { organizations, activeOrganization, switchOrganization } = useOrganization();
   const runtime = useAtomValue(activeWorkspaceRuntimeAtom);
@@ -994,8 +1056,6 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
     shareWithTeam: shareSessionWithTeam,
   } = useSessionSharing({ includeLocalProjectDetails: true });
   const localMachineId = useAtomValue(localMachineIdAtom);
-  // Relative-time labels ("3m ago") on session rows refresh on this tick.
-  const now = useStableNow(SIDEBAR_RELATIVE_TIME_REFRESH_MS);
   const onlineMachineIds = useOnlineMachineIds();
 
   const selectedSessionId = useMemo(() => {
@@ -1235,6 +1295,15 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
     }
     return next;
   }, [allActiveSessions, presenceNowMs, presenceStates, sessions]);
+  // `allActiveSessions` is the only view that still contains child Tabs, so it
+  // is the only place an opener→sidebar-row mapping can be resolved. Shared by
+  // every list plus the keyboard nav model so they agree on where a Session
+  // opened from a child Tab lands.
+  const resolveOpenerRowId = useMemo(
+    () => buildSidebarOpenerRowResolver(allActiveSessions),
+    [allActiveSessions]
+  );
+
   const tasks = useMemo(() => {
     const sourceSessions = sessionsListLoading ? [] : sessions;
     const filteredSessions = sourceSessions.filter((session) => session.project?.kind !== 'local');
@@ -1248,6 +1317,7 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
         members: activeOrganization?.members,
         lineChangeScope: sessionSidebarCodeChangesOnly ? 'code' : 'all',
         liveSessionStatuses,
+        resolveOpenerRowId,
       },
       allActiveSessions
     ).map((task) => ({
@@ -1261,6 +1331,7 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
     onlineMachineIds,
     liveSessionStatuses,
     machineMetaMap,
+    resolveOpenerRowId,
     scope,
     sessions,
     sessionsListLoading,
@@ -1295,6 +1366,11 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
   const [localProjectCollapseState, setLocalProjectCollapseState] = useAtom(
     localProjectCollapseStateAtom
   );
+  // Shared with SessionList (same atom) so an opener collapsed in one sidebar
+  // surface stays collapsed in the other, and with the keyboard nav model so
+  // arrow keys never visit a hidden row.
+  const collapsedOpenedBySessionIds = useAtomValue(sidebarCollapsedOpenedBySessionsAtom);
+  const handleToggleOpenedBySessions = useSetAtom(toggleSidebarCollapsedOpenedBySessionAtom);
 
   const toggleLocalProjectCollapsed = useCallback(
     (machineId: MachineId, localProjectId: LocalProjectId) => {
@@ -1390,7 +1466,6 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
     () => buildChildSessionsByParent(allActiveSessions),
     [allActiveSessions]
   );
-
   const localProjectSessionsByKey = useMemo(() => {
     const map = new Map<string, SessionMeta[]>();
     const sourceSessions = sessionsListLoading ? [] : sessions;
@@ -1433,13 +1508,23 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
     return map;
   }, [localProjectSessionsByKey]);
 
+  // The ONE session-navigation callback for every sidebar surface (rows,
+  // Updated items, keyboard nav). `tabSessionId` restores the precise child Tab
+  // that "Go to Opener Session" points at.
   const handleNavigateToSession = useCallback(
-    (sessionId: string) => {
+    (sessionId: string, tabSessionId?: string) => {
       if (!workspaceSlug) return;
       closeMobileDrawer();
       void router.navigate({
         to: '/$workspaceName/sessions/$sessionId',
         params: { workspaceName: workspaceSlug, sessionId: sessionId as SessionId },
+        ...(tabSessionId
+          ? {
+              search: {
+                tab: formatSessionTabSearch(tabSessionId, sessionId),
+              },
+            }
+          : {}),
       });
     },
     [closeMobileDrawer, router, workspaceSlug]
@@ -1577,6 +1662,8 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
         isWaitingPermission: task.isWaitingPermission,
         externalHistoryProvider: task.externalHistoryProvider ?? null,
         owner: task.owner ?? null,
+        openedBySessionId: task.openedBySessionId ?? null,
+        openedByRowSessionId: task.openedByRowSessionId ?? null,
         sharing: task.sharing,
       });
     }
@@ -1606,6 +1693,8 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
         prUrl: task.prUrl ?? null,
         externalHistoryProvider: task.externalHistoryProvider ?? null,
         owner: task.owner ?? null,
+        openedBySessionId: task.openedBySessionId ?? null,
+        openedByRowSessionId: task.openedByRowSessionId ?? null,
         addedLines: task.addedLines,
         deletedLines: task.deletedLines,
         sharing: task.sharing,
@@ -1655,6 +1744,9 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
             prReadiness: prInfo.readiness,
             prNumber: prInfo.number,
             prUrl: prInfo.url,
+            openedBySessionId: session.openedBySessionId ?? null,
+            openedByRowSessionId:
+              session.openedByRootSessionId ?? resolveOpenerRowId(session.openedBySessionId),
             sharing: sessionSharingById.get(session.id),
           });
         }
@@ -1671,6 +1763,7 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
     liveSessionStatuses,
     onlineMachineIds,
     repoSessions,
+    resolveOpenerRowId,
     resolveSessionAuthor,
     sessionsListLoading,
     sessionSharingById,
@@ -1811,7 +1904,6 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
                         resolveSessionAuthor={resolveSessionAuthor}
                         formattedPath={formattedPath}
                         defaultSessionTitle={defaultSessionTitle}
-                        now={now}
                         selectedSessionId={selectedSessionId}
                         removeProjectLabel={removeProjectLabel}
                         archiveTooltipLabel={archiveTooltipLabel}
@@ -1827,6 +1919,9 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
                         onCopySessionUrl={handleCopySessionUrl}
                         onShareSessionWithTeam={handleRequestShareSession}
                         sessionSharingById={sessionSharingById}
+                        collapsedOpenedBySessionIds={collapsedOpenedBySessionIds}
+                        onToggleOpenedBySessions={handleToggleOpenedBySessions}
+                        resolveOpenerRowId={resolveOpenerRowId}
                         onToggleCollapsed={toggleLocalProjectCollapsed}
                         onRequestRemoval={handleRequestRemoval}
                       />
@@ -1907,10 +2002,7 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
   const handleToggleGithubWorktreesSection = useCallback(() => {
     setGithubWorktreesSectionCollapsed((prev) => !prev);
   }, [setGithubWorktreesSectionCollapsed]);
-  const paidPlanTiers = useCloudQuery(
-    cloudOperations.billing.getMyPaidWorkspacePlanTiers,
-    {}
-  );
+  const paidPlanTiers = useCloudQuery(cloudOperations.billing.getMyPaidWorkspacePlanTiers, {});
   const planTierByWorkspaceId = useMemo(
     () => new Map((paidPlanTiers ?? []).map((entry) => [entry.workspaceId, entry.planTier])),
     [paidPlanTiers]
@@ -1925,18 +2017,6 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
         planTier: planTierByWorkspaceId.get(org.id) ?? null,
       }));
   }, [multiWorkspaceAvailable, organizations, planTierByWorkspaceId]);
-
-  const handleSessionSelected = useCallback(
-    (sessionId: string) => {
-      if (!workspaceSlug) return;
-      closeMobileDrawer();
-      void router.navigate({
-        to: '/$workspaceName/sessions/$sessionId',
-        params: { workspaceName: workspaceSlug, sessionId: sessionId as SessionId },
-      });
-    },
-    [closeMobileDrawer, router, workspaceSlug]
-  );
 
   // Sidebar task rows render as real anchors on web so middle/Cmd-click open the
   // session in a new browser tab. Electron deliberately returns undefined here:
@@ -2058,15 +2138,23 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
     setBugReportDialogOpen(true);
   }, [closeMobileDrawer, setBugReportDialogOpen]);
 
-  const handleDismissUpdateReady = useCallback(() => {
-    if (!downloadedUpdaterVersion) return;
-    setDismissedUpdaterVersion(downloadedUpdaterVersion);
+  const handleDismissUpdateBanner = useCallback(() => {
+    if (!updateBanner) return;
+    if (updateBanner.stage === 'downloading') {
+      setDismissedDownloadingVersion(updateBanner.version);
+      return;
+    }
+    setDismissedUpdaterVersion(updateBanner.version);
     try {
-      localStorage.setItem('lody:dismissedUpdaterVersion', downloadedUpdaterVersion);
+      localStorage.setItem('lody:dismissedUpdaterVersion', updateBanner.version);
     } catch {
       // Ignore storage errors
     }
-  }, [downloadedUpdaterVersion]);
+  }, [updateBanner]);
+
+  const handleOpenChangelogSite = useCallback(() => {
+    void openExternalUrl(getChangelogUrl(resolvedLanguage));
+  }, [resolvedLanguage]);
 
   const handleApplyDownloadedUpdate = useCallback(async () => {
     if (!isElectron || typeof window === 'undefined') return;
@@ -2127,34 +2215,31 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
 
   const sidebarBottomFloatingContent = useMemo(() => {
     if (!isElectron) return null;
-    if (!downloadedUpdaterVersion) return null;
-    if (dismissedUpdaterVersion === downloadedUpdaterVersion) return null;
+    if (!updateBanner) return null;
+    const dismissedVersion =
+      updateBanner.stage === 'downloading' ? dismissedDownloadingVersion : dismissedUpdaterVersion;
+    if (dismissedVersion === updateBanner.version) return null;
 
     return (
       <SidebarUpdateBanner
-        title={t('sidebar.updateReady.title', 'Update ready')}
-        description={t(
-          'sidebar.updateReady.description',
-          'Version {{version}} is ready. Restart to apply the update.',
-          { version: downloadedUpdaterVersion }
-        )}
-        changelogLabel={t('sidebar.updateReady.changelog', 'View changelog')}
-        restartLabel={t('sidebar.updateReady.restart', 'Update & Restart')}
-        laterLabel={t('sidebar.updateReady.later', 'Later')}
+        stage={updateBanner.stage}
+        version={updateBanner.version}
+        percent={updateBanner.percent}
         isRestarting={isInstallingUpdate}
+        onViewChangelog={() => setIsChangelogOpen(true)}
         onRestart={() => {
           void handleApplyDownloadedUpdate();
         }}
-        onLater={handleDismissUpdateReady}
+        onLater={handleDismissUpdateBanner}
       />
     );
   }, [
+    dismissedDownloadingVersion,
     dismissedUpdaterVersion,
-    downloadedUpdaterVersion,
     handleApplyDownloadedUpdate,
-    handleDismissUpdateReady,
+    handleDismissUpdateBanner,
     isInstallingUpdate,
-    t,
+    updateBanner,
   ]);
 
   const githubWorktreesLabel = useMemo(() => t('sidebar.githubWorktrees', 'GitHub Worktrees'), [t]);
@@ -2198,7 +2283,8 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
       }
       selectedSessionId={selectedSessionId}
       activeGroupKey={activeNewSessionGroup}
-      onSelectSession={handleSessionSelected}
+      onSelectSession={handleNavigateToSession}
+      onNavigateSessionTab={handleNavigateToSession}
       onArchiveSession={handleArchiveSession}
       onRenameSession={handleRenameSession}
       onTogglePinSession={handleTogglePinSession}
@@ -2240,7 +2326,8 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
       isLoading: githubWorktreesSectionCollapsed ? false : sessionsListLoading,
       selectedSessionId: selectedSessionId,
       activeGroupKey: activeNewSessionGroup,
-      onSelectSession: handleSessionSelected,
+      onSelectSession: handleNavigateToSession,
+      onNavigateSessionTab: handleNavigateToSession,
       onArchiveSession: handleArchiveSession,
       onRenameSession: handleRenameSession,
       onTogglePinSession: handleTogglePinSession,
@@ -2264,7 +2351,7 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
       handleMoveRepo,
       handleNavigateToNewSession,
       handleOpenTaskPullRequest,
-      handleSessionSelected,
+      handleNavigateToSession,
       handleToggleRepoCollapsed,
       workspaceRepoSessions,
       repos,
@@ -2274,7 +2361,7 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
   );
 
   const updatedSelectedItemId = selectedSessionId ?? null;
-  const handleSelectUpdatedItem = handleSessionSelected;
+  const handleSelectUpdatedItem = handleNavigateToSession;
 
   const [updatedBucketCollapseState, setUpdatedBucketCollapseState] = useAtom(
     sidebarUpdatedBucketCollapseStateAtom
@@ -2334,7 +2421,14 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
           machineId,
           localProjectId: project.id,
           collapsed,
-          sessions: sessionsForProject.map((s) => ({ id: s.id })),
+          // Mirror exactly what LocalProjectItem renders: same nesting target and
+          // the same group ranking, or arrow keys drift from the visible order.
+          sessions: sessionsForProject.map((s) => ({
+            id: s.id,
+            openedByRowSessionId:
+              s.openedByRootSessionId ?? resolveOpenerRowId(s.openedBySessionId),
+            rootRankMs: getEffectiveLatestMessageAt(s, childSessionsByParent),
+          })),
         });
       }
       result.push({
@@ -2344,9 +2438,11 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
     }
     return result;
   }, [
+    childSessionsByParent,
     localProjectSections,
     localProjectCollapseState,
     localProjectsSectionCollapseState,
+    resolveOpenerRowId,
     workspaceLocalProjectSessionsByKey,
   ]);
 
@@ -2365,7 +2461,7 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
 
   const keyboardNavCallbacks = useMemo<import('@/atoms/focus-layer').SidebarNavCallbacks>(
     () => ({
-      onNavigateToSession: handleSessionSelected,
+      onNavigateToSession: handleNavigateToSession,
       onNavigateToNewSession: handleNavigateToNewSession,
       onToggleRepoCollapsed: handleToggleRepoCollapsed,
       onToggleChatsCollapsed: handleToggleChatsCollapsed,
@@ -2402,7 +2498,7 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
       },
     }),
     [
-      handleSessionSelected,
+      handleNavigateToSession,
       handleNavigateToNewSession,
       handleToggleRepoCollapsed,
       handleToggleChatsCollapsed,
@@ -2416,6 +2512,7 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
       buildSidebarNavigationItems({
         organizeMode,
         showFullSessionGroups,
+        collapsedOpenedBySessions: collapsedOpenedBySessionIds,
         pinnedItems,
         pinnedSectionCollapsed,
         workspace: {
@@ -2434,6 +2531,7 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
       }),
     [
       chatsCollapsed,
+      collapsedOpenedBySessionIds,
       githubWorktreesSectionCollapsed,
       keyboardNavLocalSections,
       organizeMode,
@@ -2543,6 +2641,17 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
           void handleConfirmSessionShare();
         }}
       />
+
+      {updateBanner ? (
+        <UpdateChangelogDialog
+          open={isChangelogOpen}
+          onOpenChange={setIsChangelogOpen}
+          version={updateBanner.version}
+          releaseDate={updaterState?.releaseDate}
+          notes={updateReleaseNotes}
+          onOpenChangelogSite={handleOpenChangelogSite}
+        />
+      ) : null}
 
       <Dialog
         open={pendingLocalProjectRemoval != null}

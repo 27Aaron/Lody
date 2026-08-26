@@ -16,6 +16,11 @@ import {
 } from '@/atoms/machine-flock';
 import { activeWorkspaceRuntimeAtom, type WorkspaceRuntime } from '@/atoms/runtime';
 import { readinessBinding } from '@/lib/room-readiness';
+import {
+  flockVersionTokensEqual,
+  readFlockVersionToken,
+  type FlockVersionToken,
+} from '@/lib/flock-version';
 
 type MachineFlockDocHandle = Awaited<ReturnType<WorkspaceRuntime['repo']['openFlockDoc']>>;
 type MachineFlockRoomSubscription = Awaited<ReturnType<MachineFlockDocHandle['joinRoom']>>;
@@ -31,10 +36,13 @@ type MachineFlockRowsSyncResult = {
 };
 
 type MachineFlockRowsSnapshot = {
-  rows: MachineFlockRowMap;
+  rows:
+    | MachineFlockRowMap
+    | ((readOptions: ReadMachineFlockRowsOptions | undefined) => MachineFlockRowMap);
   mode?: 'replace' | 'merge';
   preserveExistingOnEmpty?: boolean;
   syncedRemote?: boolean;
+  version?: FlockVersionToken | null;
 };
 
 type UseMachineFlockRowsOptions = {
@@ -92,49 +100,68 @@ type SharedMachineFlockEvents = {
   unsubscribe: () => void;
 };
 
-// Which (machine, families) pairs this Jotai store has already read in full
-// from the local Flock. The full read is an O(whole-flock) wasm scan, and once
-// it has happened the shared subscription in `acquireMachineFlockEvents` keeps
-// the atom current incrementally — so a LATER consumer mounting against the
-// same store must not repeat it. Without this, every chat-surface mount
-// re-scanned the machine Flock, i.e. once per session switch.
-//
-// The entry is dropped the moment this store stops receiving events for that
-// machine (the only way its rows can silently go stale), so correctness rests
-// on the release path in `acquireMachineFlockEvents`, not on a timer.
-const MACHINE_FLOCK_LOCAL_READ_DONE = new WeakMap<
+// Materialized Flock versions are scoped by row-family projection. A document
+// version alone is not enough: two consumers can read different families from
+// the same machine at the same version. While a store holds the live event
+// subscription, each materialized projection advances with those events and a
+// later mount can skip the synchronous wasm scan.
+const MACHINE_FLOCK_MATERIALIZED_VERSIONS = new WeakMap<
   MachineFlockRowsStore,
-  Map<string, Set<string>>
+  Map<
+    string,
+    {
+      readonly runtime: WorkspaceRuntime;
+      readonly versionsByFamily: Map<string, FlockVersionToken>;
+    }
+  >
 >();
 
-function hasFreshLocalMachineFlockRows(
+function hasMaterializedMachineFlockVersion(
   store: MachineFlockRowsStore,
+  runtime: WorkspaceRuntime,
   cacheKey: string,
-  familiesKey: string
+  familiesKey: string,
+  version: FlockVersionToken | null
 ): boolean {
-  return MACHINE_FLOCK_LOCAL_READ_DONE.get(store)?.get(cacheKey)?.has(familiesKey) ?? false;
+  const entry = MACHINE_FLOCK_MATERIALIZED_VERSIONS.get(store)?.get(cacheKey);
+  return (
+    entry?.runtime === runtime &&
+    flockVersionTokensEqual(entry.versionsByFamily.get(familiesKey), version)
+  );
 }
 
-function markLocalMachineFlockRowsFresh(
+function markMaterializedMachineFlockVersion(
   store: MachineFlockRowsStore,
+  runtime: WorkspaceRuntime,
   cacheKey: string,
-  familiesKey: string
+  familiesKey: string,
+  version: FlockVersionToken
 ): void {
-  let byCacheKey = MACHINE_FLOCK_LOCAL_READ_DONE.get(store);
+  let byCacheKey = MACHINE_FLOCK_MATERIALIZED_VERSIONS.get(store);
   if (!byCacheKey) {
     byCacheKey = new Map();
-    MACHINE_FLOCK_LOCAL_READ_DONE.set(store, byCacheKey);
+    MACHINE_FLOCK_MATERIALIZED_VERSIONS.set(store, byCacheKey);
   }
-  let families = byCacheKey.get(cacheKey);
-  if (!families) {
-    families = new Set();
-    byCacheKey.set(cacheKey, families);
+  let entry = byCacheKey.get(cacheKey);
+  if (!entry || entry.runtime !== runtime) {
+    entry = { runtime, versionsByFamily: new Map() };
+    byCacheKey.set(cacheKey, entry);
   }
-  families.add(familiesKey);
+  entry.versionsByFamily.set(familiesKey, version);
 }
 
-function clearLocalMachineFlockRowsFresh(store: MachineFlockRowsStore, cacheKey: string): void {
-  MACHINE_FLOCK_LOCAL_READ_DONE.get(store)?.delete(cacheKey);
+function advanceMaterializedMachineFlockVersions(
+  store: MachineFlockRowsStore,
+  runtime: WorkspaceRuntime,
+  cacheKey: string,
+  version: FlockVersionToken | null
+): void {
+  if (!version) return;
+  const entry = MACHINE_FLOCK_MATERIALIZED_VERSIONS.get(store)?.get(cacheKey);
+  if (!entry || entry.runtime !== runtime) return;
+  for (const familiesKey of entry.versionsByFamily.keys()) {
+    entry.versionsByFamily.set(familiesKey, version);
+  }
 }
 
 const MACHINE_FLOCK_ROWS_SYNC_STATE = new Map<string, MachineFlockRowsSyncEntry>();
@@ -195,8 +222,9 @@ async function measureMachineFlockRowsAsync<T>(label: string, fn: () => Promise<
 }
 
 // Mounted `useMachineFlockRowsByMachineIds` consumers register a listener per
-// machine so an explicit re-sync can publish its fresh full snapshot alongside
-// the live room's incremental Flock events.
+// machine so an explicit re-sync can publish alongside the live room's
+// incremental Flock events. Resync rows may be lazy: every listener checks its
+// projection version before paying for a family-scoped Wasm scan.
 type MachineFlockRowsListener = (snapshot: MachineFlockRowsSnapshot) => void;
 const MACHINE_FLOCK_ROWS_LISTENERS = new Map<string, Set<MachineFlockRowsListener>>();
 
@@ -402,12 +430,15 @@ function acquireMachineFlockEvents(
       unsubscribe: handle.flock.subscribe((batch) => {
         const events = (batch as { events?: MachineFlockEvent[] }).events ?? [];
         if (events.length === 0) return;
+        const cacheKey = getMachineFlockRowsCacheKey(runtime.workspaceId, machineId);
+        const version = readFlockVersionToken(handle.flock);
         for (const activeStore of refCountsByStore.keys()) {
           activeStore.set(applyMachineFlockRowEventsForMachineAtom, {
             workspaceId: runtime.workspaceId,
             machineId,
             events,
           });
+          advanceMaterializedMachineFlockVersions(activeStore, runtime, cacheKey, version);
         }
       }),
     };
@@ -425,12 +456,6 @@ function acquireMachineFlockEvents(
       return;
     }
     sharedEvents.refCountsByStore.delete(store);
-    // This store no longer receives incremental Flock events for the machine,
-    // so its rows may drift; the next consumer must do a real local read.
-    clearLocalMachineFlockRowsFresh(
-      store,
-      getMachineFlockRowsCacheKey(runtime.workspaceId, machineId)
-    );
     if (sharedEvents.refCountsByStore.size > 0) return;
     if (eventsByMachineId.get(machineId) === sharedEvents) {
       eventsByMachineId.delete(machineId);
@@ -538,11 +563,13 @@ export async function resyncMachineFlockRows(
   const cacheKey = getMachineFlockRowsCacheKey(runtime.workspaceId, normalizedMachineId);
   const handle = await openMachineFlockDoc(runtime, normalizedMachineId);
   const syncResult = await syncMachineFlockRowsOnce(cacheKey, handle, { force: true });
+  const version = readFlockVersionToken(handle.flock);
   notifyMachineFlockRowsCache(cacheKey, {
-    rows: readMachineFlockRowsSnapshot(handle, undefined, 'resync'),
+    rows: (readOptions) => readMachineFlockRowsSnapshot(handle, readOptions, 'resync'),
     mode: 'merge',
     preserveExistingOnEmpty: true,
     syncedRemote: syncResult.syncedRemote,
+    version,
   });
   if (options.requireRemoteSync && !syncResult.syncedRemote) {
     throw new Error(`Failed to sync Machine Flock rows for ${normalizedMachineId}`);
@@ -560,7 +587,7 @@ export function useMachineFlockRows(
   );
   const rowsByMachineId = useMachineFlockRowsByMachineIds(machineIds, options);
   return normalizedMachineId
-    ? (rowsByMachineId.get(normalizedMachineId) ?? EMPTY_MACHINE_FLOCK_ROWS)
+    ? rowsByMachineId.get(normalizedMachineId) ?? EMPTY_MACHINE_FLOCK_ROWS
     : EMPTY_MACHINE_FLOCK_ROWS;
 }
 
@@ -652,9 +679,12 @@ export function useMachineFlockRowsByMachineIdsState(
     if (!runtime) return;
 
     for (const machineId of normalizedMachineIds) {
+      const cacheKey = getMachineFlockRowsCacheKey(runtime.workspaceId, machineId);
       const remoteEnabled = syncRemote && (normalizedRemoteMachineIds?.has(machineId) ?? true);
       const presenceAware = normalizedRemoteMachineIds !== null;
-      const workKey = `${familiesKey}\0${readLocal ? 'read-local' : 'skip-local'}\0${remoteEnabled ? 'remote' : 'local'}\0${presenceAware ? 'presence-aware' : 'unscoped'}\0${remoteSyncDelayMs}`;
+      const workKey = `${familiesKey}\0${readLocal ? 'read-local' : 'skip-local'}\0${
+        remoteEnabled ? 'remote' : 'local'
+      }\0${presenceAware ? 'presence-aware' : 'unscoped'}\0${remoteSyncDelayMs}`;
       const previousTask = activeTasks.get(machineId);
       if (
         previousTask?.runtime === runtime &&
@@ -715,32 +745,58 @@ export function useMachineFlockRowsByMachineIdsState(
       };
       const publishSnapshot = (snapshot: MachineFlockRowsSnapshot): void => {
         if (!isCurrent()) return;
+        if (
+          snapshot.version &&
+          hasMaterializedMachineFlockVersion(
+            machineFlockRowsStore,
+            runtime,
+            cacheKey,
+            familiesKey,
+            snapshot.version
+          )
+        ) {
+          if (snapshot.syncedRemote) markRemoteSynced();
+          return;
+        }
+        const rows =
+          typeof snapshot.rows === 'function' ? snapshot.rows(readOptions) : snapshot.rows;
         setMachineFlockRowsForMachine({
           workspaceId: runtime.workspaceId,
           machineId,
-          rows: snapshot.rows,
+          rows,
           mode: snapshot.mode,
           preserveExistingOnEmpty: snapshot.preserveExistingOnEmpty,
         });
+        if (snapshot.version) {
+          markMaterializedMachineFlockVersion(
+            machineFlockRowsStore,
+            runtime,
+            cacheKey,
+            familiesKey,
+            snapshot.version
+          );
+        }
         if (snapshot.syncedRemote) {
           markRemoteSynced();
         }
       };
 
       void (async () => {
-        const cacheKey = getMachineFlockRowsCacheKey(runtime.workspaceId, machineId);
         addCleanup(subscribeMachineFlockRowsCache(cacheKey, publishSnapshot));
 
         const handle = await openMachineFlockDoc(runtime, machineId);
         if (!isCurrent()) return;
 
-        // Skipping the read is only safe because the subscription acquired
-        // immediately below has been alive continuously since the read that set
-        // this marker — the read and the subscribe are adjacent synchronous
-        // statements, so no event can land between them.
+        const localVersion = readFlockVersionToken(handle.flock);
         if (
           readLocal &&
-          !hasFreshLocalMachineFlockRows(machineFlockRowsStore, cacheKey, familiesKey)
+          !hasMaterializedMachineFlockVersion(
+            machineFlockRowsStore,
+            runtime,
+            cacheKey,
+            familiesKey,
+            localVersion
+          )
         ) {
           publishSnapshot({
             rows: readMachineFlockRowsSnapshot(handle, readOptions, 'local'),
@@ -749,12 +805,19 @@ export function useMachineFlockRowsByMachineIdsState(
           });
         }
         addCleanup(acquireMachineFlockEvents(runtime, machineId, handle, machineFlockRowsStore));
-        // Only after the subscription is held: a cancelled task already ran its
-        // cleanup above, which cleared the marker, and re-setting it here would
-        // leave the store claiming freshness it no longer receives events for.
+        // Record the version only after the subscription is held, so an event
+        // cannot land between the snapshot and the live tail.
         if (!isCurrent()) return;
         if (readLocal) {
-          markLocalMachineFlockRowsFresh(machineFlockRowsStore, cacheKey, familiesKey);
+          if (localVersion) {
+            markMaterializedMachineFlockVersion(
+              machineFlockRowsStore,
+              runtime,
+              cacheKey,
+              familiesKey,
+              localVersion
+            );
+          }
         }
 
         if (!remoteEnabled) return;
@@ -787,12 +850,33 @@ export function useMachineFlockRowsByMachineIdsState(
             // Dual-homed rooms reject the merged `firstSyncedWithRemote`;
             // readiness is the selected binding's first sync.
             await roomLease.firstSyncedWithRemote;
-            publishSnapshot({
-              rows: readMachineFlockRowsSnapshot(handle, readOptions, 'remote'),
-              mode: 'merge',
-              preserveExistingOnEmpty: true,
-              syncedRemote: true,
-            });
+            if (!isCurrent()) return;
+            const remoteVersion = readFlockVersionToken(handle.flock);
+            if (
+              !hasMaterializedMachineFlockVersion(
+                machineFlockRowsStore,
+                runtime,
+                cacheKey,
+                familiesKey,
+                remoteVersion
+              )
+            ) {
+              publishSnapshot({
+                rows: readMachineFlockRowsSnapshot(handle, readOptions, 'remote'),
+                mode: 'merge',
+                preserveExistingOnEmpty: true,
+              });
+              if (remoteVersion) {
+                markMaterializedMachineFlockVersion(
+                  machineFlockRowsStore,
+                  runtime,
+                  cacheKey,
+                  familiesKey,
+                  remoteVersion
+                );
+              }
+            }
+            markRemoteSynced();
           })().catch(() => undefined);
         };
         if (remoteSyncDelayMs > 0) {
@@ -851,7 +935,9 @@ export function useMachineFlockRowsByMachineIdsState(
     for (const machineId of normalizedMachineIds) {
       const remoteEnabled = syncRemote && (normalizedRemoteMachineIds?.has(machineId) ?? true);
       if (!remoteEnabled) continue;
-      const workKey = `${familiesKey}\0${readLocal ? 'read-local' : 'skip-local'}\0remote\0${presenceAware ? 'presence-aware' : 'unscoped'}\0${remoteSyncDelayMs}`;
+      const workKey = `${familiesKey}\0${readLocal ? 'read-local' : 'skip-local'}\0remote\0${
+        presenceAware ? 'presence-aware' : 'unscoped'
+      }\0${remoteSyncDelayMs}`;
       const record = remoteSyncState.get(machineId);
       if (
         record?.runtime === runtime &&

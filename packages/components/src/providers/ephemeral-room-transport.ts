@@ -1,12 +1,12 @@
 import {
   EphemeralStoreAdaptor,
   EphemeralStreamCrdt,
-  createStreamUrl,
   type EphemeralStreamSubscription,
 } from '@loro-dev/streams-crdt/loro';
 import type { EphemeralStore } from 'loro-crdt';
 import {
   LORO_STREAMS_BUCKET_ID,
+  createLoroStreamUrl,
   getLoroMetaStreamId,
   getLoroStreamsPresenceBaseUrl,
   pickLoroStreamsPresenceShardId,
@@ -45,6 +45,24 @@ export const EPHEMERAL_STATUS_TO_SYNC_STATE: Record<string, RoomSyncState> = {
   error: 'error',
 };
 
+// A first join that never completes surfaces no terminal status: the library
+// retries the SSE connect forever while the room reports 'connecting', so the
+// workspace reconnect loop (which only reacts to 'error'/'disconnected') never
+// intervenes and the room is silently dead for the whole page lifetime. The
+// watchdog bounds that silence: a room that hasn't reached 'synced' by the
+// deadline is restarted on a freshly drawn presence shard, so a stalled host
+// or an exhausted per-host connection budget gets a new draw instead of a
+// permanent empty presence set.
+const EPHEMERAL_JOIN_WATCHDOG_BASE_MS = 20_000;
+const EPHEMERAL_JOIN_WATCHDOG_MAX_MS = 120_000;
+
+export type EphemeralRoomStartArgs = {
+  baseUrl: string;
+  auth: EphemeralRoomAuthCallback;
+  /** Hosted shard topology (bare host suffix) injected at runtime; absent for unsharded gateways. */
+  shardHostSuffix?: string;
+};
+
 export type EphemeralRoomBaseOptions = {
   workspaceId: WorkspaceId;
   /**
@@ -77,9 +95,15 @@ export abstract class EphemeralRoomTransport<
   private detachStoreListener: (() => void) | null = null;
   protected generation = 0;
   protected streamUrl: string | null = null;
-  protected readonly presenceShardId: LoroStreamsPresenceShardId;
+  // Mutable: the join watchdog re-draws the shard on restart so a retry never
+  // re-queues on the same stalled host. A fixed options.presenceShardId
+  // (tests) is never re-drawn.
+  protected presenceShardId: LoroStreamsPresenceShardId;
   private syncState: RoomSyncState = 'idle';
   private readonly syncStateListeners = new Set<(state: RoomSyncState) => void>();
+  private joinWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
+  private joinWatchdogAttempt = 0;
+  private lastStartArgs: EphemeralRoomStartArgs | null = null;
 
   constructor(protected readonly options: TOptions) {
     this.presenceShardId = options.presenceShardId ?? pickLoroStreamsPresenceShardId();
@@ -103,13 +127,18 @@ export abstract class EphemeralRoomTransport<
 
   abstract shouldRestartOnExternalWake(nowMs?: number): boolean;
 
-  start(args: { baseUrl: string; auth: EphemeralRoomAuthCallback }): void {
+  start(args: EphemeralRoomStartArgs): void {
     void this.teardownResources(`failed to close previous ${this.roomLabel}`);
+    this.lastStartArgs = args;
     const generation = (this.generation += 1);
-    const durableStreamUrl = createStreamUrl({
+    const durableStreamUrl = createLoroStreamUrl({
       bucketId: LORO_STREAMS_BUCKET_ID,
       streamId: getLoroMetaStreamId(this.options.workspaceId),
-      baseUrl: getLoroStreamsPresenceBaseUrl(args.baseUrl, this.presenceShardId),
+      baseUrl: getLoroStreamsPresenceBaseUrl(
+        args.baseUrl,
+        this.presenceShardId,
+        args.shardHostSuffix
+      ),
     });
     const store = this.createStore();
     const streamUrl = this.tagStreamUrl(durableStreamUrl);
@@ -150,6 +179,7 @@ export abstract class EphemeralRoomTransport<
 
   async stop(): Promise<void> {
     this.generation += 1;
+    this.lastStartArgs = null;
     this.setSyncState('idle');
     this.onBeforeStop();
     await this.teardownResources(`failed to close ${this.roomLabel}`);
@@ -158,9 +188,54 @@ export abstract class EphemeralRoomTransport<
   protected setSyncState(next: RoomSyncState): void {
     if (this.syncState === next) return;
     this.syncState = next;
+    if (next === 'synced') {
+      this.joinWatchdogAttempt = 0;
+      this.clearJoinWatchdog();
+    } else if (next === 'connecting' || next === 'reconnecting') {
+      // States the library can sit in forever without ever reporting a
+      // terminal status; bound them with the join watchdog.
+      this.scheduleJoinWatchdog();
+    } else {
+      // 'error'/'disconnected'/'idle': the workspace reconnect loop (or stop)
+      // owns recovery from terminal states.
+      this.clearJoinWatchdog();
+    }
     for (const listener of Array.from(this.syncStateListeners)) {
       listener(next);
     }
+  }
+
+  private scheduleJoinWatchdog(): void {
+    if (this.joinWatchdogTimer !== null || this.lastStartArgs === null) return;
+    const generation = this.generation;
+    const delayMs = Math.min(
+      EPHEMERAL_JOIN_WATCHDOG_BASE_MS * 2 ** Math.min(this.joinWatchdogAttempt, 3),
+      EPHEMERAL_JOIN_WATCHDOG_MAX_MS
+    );
+    this.joinWatchdogTimer = setTimeout(() => {
+      this.joinWatchdogTimer = null;
+      if (generation !== this.generation) return;
+      const state = this.syncState;
+      if (state !== 'connecting' && state !== 'reconnecting') return;
+      const args = this.lastStartArgs;
+      if (!args) return;
+      this.joinWatchdogAttempt += 1;
+      if (this.options.presenceShardId == null) {
+        this.presenceShardId = pickLoroStreamsPresenceShardId();
+      }
+      this.warn(`restarting stalled ${this.roomLabel}`, {
+        syncState: state,
+        attempt: this.joinWatchdogAttempt,
+        presenceShardId: this.presenceShardId,
+      });
+      this.start(args);
+    }, delayMs);
+  }
+
+  private clearJoinWatchdog(): void {
+    if (this.joinWatchdogTimer === null) return;
+    clearTimeout(this.joinWatchdogTimer);
+    this.joinWatchdogTimer = null;
   }
 
   protected async teardownResources(closeErrorMessage: string): Promise<void> {

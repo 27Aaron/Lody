@@ -73,6 +73,8 @@ export default defineConfig({
         index: path.resolve(__dirname, 'src/index.ts'),
         'codex-acp': path.resolve(__dirname, 'src/codex-acp-entry.ts'),
         'claude-acp': path.resolve(__dirname, 'src/claude-acp-entry.ts'),
+        'deepseek-acp': path.resolve(__dirname, 'src/deepseek-acp-entry.ts'),
+        'grok-acp': path.resolve(__dirname, 'src/grok-acp-entry.ts'),
         'diff-worker': path.resolve(__dirname, 'src/lib/code-collab/diff-worker.ts'),
         'file-index-scan-worker': path.resolve(
           __dirname,

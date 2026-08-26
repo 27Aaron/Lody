@@ -4,11 +4,20 @@ import type { BillingOverviewData } from './billing-setting-pure';
 
 const billingOverviewSchema: z.ZodType<BillingOverviewData> = z.object({
   billingAccountId: z.string().nullable(),
+  giftStackingSupported: z.boolean().catch(false),
   effectivePlanTier: z.enum(['free', 'plus', 'enterprise']),
   entitlementSource: z.enum(['free', 'stripe', 'stripe_gift', 'enterprise']),
   offerKey: z.string().nullable(),
   yearlyEarlyBirdEligible: z.boolean(),
   promotionalEntitlementEndsAt: z.number().nullable(),
+  giftStartsAt: z.number().nullable().catch(null),
+  giftEndsAt: z.number().nullable().catch(null),
+  nextBillingAt: z.number().nullable().catch(null),
+  autoRenewAfterGift: z.boolean().catch(false),
+  canResumeAfterGift: z.boolean().catch(false),
+  scheduledBillingInterval: z.enum(['month', 'year']).nullable().catch(null),
+  scheduleManaged: z.boolean().catch(false),
+  subscriptionSetupPending: z.boolean().catch(false),
   checkoutPending: z.boolean(),
   checkoutInterval: z.enum(['month', 'year']).nullable(),
   subscriptionStatus: z.string().nullable(),
@@ -42,11 +51,20 @@ const billingOverviewCache = createLocalStorageCache(
  */
 export const OPTIMISTIC_BILLING_OVERVIEW: BillingOverviewData = {
   billingAccountId: null,
+  giftStackingSupported: false,
   effectivePlanTier: 'free',
   entitlementSource: 'free',
   offerKey: null,
   yearlyEarlyBirdEligible: false,
   promotionalEntitlementEndsAt: null,
+  giftStartsAt: null,
+  giftEndsAt: null,
+  nextBillingAt: null,
+  autoRenewAfterGift: false,
+  canResumeAfterGift: false,
+  scheduledBillingInterval: null,
+  scheduleManaged: false,
+  subscriptionSetupPending: false,
   checkoutPending: false,
   checkoutInterval: null,
   subscriptionStatus: null,
@@ -93,11 +111,20 @@ export function areBillingOverviewsEqual(
 
   return (
     left.billingAccountId === right.billingAccountId &&
+    left.giftStackingSupported === right.giftStackingSupported &&
     left.effectivePlanTier === right.effectivePlanTier &&
     left.entitlementSource === right.entitlementSource &&
     left.offerKey === right.offerKey &&
     left.yearlyEarlyBirdEligible === right.yearlyEarlyBirdEligible &&
     left.promotionalEntitlementEndsAt === right.promotionalEntitlementEndsAt &&
+    left.giftStartsAt === right.giftStartsAt &&
+    left.giftEndsAt === right.giftEndsAt &&
+    left.nextBillingAt === right.nextBillingAt &&
+    left.autoRenewAfterGift === right.autoRenewAfterGift &&
+    left.canResumeAfterGift === right.canResumeAfterGift &&
+    left.scheduledBillingInterval === right.scheduledBillingInterval &&
+    left.scheduleManaged === right.scheduleManaged &&
+    left.subscriptionSetupPending === right.subscriptionSetupPending &&
     left.checkoutPending === right.checkoutPending &&
     left.checkoutInterval === right.checkoutInterval &&
     left.subscriptionStatus === right.subscriptionStatus &&

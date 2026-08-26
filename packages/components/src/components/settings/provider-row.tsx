@@ -4,7 +4,6 @@ import { useAtomValue } from 'jotai';
 import { Loader2, RefreshCw, Trash2 } from 'lucide-react';
 import {
   REGISTRY_ACP_AGENTS,
-  isBuiltinAgentType,
   type AgentConfigCliType,
   type AgentConfigMeta,
   type MachineAcpBinaryProgressMessage,
@@ -28,10 +27,12 @@ import { cn } from '@/lib/utils';
 import { activeWorkspaceRuntimeAtom } from '@/atoms/runtime';
 import { useMachineAcpBinaryProgress } from '@/hooks/use-machine-acp-binary-progress';
 import { AgentIcon } from '@/components/icons/agent-icon';
-import { AcpAuthenticationPanel } from './acp-authentication-panel';
+import { CodexResetForecastChip } from '@/components/codex-reset/codex-reset-forecast-entry';
+import { canShowCodexResetForecast } from '@/lib/codex-reset-forecast';
 import {
   canShowSubscriptionRateLimits,
   formatRateLimitWindowShortLabel,
+  getAgentRateLimitEntries,
   getAgentRateLimitWindows,
 } from '@/lib/session-usage';
 
@@ -43,6 +44,8 @@ export type ProviderRowProps = {
   onRefresh?: (config: AgentConfigMeta) => Promise<void>;
 };
 
+/** One provider entry. Signing in again lives in the provider's detail dialog
+ *  (`AgentConfigDialog`), not here: only some providers can sign in at all. */
 export function ProviderRow({ config, machine, onEdit, onDelete, onRefresh }: ProviderRowProps) {
   const { t } = useTranslation();
   const { cliType, agentType } = config;
@@ -57,16 +60,17 @@ export function ProviderRow({ config, machine, onEdit, onDelete, onRefresh }: Pr
   // Compact usage meters shown inline after the provider name.
   const rateLimitWindows = useMemo(() => {
     if (!showRateLimits || !machine?.raceLimits) return [];
-    for (const [key, limits] of Object.entries(machine.raceLimits)) {
-      if (parseRateLimitEntryKey(key).cliType !== agentType) continue;
-      const windows = getAgentRateLimitWindows(limits, agentType);
+    for (const entry of getAgentRateLimitEntries(machine.raceLimits, agentType)) {
+      const windows = getAgentRateLimitWindows(entry.limits);
       if (windows.length > 0) return windows;
     }
     return [];
   }, [showRateLimits, machine?.raceLimits, agentType]);
 
+  // Codex-only: the third-party reset forecast for OpenAI's own usage limits.
+  const showResetForecast = canShowCodexResetForecast({ cliType, agentType, config });
+
   const typeBadge = cliType === 'builtin' ? null : cliType === 'custom' ? 'Custom' : 'Registry';
-  const canReauthenticate = cliType === 'builtin' && isBuiltinAgentType(agentType);
 
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -144,12 +148,15 @@ export function ProviderRow({ config, machine, onEdit, onDelete, onRefresh }: Pr
           </div>
         </button>
         <div className="flex shrink-0 items-center gap-2 py-1.5 pr-3 text-xs text-muted-foreground">
+          {/* Not mounted at all when ineligible, so a non-Codex row costs no
+              store subscription and no clock tick. */}
+          {showResetForecast ? <CodexResetForecastChip enabled /> : null}
           {rateLimitWindows.length > 0 && (
             <div className="hidden items-center gap-2.5 sm:flex">
               {rateLimitWindows.map((window, index) => (
                 <RateLimitMeter
-                  key={`${window.windowDurationMins ?? 'unknown'}-${index}`}
-                  label={formatRateLimitWindowShortLabel(window.windowDurationMins)}
+                  key={`${window.windowDurationSeconds ?? 'unknown'}-${index}`}
+                  label={formatRateLimitWindowShortLabel(window.windowDurationSeconds)}
                   remainingPercent={window.remainingPercent}
                 />
               ))}
@@ -205,28 +212,13 @@ export function ProviderRow({ config, machine, onEdit, onDelete, onRefresh }: Pr
         <div className="flex flex-wrap items-center gap-x-5 gap-y-1 px-3 pb-2.5 pt-0.5 sm:hidden">
           {rateLimitWindows.map((window, index) => (
             <RateLimitMeter
-              key={`${window.windowDurationMins ?? 'unknown'}-${index}`}
-              label={formatRateLimitWindowShortLabel(window.windowDurationMins)}
+              key={`${window.windowDurationSeconds ?? 'unknown'}-${index}`}
+              label={formatRateLimitWindowShortLabel(window.windowDurationSeconds)}
               remainingPercent={window.remainingPercent}
             />
           ))}
         </div>
       )}
-      {canReauthenticate ? (
-        <div className="px-3 pb-2.5 pt-0.5 sm:ps-11">
-          <AcpAuthenticationPanel
-            machineId={machine?.id ?? config.machineId}
-            configId={config.id}
-            cliType={config.cliType}
-            agentType={config.agentType}
-            customAcp={config.customAcp}
-            runtimeOverrides={config.runtimeOverrides}
-            env={config.env}
-            compact
-            reauthentication
-          />
-        </div>
-      ) : null}
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>

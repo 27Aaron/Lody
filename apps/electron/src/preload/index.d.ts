@@ -3,6 +3,7 @@ import type {
   CheckForElectronUpdateResult,
   CopyImageToClipboardInput,
   CopyImageToClipboardResult,
+  DesktopOnboardingCompleteResult,
   ElectronAutoLaunchStatusResult,
   ElectronAuthCallbackInput,
   ElectronAuthCallbackSession,
@@ -160,6 +161,8 @@ type LodyRendererApi = {
     resize: (terminalId: string, cols: number, rows: number) => void
     close: (terminalId: string) => void
     closeSession: (sessionId: string) => void
+    readClipboardText: () => string
+    writeClipboardText: (text: string) => void
     onData: (handler: (event: TerminalDataEvent) => void) => () => void
     onExit: (handler: (event: TerminalExitEvent) => void) => () => void
     onTitle: (handler: (event: TerminalTitleEvent) => void) => () => void
@@ -235,6 +238,7 @@ type LodyRendererApi = {
   onMenuAction: (handler: (action: string) => void) => () => void
   onWindowFullscreenChanged: (handler: (isFullscreen: boolean) => void) => () => void
   getWindowFullscreen: () => Promise<boolean>
+  completeOnboarding: () => Promise<DesktopOnboardingCompleteResult>
   getNotificationPermissionStatus: () => Promise<GetNotificationPermissionStatusResult>
   openSystemNotificationSettings: () => Promise<OpenSystemNotificationSettingsResult>
   getAutoLaunchStatus: () => Promise<ElectronAutoLaunchStatusResult>
@@ -260,6 +264,7 @@ type LodyRendererApi = {
   getCliAutoStartEnabled: () => Promise<{ enabled: boolean }>
   setLanguage: (locale: string) => void
   setNativeTheme: (source: 'dark' | 'light' | 'system') => void
+  onNativeThemeUpdated: (handler: (resolved: 'light' | 'dark') => void) => () => void
   // Optional: missing on older preload builds. Renderer code must use
   // optional chaining so a bridge mismatch never becomes the new white screen.
   notifyRendererMounted?: () => void

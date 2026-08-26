@@ -8,7 +8,15 @@ import {
   LockKeyhole,
   MessageCircle,
 } from 'lucide-react';
+import { useAtomValue, useSetAtom } from 'jotai';
+import { useTranslation } from 'react-i18next';
 import { getServerNow } from '@lody/shared';
+import { buildOpenedBySessionTree, pinnedFirstRootRank } from '@/lib/session-opened-by-tree';
+import {
+  sidebarCollapsedOpenedBySessionsAtom,
+  toggleSidebarCollapsedOpenedBySessionAtom,
+} from '@/atoms/focus-layer';
+import { buildSessionRowOpenedByTreeSlot } from '@/components/sidebar-row-shared';
 import { cn } from '@/lib/utils';
 import { Checkbox } from '@/ui/checkbox';
 import {
@@ -21,7 +29,11 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/ui/alert-dialog';
-import { ConversationRow, type MobileConversationItem } from './mobile-project-screen';
+import {
+  ConversationRow,
+  conversationRowHasActivity,
+  type MobileConversationItem,
+} from './mobile-project-screen';
 import { MobileInitialLetterAvatar } from './mobile-initial-letter-avatar';
 import { CachedAvatarImg } from '@/components/cached-avatar-img';
 import { MobileSwipeableRow, MobileSwipeableRowGroup } from './mobile-swipeable-row';
@@ -387,6 +399,7 @@ export function MobileChatListCard({
   /* The archived list swaps the pin/archive chips for restore/delete;
      each list mode only honours its own callbacks so a stray handler
      can't surface the wrong action in the wrong surface. */
+  const { t } = useTranslation();
   const hasActions = archived
     ? Boolean(rowActions?.onRestore || onRequestDelete)
     : Boolean(rowActions?.onTogglePin || rowActions?.onArchive);
@@ -395,6 +408,30 @@ export function MobileChatListCard({
      tap also wants to claim. Drop the swipe wrapper once selection
      mode is *active* (long-press still works while inactive). */
   const wrapSwipe = hasActions && !(selection?.active ?? false);
+  /* Sessions created by another Session (the `lody_session_create` MCP tool)
+     render indented under their opener — same model as the desktop sidebar
+     (`lib/session-opened-by-tree.ts`), resolved INSIDE this one bucket so a
+     Pinned / date / project section boundary is never crossed. An opener that
+     is missing from this bucket leaves its Session as an ordinary top-level
+     row; the tree never hides anything.
+
+     Collapse state is the SAME atom the sidebar lists use, so folding an
+     opener in the drawer and in the mobile list can never disagree. */
+  const collapsedOpeners = useAtomValue(sidebarCollapsedOpenedBySessionsAtom);
+  const toggleCollapsedOpener = useSetAtom(toggleSidebarCollapsedOpenedBySessionAtom);
+  const treeNodes = useMemo(
+    () =>
+      buildOpenedBySessionTree(chats, {
+        getId: (chat) => chat.id,
+        getOpenedBySessionId: (chat) => chat.openedByRowSessionId ?? chat.openedBySessionId,
+        isCollapsed: (openerId) => collapsedOpeners[openerId] === true,
+        /* Bucket order is pinned-first then latest activity; rank an opener by
+           its freshest opened Session so nesting cannot bury a just-updated
+           row under a stale opener. */
+        rootRank: (chat) => pinnedFirstRootRank(chat.latestMessageAt ?? 0, chat.isPinned),
+      }),
+    [chats, collapsedOpeners]
+  );
   return (
     /* Flat list — no rounded card shell or inter-row dividers. Rows
        sit directly on the page canvas; `ConversationRow` supplies its
@@ -414,13 +451,25 @@ export function MobileChatListCard({
          intentional single-row archive case still works because that
          path only removes one item from the same key bucket. */}
       <AnimatePresence initial={false} key={archived ? 'archived' : 'active'}>
-        {chats.map((conversation) => {
+        {treeNodes.map((node) => {
+          const conversation = node.item;
+          /* Same builder the sidebar rows use, so the disclosure's aria-label
+             and its "Show N opened sessions" count stay identical across
+             platforms and only need translating once. */
+          const treeSlot = buildSessionRowOpenedByTreeSlot(node, t, () =>
+            toggleCollapsedOpener(node.id)
+          );
+          /* The chevron only renders while the leading node is free, so only
+             then does the row put a tap target in the back-swipe strip. */
+          const showsTreeToggle =
+            treeSlot?.kind === 'opener' && !conversationRowHasActivity(conversation);
           const row = (
             <ConversationRow
               conversation={conversation}
               selected={selectedConversationId === conversation.id}
               onClick={() => onSelect?.(conversation.id)}
               archived={archived}
+              treeSlot={treeSlot}
               selectionMode={selection?.active ?? false}
               isSelected={selection?.isSelected(conversation.id) ?? false}
               onToggleSelect={
@@ -460,6 +509,7 @@ export function MobileChatListCard({
                 archived ? (
                   <MobileSwipeableRow
                     variant="archived"
+                    liftAboveEdgeSwipeZone={showsTreeToggle}
                     onRestore={
                       rowActions?.onRestore
                         ? () => rowActions.onRestore!(conversation.id)
@@ -475,6 +525,10 @@ export function MobileChatListCard({
                   </MobileSwipeableRow>
                 ) : (
                   <MobileSwipeableRow
+                    /* Only a rendered chevron puts a control in the leading
+                       48px, so only then does the row need to clear the
+                       back-swipe strip. */
+                    liftAboveEdgeSwipeZone={showsTreeToggle}
                     isPinned={conversation.isPinned ?? false}
                     onTogglePin={
                       rowActions?.onTogglePin

@@ -23,6 +23,12 @@ import 'prosemirror-flat-list/dist/style.css';
 
 const IDLE_COMMIT_MS = 1200;
 
+type PendingBodyCommit = {
+  body: string;
+  base: string;
+  failed: boolean;
+};
+
 /**
  * Prose styling for the editing surface.
  *
@@ -167,10 +173,12 @@ export default function TaskBodyEditorSurface({
   const { resolveImageUrl, cacheVersion } = useTaskImageResolver(value);
   const latestValueRef = useRef(value);
   const latestOnCommitRef = useRef(onCommit);
+  const latestTRef = useRef(t);
   const editingRef = useRef(false);
-  const pendingCommitRef = useRef<{ body: string; base: string } | null>(null);
+  const pendingCommitRef = useRef<PendingBodyCommit | null>(null);
   latestValueRef.current = value;
   latestOnCommitRef.current = onCommit;
+  latestTRef.current = t;
 
   // While the caret is in here, editor keys win over app shortcuts — ⌘B is bold,
   // not "toggle sidebar". Declared without `claims` because a rich text editor
@@ -186,17 +194,70 @@ export default function TaskBodyEditorSurface({
   // initial value and quietly remount the document.
   const initialMarkdownRef = useRef(value);
 
-  const flushCommit = useCallback((handle = handleRef.current) => {
+  const flushCommit = useCallback((handle = handleRef.current, retryPending = false) => {
     if (idleTimerRef.current) {
       clearTimeout(idleTimerRef.current);
       idleTimerRef.current = null;
     }
     if (!handle) return;
     const next = handle.getMarkdown();
-    if (next === lastSyncedRef.current) return;
-    pendingCommitRef.current = { body: next, base: latestValueRef.current };
-    lastSyncedRef.current = next;
-    latestOnCommitRef.current(next);
+    const pending = pendingCommitRef.current;
+    if (!pending && next === lastSyncedRef.current) return;
+    // An idle timer and blur can land while the same asynchronous write is
+    // still in flight. Do not issue it twice, but DO retry a rejected write.
+    if (pending?.body === next && !pending.failed && !retryPending) return;
+
+    const attempt: PendingBodyCommit = {
+      body: next,
+      base: latestValueRef.current,
+      failed: false,
+    };
+    pendingCommitRef.current = attempt;
+
+    let result: void | Promise<void>;
+    try {
+      result = latestOnCommitRef.current(next);
+    } catch (error) {
+      attempt.failed = true;
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : latestTRef.current(
+              'tasks.body.saveFailed',
+              'Could not save the description. Please try again.'
+            )
+      );
+      return;
+    }
+
+    void Promise.resolve(result).then(
+      () => {
+        // A newer edit may already be saving, or the Loro echo may have
+        // acknowledged this attempt synchronously. Never let an older promise
+        // change the state of either one.
+        if (pendingCommitRef.current !== attempt) return;
+        // Success means the local write completed, but keep the pending guard
+        // until that exact body comes back through the document subscription.
+        // Clearing it here opens a small window where the previous (often
+        // empty) prop can be mistaken for a newer remote edit.
+        lastSyncedRef.current = next;
+      },
+      (error: unknown) => {
+        if (pendingCommitRef.current !== attempt) return;
+        // Keep the failed attempt as a dirty guard. A stale document snapshot
+        // (commonly the empty body during reconnect) must not replace the
+        // unsaved editor contents, and the next idle/blur/unmount can retry it.
+        attempt.failed = true;
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : latestTRef.current(
+                'tasks.body.saveFailed',
+                'Could not save the description. Please try again.'
+              )
+        );
+      }
+    );
   }, []);
 
   const handleDocChange = useCallback(() => {
@@ -219,6 +280,9 @@ export default function TaskBodyEditorSurface({
         return;
       }
       if (incoming === pending.base) {
+        return;
+      }
+      if (pending.failed) {
         return;
       }
       pendingCommitRef.current = null;
@@ -256,7 +320,10 @@ export default function TaskBodyEditorSurface({
 
       const current = handleRef.current;
       if (!current) return;
-      flushCommit(current);
+      // Detaching loses the in-memory draft guard. Re-issue even an in-flight
+      // body write so a rejected first attempt cannot disappear with the
+      // editor; setting the same LoroText twice is idempotent at this boundary.
+      flushCommit(current, true);
       const editor = current.editor;
       if (editor?.mounted) {
         editor.unmount();

@@ -1,4 +1,3 @@
-import { useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { X } from 'lucide-react';
 import type {
@@ -8,7 +7,7 @@ import type {
 } from '@lody/shared';
 import { Drawer, DrawerClose, DrawerContent, DrawerDescription, DrawerTitle } from '@/ui/drawer';
 import { cn } from '@/lib/utils';
-import { useKeyboardAwareScrollIntoView } from '@/hooks/use-keyboard-aware-scroll-into-view';
+import { useKeyboardAwareSheet } from '@/hooks/use-keyboard-aware-scroll-into-view';
 import { WorktreeSetupEditor } from '@/components/settings/project-settings';
 
 export type MobileWorktreeConfigSheetProps = {
@@ -55,31 +54,17 @@ export function MobileWorktreeConfigSheet({
   const { t } = useTranslation();
   const title = t('workspace.projects.worktreeConfigTitle', 'Worktree setup & cleanup');
 
-  /* Native (Capacitor) keyboard handling: vaul renders the drawer through a
-     portal, so the root layout's global `pb-[var(--native-keyboard-height)]`
-     doesn't reach it. We lift the whole sheet by the keyboard height (iOS;
-     the var is `0px` on web + Android, where the WebView resizes natively) and
-     cap the scroll area to the visible region. The hook then keeps the focused
-     textarea centered in that region — driven by the keyboard event (not an
-     arbitrary timeout), so it tracks the keyboard instead of jumping after it. */
-  const scrollRef = useRef<HTMLDivElement>(null);
-  useKeyboardAwareScrollIntoView(scrollRef);
+  /* Both editors are textareas, so this sheet is on screen with the soft
+     keyboard up for most of its life. */
+  const keyboard = useKeyboardAwareSheet();
 
   return (
     <Drawer open={open} onOpenChange={onOpenChange} repositionInputs={false}>
       <DrawerContent
-        /* The lift (`bottom`) is intentionally NOT transitioned. This sheet's
-           height is `h-auto` capped by the inner `maxHeight`, which reacts to
-           `--native-keyboard-height` instantly. If we animated `bottom` while
-           the height snapped, the sheet's top would jump down (shorter sheet
-           still anchored at bottom: 0 for the first frame) and then slide up —
-           a visible flicker when focusing the top (setup) editor. Snapping
-           `bottom` in the same frame as the height keeps the top stable; vaul's
-           own translate-y transition still animates the open/close slide. */
         className={cn(
           'mobile-worktree-config-sheet',
           'h-auto! max-h-[88dvh]! rounded-t-2xl border-border/60',
-          'bottom-[var(--native-keyboard-height,0px)]!'
+          keyboard.contentClassName
         )}
       >
         <div className="flex max-h-full min-h-0 flex-col">
@@ -103,16 +88,9 @@ export function MobileWorktreeConfigSheet({
           <DrawerDescription className="sr-only">{title}</DrawerDescription>
 
           <div
-            ref={scrollRef}
-            className={cn(
-              'flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-4 pt-1',
-              'pb-[calc(16px+max(0px,var(--safe-area-bottom,0px)-var(--native-keyboard-height,0px)))]'
-            )}
-            /* Cap the scroll area to the visible drawer region (viewport minus
-               the soft keyboard and the ~3.25rem header). Without the cap the
-               container grows to fit content and `scrollIntoView` becomes a
-               no-op. */
-            style={{ maxHeight: 'calc(100dvh - var(--native-keyboard-height, 0px) - 3.25rem)' }}
+            ref={keyboard.scrollRef}
+            className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-4 pt-1"
+            style={keyboard.scrollStyle}
           >
             <WorktreeSetupEditor
               phase="setup"

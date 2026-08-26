@@ -5,6 +5,8 @@ import type {
 import {
   getServerNow,
   type CodeCollabV2Error,
+  type CodeCollabV2FileIndexRequest,
+  type CodeCollabV2FileIndexSnapshot,
   type CodeCollabV2InitDirectoryOk,
   type CodeCollabV2InitDirectoryRequest,
   type CodeCollabV2LspUnsupported,
@@ -20,6 +22,10 @@ import {
   type CodeCollabV2RefreshTextResponse,
   type CodeCollabV2SaveTextRequest,
   type CodeCollabV2SaveTextResponse,
+  type FilePreviewV3Request,
+  type FilePreviewV3Response,
+  FILE_PREVIEW_PROTOCOL_VERSION,
+  filePreviewV3Error,
   type LocalMachineRpcRequest,
   type LocalMachineRpcResult,
   type LocalProjectControlRequest,
@@ -159,6 +165,84 @@ export function createWorkspaceMachineRpcFacade(deps: WorkspaceMachineRpcFacadeD
       ? {}
       : { ownerSessionId: options.ownerSessionId.toString() };
 
+  /**
+   * File Preview v3. Its own transport wrapper (rather than `requestCodeCollab`)
+   * so a transport failure surfaces as a typed `FilePreviewV3Error` instead of a
+   * Code Collab error the preview UI would have to translate.
+   */
+  const requestFilePreview = async (
+    machineId: MachineId,
+    request: Omit<FilePreviewV3Request, 'v'>,
+    options?: CodeCollabRequestOptions
+  ): Promise<FilePreviewV3Response> => {
+    const params: FilePreviewV3Request = {
+      v: FILE_PREVIEW_PROTOCOL_VERSION,
+      sessionId: request.sessionId,
+      path: request.path,
+      ...(request.knownDigest === undefined ? {} : { knownDigest: request.knownDigest }),
+      ...(request.maxBytes === undefined ? {} : { maxBytes: request.maxBytes }),
+    };
+    try {
+      const result = await (async () => {
+        const isElectron = typeof window !== 'undefined' && window.__LODY_ELECTRON__;
+        if (isElectron) {
+          // A local Electron file preview must never fall through to the
+          // Streams RPC plane. Until the target router identifies the machine,
+          // returning a retryable error is safer than sending a local path to
+          // the server; once identified, remote machines still use Streams.
+          await targetRouter.resolvePlaneForMachine(machineId, {
+            timeoutMs: LOCAL_MACHINE_ID_READY_TIMEOUT_MS,
+          });
+          const plane = targetRouter.getPlaneForMachine(machineId);
+          if (plane === null) {
+            throw new Error('Local Machine RPC routing is not available.');
+          }
+          if (plane === 'cloud') {
+            const client = await getMachineRpcClient(machineId);
+            return await client.requestFilePreview({
+              ...params,
+              ownerSessionId: options?.ownerSessionId,
+              timeoutMs: options?.timeoutMs ?? 30_000,
+            });
+          }
+
+          const sender = getLocalMachineRpcSender();
+          if (!sender) throw new Error('Local Machine RPC is not available.');
+          const response = await sender({
+            machineId,
+            workspaceId,
+            method: 'file/preview-local',
+            params,
+            ...ownerSessionFields(options),
+            timeoutMs: options?.timeoutMs ?? 30_000,
+          });
+          if (!response.ok) throw new Error(response.error);
+          return response.result as FilePreviewV3Response | null;
+        }
+        const client = await getMachineRpcClient(machineId);
+        return await client.requestFilePreview({
+          ...params,
+          ownerSessionId: options?.ownerSessionId,
+          timeoutMs: options?.timeoutMs ?? 30_000,
+        });
+      })();
+      if (result === null) {
+        return filePreviewV3Error('transient_io', {
+          message: 'File preview request timed out.',
+          path: request.path,
+          retryable: true,
+        });
+      }
+      return result;
+    } catch (error) {
+      return filePreviewV3Error('transient_io', {
+        message: error instanceof Error ? error.message : String(error),
+        path: request.path,
+        retryable: true,
+      });
+    }
+  };
+
   const requestCodeCollabOpenText = (
     machineId: MachineId,
     request: CodeCollabV2OpenTextRequest,
@@ -181,6 +265,35 @@ export function createWorkspaceMachineRpcFacade(deps: WorkspaceMachineRpcFacadeD
           timeoutMs: options?.timeoutMs ?? 30_000,
         })
     );
+
+  /**
+   * Electron local file surfaces need an authoritative initial tree/current-diff
+   * snapshot before a Flock publication has had a chance to replicate. This is
+   * intentionally local-only: remote surfaces continue reading the shared Flock.
+   */
+  const requestLocalCodeCollabFileIndex = async (
+    machineId: MachineId,
+    request: CodeCollabV2FileIndexRequest,
+    options?: CodeCollabRequestOptions
+  ): Promise<CodeCollabV2FileIndexSnapshot | CodeCollabV2Error | null> => {
+    try {
+      if (!(await canUseLocalMachineRpc(machineId))) {
+        return toCodeCollabTransportError(
+          new Error('Local Code Collab file-index RPC is not available for this machine.')
+        );
+      }
+      return (await sendLocalMachineRpcRequest({
+        machineId,
+        workspaceId,
+        method: 'code-collab/get-file-index',
+        params: request,
+        ...ownerSessionFields(options),
+        timeoutMs: options?.timeoutMs ?? 30_000,
+      })) as CodeCollabV2FileIndexSnapshot | CodeCollabV2Error | null;
+    } catch (error) {
+      return toCodeCollabTransportError(error);
+    }
+  };
 
   const requestCodeCollabRefreshText = (
     machineId: MachineId,
@@ -646,7 +759,8 @@ export function createWorkspaceMachineRpcFacade(deps: WorkspaceMachineRpcFacadeD
           workspaceId,
           method: 'session/fork',
           params: args,
-          timeoutMs: options?.timeoutMs ?? 120_000,
+          timeoutMs:
+            options?.timeoutMs ?? (args.targetContext?.kind === 'new-worktree' ? 15_000 : 120_000),
         });
         if (response && !response.ok) {
           return sessionForkFailure(args, 'INTERNAL_ERROR', response.error);
@@ -655,7 +769,11 @@ export function createWorkspaceMachineRpcFacade(deps: WorkspaceMachineRpcFacadeD
       }
       return await (
         await getMachineRpcClient(machineId)
-      ).requestSessionFork({ ...args, timeoutMs: options?.timeoutMs ?? 120_000 });
+      ).requestSessionFork({
+        ...args,
+        timeoutMs:
+          options?.timeoutMs ?? (args.targetContext?.kind === 'new-worktree' ? 15_000 : 120_000),
+      });
     } catch (error) {
       return sessionForkFailure(
         args,
@@ -999,6 +1117,8 @@ export function createWorkspaceMachineRpcFacade(deps: WorkspaceMachineRpcFacadeD
     requestSessionDispatchTurn,
     requestSessionPrepare,
     requestSessionPrepareCancel,
+    requestFilePreview,
+    requestLocalCodeCollabFileIndex,
     requestCodeCollabOpenText,
     requestCodeCollabRefreshText,
     requestCodeCollabSaveText,

@@ -1,7 +1,13 @@
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
+import {
+  ACP_EXTENSION_DSH_QUERY_PATH_ENV,
+  ACP_EXTENSION_DSH_SESSION_ROOT_ENV,
+} from 'acp-extension-dsh/profile';
 import { REGISTRY_ACP_AGENTS } from '@lody/shared';
 
 import {
@@ -18,9 +24,16 @@ import {
 import {
   BUILTIN_CLAUDE_CAPABILITY_SOURCE_VERSION,
   BUILTIN_CODEX_CAPABILITY_SOURCE_VERSION,
+  BUILTIN_GROK_CAPABILITY_SOURCE_VERSION,
   BUILTIN_KIMI_CAPABILITY_SOURCE_VERSION,
 } from '../src/agent/managed-agent-runtime';
 import * as managedRuntime from '../src/agent/managed-agent-runtime';
+import { parseNpxPackageSpecFromArgs } from '../src/agent/npx-cache';
+import {
+  DEEPSEEK_HARNESS_CAPABILITY_SOURCE_VERSION,
+  DEEPSEEK_HARNESS_HOME_ENV,
+  DEEPSEEK_HARNESS_VERSION,
+} from '../src/agent/deepseek-harness-runtime';
 
 function getRegistryAgent(agentType: string) {
   const agent = REGISTRY_ACP_AGENTS.find((candidate) => candidate.id === agentType);
@@ -35,6 +48,7 @@ describe('resolveBuiltinACPSetting', () => {
     expect(() => resolveBuiltinACPSetting('claude')).toThrow(/resolveACPProcessLaunchAsync/);
     expect(() => resolveBuiltinACPSetting('codex')).toThrow(/resolveACPProcessLaunchAsync/);
     expect(() => resolveBuiltinACPSetting('kimi')).toThrow(/resolveACPProcessLaunchAsync/);
+    expect(() => resolveBuiltinACPSetting('grok')).toThrow(/resolveACPProcessLaunchAsync/);
   });
 
   it('keys builtin capability versions on the bundled adapter and managed runtime', () => {
@@ -47,6 +61,9 @@ describe('resolveBuiltinACPSetting', () => {
     expect(getAcpCapabilitySourceVersion({ cliType: 'builtin', agentType: 'kimi' })).toBe(
       BUILTIN_KIMI_CAPABILITY_SOURCE_VERSION
     );
+    expect(getAcpCapabilitySourceVersion({ cliType: 'builtin', agentType: 'grok' })).toBe(
+      BUILTIN_GROK_CAPABILITY_SOURCE_VERSION
+    );
     expect(
       getAcpCapabilitySourceVersion({
         cliType: 'builtin',
@@ -54,6 +71,72 @@ describe('resolveBuiltinACPSetting', () => {
         runtimeOverrides: { codexPath: '/opt/codex' },
       })
     ).toBe(`${BUILTIN_CODEX_CAPABILITY_SOURCE_VERSION}+override:{"codexPath":"/opt/codex"}`);
+    expect(getAcpCapabilitySourceVersion({ cliType: 'builtin', agentType: 'deepseek' })).toBe(
+      DEEPSEEK_HARNESS_CAPABILITY_SOURCE_VERSION
+    );
+    expect(getAcpCapabilitySourceVersion({ cliType: 'builtin', agentType: 'kimi' }, '0.36.0')).toBe(
+      'builtin-kimi:0.36.0'
+    );
+  });
+
+  it('launches DeepSeek Harness through the pinned ACP npm composition', async () => {
+    const dshHome = await mkdtemp(join(tmpdir(), 'lody-deepseek-harness-test-'));
+    vi.stubEnv(DEEPSEEK_HARNESS_HOME_ENV, dshHome);
+    try {
+      const launch = await resolveACPProcessLaunchAsync({
+        cliType: 'builtin',
+        agentType: 'deepseek',
+      });
+
+      expect(launch.command).toBe('npx');
+      expect(launch.args).toContain('--force');
+      expect(launch.args).toEqual(
+        expect.arrayContaining([
+          '--prefer-offline',
+          '-y',
+          '--package',
+          `@deepseek-ai/dsh-acp-demo@${DEEPSEEK_HARNESS_VERSION}`,
+          '--package',
+          `@deepseek-ai/dsh-agent-spine-demo@${DEEPSEEK_HARNESS_VERSION}`,
+          '--package',
+          `@deepseek-ai/dsh-session-persistence-jsonl@${DEEPSEEK_HARNESS_VERSION}`,
+          '--package',
+          `@deepseek-ai/dsh-llm-deepseek@${DEEPSEEK_HARNESS_VERSION}`,
+          '--package',
+          `@deepseek-ai/dsh-permission-presets@${DEEPSEEK_HARNESS_VERSION}`,
+          'dsh-acp-demo',
+          '--config',
+        ])
+      );
+      expect(parseNpxPackageSpecFromArgs(launch.args)).toEqual({
+        name: '@deepseek-ai/dsh-acp-demo',
+        version: DEEPSEEK_HARNESS_VERSION,
+      });
+      expect(launch.args).not.toContain(`@deepseek-ai/dsh@${DEEPSEEK_HARNESS_VERSION}`);
+      expect(launch.env?.[ACP_EXTENSION_DSH_SESSION_ROOT_ENV]).toBe(join(dshHome, 'sessions'));
+      expect(launch.env?.[ACP_EXTENSION_DSH_QUERY_PATH_ENV]).toBe(
+        join(dshHome, 'sessions', 'session-query.db')
+      );
+      expect(launch.env?.[DEEPSEEK_HARNESS_HOME_ENV]).toBe(dshHome);
+
+      const configFlag = launch.args.indexOf('--config');
+      const configPath = launch.args[configFlag + 1];
+      expect(configPath).toBeTruthy();
+      const config = await readFile(configPath!, 'utf8');
+      expect(config).toContain('deepseek-acp.js');
+      expect(config).not.toContain("name: '@deepseek-ai/dsh-acp-demo'");
+      expect(config).toContain("name: '@deepseek-ai/dsh-agent-spine-demo'");
+      expect(config).toContain("name: '@deepseek-ai/dsh-session-persistence-jsonl'");
+      expect(config).toContain("name: '@deepseek-ai/dsh-session-checkpoint-policy'");
+      expect(config).toContain("name: '@deepseek-ai/dsh-session-query-sqlite'");
+      expect(config).toContain('compression: zstd');
+      expect(config).toContain('mode: workspace-write');
+      expect(config).toContain("name: '@deepseek-ai/dsh-permission-presets'");
+      expect(config).toContain('reasoningEffort: max');
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(dshHome, { recursive: true, force: true });
+    }
   });
 
   it('launches an overridden Kimi executable in ACP login mode', async () => {
@@ -70,6 +153,7 @@ describe('resolveBuiltinACPSetting', () => {
       env: {
         KIMI_CODE_NO_AUTO_UPDATE: '1',
       },
+      capabilitySourceVersion: `${BUILTIN_KIMI_CAPABILITY_SOURCE_VERSION}+override:{"kimiPath":"/opt/kimi"}`,
     });
   });
 
@@ -137,11 +221,53 @@ describe('resolveBuiltinACPSetting', () => {
     ).resolves.toBeNull();
   });
 
+  it('launches Grok ACP and device login through an overridden runtime', async () => {
+    await expect(
+      resolveACPProcessLaunchAsync({
+        cliType: 'builtin',
+        agentType: 'grok',
+        runtimeOverrides: { grokPath: '/opt/grok' },
+      })
+    ).resolves.toEqual({
+      command: process.execPath,
+      args: [expect.stringMatching(/grok-acp\.js$/u)],
+      env: { GROK_PATH: '/opt/grok', GROK_DISABLE_AUTOUPDATER: '1' },
+      capabilitySourceVersion: `${BUILTIN_GROK_CAPABILITY_SOURCE_VERSION}+override:{"grokPath":"/opt/grok"}`,
+    });
+    await expect(
+      resolveBuiltinAuthenticationProcessLaunch({
+        cliType: 'builtin',
+        agentType: 'grok',
+        runtimeOverrides: { grokPath: '/opt/grok' },
+        action: 'login',
+      })
+    ).resolves.toEqual({
+      command: '/opt/grok',
+      args: ['login', '--device-auth'],
+      env: { GROK_DISABLE_AUTOUPDATER: '1' },
+    });
+    await expect(
+      resolveBuiltinAuthenticationProcessLaunch({
+        cliType: 'builtin',
+        agentType: 'grok',
+        runtimeOverrides: { grokPath: '/opt/grok' },
+        action: 'status',
+      })
+    ).resolves.toBeNull();
+  });
+
   it('launches the managed Kimi module with the current Node executable', async () => {
-    const ensureRuntime = vi.fn().mockResolvedValue('/managed/kimi/package/dist/main.mjs');
+    const resolveRuntimeForLaunch = vi.fn().mockResolvedValue({
+      runtimeName: 'kimi-code',
+      version: '0.36.0',
+      targetVersion: '0.37.0',
+      platformArch: 'node',
+      command: '/managed/kimi/package/dist/main.mjs',
+      updateAvailable: false,
+    });
     const managerSpy = vi
       .spyOn(managedRuntime, 'getManagedAgentRuntimeManager')
-      .mockReturnValue({ ensureRuntime } as ReturnType<
+      .mockReturnValue({ resolveRuntimeForLaunch } as ReturnType<
         typeof managedRuntime.getManagedAgentRuntimeManager
       >);
     try {
@@ -153,8 +279,12 @@ describe('resolveBuiltinACPSetting', () => {
         env: {
           KIMI_CODE_NO_AUTO_UPDATE: '1',
         },
+        capabilitySourceVersion: 'builtin-kimi:0.36.0',
       });
-      expect(ensureRuntime).toHaveBeenCalledWith('kimi-code', { onProgress: undefined });
+      expect(resolveRuntimeForLaunch).toHaveBeenCalledWith('kimi-code', {
+        onProgress: undefined,
+        signal: undefined,
+      });
     } finally {
       managerSpy.mockRestore();
     }

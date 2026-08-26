@@ -81,7 +81,9 @@ import { runtimeAtom, type WorkspaceRuntime } from '../src/atoms/runtime';
 import { docMetaCacheReadyAtom, sessionMetaCacheAtom } from '../src/atoms/doc-meta';
 import { currentWorkspaceIdAtom, currentWorkspaceSlugAtom } from '../src/atoms/workspace-context';
 import {
+  countSessionMentions,
   SessionCreateBillingError,
+  resolveSessionChatType,
   useSessionActions,
   type SessionActions,
 } from '../src/hooks/use-session-actions';
@@ -953,6 +955,69 @@ describe('useSessionActions', () => {
     );
   });
 
+  it('archives child tabs and independently opened session workspaces together', async () => {
+    const rootSession = {
+      id: 'archive-root' as SessionId,
+      machineId: 'machine-root' as MachineId,
+      createdAt: '2026-08-24T00:00:00.000Z',
+    } as SessionMeta;
+    const tabSession = {
+      id: 'archive-tab' as SessionId,
+      machineId: rootSession.machineId,
+      parentSessionId: rootSession.id,
+      openedBySessionId: rootSession.id,
+      createdAt: '2026-08-24T00:01:00.000Z',
+    } as SessionMeta;
+    const openedSession = {
+      id: 'archive-opened' as SessionId,
+      machineId: 'machine-opened' as MachineId,
+      openedBySessionId: rootSession.id,
+      createdAt: '2026-08-24T00:02:00.000Z',
+    } as SessionMeta;
+    const openedFromTabSession = {
+      id: 'archive-opened-from-tab' as SessionId,
+      machineId: 'machine-opened-from-tab' as MachineId,
+      openedBySessionId: tabSession.id,
+      openedByRootSessionId: rootSession.id,
+      createdAt: '2026-08-24T00:03:00.000Z',
+    } as SessionMeta;
+    const sessionMetaCache = Object.fromEntries(
+      [rootSession, tabSession, openedSession, openedFromTabSession].map((session) => [
+        getSessionRoomId(session.id),
+        session,
+      ])
+    );
+    const upsertDocMeta = vi.fn(async () => undefined);
+    const getDocMeta = vi.fn(async (roomId: string) => {
+      const session = sessionMetaCache[roomId];
+      return { meta: session ?? {} };
+    });
+    const runtime = createRuntime({
+      repo: { getDocMeta, upsertDocMeta } as unknown as WorkspaceRuntime['repo'],
+    });
+    const actions = await renderActions(runtime, { sessionMetaCache });
+
+    await actions.archiveSession(rootSession.id);
+
+    for (const session of [rootSession, tabSession, openedSession, openedFromTabSession]) {
+      expect(upsertDocMeta).toHaveBeenCalledWith(
+        getSessionRoomId(session.id),
+        expect.objectContaining({ isArchived: true, status: { type: 'idle' } })
+      );
+    }
+    expect(runtime.writer.flockRowPut).toHaveBeenCalledTimes(3);
+    expect(runtime.writer.flockRowPut).toHaveBeenCalledWith(
+      expect.any(String),
+      machineFlockKeys.archiveSessionCommand(rootSession.id),
+      expect.any(Object)
+    );
+    expect(runtime.writer.flockRowPut).not.toHaveBeenCalledWith(
+      expect.any(String),
+      machineFlockKeys.archiveSessionCommand(tabSession.id),
+      expect.any(Object)
+    );
+  });
+
   it('writes legacy delete queue before deleting archived code sessions', async () => {
     const sessionId = 'session-delete-legacy-queue' as SessionId;
     const machineId = 'machine-1';
@@ -1107,5 +1172,59 @@ describe('useSessionActions', () => {
       })
     );
     expect(deleteDoc).toHaveBeenCalledWith(getSessionRoomId(sessionId));
+  });
+});
+
+describe('resolveSessionChatType', () => {
+  it('distinguishes side chats from regular sessions', () => {
+    expect(resolveSessionChatType({ childSessionPlacement: 'side-panel' })).toBe('side_chat');
+    expect(resolveSessionChatType({})).toBe('regular');
+    expect(resolveSessionChatType(undefined)).toBe('regular');
+  });
+});
+
+describe('countSessionMentions', () => {
+  it('counts each sent mention kind and ignores pasted-text spans', () => {
+    expect(
+      countSessionMentions([
+        {
+          type: 'text',
+          text: '@src @dir #12 $review /test @session @role pasted',
+          spans: [
+            { start: 0, end: 4, kind: 'file', label: '@src' },
+            { start: 5, end: 9, kind: 'dir', label: '@dir' },
+            { start: 10, end: 13, kind: 'issue', label: '#12' },
+            { start: 14, end: 21, kind: 'skill', label: '$review' },
+            { start: 22, end: 27, kind: 'command', label: '/test' },
+            { start: 28, end: 36, kind: 'session', label: '@session' },
+            { start: 37, end: 42, kind: 'agent_role', label: '@role' },
+            { start: 43, end: 49, kind: 'pasted_text', label: 'pasted' },
+          ],
+        },
+        {
+          type: 'text',
+          text: '#34 pull request',
+          spans: [{ start: 0, end: 3, kind: 'pr', label: '#34' }],
+        },
+      ])
+    ).toEqual({
+      mention_count: 8,
+      mention_types: ['file', 'dir', 'issue', 'pr', 'skill', 'session', 'command', 'agent_role'],
+      mention_file_count: 1,
+      mention_dir_count: 1,
+      mention_issue_count: 1,
+      mention_pr_count: 1,
+      mention_skill_count: 1,
+      mention_session_count: 1,
+      mention_command_count: 1,
+      mention_agent_role_count: 1,
+    });
+  });
+
+  it('returns zero counts when the message has no mentions', () => {
+    expect(countSessionMentions(undefined)).toMatchObject({
+      mention_count: 0,
+      mention_types: [],
+    });
   });
 });

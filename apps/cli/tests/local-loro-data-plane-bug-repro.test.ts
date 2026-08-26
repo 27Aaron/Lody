@@ -25,10 +25,10 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { LoroDoc } from 'loro-crdt';
 import {
   createJsonLineSplitter,
-  LocalLoroDataPlaneServer,
   LOCAL_LORO_DATA_PLANE_PROTOCOL_VERSION,
   type LocalLoroDataPlaneServerMessage,
-} from '@lody/shared';
+} from '@lody/shared/local-loro-data-plane';
+import { LocalLoroDataPlaneServer } from '@lody/shared/local-loro-data-plane-server';
 import { getLocalLoroDataPlaneSocketPath } from '@lody/shared/node/local-ipc';
 import {
   startLocalLoroDataPlaneServer,
@@ -49,11 +49,14 @@ const logger: Logger = {
 } as unknown as Logger;
 
 const WORKSPACE_ID = 'ws-f6';
+const TEST_MAX_FRAME_BYTES = 64 * 1024;
 
-// The socket path is derived from os.homedir() ($HOME/.lody/run, S1); redirect
+// The socket path is derived from os.homedir(); redirect
 // HOME to a temp dir so the test can never collide with a real running daemon.
 let tempHome: string | null = null;
 let originalHome: string | undefined;
+let originalPlatform: string | undefined;
+let originalDataDir: string | undefined;
 
 class SocketClient {
   readonly messages: LocalLoroDataPlaneServerMessage[] = [];
@@ -67,7 +70,7 @@ class SocketClient {
         for (const waiter of [...this.waiters]) waiter();
       },
     });
-    socket.on('data', (chunk) => splitLines(chunk.toString('utf8')));
+    socket.on('data', (chunk) => splitLines(chunk));
     // Swallow EPIPE etc. from writes racing the server-side destroy.
     socket.on('error', () => {});
     this.closed = new Promise<void>((resolve) => {
@@ -137,9 +140,17 @@ function joinLine(requestId: string, docId: string): string {
 describe('local Loro data-plane socket server — F6 regression', () => {
   beforeAll(async () => {
     originalHome = process.env.HOME;
-    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'lody-dp-f6-'));
+    originalPlatform = process.env.LODY_PLATFORM;
+    originalDataDir = process.env.LODY_DATA_DIR;
+    // macOS exposes os.tmpdir() as a long /var/folders path. Keep the test's
+    // Unix socket below sockaddr_un's 104-byte path limit, like the CI runner's
+    // /tmp, while retaining the platform temp directory on Windows.
+    const tempRoot = process.platform === 'win32' ? os.tmpdir() : '/tmp';
+    tempHome = fs.mkdtempSync(path.join(tempRoot, 'lody-dp-f6-'));
     process.env.HOME = tempHome;
-    fs.mkdirSync(path.join(tempHome, '.lody', 'run'), { recursive: true });
+    process.env.LODY_PLATFORM = 'local';
+    delete process.env.LODY_DATA_DIR;
+    fs.mkdirSync(path.dirname(getLocalLoroDataPlaneSocketPath()), { recursive: true });
 
     const docs = new Map<string, LoroDoc>();
     const engine = new LocalLoroDataPlaneServer({
@@ -158,12 +169,18 @@ describe('local Loro data-plane socket server — F6 regression', () => {
     await startLocalLoroDataPlaneServer({
       logger,
       getWorkspaceServer: (workspaceId) => (workspaceId === WORKSPACE_ID ? engine : null),
+      maxFrameBytes: TEST_MAX_FRAME_BYTES,
     });
   });
 
   afterAll(async () => {
     await stopLocalLoroDataPlaneServer();
-    process.env.HOME = originalHome;
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    if (originalPlatform === undefined) delete process.env.LODY_PLATFORM;
+    else process.env.LODY_PLATFORM = originalPlatform;
+    if (originalDataDir === undefined) delete process.env.LODY_DATA_DIR;
+    else process.env.LODY_DATA_DIR = originalDataDir;
     if (tempHome) fs.rmSync(tempHome, { recursive: true, force: true });
   });
 
@@ -183,24 +200,28 @@ describe('local Loro data-plane socket server — F6 regression', () => {
       await client.writeLine(joinLine('join-1', 'doc-1'));
       expect(await client.outcomeForRequest('join-1', 5_000)).toBe('joined');
 
-      // One >32MB frame from a NON-COMPLIANT sender (a compliant v3 sender
-      // enforces the payload budget and never writes this). The bytes never
-      // reach JSON parsing: the framing buffer overflows first, so placeholder
-      // base64 content is sufficient and faithful.
+      // A frame over the injected test limit from a NON-COMPLIANT sender. The
+      // production limit remains 32MB; lowering it here exercises the same
+      // splitter overflow and real socket behavior without allocating/writing
+      // 33MB. The bytes never reach JSON parsing, so placeholder base64 is
+      // sufficient and faithful.
       const prefix =
         `{"type":"update","protocolVersion":${LOCAL_LORO_DATA_PLANE_PROTOCOL_VERSION},` +
         `"workspaceId":"${WORKSPACE_ID}","peerId":"renderer:f6",` +
         `"room":{"scope":"doc","docId":"doc-1"},` +
         `"payload":{"kind":"doc-update","dataBase64":"`;
       await client.writeRaw(prefix);
-      const chunk = 'A'.repeat(1024 * 1024);
-      for (let mb = 0; mb < 33 && !socket.destroyed; mb += 1) {
-        await client.writeRaw(chunk);
-      }
+      await client.writeRaw('A'.repeat(TEST_MAX_FRAME_BYTES));
       await client.writeRaw('"}}\n');
 
-      // Give the server a moment to react to the overflow.
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await vi.waitFor(
+        () => {
+          expect(client.messages).toContainEqual(
+            expect.objectContaining({ type: 'error', code: 'payload_too_large' })
+          );
+        },
+        { timeout: 5_000 }
+      );
 
       // R4-required behavior: the connection survives the oversized frame (the
       // splitter discards it and the server answers with a protocol error), so

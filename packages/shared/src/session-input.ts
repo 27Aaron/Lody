@@ -10,7 +10,10 @@ import type {
   SessionTurnInputConfig,
   VisualAnnotationReferencePayload,
 } from './ai';
+import { isSessionFileSourcePath } from './ai';
 import type { SessionHistoryInput } from './schema';
+import type { McpServerId } from './ids';
+import { reanchorMessageTextSpansForTrim, sanitizeMessageTextSpans } from './message-text-spans';
 import {
   AgentConfigCliTypeSchema,
   SessionInputBlocksSchema,
@@ -57,6 +60,8 @@ export type SessionConversationConfig = {
   modeId?: string;
   modelId?: string;
   configOptionValues?: Record<string, AcpConfigOptionValue>;
+  mcpServerIds?: McpServerId[];
+  taskToolsEnabled?: boolean;
 };
 
 export const resolveSessionConversationConfig = (
@@ -79,6 +84,10 @@ export const resolveSessionConversationConfig = (
       ...(inputConfig.configOptionValues && Object.keys(inputConfig.configOptionValues).length > 0
         ? { configOptionValues: inputConfig.configOptionValues }
         : {}),
+      ...(inputConfig.mcpServerIds ? { mcpServerIds: inputConfig.mcpServerIds } : {}),
+      ...(typeof inputConfig.taskToolsEnabled === 'boolean'
+        ? { taskToolsEnabled: inputConfig.taskToolsEnabled }
+        : {}),
     };
   };
 
@@ -100,11 +109,33 @@ export const resolveSessionConversationConfig = (
   return {};
 };
 
+/**
+ * The MCP selection a restart inherits. The catalog selection is durable only in
+ * turn input config, so fork/restore/edit-and-resend must read it back from the
+ * conversation rather than from `SessionMeta` — and an absent selection resolves
+ * to the explicit empty list every `SessionConfig` carries.
+ */
+export const resolveSessionMcpSelection = (
+  history: readonly { id: string; role: unknown; inputConfig?: unknown }[],
+  messageQueue: readonly { $cid?: unknown; acpSessionConfig?: unknown }[] = []
+): McpServerId[] => resolveSessionConversationConfig(history, messageQueue).mcpServerIds ?? [];
+
+/** The Task MCP gate frozen by the latest driving Turn. Missing legacy values are disabled. */
+export const resolveSessionTaskToolsEnabled = (
+  history: readonly { id: string; role: unknown; inputConfig?: unknown }[],
+  messageQueue: readonly { $cid?: unknown; acpSessionConfig?: unknown }[] = []
+): boolean => resolveSessionConversationConfig(history, messageQueue).taskToolsEnabled === true;
+
 const normalizeTextInputBlock = (
   block: Extract<SessionInputBlock, { type: 'text' }>
 ): Extract<SessionInputBlock, { type: 'text' }> | null => {
   const trimmed = block.text.trim();
-  return trimmed ? { type: 'text', text: trimmed } : null;
+  if (!trimmed) return null;
+  // The trim is what makes this more than a field copy: dropping leading
+  // whitespace shifts every offset left, so spans have to be re-anchored
+  // against the trimmed string rather than carried across as-is.
+  const spans = reanchorMessageTextSpansForTrim(block.text, trimmed, block.spans);
+  return spans ? { type: 'text', text: trimmed, spans } : { type: 'text', text: trimmed };
 };
 
 const toImagePayload = (
@@ -137,6 +168,10 @@ const toFilePayload = (
   // transport='local' requires machineId; the runtime validator enforces this,
   // but we still preserve whatever was provided so the pending state can render.
   const machineId = typeof block.machineId === 'string' ? block.machineId : undefined;
+  const sourcePath =
+    typeof block.sourcePath === 'string' && isSessionFileSourcePath(block.sourcePath)
+      ? block.sourcePath
+      : undefined;
   const storageSessionId =
     typeof block.storageSessionId === 'string' ? block.storageSessionId : undefined;
 
@@ -148,6 +183,7 @@ const toFilePayload = (
     sizeBytes: block.sizeBytes,
     sha256: block.sha256,
     textPreview: block.textPreview,
+    ...(sourcePath === undefined ? {} : { sourcePath }),
     transport: block.transport,
     ...(machineId === undefined ? {} : { machineId }),
     uploadedAt: block.uploadedAt,
@@ -363,6 +399,7 @@ export const inputBlocksToHistoryItems = (
       items.push({
         type: 'text',
         text: normalizedTextBlock.text,
+        ...(normalizedTextBlock.spans ? { spans: normalizedTextBlock.spans } : {}),
       } satisfies SessionInputHistoryItem);
     }
   }
@@ -381,7 +418,16 @@ export const historyItemsToInputBlocks = (
 
   for (const item of items) {
     if (isTextHistoryItem(item)) {
-      const normalizedTextBlock = normalizeTextInputBlock({ type: 'text', text: item.text });
+      // `item` came out of the session document, where spans ride an untyped
+      // catchall — whatever wrote them, including an older or newer client,
+      // never had its shape checked. Sanitize before anything downstream
+      // indexes into the text with these offsets.
+      const spans = sanitizeMessageTextSpans(item.text, (item as { spans?: unknown }).spans);
+      const normalizedTextBlock = normalizeTextInputBlock({
+        type: 'text',
+        text: item.text,
+        ...(spans ? { spans } : {}),
+      });
       if (normalizedTextBlock) {
         blocks.push(normalizedTextBlock);
       }
@@ -439,6 +485,8 @@ export const buildSessionTurnInputConfig = (args: {
   modeId?: string | null;
   modelId?: string | null;
   configOptionValues?: Record<string, AcpConfigOptionValue> | null;
+  mcpServerIds?: readonly McpServerId[] | null;
+  taskToolsEnabled?: boolean;
   issuePRMentions?: IssuePRMention[];
   resume?: ACPSessionConfig['resume'];
   prompt?: string;
@@ -456,6 +504,10 @@ export const buildSessionTurnInputConfig = (args: {
       args.configOptionValues && Object.keys(args.configOptionValues).length > 0
         ? args.configOptionValues
         : undefined,
+    mcpServerIds: args.mcpServerIds ? [...args.mcpServerIds] : undefined,
+    ...(args.taskToolsEnabled !== undefined
+      ? { taskToolsEnabled: args.taskToolsEnabled === true }
+      : {}),
     issuePRMentions: args.issuePRMentions,
     resume: args.resume,
   };

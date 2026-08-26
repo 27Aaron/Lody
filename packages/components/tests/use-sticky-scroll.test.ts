@@ -2,22 +2,16 @@
  * @vitest-environment jsdom
  */
 
-import React, { act, useEffect, useRef } from 'react';
+import React, { act, useEffect, useLayoutEffect, useRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionId } from '@lody/shared';
-import type { VListHandle } from 'virtua';
+import type { VirtualizerHandle } from 'virtua';
 import {
   clearAllScrollPositions,
   getScrollPosition,
   saveScrollPosition,
 } from '../src/hooks/use-scroll-position-cache';
-import {
-  getScrollBottomPaddingOffset,
-  getScrollElementDistanceFromBottom,
-  resolveVListScrollElement,
-  scrollViewportToRealBottom,
-} from '../src/hooks/sticky-scroll-dom';
 import { useStickyScroll, type UseStickyScrollResult } from '../src/hooks/use-sticky-scroll';
 
 type ResizeObserverEntryLike = Pick<ResizeObserverEntry, 'contentRect' | 'target'>;
@@ -58,7 +52,6 @@ class MockResizeObserver {
 }
 
 type ScrollFixture = {
-  rootElement: HTMLDivElement;
   scrollElement: HTMLDivElement;
   contentElement: HTMLDivElement;
   setScrollTop: (value: number) => void;
@@ -66,30 +59,35 @@ type ScrollFixture = {
   setContentHeight: (value: number) => void;
   setScrollHeight: (value: number) => void;
   setClientHeight: (value: number) => void;
-  setWidth: (value: number) => void;
 };
 
-type MockVListHandle = VListHandle & {
-  _scrollElement: HTMLElement;
+type MockVirtualizerHandle = VirtualizerHandle & {
   scrollToIndex: ReturnType<typeof vi.fn>;
   scrollTo: ReturnType<typeof vi.fn>;
 };
 
 type HarnessProps = {
   sessionId: SessionId;
-  vlist: MockVListHandle;
+  vlist: MockVirtualizerHandle | null;
+  scrollElement: HTMLDivElement | null;
   itemCount: number;
-  contentChangeKey: string | number;
   onAtBottomChange?: (atBottom: boolean) => void;
+  skipNextViewportResizeAutoScrollRef?: React.MutableRefObject<boolean>;
 };
 
-function flushAnimationFrames(): void {
-  while (rafQueue.length > 0) {
+async function advanceAnimationFrames(): Promise<void> {
+  for (let iteration = 0; iteration < 200; iteration += 1) {
+    if (rafQueue.length === 0) {
+      await Promise.resolve();
+      if (rafQueue.length === 0) return;
+    }
     const callbacks = [...rafQueue];
     rafQueue = [];
+    vi.advanceTimersByTime(17);
     for (const callback of callbacks) {
       callback(performance.now());
     }
+    await Promise.resolve();
   }
 }
 
@@ -99,6 +97,7 @@ function createScrollFixture(): ScrollFixture {
   const contentElement = document.createElement('div');
   scrollElement.className = 'chat-scrollbar';
   scrollElement.style.paddingBottom = '24px';
+  scrollElement.style.overflow = 'auto';
   scrollElement.appendChild(contentElement);
   rootElement.appendChild(scrollElement);
   document.body.appendChild(rootElement);
@@ -106,7 +105,7 @@ function createScrollFixture(): ScrollFixture {
   let scrollTop = 0;
   let scrollHeight = 640;
   let clientHeight = 400;
-  let width = 320;
+  const width = 320;
   let contentHeight = 616;
 
   Object.defineProperty(scrollElement, 'scrollTop', {
@@ -150,7 +149,6 @@ function createScrollFixture(): ScrollFixture {
     }) as DOMRect;
 
   return {
-    rootElement,
     scrollElement,
     contentElement,
     setScrollTop: (value) => {
@@ -166,22 +164,18 @@ function createScrollFixture(): ScrollFixture {
     setClientHeight: (value) => {
       clientHeight = value;
     },
-    setWidth: (value) => {
-      width = value;
-    },
   };
 }
 
-function createMockVListHandle(scrollElement: HTMLElement): MockVListHandle {
+function createMockVirtualizerHandle(scrollElement: HTMLElement): MockVirtualizerHandle {
   const handle = {
-    _scrollElement: scrollElement,
     scrollSize: 640,
     viewportSize: 400,
     scrollToIndex: vi.fn(),
     scrollTo: vi.fn((offset: number) => {
       scrollElement.scrollTop = offset;
     }),
-  } as unknown as MockVListHandle;
+  } as unknown as MockVirtualizerHandle;
 
   Object.defineProperty(handle, 'scrollOffset', {
     configurable: true,
@@ -220,23 +214,27 @@ function emitResize(target: Element): void {
 function HookHarness({
   sessionId,
   vlist,
+  scrollElement,
   itemCount,
-  contentChangeKey,
   onAtBottomChange,
+  skipNextViewportResizeAutoScrollRef,
 }: HarnessProps) {
-  const vlistRef = useRef<VListHandle | null>(vlist);
-  const scrollRootRef = useRef<HTMLElement | null>(vlist._scrollElement.parentElement);
+  const vlistRef = useRef<VirtualizerHandle | null>(vlist);
   vlistRef.current = vlist;
 
   const result = useStickyScroll({
     sessionId,
     vlistRef,
-    scrollRootRef,
     itemCount,
-    contentChangeKey,
-    scrollContainerClass: 'chat-scrollbar',
     onAtBottomChange,
+    skipNextViewportResizeAutoScrollRef,
   });
+  const { scrollRef } = result;
+
+  useLayoutEffect(() => {
+    scrollRef(scrollElement);
+    return () => scrollRef(null);
+  }, [scrollElement, scrollRef]);
 
   useEffect(() => {
     latestResult = result;
@@ -257,11 +255,12 @@ async function renderHarness(props: HarnessProps): Promise<void> {
   });
 }
 
-describe('useStickyScroll helpers', () => {
+describe('useStickyScroll Virtua adapter', () => {
   beforeEach(() => {
     resizeObserverInstances.length = 0;
     rafQueue = [];
     latestResult = null;
+    vi.useFakeTimers();
     vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
     vi.stubGlobal('ResizeObserver', MockResizeObserver as typeof ResizeObserver);
     vi.stubGlobal('requestAnimationFrame', ((callback: FrameRequestCallback) => {
@@ -286,79 +285,23 @@ describe('useStickyScroll helpers', () => {
     rafQueue = [];
     clearAllScrollPositions();
     vi.unstubAllGlobals();
-  });
-
-  it('computes distance from the real DOM bottom', () => {
-    expect(
-      getScrollElementDistanceFromBottom({
-        scrollHeight: 864,
-        scrollTop: 600,
-        clientHeight: 200,
-      })
-    ).toBe(64);
-  });
-
-  it('reads bottom padding as additional end offset', () => {
-    vi.stubGlobal(
-      'getComputedStyle',
-      vi.fn(() => ({ paddingBottom: '24px' }) as CSSStyleDeclaration)
-    );
-
-    expect(getScrollBottomPaddingOffset({} as HTMLElement)).toBe(24);
-  });
-
-  it('scrolls the viewport to the true bottom after aligning the last item', () => {
-    const scrollToIndex = vi.fn();
-    const scrollElement = {
-      scrollHeight: 640,
-      scrollTop: 180,
-      clientHeight: 400,
-    };
-
-    scrollViewportToRealBottom({
-      itemCount: 4,
-      vlist: { scrollToIndex } as { scrollToIndex: typeof scrollToIndex },
-      scrollElement,
-      bottomOffset: 24,
-    });
-
-    expect(scrollToIndex).toHaveBeenCalledWith(3, { align: 'end', offset: 24 });
-    expect(scrollElement.scrollTop).toBe(240);
-  });
-
-  it('resolves the fallback scroll element inside the provided chat root only', () => {
-    const firstRoot = document.createElement('div');
-    const firstScrollElement = document.createElement('div');
-    const secondRoot = document.createElement('div');
-    const secondScrollElement = document.createElement('div');
-    firstScrollElement.className = 'chat-scrollbar';
-    secondScrollElement.className = 'chat-scrollbar';
-    firstRoot.appendChild(firstScrollElement);
-    secondRoot.appendChild(secondScrollElement);
-    document.body.append(firstRoot, secondRoot);
-
-    const vlist = {} as VListHandle;
-
-    expect(resolveVListScrollElement(vlist, 'chat-scrollbar', secondRoot)).toBe(
-      secondScrollElement
-    );
-    expect(resolveVListScrollElement(vlist, 'chat-scrollbar')).toBeNull();
+    vi.useRealTimers();
   });
 
   it('restores a cached offset without forcing the list back to the bottom', async () => {
     const sessionId = 'session-cached-offset' as SessionId;
     const fixture = createScrollFixture();
-    const vlist = createMockVListHandle(fixture.scrollElement);
+    const vlist = createMockVirtualizerHandle(fixture.scrollElement);
     saveScrollPosition(sessionId, { type: 'offset', scrollOffset: 96 });
 
     await renderHarness({
       sessionId,
       vlist,
+      scrollElement: fixture.scrollElement,
       itemCount: 4,
-      contentChangeKey: '4-false',
     });
     await act(async () => {
-      flushAnimationFrames();
+      await advanceAnimationFrames();
     });
 
     expect(vlist.scrollTo).toHaveBeenCalledWith(96);
@@ -369,66 +312,72 @@ describe('useStickyScroll helpers', () => {
   it('unsticks after a real upward user scroll and does not auto-scroll on later content changes', async () => {
     const sessionId = 'session-unstick' as SessionId;
     const fixture = createScrollFixture();
-    const vlist = createMockVListHandle(fixture.scrollElement);
+    const vlist = createMockVirtualizerHandle(fixture.scrollElement);
     const atBottomChanges = vi.fn();
 
     await renderHarness({
       sessionId,
       vlist,
+      scrollElement: fixture.scrollElement,
       itemCount: 4,
-      contentChangeKey: '4-true',
       onAtBottomChange: atBottomChanges,
     });
     await act(async () => {
-      flushAnimationFrames();
+      await advanceAnimationFrames();
     });
 
     vlist.scrollToIndex.mockClear();
-    fixture.setScrollTop(0);
     await act(async () => {
+      fixture.scrollElement.dispatchEvent(new WheelEvent('wheel', { deltaY: -40 }));
+      fixture.setScrollTop(140);
+      fixture.scrollElement.dispatchEvent(new Event('scroll'));
       latestResult?.handleScroll(0);
     });
 
     expect(latestResult?.isSticky).toBe(false);
     expect(atBottomChanges).toHaveBeenCalledWith(false);
-    expect(getScrollPosition(sessionId)).toEqual({ type: 'offset', scrollOffset: 0 });
+    expect(getScrollPosition(sessionId)).toEqual({ type: 'offset', scrollOffset: 140 });
 
+    fixture.setContentHeight(696);
+    fixture.setScrollHeight(720);
     await renderHarness({
       sessionId,
       vlist,
+      scrollElement: fixture.scrollElement,
       itemCount: 5,
-      contentChangeKey: '5-true',
       onAtBottomChange: atBottomChanges,
     });
     await act(async () => {
-      flushAnimationFrames();
+      emitResize(fixture.contentElement);
+      await advanceAnimationFrames();
     });
 
     expect(vlist.scrollToIndex).not.toHaveBeenCalled();
-    expect(fixture.getScrollTop()).toBe(0);
+    expect(fixture.getScrollTop()).toBe(140);
 
     await act(async () => {
       latestResult?.scrollToBottom();
+      await advanceAnimationFrames();
     });
 
     expect(latestResult?.isSticky).toBe(true);
     expect(getScrollPosition(sessionId)).toEqual({ type: 'end' });
-    expect(fixture.getScrollTop()).toBe(240);
+    expect(fixture.getScrollTop()).toBe(320);
   });
 
   it('keeps the viewport pinned to the real bottom when sticky content grows', async () => {
     const sessionId = 'session-streaming-growth' as SessionId;
     const fixture = createScrollFixture();
-    const vlist = createMockVListHandle(fixture.scrollElement);
+    const vlist = createMockVirtualizerHandle(fixture.scrollElement);
 
     await renderHarness({
       sessionId,
       vlist,
+      scrollElement: fixture.scrollElement,
       itemCount: 4,
-      contentChangeKey: '4-true',
     });
     await act(async () => {
-      flushAnimationFrames();
+      await advanceAnimationFrames();
     });
 
     vlist.scrollToIndex.mockClear();
@@ -437,11 +386,120 @@ describe('useStickyScroll helpers', () => {
 
     await act(async () => {
       emitResize(fixture.contentElement);
-      flushAnimationFrames();
+      await advanceAnimationFrames();
+    });
+
+    expect(vlist.scrollToIndex).not.toHaveBeenCalled();
+    expect(fixture.getScrollTop()).toBeCloseTo(319, 5);
+    expect(latestResult?.isSticky).toBe(true);
+  });
+
+  it('follows each committed viewport resize without a transition timer', async () => {
+    const sessionId = 'session-viewport-resize' as SessionId;
+    const fixture = createScrollFixture();
+    const vlist = createMockVirtualizerHandle(fixture.scrollElement);
+
+    await renderHarness({
+      sessionId,
+      vlist,
+      scrollElement: fixture.scrollElement,
+      itemCount: 4,
+    });
+    await act(async () => {
+      await advanceAnimationFrames();
+    });
+
+    expect(fixture.getScrollTop()).toBe(240);
+    vlist.scrollToIndex.mockClear();
+
+    fixture.setClientHeight(320);
+    await act(async () => {
+      emitResize(fixture.scrollElement);
+      await advanceAnimationFrames();
     });
 
     expect(vlist.scrollToIndex).toHaveBeenCalledWith(3, { align: 'end', offset: 24 });
     expect(fixture.getScrollTop()).toBe(320);
+    expect(latestResult?.isSticky).toBe(true);
+  });
+
+  it('skips one viewport resize caused by the composer changing height', async () => {
+    const sessionId = 'session-composer-viewport-resize' as SessionId;
+    const fixture = createScrollFixture();
+    const vlist = createMockVirtualizerHandle(fixture.scrollElement);
+    const skipNextViewportResizeAutoScrollRef = { current: true };
+
+    await renderHarness({
+      sessionId,
+      vlist,
+      scrollElement: fixture.scrollElement,
+      itemCount: 4,
+      skipNextViewportResizeAutoScrollRef,
+    });
+    await act(async () => {
+      await advanceAnimationFrames();
+    });
+
+    vlist.scrollToIndex.mockClear();
+    fixture.setClientHeight(320);
+    await act(async () => {
+      emitResize(fixture.scrollElement);
+      await advanceAnimationFrames();
+    });
+
+    expect(vlist.scrollToIndex).not.toHaveBeenCalled();
+    expect(fixture.getScrollTop()).toBe(240);
+    expect(skipNextViewportResizeAutoScrollRef.current).toBe(false);
+    expect(latestResult?.isSticky).toBe(true);
+  });
+
+  it('attaches when the scroll viewport mounts after the empty state', async () => {
+    const sessionId = 'session-late-viewport' as SessionId;
+    saveScrollPosition(sessionId, { type: 'offset', scrollOffset: 96 });
+
+    await renderHarness({
+      sessionId,
+      vlist: null,
+      scrollElement: null,
+      itemCount: 0,
+    });
+
+    const fixture = createScrollFixture();
+    const vlist = createMockVirtualizerHandle(fixture.scrollElement);
+    await renderHarness({
+      sessionId,
+      vlist,
+      scrollElement: fixture.scrollElement,
+      itemCount: 4,
+    });
+    await act(async () => {
+      await advanceAnimationFrames();
+    });
+
+    expect(vlist.scrollTo).toHaveBeenCalledWith(96);
+    expect(latestResult?.isSticky).toBe(false);
+
+    await act(async () => {
+      fixture.scrollElement.dispatchEvent(new Event('scroll'));
+      vi.advanceTimersByTime(2);
+    });
+
+    await act(async () => {
+      latestResult?.scrollToBottom();
+      await advanceAnimationFrames();
+    });
+
+    expect(fixture.getScrollTop()).toBe(240);
+    expect(latestResult?.isSticky).toBe(true);
+
+    fixture.setContentHeight(696);
+    fixture.setScrollHeight(720);
+    await act(async () => {
+      emitResize(fixture.contentElement);
+      await advanceAnimationFrames();
+    });
+
+    expect(fixture.getScrollTop()).toBeCloseTo(319, 5);
     expect(latestResult?.isSticky).toBe(true);
   });
 });

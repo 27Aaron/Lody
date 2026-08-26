@@ -10,10 +10,12 @@ import {
   getStaticBuiltinAcpCapabilities,
   getBuiltinTitleGenerationDefaults,
   getRegistryAcpLaunchKind,
-  isBuiltinAgentType,
+  machineSupportsProviderSetupProtocol,
+  isManagedBuiltinAgentType,
   isAcpCapabilityCacheEntryCurrent,
   parseCustomAcpCommandLine,
   serializeCustomAcpLaunchSpec,
+  supportsBuiltinAuthentication,
   usesAcpProvidedSessionTitle,
   REGISTRY_ACP_AGENTS,
   type AgentBrandId,
@@ -21,7 +23,7 @@ import {
   type AgentConfigId,
   type AgentConfigMeta,
   type AgentType,
-  type BuiltinAgentType,
+  type ManagedBuiltinAgentType,
   type BuiltinRuntimeOverrides,
   type CustomAcpLaunchSpec,
   type MachineAcpBinaryProgressMessage,
@@ -78,6 +80,7 @@ type Translate = ReturnType<typeof useTranslation>['t'];
 
 export const DEEPSEEK_CLAUDE_PRESET_ID = 'deepseek-over-claude-code';
 export const DEEPSEEK_REASONIX_PRESET_ID = 'deepseek-reasonix';
+const DEEPSEEK_API_KEY_ENV = 'DEEPSEEK_API_KEY';
 export const MIMO_CLAUDE_PRESET_ID = 'mimo-over-claude-code';
 export const MINIMAX_CLAUDE_PRESET_ID = 'minimax-over-claude-code';
 export const GLM_CLAUDE_PRESET_ID = 'glm-over-claude-code';
@@ -453,6 +456,15 @@ const BUILTIN_OPTIONS: AgentTypeOption[] = [
   },
   {
     kind: 'builtin',
+    value: 'builtin:grok',
+    label: 'Grok',
+    descriptionDefault: 'xAI Grok coding agent runtime',
+    cliType: 'builtin',
+    agentType: 'grok',
+    searchKeys: 'grok xai',
+  },
+  {
+    kind: 'builtin',
     value: 'builtin:claude',
     label: 'Claude',
     descriptionKey: 'settings.agent.dialog.option.claude.description',
@@ -470,6 +482,17 @@ const BUILTIN_OPTIONS: AgentTypeOption[] = [
     cliType: 'builtin',
     agentType: 'codex',
     searchKeys: 'codex openai',
+  },
+  {
+    kind: 'builtin',
+    value: 'builtin:deepseek',
+    label: 'DeepSeek Harness',
+    descriptionKey: 'settings.agent.dialog.option.deepseek.description',
+    descriptionDefault: 'DeepSeek coding agent over ACP (developer preview)',
+    cliType: 'builtin',
+    agentType: 'deepseek',
+    experimental: true,
+    searchKeys: 'deepseek harness dsh acp',
   },
 ];
 
@@ -606,9 +629,7 @@ export type AgentConfigDialogProps = {
   /** Download + unpack the agent's platform binary. Rejects on failure. */
   onInstallBinary?: (args: BinaryActionArgs) => Promise<void>;
   /** Raise the selected managed runtime above onboarding's background queue. */
-  onManagedRuntimeSelected?: (agentType: BuiltinAgentType) => void;
-  /** Let managed builtins finish download/auth/probe after this dialog closes. */
-  deferManagedBuiltinCreation?: boolean;
+  onManagedRuntimeSelected?: (agentType: ManagedBuiltinAgentType) => void;
 };
 
 const DEFAULT_FORM: AgentConfigFormData = {
@@ -754,6 +775,12 @@ function buildPresetInjectedEnvPreview(
   return env;
 }
 
+function omitDeepSeekApiKey(env: Record<string, string>): Record<string, string> {
+  const additionalEnv = { ...env };
+  delete additionalEnv[DEEPSEEK_API_KEY_ENV];
+  return additionalEnv;
+}
+
 // For an existing custom config, returns the command "key" to pre-seed as
 // already-tested IFF the machine still has current cached capabilities whose
 // source version matches the saved command (same derivation the CLI uses in
@@ -789,7 +816,6 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
     onCheckBinaryStatus,
     onInstallBinary,
     onManagedRuntimeSelected,
-    deferManagedBuiltinCreation = false,
   } = props;
   const { t } = useTranslation();
   const draftConfigIdRef = useRef<AgentConfigId | null>(null);
@@ -912,20 +938,42 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
   const activeCredentialMode = activePreset
     ? getPresetCredentialMode(activePreset, formData.presetCredentialModeId)
     : undefined;
+  // Prefer the active preset's brand; on edit (where the preset isn't
+  // re-detected) preserve the brand already persisted on the config so an
+  // unrelated edit doesn't strip it. MiMo's custom token-plan base URL can't
+  // be recovered from env, so the persisted value is the source of truth.
+  const resolvedBrandId =
+    activePreset?.brandId ?? (mode.kind === 'edit' ? mode.config.brandId : undefined);
 
   const isCustom = formData.cliType === 'custom';
+  const isDeepSeekBuiltin = formData.cliType === 'builtin' && formData.agentType === 'deepseek';
+  const isManagedBuiltin =
+    formData.cliType === 'builtin' && isManagedBuiltinAgentType(formData.agentType);
   const builtinVerificationContext = `${machine.id}:${builtinVerificationRevision}`;
   const requiresBuiltinCreationVerification =
-    mode.kind === 'create' &&
-    !isPreset &&
-    formData.cliType === 'builtin' &&
-    isBuiltinAgentType(formData.agentType);
+    mode.kind === 'create' && !isPreset && isManagedBuiltin;
   const builtinCreationVerified =
     !requiresBuiltinCreationVerification || verifiedBuiltinContext === builtinVerificationContext;
   const builtinCreationPending =
     requiresBuiltinCreationVerification &&
     !builtinCreationVerified &&
     pendingCreateBuiltinContext === builtinVerificationContext;
+  // Editing an existing provider offers "Sign in again" whenever the provider
+  // has a login of its own to run — this dialog is where re-authentication
+  // lives, but preset / env-credential providers (DeepSeek, MiniMax, MiMo, GLM,
+  // or a hand-rolled endpoint override) authenticate purely through env vars,
+  // so a sign-in would do nothing for them. Creating one only surfaces the
+  // panel when a live probe reported missing credentials, because that panel is
+  // the single way to unblock the creation-time verification gate.
+  const showAuthenticationPanel =
+    mode.kind === 'edit'
+      ? supportsBuiltinAuthentication({
+          cliType: formData.cliType,
+          agentType: formData.agentType,
+          brandId: resolvedBrandId,
+          env: formData.env,
+        })
+      : authRequired && isManagedBuiltin;
   const builtinRuntimeOverrideKey =
     formData.cliType !== 'builtin'
       ? null
@@ -935,7 +983,9 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
           ? 'claudeCodeExecutable'
           : formData.agentType === 'kimi'
             ? 'kimiPath'
-            : null;
+            : formData.agentType === 'grok'
+              ? 'grokPath'
+              : null;
   const builtinRuntimeOverrideValue = builtinRuntimeOverrideKey
     ? (formData.runtimeOverrides?.[builtinRuntimeOverrideKey] ?? '')
     : '';
@@ -981,19 +1031,23 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
       : 'unknown';
   const usesDefaultManagedRuntime =
     formData.cliType === 'builtin' &&
-    (formData.agentType === 'codex' ||
-      formData.agentType === 'claude' ||
-      formData.agentType === 'kimi') &&
+    isManagedBuiltinAgentType(formData.agentType) &&
     !hasBuiltinRuntimeOverride;
+  // Deferring hands the target daemon a durable `providerSetup` row, so it is
+  // only safe once that daemon advertises the protocol. Derived here rather
+  // than passed in: every host already gives us the target machine, and a
+  // per-caller flag can disagree with the machine it travels with.
   const backgroundManagedBuiltinSetup =
-    deferManagedBuiltinCreation && requiresBuiltinCreationVerification && usesDefaultManagedRuntime;
+    machineSupportsProviderSetupProtocol(machine) &&
+    requiresBuiltinCreationVerification &&
+    usesDefaultManagedRuntime;
 
   useEffect(() => {
     if (
       !open ||
       mode.kind !== 'create' ||
       !usesDefaultManagedRuntime ||
-      !isBuiltinAgentType(formData.agentType)
+      !isManagedBuiltinAgentType(formData.agentType)
     ) {
       return;
     }
@@ -1024,8 +1078,7 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
   // visible Test action until a real probe (or authoritative cache entry) has
   // checked sign-in, so missing credentials can be resolved inside this dialog.
   const builtinNeedsCredentialCheck =
-    formData.cliType === 'builtin' &&
-    isBuiltinAgentType(formData.agentType) &&
+    isManagedBuiltin &&
     (requiresBuiltinCreationVerification
       ? !builtinCreationVerified
       : !manuallyTested && !hasCachedCaps);
@@ -1311,7 +1364,31 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
     });
   }, [isPreset, titleSelectors, formData.titleGeneration?.configOptionValues]);
 
-  const envCount = Object.keys(formData.env).length;
+  const additionalEnv = isDeepSeekBuiltin ? omitDeepSeekApiKey(formData.env) : formData.env;
+  const envCount = Object.keys(additionalEnv).length;
+
+  const updateEnvironment = (env: Record<string, string>) => {
+    latestProbeEnvRef.current = env;
+    setManuallyTested(false);
+    setAuthRequired(false);
+    setProbeError(null);
+    setProbeTick(0);
+    setBuiltinVerificationRevision((revision) => revision + 1);
+    setVerifiedBuiltinContext(null);
+    setPendingCreateBuiltinContext(null);
+    setFormData((prev) => ({ ...prev, env }));
+  };
+
+  const updateDeepSeekApiKey = (value: string) => {
+    const env = { ...formData.env };
+    const apiKey = value.trim();
+    if (apiKey) {
+      env[DEEPSEEK_API_KEY_ENV] = apiKey;
+    } else {
+      delete env[DEEPSEEK_API_KEY_ENV];
+    }
+    updateEnvironment(env);
+  };
 
   const selectOption = (opt: AgentTypeOption) => {
     titleDefaultsAppliedRef.current = false;
@@ -1468,6 +1545,9 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
         ? t('agents.disableReason.invalidCustomCommand', 'The launch command has unclosed quotes')
         : t('agents.disableReason.missingCustomCommand', 'Please enter the launch command');
     }
+    if (isDeepSeekBuiltin && !formData.env[DEEPSEEK_API_KEY_ENV]?.trim()) {
+      return t('agents.disableReason.missingDeepseekApiKey', 'Please enter your DeepSeek API Key');
+    }
     if (activePreset && !(formData.presetToken ?? '').trim()) {
       return t('agents.disableReason.missingPresetToken', 'Please paste your {{preset}} token', {
         preset: t(activePreset.labelKey, activePreset.label),
@@ -1510,12 +1590,6 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
         : isPreset
           ? buildPresetTitleGeneration(formData.cliType, agentType, formData.titleGeneration)
           : formData.titleGeneration;
-      // Prefer the active preset's brand; on edit (where the preset isn't
-      // re-detected) preserve the brand already persisted on the config so an
-      // unrelated edit doesn't strip it. MiMo's custom token-plan base URL can't
-      // be recovered from env, so the persisted value is the source of truth.
-      const brandId =
-        activePreset?.brandId ?? (mode.kind === 'edit' ? mode.config.brandId : undefined);
       await onSubmit({
         id: agentConfigId,
         name: formData.name.trim(),
@@ -1527,7 +1601,7 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
         env,
         titleGeneration,
         description: undefined,
-        brandId,
+        brandId: resolvedBrandId,
         ...(backgroundManagedBuiltinSetup ? { backgroundSetup: true } : {}),
       });
       onOpenChange(false);
@@ -1545,10 +1619,10 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
     formData,
     isCustom,
     isPreset,
-    mode,
     onOpenChange,
     onSubmit,
     parsedCustomAcp,
+    resolvedBrandId,
   ]);
 
   const submit = async () => {
@@ -1850,6 +1924,34 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
             />
           ) : null}
 
+          {isDeepSeekBuiltin ? (
+            <div className="rounded-xl border border-primary/20 bg-primary/[0.04] p-4">
+              <Field
+                htmlFor="deepseek-api-key"
+                label={t('settings.agent.dialog.deepseek.apiKeyLabel', 'DeepSeek API Key')}
+                hint={t(
+                  'settings.agent.dialog.deepseek.apiKeyHelp',
+                  'Saved with this provider and injected as DEEPSEEK_API_KEY when DSH starts.'
+                )}
+                icon={<KeyRound className="h-3.5 w-3.5" aria-hidden="true" />}
+              >
+                <Input
+                  id="deepseek-api-key"
+                  type="password"
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={formData.env[DEEPSEEK_API_KEY_ENV] ?? ''}
+                  onChange={(event) => updateDeepSeekApiKey(event.target.value)}
+                  placeholder={t(
+                    'settings.agent.dialog.deepseek.apiKeyPlaceholder',
+                    'sk-XXXXXXXXXXXX'
+                  )}
+                  className="h-9 font-mono"
+                />
+              </Field>
+            </div>
+          ) : null}
+
           {isCustom && (
             <div className="space-y-3 rounded-xl border border-primary/20 bg-primary/[0.04] p-4">
               <Field
@@ -1935,10 +2037,15 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
                             'settings.agent.dialog.runtimeOverride.kimiPlaceholder',
                             '/path/to/kimi'
                           )
-                        : t(
-                            'settings.agent.dialog.runtimeOverride.claudePlaceholder',
-                            '/path/to/claude'
-                          )
+                        : formData.agentType === 'grok'
+                          ? t(
+                              'settings.agent.dialog.runtimeOverride.grokPlaceholder',
+                              '/path/to/grok'
+                            )
+                          : t(
+                              'settings.agent.dialog.runtimeOverride.claudePlaceholder',
+                              '/path/to/claude'
+                            )
                   }
                   autoComplete="off"
                   spellCheck={false}
@@ -1983,25 +2090,43 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
             </div>
           )}
 
-          {authRequired &&
-          formData.cliType === 'builtin' &&
-          isBuiltinAgentType(formData.agentType) ? (
-            <AcpAuthenticationPanel
-              machineId={machine.id}
-              configId={agentConfigId}
-              cliType={formData.cliType}
-              agentType={formData.agentType}
-              runtimeOverrides={formData.runtimeOverrides}
-              env={formData.env}
-              onAuthenticated={() => {
-                setAuthRequired(false);
-                setProbeError(null);
-                setManuallyTested(true);
-                if (requiresBuiltinCreationVerification) {
-                  setVerifiedBuiltinContext(builtinVerificationContext);
+          {showAuthenticationPanel ? (
+            <div className="rounded-xl border border-border/60 bg-muted/20 p-4">
+              <Field
+                label={t('settings.agent.dialog.section.account', 'Account')}
+                hint={
+                  authRequired
+                    ? t(
+                        'settings.agent.dialog.authRequiredHint',
+                        'This provider has no credentials on this machine yet.'
+                      )
+                    : t(
+                        'settings.agent.dialog.reauthenticateHint',
+                        'Sign in again if this provider stopped accepting your account.'
+                      )
                 }
-              }}
-            />
+                icon={<KeyRound className="h-3.5 w-3.5" aria-hidden="true" />}
+              >
+                <AcpAuthenticationPanel
+                  machineId={machine.id}
+                  configId={agentConfigId}
+                  cliType={formData.cliType}
+                  agentType={formData.agentType}
+                  runtimeOverrides={formData.runtimeOverrides}
+                  env={formData.env}
+                  compact
+                  reauthentication={!authRequired}
+                  onAuthenticated={() => {
+                    setAuthRequired(false);
+                    setProbeError(null);
+                    setManuallyTested(true);
+                    if (requiresBuiltinCreationVerification) {
+                      setVerifiedBuiltinContext(builtinVerificationContext);
+                    }
+                  }}
+                />
+              </Field>
+            </div>
           ) : null}
 
           {showBinaryPanel && (
@@ -2132,7 +2257,7 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
 
           <Section
             title={
-              activePreset
+              activePreset || isDeepSeekBuiltin
                 ? t(
                     'settings.agent.dialog.section.envAdditional',
                     'Additional environment variables'
@@ -2143,7 +2268,7 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
             action={
               envCount > 0 ? (
                 <InlineCopyButton
-                  value={envVarsToText(formData.env)}
+                  value={envVarsToText(additionalEnv)}
                   ariaLabel={t('common.copy', 'Copy')}
                 />
               ) : null
@@ -2157,18 +2282,25 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
                 )}
               </p>
             ) : null}
+            {!activePreset && isDeepSeekBuiltin ? (
+              <p className="mb-2 text-xs text-muted-foreground">
+                {t(
+                  'settings.agent.dialog.deepseek.envHint',
+                  'Optional: set DEEPSEEK_BASE_URL here to use a compatible endpoint.'
+                )}
+              </p>
+            ) : null}
             <EnvVarsTextarea
-              value={formData.env}
+              value={additionalEnv}
               onChange={(env) => {
-                latestProbeEnvRef.current = env;
-                setManuallyTested(false);
-                setAuthRequired(false);
-                setProbeError(null);
-                setProbeTick(0);
-                setBuiltinVerificationRevision((revision) => revision + 1);
-                setVerifiedBuiltinContext(null);
-                setPendingCreateBuiltinContext(null);
-                setFormData({ ...formData, env });
+                updateEnvironment(
+                  isDeepSeekBuiltin && formData.env[DEEPSEEK_API_KEY_ENV]
+                    ? {
+                        ...env,
+                        [DEEPSEEK_API_KEY_ENV]: formData.env[DEEPSEEK_API_KEY_ENV],
+                      }
+                    : env
+                );
               }}
               showLabel={false}
               rows={5}

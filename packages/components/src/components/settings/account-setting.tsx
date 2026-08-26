@@ -74,6 +74,12 @@ function CloudAccountSettings({ surface }: { surface: AccountSettingsSurface }) 
     cloudOperations.billing.getWorkspaceMemberLimitState,
     activeOrganizationId ? { workspaceId: activeOrganizationId } : 'skip'
   );
+  // Accepting an invitation adds a billed seat and Stripe invoices the
+  // prorated difference immediately, so the invite dialog quotes it up front.
+  const seatInvitePreview = useCloudQuery(
+    cloudOperations.billing.getWorkspaceSeatInvitePreview,
+    activeOrganizationId ? { workspaceId: activeOrganizationId } : 'skip'
+  );
   // Deleting a paid workspace needs a billing-aware guard: a live subscription
   // blocks deletion (cancel first); a cancel-scheduled one gets a warning that
   // deleting now ends it immediately.
@@ -85,16 +91,20 @@ function CloudAccountSettings({ surface }: { surface: AccountSettingsSurface }) 
     if (
       !billingOverview ||
       billingOverview.effectivePlanTier === 'free' ||
-      billingOverview.entitlementSource === 'stripe_gift'
+      (billingOverview.entitlementSource === 'stripe_gift' && !billingOverview.autoRenewAfterGift)
     ) {
       return null;
     }
     if (billingOverview.cancelAtPeriodEnd) {
+      const entitlementEnd =
+        billingOverview.giftEndsAt && billingOverview.giftEndsAt > Date.now()
+          ? billingOverview.giftEndsAt
+          : billingOverview.currentPeriodEnd;
       return {
         kind: 'cancel-scheduled',
-        formattedPeriodEnd: billingOverview.currentPeriodEnd
+        formattedPeriodEnd: entitlementEnd
           ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(
-              new Date(billingOverview.currentPeriodEnd)
+              new Date(entitlementEnd)
             )
           : null,
       };
@@ -673,6 +683,7 @@ function CloudAccountSettings({ surface }: { surface: AccountSettingsSurface }) 
       memberLimit={memberLimitState?.memberLimit ?? null}
       memberLimitReached={memberLimitReachedFromError || memberLimitState?.canInvite === false}
       billingUiAvailable={billingUiAvailable}
+      seatPreview={seatInvitePreview}
       onSignOut={() => {
         void signOut();
       }}

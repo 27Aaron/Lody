@@ -36,6 +36,12 @@ Two things the dev build does deliberately, both load-bearing:
 
 ## Coding rules
 
+- The CLI's own `version` must be imported from `@/pkg`, never from a relative
+  `../package.json`. Each build composition aliases `@/pkg` to the manifest that
+  actually gets published (cloud builds point it at the private composing
+  package), so a relative import bakes the stale OSS version into the published
+  bundle — this is what made `lody@0.82.1 --version` print `0.76.0`. The package
+  `name` is the exception: it stays `lody` in every composition.
 - context/cli-effect-ts.md — prefer Effect TS idioms
   for new/refactored CLI code: services via `Context.Tag` + `Layer`, typed errors,
   structured concurrency, `Schedule` retries; when raw async/await is OK; interop.
@@ -73,6 +79,14 @@ Two things the dev build does deliberately, both load-bearing:
   connection state and `connectedWorkspaces`; aggregate `connectivity` is local runtime
   health and must not be presented as proof that the cached CLI token was accepted.
 
+- `lody daemon start` resolves cloud authentication in the FOREGROUND process before
+  spawning the detached runner (`commands/daemon-auth-preflight.ts`): validate the cached
+  credential against the backend, and on a missing/rejected credential run the interactive
+  device-authorization flow (browser link) right there. The runner is detached, so a
+  credential failure inside it is invisible. An unreachable backend aborts instead of
+  re-authenticating — a network outage must not replace a working credential — and a
+  non-TTY run aborts instead of blocking on a browser link until the device code expires.
+  `--skip-auth-check` is the explicit opt-out; `--auth` keeps its non-interactive path.
 - New one-shot commands should use `src/lib/command-runtime.ts` (`runOneShotCommand`)
   so exit codes, telemetry flush, and stream flushing are handled consistently.
 - Process entrypoints, command-owned boundaries, global process-error handlers, and
@@ -103,14 +117,15 @@ Two things the dev build does deliberately, both load-bearing:
 
 - `src/commands/app.ts` registers the directory as a local project through the
   daemon (`local-project/add`, idempotent — the id is a sha256 of the resolved root
-  path), then hands `lody://chat/new?machine=…&project=…[&workspaceSlug=…]` to the OS
+  path), then hands the active installation profile's deep link
+  (`lody://chat/new?…` for cloud, `lody-oss://chat/new?…` for local) to the OS
   via `utils/open-browser.ts`. Link shape lives in `src/lib/desktop-deep-link.ts`;
   the desktop side parses it in
   `packages/components/src/lib/desktop-open-local-project-deep-link.ts` and routes to
   `/<slug>/chat?context=local&machine=…&project=…`. Both sides pin the URL in unit tests.
 - INVARIANT: registration happens only in the CLI. The deep link carries ids, never a
   path, and the app must never register a project from one — any web page can navigate
-  the OS to `lody://…`, so a path-carrying link would let a site hand agents an
+  the OS to either registered protocol, so a path-carrying link would let a site hand agents an
   arbitrary directory. An unknown project id just stays unselected.
 - `workspaceSlug` is present only when the daemon reported workspace candidates (i.e.
   multiple active workspaces). With one workspace the app's current workspace is
@@ -158,6 +173,10 @@ Two things the dev build does deliberately, both load-bearing:
   public wait tool.
   Legacy single create/chat `wait=true` remains a temporary compatibility adapter;
   new callers must not depend on it. Child Sessions are one level deep only.
+  An independent Session created from inside another Session persists exact provenance in
+  `openedBySessionId`. If that opener is a child Tab, it also sparsely persists the Tab owner's
+  root route as `openedByRootSessionId`; clients need both ids to restore the exact originating
+  Tab. Do not rewrite the exact opener to the root or treat either pointer as `parentSessionId`.
 - Local daemon IPC sends the real control request once; do not restore a health preflight.
   Native `LocalDaemonAvailabilityError` must be thrown outside the Effect runtime boundary
   so MCP can preserve `DAEMON_NOT_RUNNING` versus retryable `DAEMON_BUSY`. A connection
@@ -249,6 +268,14 @@ Two things the dev build does deliberately, both load-bearing:
   pointer was NOT yet written (`if (!dispatched)`); rolling back after dispatch deletes an
   already-running session out from under the daemon and drops its generated title. Do not
   reintroduce a hard-fail Streams ack on the dispatch write.
+- A renderer joining a local data-plane Session Doc room must not call
+  `LoroDocumentManager.getOrCreateSessionDoc` or retain a live cloud room.
+  Renderers may visit thousands of historical sessions; coupling local join to a
+  `SessionDocument` retains them until GC and can starve the Host health endpoint. Use the
+  bounded raw-doc one-shot reconciliation in `loro/doc.ts`, cancel it on local leave or
+  Session activation, and unload renderer-only docs after the last peer leaves. Session
+  metadata/RPC activation owns persistent CLI cloud joins. Flock room bridging remains
+  explicitly paired to local Flock join/leave.
 
 ## Agent feedback
 
@@ -314,9 +341,14 @@ Terminal output history is bounded separately from agent execution output. Read
 context/terminal-output-lifecycle.md before
 changing ACP terminal notification handling or history compaction.
 
-Builtin Claude/Codex use bundled adapters plus managed native runtimes; builtin Kimi
-launches its managed Node package directly. `src/agent/setting.ts` resolves all three
-through `src/agent/managed-agent-runtime.ts`. See
+Builtin Claude/Codex/Grok use bundled adapters plus managed native runtimes; builtin Kimi
+launches its managed Node package directly. `src/agent/setting.ts` resolves those four
+through `src/agent/managed-agent-runtime.ts`. Builtin DeepSeek Harness is deliberately not
+a managed runtime: `src/agent/deepseek-harness-runtime.ts` consumes the pinned profile from
+the `packages/acp-extension-dsh` submodule, launches it through Lody's isolated npx cache,
+and loads the bundled `deepseek-acp.js` adapter. The extension owns the ACP model,
+reasoning-effort, and permission selectors while Harness
+continues to own model execution, sandbox enforcement, and one-shot approvals. See
 managed runtime context and the
 builtin extension checklist.
 
@@ -332,9 +364,13 @@ The adapter packages in `apps/cli/package.json` are public submodule dependencie
 Adapter bugs/behaviors should be fixed in their package sources first:
 
 - `claude` → `packages/acp-extension-claude`, source:
-  https://github.com/loro-dev/acp-extension-claude
+  https://github.com/LodyAI/acp-extension-claude
 - `codex` → `packages/acp-extension-codex`, source:
-  https://github.com/loro-dev/acp-extension-codex
+  https://github.com/LodyAI/acp-extension-codex
+- shared extension contracts → `packages/acp-extension-core`, source:
+  https://github.com/LodyAI/acp-extension-core
+- `deepseek` → `packages/acp-extension-dsh`, source:
+  https://github.com/LodyAI/acp-extension-dsh
 
 Both adapters ship from these workspace sources; debug behavior there first.
 

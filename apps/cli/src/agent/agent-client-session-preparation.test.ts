@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SessionId } from '@lody/shared';
+import type { MachineId, SessionId, WorkspaceId } from '@lody/shared';
 import type { Logger } from '@/utils/logger';
 
 const connectionMocks = vi.hoisted(() => ({
@@ -7,6 +7,7 @@ const connectionMocks = vi.hoisted(() => ({
   newSession: vi.fn(),
   loadSession: vi.fn(),
   resumeSession: vi.fn(),
+  setSessionConfigOption: vi.fn(),
   unstable_forkSession: vi.fn(),
   closeSession: vi.fn(),
   cancel: vi.fn(),
@@ -19,6 +20,7 @@ vi.mock('@agentclientprotocol/sdk', () => ({
     readonly newSession = connectionMocks.newSession;
     readonly loadSession = connectionMocks.loadSession;
     readonly resumeSession = connectionMocks.resumeSession;
+    readonly setSessionConfigOption = connectionMocks.setSessionConfigOption;
     readonly unstable_forkSession = connectionMocks.unstable_forkSession;
     readonly closeSession = connectionMocks.closeSession;
     readonly cancel = connectionMocks.cancel;
@@ -99,6 +101,203 @@ describe('AgentClient session preparation gate', () => {
     ]);
   });
 
+  it('starts initial and replacement sessions with selected config option values', async () => {
+    const client = new AgentClient({
+      logger: createLogger(),
+      sessionId: 'session-grok' as SessionId,
+      terminalManager: {} as never,
+      agentConfig: { cliType: 'builtin', agentType: 'grok' },
+      configOptionValues: { permission_mode: 'always-approve' },
+      onUpdateMessage: vi.fn(),
+      onRequestPermission: vi.fn(),
+    });
+
+    await client.startSession({} as never, '/workdir');
+
+    expect(connectionMocks.initialize).toHaveBeenCalledWith(
+      expect.objectContaining({
+        _meta: { clientIdentifier: 'lody:session-grok' },
+      })
+    );
+    expect(connectionMocks.newSession).toHaveBeenCalledWith({
+      cwd: '/workdir',
+      mcpServers: [],
+      _meta: {
+        clientIdentifier: 'lody:session-grok',
+        lody: {
+          sessionConfig: {
+            version: 1,
+            configOptionValues: { permission_mode: 'always-approve' },
+          },
+        },
+      },
+    });
+
+    connectionMocks.newSession.mockResolvedValueOnce({ sessionId: 'acp-session-2' });
+    await client.prepareReplacementSession();
+
+    expect(connectionMocks.newSession).toHaveBeenLastCalledWith({
+      cwd: '/workdir',
+      mcpServers: [],
+      _meta: {
+        clientIdentifier: 'lody:session-grok',
+        lody: {
+          sessionConfig: {
+            version: 1,
+            configOptionValues: { permission_mode: 'always-approve' },
+          },
+        },
+      },
+    });
+  });
+
+  it('sends initial config without provider-specific startup fields', async () => {
+    const client = new AgentClient({
+      logger: createLogger(),
+      sessionId: 'session-neutral-config' as SessionId,
+      terminalManager: {} as never,
+      agentConfig: { cliType: 'builtin', agentType: 'codex' },
+      configOptionValues: { approval_policy: 'never' },
+      onUpdateMessage: vi.fn(),
+      onRequestPermission: vi.fn(),
+    });
+
+    await client.startSession({} as never, '/workdir');
+
+    expect(connectionMocks.newSession).toHaveBeenCalledWith({
+      cwd: '/workdir',
+      mcpServers: [],
+      _meta: {
+        lody: {
+          sessionConfig: {
+            version: 1,
+            configOptionValues: { approval_policy: 'never' },
+          },
+        },
+      },
+    });
+  });
+
+  it('carries successful live config changes into replacement session startup', async () => {
+    connectionMocks.setSessionConfigOption.mockResolvedValue({ configOptions: [] });
+    const client = new AgentClient({
+      logger: createLogger(),
+      sessionId: 'session-grok-switch' as SessionId,
+      terminalManager: {} as never,
+      agentConfig: { cliType: 'builtin', agentType: 'grok' },
+      configOptionValues: { permission_mode: 'ask' },
+      onUpdateMessage: vi.fn(),
+      onRequestPermission: vi.fn(),
+    });
+
+    await client.startSession({} as never, '/workdir');
+    await client.setSessionConfigOption(
+      'acp-session-1' as never,
+      'permission_mode',
+      'always-approve'
+    );
+
+    connectionMocks.newSession.mockResolvedValueOnce({ sessionId: 'acp-session-2' });
+    await client.prepareReplacementSession();
+    expect(connectionMocks.newSession).toHaveBeenLastCalledWith({
+      cwd: '/workdir',
+      mcpServers: [],
+      _meta: {
+        clientIdentifier: 'lody:session-grok-switch',
+        lody: {
+          sessionConfig: {
+            version: 1,
+            configOptionValues: { permission_mode: 'always-approve' },
+          },
+        },
+      },
+    });
+
+    await client.setSessionConfigOption('acp-session-1' as never, 'permission_mode', 'ask');
+    connectionMocks.newSession.mockResolvedValueOnce({ sessionId: 'acp-session-3' });
+    await client.prepareReplacementSession();
+    expect(connectionMocks.newSession).toHaveBeenLastCalledWith({
+      cwd: '/workdir',
+      mcpServers: [],
+      _meta: {
+        clientIdentifier: 'lody:session-grok-switch',
+        lody: {
+          sessionConfig: {
+            version: 1,
+            configOptionValues: { permission_mode: 'ask' },
+          },
+        },
+      },
+    });
+  });
+
+  it('loads sessions with selected config option values', async () => {
+    connectionMocks.initialize.mockResolvedValue({
+      agentCapabilities: { loadSession: true },
+    });
+    connectionMocks.loadSession.mockResolvedValue({});
+    const client = new AgentClient({
+      logger: createLogger(),
+      sessionId: 'session-grok-load' as SessionId,
+      terminalManager: {} as never,
+      agentConfig: { cliType: 'builtin', agentType: 'grok' },
+      configOptionValues: { permission_mode: 'always-approve' },
+      onUpdateMessage: vi.fn(),
+      onRequestPermission: vi.fn(),
+    });
+
+    await client.startSession({} as never, '/workdir', 'stored-grok-session' as never);
+
+    expect(connectionMocks.loadSession).toHaveBeenCalledWith({
+      sessionId: 'stored-grok-session',
+      cwd: '/workdir',
+      mcpServers: [],
+      _meta: {
+        clientIdentifier: 'lody:session-grok-load',
+        lody: {
+          sessionConfig: {
+            version: 1,
+            configOptionValues: { permission_mode: 'always-approve' },
+          },
+        },
+      },
+    });
+  });
+
+  it('injects Lody MCP into DeepSeek Harness sessions', async () => {
+    const client = new AgentClient({
+      logger: createLogger(),
+      sessionId: 'session-deepseek' as SessionId,
+      workspaceId: 'workspace-1' as WorkspaceId,
+      machineId: 'machine-1' as MachineId,
+      terminalManager: {} as never,
+      agentConfig: { cliType: 'builtin', agentType: 'deepseek' },
+      taskToolsEnabled: true,
+      onUpdateMessage: vi.fn(),
+      onRequestPermission: vi.fn(),
+    });
+
+    await client.startSession({} as never, '/workdir');
+
+    expect(connectionMocks.newSession).toHaveBeenCalledWith({
+      cwd: '/workdir',
+      mcpServers: [
+        expect.objectContaining({
+          name: 'lody',
+          command: process.execPath,
+          args: expect.arrayContaining(['__internal', 'lody-mcp-server']),
+          env: expect.arrayContaining([
+            { name: 'LODY_MCP_SESSION_ID', value: 'session-deepseek' },
+            { name: 'LODY_MCP_WORKSPACE_ID', value: 'workspace-1' },
+            { name: 'LODY_MCP_MACHINE_ID', value: 'machine-1' },
+            { name: 'LODY_MCP_WORKDIR', value: '/workdir' },
+            { name: 'LODY_MCP_TASK_TOOLS_ENABLED', value: '1' },
+          ]),
+        }),
+      ],
+    });
+  });
+
   it('aborts while waiting for a claim without creating an ACP session', async () => {
     const target = deferred<{ workdir: string }>();
     const startupAbort = deferred<never>();
@@ -140,6 +339,7 @@ describe('AgentClient session preparation gate', () => {
       logger: createLogger(),
       sessionId: 'session-fork' as SessionId,
       terminalManager: {} as never,
+      configOptionValues: { interaction_mode: 'plan' },
       onUpdateMessage: vi.fn(),
       onRequestPermission: vi.fn(),
     });
@@ -152,7 +352,15 @@ describe('AgentClient session preparation gate', () => {
       expect.objectContaining({
         sessionId: 'acp-session-1',
         cwd: '/workdir',
-        _meta: { lody: { forkAtTurn: { version: 1, turnId: 'provider-turn-1' } } },
+        _meta: {
+          lody: {
+            forkAtTurn: { version: 1, turnId: 'provider-turn-1' },
+            sessionConfig: {
+              version: 1,
+              configOptionValues: { interaction_mode: 'plan' },
+            },
+          },
+        },
       })
     );
     await client.cancel('acp-session-1' as never);

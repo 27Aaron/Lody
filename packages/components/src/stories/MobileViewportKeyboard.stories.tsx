@@ -193,7 +193,7 @@ function ChatLandingContent() {
           title="Let's ship something"
           promptValue={prompt}
           onPromptChange={setPrompt}
-          promptPlaceholder="Press '/' for commands, '@' for files, '#' for issues/PRs, '$' for skills."
+          promptPlaceholder="Press '/' for commands, '@' for mentions."
           contextSwitch={
             <ContextSwitch value={contextType} onChange={setContextType} tone="dark" />
           }

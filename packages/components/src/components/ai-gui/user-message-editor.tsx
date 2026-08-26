@@ -6,7 +6,7 @@ import { Button } from '@/ui/button';
 import { Textarea } from '@/ui/textarea';
 import { cn } from '@/lib/utils';
 import type { ConversationFontSize } from '@/atoms/settings';
-import { CONVERSATION_TEXT_FONT_SIZE_CLASSES } from './conversation-font-size-classes';
+import { conversationTextFontSizeStyle } from './conversation-font-size-classes';
 
 /** Grows with the text instead of reserving a fixed empty block. */
 const MAX_TEXTAREA_HEIGHT_PX = 320;
@@ -92,9 +92,9 @@ export function UserMessageEditor({
         className={cn(
           'input-scrollbar resize-none rounded-none border-transparent bg-transparent p-0',
           'leading-relaxed text-foreground',
-          CONVERSATION_TEXT_FONT_SIZE_CLASSES[conversationFontSize],
           isSaving && 'text-muted-foreground'
         )}
+        style={conversationTextFontSizeStyle(conversationFontSize)}
         aria-label={t('sessions.editMessage', 'Edit message')}
       />
       <div className="mt-2 flex items-center justify-end gap-1">

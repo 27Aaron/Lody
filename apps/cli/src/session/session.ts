@@ -15,6 +15,7 @@ import { ndJsonStream } from '@agentclientprotocol/sdk';
 import * as fs from 'fs';
 import type { AcpStartupTimeoutOptions, AgentClient } from '@/agent/agent-client';
 import { createAcpClient } from '@/agent/acp-runner';
+import { withAcpSessionStartSlot } from '@/agent/acp-session-start-gate';
 import {
   AcpStartupProcessError,
   AcpStartupProcessExitError,
@@ -34,6 +35,7 @@ import {
 import { scrubInheritedClaudeAuthEnv, shouldScrubClaudeAuthEnv } from '@/agent/claude-env-conflict';
 import { getCachedLoginShellEnvSync, getLoginShellEnv } from '@/agent/login-shell-env';
 import { mergeLoginShellEnv, withDefaultAcpPathEntries } from '@/agent/setting';
+import { withLoopbackNoProxy } from '@lody/shared/proxy-env';
 import { ShellTerminalManager, TerminalManager } from './terminal-manager';
 import { decodeBuffer } from '@/utils/encoding';
 import {
@@ -113,6 +115,7 @@ export class Session extends EventEmitter<SessionEvents> implements ISession {
   public agentClient: AgentClient | null = null;
   public acpSessionId: ACPSessionId | null = null;
   private acpCapabilities: AcpCapabilitiesResult | null = null;
+  private acpCapabilitySourceVersion: string | null = null;
   public terminalManager: TerminalManager;
   public ghTokenInjected: boolean = false;
 
@@ -177,7 +180,19 @@ export class Session extends EventEmitter<SessionEvents> implements ISession {
   }
 
   setWorkdir(workdir: string): void {
-    const stat = fs.statSync(workdir);
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(workdir);
+    } catch (error) {
+      const code =
+        error && typeof error === 'object' && 'code' in error
+          ? (error as { code?: unknown }).code
+          : null;
+      if (code === 'ENOENT') {
+        throw new Error(`Session workdir does not exist: ${workdir}`, { cause: error });
+      }
+      throw error;
+    }
     if (!stat.isDirectory()) {
       throw new Error(`Session workdir is not a directory: ${workdir}`);
     }
@@ -455,10 +470,15 @@ export class Session extends EventEmitter<SessionEvents> implements ISession {
     const agentEnv = shouldScrubClaudeAuthEnv(this.config.agentCliType, this.config.agentType)
       ? scrubInheritedClaudeAuthEnv(withLoginShell, { ...configEnv, ...extraEnv })
       : withLoginShell;
-    return withDefaultAcpPathEntries(agentEnv, this.config.agentType);
+    // The child talks to Lody's own loopback services (MCP HTTP host, preview
+    // gateway); a proxy inherited from the host process or the login shell
+    // must never intercept those. Runs last so a proxy contributed by the
+    // login shell is covered too.
+    return withLoopbackNoProxy(withDefaultAcpPathEntries(agentEnv, this.config.agentType));
   }
 
   async createAgent(callbacks: CreateAgentConfig): Promise<string> {
+    this.acpCapabilitySourceVersion = callbacks.capabilitySourceVersion ?? null;
     const loginShellEnv = await getLoginShellEnv();
     callbacks.abortSignal?.throwIfAborted();
     const env = withLodyNpmCacheForNpx(
@@ -604,6 +624,8 @@ export class Session extends EventEmitter<SessionEvents> implements ISession {
             cliType: callbacks.cliType,
             agentType: callbacks.agentType,
           },
+          configOptionValues: this.config.configOptionValues,
+          taskToolsEnabled: this.config.taskToolsEnabled,
           launcher,
           workspaceId: this.config.workspaceId,
           machineId: this.config.machineId as MachineId,
@@ -620,9 +642,9 @@ export class Session extends EventEmitter<SessionEvents> implements ISession {
           onThreadGoalCleared: callbacks.onThreadGoalCleared,
           onSessionTitleUpdate: callbacks.onSessionTitleUpdate,
           onAgentWarning: callbacks.onAgentWarning,
-          onCodexProposedPlan: callbacks.onCodexProposedPlan,
-          onCodexImageGenerationBegin: callbacks.onCodexImageGenerationBegin,
-          onCodexImageGenerationEnd: callbacks.onCodexImageGenerationEnd,
+          loadExternalMcpServers: callbacks.loadExternalMcpServers,
+          onImageGenerationBegin: callbacks.onImageGenerationBegin,
+          onImageGenerationEnd: callbacks.onImageGenerationEnd,
           onWriteTextFile: callbacks.onWriteTextFile,
           sessionId: this.sessionId,
           startupTimeouts,
@@ -663,16 +685,24 @@ export class Session extends EventEmitter<SessionEvents> implements ISession {
     };
 
     try {
-      return await runNpxStartupWithRecovery({
-        command: callbacks.command,
-        args: callbacks.args ?? [],
-        env,
-        logger: this.logger,
-        logPrefix: `[${this.sessionId}]`,
-        attempt: ({ startupTimeouts }) => attemptCreateAgent(startupTimeouts),
-        cleanupFailedAttempt,
-        getStderrTail: () => lastStderrTail,
-      });
+      return await withAcpSessionStartSlot(
+        {
+          label: this.sessionId,
+          logger: this.logger,
+          abortSignal: callbacks.abortSignal,
+        },
+        async () =>
+          await runNpxStartupWithRecovery({
+            command: callbacks.command,
+            args: callbacks.args ?? [],
+            env,
+            logger: this.logger,
+            logPrefix: `[${this.sessionId}]`,
+            attempt: ({ startupTimeouts }) => attemptCreateAgent(startupTimeouts),
+            cleanupFailedAttempt,
+            getStderrTail: () => lastStderrTail,
+          })
+      );
     } catch (error) {
       await cleanupFailedAttempt();
       throw error;
@@ -681,6 +711,10 @@ export class Session extends EventEmitter<SessionEvents> implements ISession {
 
   getAcpCapabilities(): AcpCapabilitiesResult | null {
     return this.acpCapabilities;
+  }
+
+  getAcpCapabilitySourceVersion(): string | null {
+    return this.acpCapabilitySourceVersion;
   }
 
   private runCommand(

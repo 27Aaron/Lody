@@ -9,29 +9,37 @@ import {
 
 export const languageAtom = atomWithStorage<SupportedLanguage>('lody-language', 'en');
 
-export const CONVERSATION_FONT_SIZE_VALUES = ['small', 'default', 'large'] as const;
-export type ConversationFontSize = (typeof CONVERSATION_FONT_SIZE_VALUES)[number];
+export const DEFAULT_CONVERSATION_FONT_SIZE = 14;
+export const CONVERSATION_FONT_SIZE_MIN = 9;
+export const CONVERSATION_FONT_SIZE_MAX = 32;
+export type ConversationFontSize = number;
 
-export function isConversationFontSize(value: unknown): value is ConversationFontSize {
-  return (
-    typeof value === 'string' &&
-    (CONVERSATION_FONT_SIZE_VALUES as readonly string[]).includes(value)
+const LEGACY_CONVERSATION_FONT_SIZES: Record<string, ConversationFontSize> = {
+  small: 12,
+  default: DEFAULT_CONVERSATION_FONT_SIZE,
+  large: 16,
+};
+
+export function normalizeConversationFontSize(value: unknown): ConversationFontSize {
+  const migratedValue = typeof value === 'string' ? LEGACY_CONVERSATION_FONT_SIZES[value] : value;
+  if (typeof migratedValue !== 'number' || !Number.isFinite(migratedValue)) {
+    return DEFAULT_CONVERSATION_FONT_SIZE;
+  }
+  return Math.min(
+    CONVERSATION_FONT_SIZE_MAX,
+    Math.max(CONVERSATION_FONT_SIZE_MIN, Math.round(migratedValue))
   );
 }
 
-export function normalizeConversationFontSize(value: unknown): ConversationFontSize {
-  return isConversationFontSize(value) ? value : 'default';
-}
-
-const conversationFontSizeStorageAtom = atomWithStorage<string>(
+const conversationFontSizeStorageAtom = atomWithStorage<unknown>(
   'lody-conversation-font-size',
-  'default'
+  DEFAULT_CONVERSATION_FONT_SIZE
 );
 
 export const conversationFontSizeAtom = atom(
   (get) => normalizeConversationFontSize(get(conversationFontSizeStorageAtom)),
   (_get, set, nextValue: ConversationFontSize) => {
-    set(conversationFontSizeStorageAtom, nextValue);
+    set(conversationFontSizeStorageAtom, normalizeConversationFontSize(nextValue));
   }
 );
 

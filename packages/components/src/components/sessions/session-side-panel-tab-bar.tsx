@@ -57,6 +57,17 @@ export function getSidePanelTabCloseFallback(
   return tabIds[closingIndex - 1] ?? tabIds[closingIndex + 1] ?? null;
 }
 
+export function getSidePanelTabStateAfterClose(
+  tabIds: readonly string[],
+  closingTabId: string
+): { fallbackTabId: string | null; sidebarOpen: boolean } {
+  if (!tabIds.includes(closingTabId)) {
+    return { fallbackTabId: null, sidebarOpen: true };
+  }
+  const fallbackTabId = getSidePanelTabCloseFallback(tabIds, closingTabId);
+  return { fallbackTabId, sidebarOpen: fallbackTabId !== null };
+}
+
 type SessionSidePanelTabBarProps = {
   tabs: SessionSidePanelTabItem[];
   activeTabId: string | null;

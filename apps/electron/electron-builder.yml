@@ -61,7 +61,11 @@ win:
   executableName: lody-oss
   icon: build/icon.ico
 nsis:
-  artifactName: ${productName}-${version}-${arch}-setup.${ext}
+  # GitHub Releases rewrites spaces in uploaded asset names to periods, which would
+  # desynchronize the file names electron-builder records in latest*.yml from the
+  # ones electron-updater can actually download. productName is "Lody OSS", so every
+  # artifact name here uses a space-free token instead of ${productName}.
+  artifactName: LodyOSS-${version}-${arch}-setup.${ext}
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
@@ -75,12 +79,20 @@ mac:
     NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
     NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
     NSUserNotificationAlertStyle: banner
-  notarize: false
+  # Squirrel.Mac refuses to install an update whose code signature it cannot
+  # validate against the running app, so signed + notarized is what makes macOS
+  # auto-update work at all. Local builds without Apple credentials are still
+  # fine: electron-builder skips signing (and therefore notarization) with a
+  # warning rather than failing.
+  notarize: true
+  # Covers the zip target that Squirrel.Mac downloads for auto-update.
+  artifactName: LodyOSS-${version}-${arch}.${ext}
 dmg:
-  artifactName: ${productName}-${version}-${arch}.${ext}
+  artifactName: LodyOSS-${version}-${arch}.${ext}
 linux:
   icon: build/icon.png
   executableName: lodyOssDesktop
+  syncDesktopName: true
   target:
     - AppImage
     - snap
@@ -88,10 +100,19 @@ linux:
   maintainer: LodyAI
   category: Utility
 appImage:
-  artifactName: ${productName}-${version}-${arch}.${ext}
+  artifactName: LodyOSS-${version}-${arch}.${ext}
 snap:
-  artifactName: ${productName}-${version}-${arch}.${ext}
+  artifactName: LodyOSS-${version}-${arch}.${ext}
 deb:
-  artifactName: ${productName}-${version}-${arch}.${ext}
+  artifactName: LodyOSS-${version}-${arch}.${ext}
 includePdb: false
 npmRebuild: false
+# The public build has no VITE_ELECTRON_UPDATE_URL to inject: electron.vite.config.ts
+# deliberately strips every VITE_* value so public builds stay deterministic. This
+# provider is baked into the packaged app-update.yml instead, which is exactly the
+# fallback AppUpdaterService takes when no feed URL is defined. Generating latest*.yml
+# during packaging also depends on this block being present.
+publish:
+  provider: github
+  owner: loro-dev
+  repo: lody-oss

@@ -3,8 +3,11 @@ import { Provider, createStore } from 'jotai';
 import { useMemo, useState } from 'react';
 import { fn } from 'storybook/test';
 import {
+  AGENT_ROLE_VERSION,
   type AgentConfigId,
   type AgentConfigMeta,
+  type AgentRole,
+  type AgentRoleId,
   type MachineId,
   type SessionId,
   type SessionMeta,
@@ -18,6 +21,7 @@ import type {
   AcpConfigOptionValue,
 } from '@/components/shared/acp-selector-options';
 import type { AcpSessionSelectOption } from '@/components/shared/acp-session-select';
+import type { ComposerAgentRoleItem } from '@/lib/composer-agent-roles';
 
 /**
  * The mobile composer's consolidated run-config bottom sheet, opened by
@@ -155,10 +159,12 @@ function StoryShell({
   session,
   modelOptions,
   selectors,
+  agentRoles,
 }: {
   session: SessionMeta;
   modelOptions: AcpSessionSelectOption[];
   selectors: AcpConfigOptionSelector[];
+  agentRoles?: ComposerAgentRoleItem[];
 }) {
   const store = useMemo(() => {
     const s = createStore();
@@ -171,6 +177,7 @@ function StoryShell({
 
   const [open, setOpen] = useState(true);
   const [model, setModel] = useState<string | null>(modelOptions[0]?.value ?? null);
+  const [roleId, setRoleId] = useState<AgentRoleId | null>(null);
   const [values, setValues] = useState<Record<string, AcpConfigOptionValue>>(() =>
     Object.fromEntries(selectors.map((sel) => [sel.configId, sel.currentValue]))
   );
@@ -205,6 +212,16 @@ function StoryShell({
           configOptionSelectors={selectors}
           configOptionValues={values}
           onConfigOptionChange={(id, v) => setValues((p) => ({ ...p, [id]: v }))}
+          agentRoles={
+            agentRoles
+              ? {
+                  items: agentRoles,
+                  selectedRoleId: roleId,
+                  onSelect: setRoleId,
+                  onCreate: fn(),
+                }
+              : undefined
+          }
         />
       </div>
     </Provider>
@@ -228,4 +245,82 @@ export const Codex: Story = {
 
 export const Claude: Story = {
   args: { session: claudeSession, modelOptions: claudeModelOptions, selectors: claudeSelectors },
+};
+
+/**
+ * A provider with a long model catalog: the Model row's picker gains a fuzzy
+ * search field (`shouldOfferOptionSearch`, the same rule the desktop menu uses).
+ * Type `54m` to see it narrow to `gpt-5.4-mini` — a substring filter would not.
+ */
+export const ManyModels: Story = {
+  args: {
+    session: codexSession,
+    modelOptions: [
+      { value: 'gpt-5.5', label: 'gpt-5.5' },
+      { value: 'gpt-5.5-codex', label: 'gpt-5.5-codex' },
+      { value: 'gpt-5.4', label: 'gpt-5.4' },
+      { value: 'gpt-5.4-mini', label: 'gpt-5.4-mini' },
+      { value: 'gpt-5.3', label: 'gpt-5.3' },
+      { value: 'gpt-5.3-mini', label: 'gpt-5.3-mini' },
+      { value: 'o5-preview', label: 'o5-preview' },
+      { value: 'o5-mini', label: 'o5-mini' },
+      { value: 'o4', label: 'o4' },
+      { value: 'gpt-4.1', label: 'gpt-4.1' },
+    ],
+    selectors: codexSelectors,
+  },
+};
+
+const makeRole = (overrides: Partial<AgentRole> & Pick<AgentRole, 'id' | 'name'>): AgentRole => ({
+  v: AGENT_ROLE_VERSION,
+  ownerUserId: 'user-1',
+  visibility: 'private',
+  machineId,
+  agentConfigId: 'agent-codex' as AgentConfigId,
+  runConfig: {},
+  revision: 1,
+  createdAt: 1,
+  updatedAt: 1,
+  ...overrides,
+});
+
+/**
+ * The machine has no Roles yet. The row still renders and reads `None`; its
+ * list is the way to make the first one, the same as the desktop row. Hiding it
+ * made the control look absent.
+ */
+export const NoAgentRolesYet: Story = {
+  args: {
+    session: codexSession,
+    modelOptions: codexModelOptions,
+    selectors: codexSelectors,
+    agentRoles: [],
+  },
+};
+
+/**
+ * The Role row sits above Agent, because a Role answers every row under it.
+ * Mobile is the picker only: no detail pane, no create action. `None` leads the
+ * list, and an unavailable Role stays listed and disabled with its reason.
+ */
+export const WithAgentRoles: Story = {
+  args: {
+    session: codexSession,
+    modelOptions: codexModelOptions,
+    selectors: codexSelectors,
+    agentRoles: [
+      {
+        role: makeRole({ id: 'role-reviewer' as AgentRoleId, name: 'Code Reviewer', emoji: '🔍' }),
+        availability: { kind: 'available' },
+      },
+      {
+        role: makeRole({ id: 'role-docs' as AgentRoleId, name: 'Docs Writer', emoji: '📝' }),
+        availability: { kind: 'available' },
+      },
+      {
+        role: makeRole({ id: 'role-gone' as AgentRoleId, name: 'Retired Reviewer', emoji: '🗑️' }),
+        availability: { kind: 'unavailable', reason: 'agent_config_missing' },
+      },
+    ],
+  },
 };

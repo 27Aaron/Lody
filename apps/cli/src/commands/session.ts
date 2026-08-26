@@ -56,6 +56,7 @@ import {
   type AcpCapabilityCacheEntry,
   type AcpConfigOptionSummary,
   type AgentConfigMeta,
+  type AgentRoleId,
   type LocalProjectId,
   type MachineLegacyMetaFields,
   type MachineId,
@@ -165,6 +166,9 @@ export type CreateOptions = CommonOptions &
     userTurnId?: string;
     /** Lody-originated execution-chain depth for the initial input. */
     chainDepth?: number;
+    /** Agent Role provenance frozen when the create Operation is accepted. */
+    agentRoleId?: string;
+    agentRoleRevision?: number;
     /**
      * Task this session belongs to. Inherited from the invoking session when it
      * is itself working on a task, so an agent spawning helpers keeps the whole
@@ -258,6 +262,7 @@ type SessionStatusResult = {
     latestUserMsgId?: string;
   };
   openedBySessionId?: SessionId;
+  openedByRootSessionId?: SessionId;
   parentSessionId?: SessionId;
   latestUserMsgId?: string;
   processingUserMsgId?: string;
@@ -298,6 +303,7 @@ type ResolvedCreateContext = {
   project?: ProjectRef;
   parentSessionId?: SessionId;
   openedBySessionId?: SessionId;
+  openedByRootSessionId?: SessionId;
   taskId?: TaskId;
 };
 
@@ -1031,6 +1037,15 @@ export async function resolveLocalProjectBranchForCreate(
   requestedBranch?: string,
   options: { requireGit?: boolean } = {}
 ): Promise<string | undefined> {
+  // A direct local-project session runs in the project's current working
+  // directory. Capturing its current branch here would turn a harmless
+  // snapshot into a later `git switch` if the directory changes before the
+  // daemon starts the session. Branch selection is meaningful only when the
+  // caller explicitly requested one or when a worktree needs a base ref.
+  if (!requestedBranch?.trim() && options.requireGit !== true) {
+    return undefined;
+  }
+
   const gitState = await getLocalProjectGitStateAtRootPath(project.rootPath);
   if (!gitState.git) {
     if (options.requireGit === true) {
@@ -1280,6 +1295,7 @@ function buildCliHistoryInputConfig(args: {
   modeId?: string;
   modelId?: string;
   configOptionValues?: Record<string, string | boolean>;
+  taskToolsEnabled?: boolean;
   resume?: ACPSessionConfig['resume'];
   chainDepth?: number;
 }): NonNullable<SessionHistoryInput['inputConfig']> {
@@ -1293,6 +1309,7 @@ function buildCliHistoryInputConfig(args: {
       args.configOptionValues && Object.keys(args.configOptionValues).length > 0
         ? args.configOptionValues
         : undefined,
+    taskToolsEnabled: args.taskToolsEnabled === true,
     resume: args.resume,
     chainDepth: args.chainDepth,
   };
@@ -1302,6 +1319,8 @@ export type ResolvedTurnDispatchConfig = {
   modeId?: string;
   modelId?: string;
   configOptionValues?: Record<string, string | boolean>;
+  /** Frozen capability gate for the built-in Lody Task MCP tools. */
+  taskToolsEnabled?: boolean;
   /** Prevent create replay from re-reading mutable defaults from the requester history. */
   inheritSessionDefaults?: false;
   /**
@@ -1349,6 +1368,7 @@ export function applyAgentRunConfigSelection(
   };
   return {
     config: {
+      ...(rest.taskToolsEnabled !== undefined ? { taskToolsEnabled: rest.taskToolsEnabled } : {}),
       ...((resolved.modeId ?? rest.modeId) ? { modeId: resolved.modeId ?? rest.modeId } : {}),
       ...((resolved.modelId ?? rest.modelId) ? { modelId: resolved.modelId ?? rest.modelId } : {}),
       ...(Object.keys(configOptionValues).length > 0 ? { configOptionValues } : {}),
@@ -1421,6 +1441,7 @@ function mergeTurnDispatchConfig(
     modeId: explicitConfig.modeId ?? fallbackConfig?.modeId,
     modelId: explicitConfig.modelId ?? fallbackConfig?.modelId,
     configOptionValues: explicitConfig.configOptionValues ?? fallbackConfig?.configOptionValues,
+    taskToolsEnabled: explicitConfig.taskToolsEnabled ?? fallbackConfig?.taskToolsEnabled,
   };
 }
 
@@ -1542,6 +1563,7 @@ export function filterCompatibleInheritedTurnConfig(
     ...(config.modeId && supportedModes.has(config.modeId) ? { modeId: config.modeId } : {}),
     ...(config.modelId && supportedModels.has(config.modelId) ? { modelId: config.modelId } : {}),
     ...(configOptionValues ? { configOptionValues } : {}),
+    ...(config.taskToolsEnabled !== undefined ? { taskToolsEnabled: config.taskToolsEnabled } : {}),
   };
 }
 
@@ -1584,6 +1606,9 @@ export function resolveTurnDispatchConfigFromInputConfig(
     ...(inputConfig.modelId ? { modelId: inputConfig.modelId } : {}),
     ...(inputConfig.configOptionValues
       ? { configOptionValues: inputConfig.configOptionValues }
+      : {}),
+    ...(inputConfig.taskToolsEnabled !== undefined
+      ? { taskToolsEnabled: inputConfig.taskToolsEnabled }
       : {}),
   };
 }
@@ -1780,7 +1805,7 @@ async function createMachineRpcClient(args: {
     // Keep the prepared URL available during an auth-triggered token refresh;
     // prefer a newly returned gateway after the refresh completes.
     getBaseUrl: () => streamsTokenProvider.getGatewayBaseUrl() ?? baseUrl,
-    shardUrls: getLoroStreamsShardUrls(baseUrl),
+    shardUrls: getLoroStreamsShardUrls(baseUrl, streamsTokenProvider.getShardHostSuffix()),
     fetchImpl: cliHttpFetch,
     timeout: {
       connectTimeoutMs: readPositiveIntEnv('LODY_LORO_RPC_CONNECT_TIMEOUT_MS', 30_000),
@@ -2287,6 +2312,13 @@ async function resolveLocalProjectBranchOnMachine(args: {
   requestedBranch?: string;
   useWorktree?: boolean;
 }): Promise<string | undefined> {
+  // Keep direct local sessions branchless. The target daemon must use the
+  // directory as it exists at dispatch time rather than switching back to a
+  // branch observed by this remote preflight.
+  if (!args.requestedBranch?.trim() && args.useWorktree !== true) {
+    return undefined;
+  }
+
   const response = await readLocalProjectGitStateOnMachine(args);
   if (!response.success) {
     if (args.requestedBranch || args.useWorktree === true) {
@@ -2418,6 +2450,18 @@ export function resolveCreateCurrentSessionId(
 ): SessionId | undefined {
   return (normalizeCliValue(options.currentSessionId) ?? normalizeCliValue(env.LODY_SESSION_ID)) as
     SessionId | undefined;
+}
+
+export function resolveOpenedBySessionRelation(
+  currentSession: Pick<SessionMeta, 'id' | 'parentSessionId'> | undefined
+): { openedBySessionId?: SessionId; openedByRootSessionId?: SessionId } {
+  if (!currentSession) return {};
+  return {
+    openedBySessionId: currentSession.id,
+    ...(currentSession.parentSessionId
+      ? { openedByRootSessionId: currentSession.parentSessionId }
+      : {}),
+  };
 }
 
 export function assertSupportedParentDepth(
@@ -2568,7 +2612,7 @@ async function resolveCreateContext(args: {
     agentConfig,
     ...(project ? { project } : {}),
     ...(parentSessionId ? { parentSessionId } : {}),
-    ...(currentSession ? { openedBySessionId: currentSession.id } : {}),
+    ...resolveOpenedBySessionRelation(currentSession),
     ...(taskId ? { taskId } : {}),
   };
 }
@@ -2756,6 +2800,7 @@ export async function createSessionResult(
   project?: ProjectRef;
   parentSessionId?: SessionId;
   openedBySessionId?: SessionId;
+  openedByRootSessionId?: SessionId;
   completionPromise?: Promise<Awaited<ReturnType<typeof waitForTurnCompletion>>>;
 }> {
   const envOverrides = parseEnvAssignments(options.env);
@@ -2782,8 +2827,15 @@ export async function createSessionResult(
     options.sessionOwnerUserId
   );
   const resolved = await resolveCreateContext({ auth, workspace, manager, options });
-  const { targetMachine, agentConfig, project, parentSessionId, openedBySessionId, taskId } =
-    resolved;
+  const {
+    targetMachine,
+    agentConfig,
+    project,
+    parentSessionId,
+    openedBySessionId,
+    openedByRootSessionId,
+    taskId,
+  } = resolved;
   const effectiveDispatchConfig = await resolveEffectiveSessionCreateDispatchConfig({
     manager,
     workspaceId: workspace.id as WorkspaceId,
@@ -2814,7 +2866,14 @@ export async function createSessionResult(
     ...(baseBranch ? { baseBranch } : {}),
     ...(parentSessionId ? { parentSessionId } : {}),
     ...(openedBySessionId ? { openedBySessionId } : {}),
+    ...(openedByRootSessionId ? { openedByRootSessionId } : {}),
+    ...(options.agentRoleId ? { agentRoleId: options.agentRoleId as AgentRoleId } : {}),
+    ...(options.agentRoleRevision !== undefined
+      ? { agentRoleRevision: options.agentRoleRevision }
+      : {}),
     ...(taskId ? { taskId } : {}),
+    // `agentRoleId`/`agentRoleRevision` are declared on `SessionMeta` now, so
+    // the provenance fields no longer need a local intersection here.
   } satisfies SessionMeta);
 
   let completionAbortController: AbortController | undefined;
@@ -2837,6 +2896,7 @@ export async function createSessionResult(
         modeId: modeId ?? undefined,
         modelId: modelId ?? undefined,
         configOptionValues: effectiveDispatchConfig.configOptionValues,
+        taskToolsEnabled: taskId ? true : effectiveDispatchConfig.taskToolsEnabled,
         chainDepth: options.chainDepth,
       }),
       preallocatedId: options.userTurnId,
@@ -2908,6 +2968,7 @@ export async function createSessionResult(
       ...(project ? { project } : {}),
       ...(parentSessionId ? { parentSessionId } : {}),
       ...(openedBySessionId ? { openedBySessionId } : {}),
+      ...(openedByRootSessionId ? { openedByRootSessionId } : {}),
       ...(taskId ? { taskId } : {}),
       completionPromise,
     };
@@ -3027,6 +3088,7 @@ export async function sendSessionChatResult(
       modeId: effectiveDispatchConfig.modeId,
       modelId: effectiveDispatchConfig.modelId,
       configOptionValues: effectiveDispatchConfig.configOptionValues,
+      taskToolsEnabled: effectiveDispatchConfig.taskToolsEnabled,
       resume: session.acpSessionId ?? undefined,
       chainDepth: orchestration?.chainDepth,
     }),
@@ -3314,6 +3376,9 @@ async function buildSessionStatusResult(
         }
       : {}),
     ...(session.openedBySessionId ? { openedBySessionId: session.openedBySessionId } : {}),
+    ...(session.openedByRootSessionId
+      ? { openedByRootSessionId: session.openedByRootSessionId }
+      : {}),
     ...(session.parentSessionId ? { parentSessionId: session.parentSessionId } : {}),
     ...(session.latestUserMsgId ? { latestUserMsgId: session.latestUserMsgId } : {}),
     ...(session.processingUserMsgId ? { processingUserMsgId: session.processingUserMsgId } : {}),
@@ -3359,6 +3424,7 @@ function printHumanSessionShow(result: SessionShowResult): void {
   console.log(`agentConfigId: ${session.agentConfigId ?? '-'}`);
   console.log(`parentSessionId: ${session.parentSessionId ?? '-'}`);
   console.log(`openedBySessionId: ${session.openedBySessionId ?? '-'}`);
+  console.log(`openedByRootSessionId: ${session.openedByRootSessionId ?? '-'}`);
   console.log(`repo: ${normalizeCliValue(session.repoFullName) ?? '-'}`);
   console.log(`baseBranch: ${session.baseBranch ?? '-'}`);
   console.log(`branch: ${session.branchName ?? '-'}`);
@@ -3380,6 +3446,7 @@ function printHumanSessionStatus(result: SessionStatusResult): void {
   console.log(`agentConfigId: ${result.agent.agentConfigId ?? '-'}`);
   console.log(`activeTurn: ${result.activeTurn?.assistantTurnId ?? '-'}`);
   console.log(`openedBySessionId: ${result.openedBySessionId ?? '-'}`);
+  console.log(`openedByRootSessionId: ${result.openedByRootSessionId ?? '-'}`);
   console.log(`parentSessionId: ${result.parentSessionId ?? '-'}`);
 }
 
@@ -3524,6 +3591,9 @@ const sessionCreateCommand = new Command('create')
             userTurnId: result.userTurnId,
             ...(result.parentSessionId ? { parentSessionId: result.parentSessionId } : {}),
             ...(result.openedBySessionId ? { openedBySessionId: result.openedBySessionId } : {}),
+            ...(result.openedByRootSessionId
+              ? { openedByRootSessionId: result.openedByRootSessionId }
+              : {}),
           };
 
           if (!shouldWaitForCompletion) {

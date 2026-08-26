@@ -19,7 +19,6 @@ export function resolveSessionInfoBarGitHubActionIds({
   hasExistingPr,
   workspaceDirty,
   hasChanges,
-  isWorktree,
   isAgentBusy,
   prCiState,
   prMergeState,
@@ -35,7 +34,6 @@ export function resolveSessionInfoBarGitHubActionIds({
    * which is uncommitted-only and gates "Commit & Push".
    */
   hasChanges: boolean;
-  isWorktree: boolean;
   isAgentBusy: boolean;
   prCiState?: SessionPullRequestCiState | null;
   prMergeState?: SessionPullRequestMergeState | null;
@@ -53,13 +51,14 @@ export function resolveSessionInfoBarGitHubActionIds({
     return workspaceDirty ? ['commit-and-push'] : [];
   }
 
-  // No PR yet. "Create PR" is gated on whether the worktree has ANY changes to
-  // base a PR on (committed or uncommitted), not on the working-tree-dirty flag
-  // alone — the latter vanished the moment the agent auto-committed (clean tree,
-  // real commits, still no PR), hiding the action. "Commit & Push" still
-  // requires uncommitted changes; a clean tree has nothing to commit.
+  // No PR yet. "Create PR" is gated on whether the GitHub-capable workspace has
+  // ANY changes to base a PR on (committed or uncommitted), not on the
+  // working-tree-dirty flag alone — the latter vanished the moment the agent
+  // auto-committed (clean tree, real commits, still no PR), hiding the action.
+  // "Commit & Push" still requires uncommitted changes; a clean tree has nothing
+  // to commit.
   const actions: SessionInfoBarGitHubActionId[] = [];
-  if (isWorktree && hasChanges) {
+  if (hasChanges) {
     // Create PR is the primary action; Create Draft PR rides its dropdown.
     actions.push('create-pr', 'create-draft-pr');
   }

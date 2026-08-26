@@ -84,7 +84,13 @@ workspace 访问权限。
 
 ## Daemon 模式
 
-`lody daemon start` 会在后台启动 Lody CLI，并由 daemon 维护运行状态。它适合长期连接桌面端、Web 端和移动端，不需要一直保留一个终端窗口。
+`lody daemon start` 会在后台启动 Lody CLI，并由 daemon 维护运行状态。它适合长期连接桌面端、Web 端和移动端，不需要一直保留一个终端窗口。接入远端机器也用这条命令：通过 SSH 在服务器或另一台电脑上执行，那台机器就会加入你的工作区。
+
+进入后台之前，`lody daemon start` 会先确认能连上 Lody、并且这台机器已登录：
+
+- 已登录且网络正常：直接启动 daemon。
+- 未登录（或本地凭证已失效）：走 device-authorization 流程，在浏览器里打开登录链接（没有浏览器时打印链接），等你完成登录后再进入 daemon 模式。如果没有可交互的终端（CI、脚本化的 SSH 命令），则不会挂起等待，而是直接报错并提示改用 `lody login` 或 `--auth <cli_token>`。
+- 连不上 Lody：直接报错退出，而不是留下一个无法同步的 daemon。可以用 `--skip-auth-check` 强行启动，或用 `--auth <cli_token>` 非交互登录。
 
 | 命令                  | 作用                             |
 | --------------------- | -------------------------------- |

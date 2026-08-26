@@ -426,6 +426,47 @@ describe('WorkspacePresenceTransport', () => {
     expect(url.searchParams.get('ephemeral')).toBe(LODY_PRESENCE_CHANNEL);
   });
 
+  it('restarts a stalled initial join and re-asserts local viewing state', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const stores: FakePresenceStore[] = [];
+    const warnings: string[] = [];
+    const viewingEntries = (store: FakePresenceStore) =>
+      Object.values(parseLodyPresenceStates(store.getAllStates())).filter(
+        (state) => state.kind === 'session-viewing'
+      );
+    const presence = new WorkspacePresenceTransport({
+      workspaceId: 'workspace-1' as WorkspaceId,
+      presenceShardId: '03',
+      onWarning: (message) => warnings.push(message),
+      createStore: () => {
+        const store = new FakePresenceStore();
+        stores.push(store);
+        return store;
+      },
+      createTransport: () => new FakePresenceTransport(),
+    });
+
+    try {
+      presence.start({ baseUrl: 'https://streams.example.test', auth: async () => 'token' });
+      presence.publishSessionViewing({ sessionId: 'session-1' as SessionId, userId: 'user-1' });
+      expect(stores).toHaveLength(1);
+      expect(viewingEntries(stores[0]!)).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      expect(stores).toHaveLength(2);
+      expect(viewingEntries(stores[0]!)).toEqual([]);
+      expect(viewingEntries(stores[1]!)).toHaveLength(1);
+      expect(warnings.some((message) => message.includes('restarting stalled presence room'))).toBe(
+        true
+      );
+    } finally {
+      await presence.stop();
+      vi.useRealTimers();
+    }
+  });
+
   describe('publishSessionViewing', () => {
     const viewingEntriesOf = (store: FakePresenceStore) =>
       Object.values(parseLodyPresenceStates(store.getAllStates())).filter(
@@ -434,6 +475,7 @@ describe('WorkspacePresenceTransport', () => {
 
     const setup = () => {
       const stores: FakePresenceStore[] = [];
+      const transports: FakePresenceTransport[] = [];
       const presence = new WorkspacePresenceTransport({
         workspaceId: 'workspace-1' as WorkspaceId,
         createStore: () => {
@@ -441,18 +483,25 @@ describe('WorkspacePresenceTransport', () => {
           stores.push(store);
           return store;
         },
-        createTransport: () => new FakePresenceTransport(),
+        createTransport: () => {
+          const transport = new FakePresenceTransport();
+          transports.push(transport);
+          return transport;
+        },
       });
       presence.start({ baseUrl: 'https://streams.example.test', auth: async () => 'token' });
-      return { presence, stores };
+      return { presence, stores, transports };
     };
 
     it('publishes, heartbeats, replaces in place, and clears', async () => {
       vi.useFakeTimers();
       vi.setSystemTime(10_000);
       try {
-        const { presence, stores } = setup();
+        const { presence, stores, transports } = setup();
         const store = stores[0]!;
+        transports[0]?.resolve({ ok: true, value: { unsubscribe: vi.fn() } } as JoinResult);
+        await flush();
+        transports[0]?.emitStatus('joined');
 
         presence.publishSessionViewing({ sessionId: 'session-1' as SessionId, userId: 'user-1' });
         expect(viewingEntriesOf(store)).toEqual([

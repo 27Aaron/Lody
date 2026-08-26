@@ -12,11 +12,7 @@ import type { PrObservation, PrPollQueryOutcome } from './github-graphql-client'
 import type { ResolvedGitHubCredential } from './github-credential-resolver';
 import { loadPrPollerConfig, type PrPollerConfig } from './pr-poller-config';
 import { INITIAL_SYNC_RETRY_MS, INITIAL_SYNC_WAIT_MS, PrPollScheduler } from './pr-poll-scheduler';
-import {
-  emptyPrPollerState,
-  type PrPollerState,
-  type PrPollerStateStore,
-} from './pr-poller-state';
+import { emptyPrPollerState, type PrPollerState, type PrPollerStateStore } from './pr-poller-state';
 import type {
   AssociatePullRequestArgs,
   PrPollMetaPatch,
@@ -184,11 +180,9 @@ function makeStateStore(initial?: PrPollerState) {
     upsertScope: vi.fn((scope: string, quota: PrPollerState['scopes'][string]) => {
       stored.scopes[scope] = quota;
     }),
-    upsertRepoCooldown: vi.fn(
-      (key: string, cooldown: PrPollerState['repoCooldowns'][string]) => {
-        stored.repoCooldowns[key] = cooldown;
-      }
-    ),
+    upsertRepoCooldown: vi.fn((key: string, cooldown: PrPollerState['repoCooldowns'][string]) => {
+      stored.repoCooldowns[key] = cooldown;
+    }),
     deleteRepoCooldown: vi.fn((key: string) => {
       delete stored.repoCooldowns[key];
     }),
@@ -296,10 +290,7 @@ describe('PrPollScheduler', () => {
     expect(calls()).toHaveLength(1);
     const [call] = calls();
     expect(call?.batch.statusAliases).toEqual([{ alias: 'p0', prNumber: 11 }]);
-    expect(call?.batch.discoveryAliases.map((alias) => alias.branch)).toEqual([
-      'feat/x',
-      'feat/x',
-    ]);
+    expect(call?.batch.discoveryAliases.map((alias) => alias.branch)).toEqual(['feat/x', 'feat/x']);
     expect(call?.batch.variables).toMatchObject({ owner: 'owner', name: 'repo' });
     expect(scheduler.counters.calls).toBe(1);
     expect(scheduler.counters.pointsSpent).toBe(1);
@@ -866,10 +857,7 @@ describe('PrPollScheduler', () => {
     // reaches idle-terminal only after the NEXT successful discovery pass.
     workspace.associateResult = true;
     await advance(config.lowMinIntervalMs);
-    expect(workspace.metas.get(sid('s1'))?.pullRequests).toEqual([
-      prMeta(9, 'merged'),
-      prMeta(55),
-    ]);
+    expect(workspace.metas.get(sid('s1'))?.pullRequests).toEqual([prMeta(9, 'merged'), prMeta(55)]);
   });
 
   it('a malformed discovery alias is not a confirmed empty result (no idle-terminal)', async () => {
@@ -965,7 +953,7 @@ describe('PrPollScheduler', () => {
     expect(scheduler.peekState().discoveryFingerprints['ws1:s1']).toBeUndefined();
   });
 
-  it('drops in-flight results when a session switches to a direct local project', async () => {
+  it('keeps in-flight results when a session switches to a direct local project with the same GitHub context', async () => {
     const workspace = new FakeWorkspace('ws1');
     workspace.metas.set(
       sid('s1'),
@@ -993,10 +981,9 @@ describe('PrPollScheduler', () => {
     };
     await startWith([workspace]);
 
-    expect(workspace.associateCalls).toHaveLength(0);
-    expect(workspace.writtenPatches).toHaveLength(0);
-    expect(workspace.metas.get(sid('s1'))?.pullRequests).toBeUndefined();
-    expect(scheduler.peekState().discoveryFingerprints['ws1:s1']).toBeUndefined();
+    expect(workspace.associateCalls).toHaveLength(1);
+    expect(workspace.metas.get(sid('s1'))?.pullRequests).toEqual([prMeta(55)]);
+    expect(scheduler.peekState().discoveryFingerprints['ws1:s1']).toBe('owner/repo|feat/x');
   });
 
   it('does not write or associate for an owner that migrated machines mid-poll', async () => {

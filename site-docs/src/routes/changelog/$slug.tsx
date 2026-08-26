@@ -1,10 +1,6 @@
 import { preloadChangelogContent } from '@site/components/changelog';
 import { loadChangelogPostRoute } from '@site/src/changelog-loader';
-import {
-  changelogPostHead,
-  changelogIndexHead,
-  ChangelogPostRoutePage,
-} from '@site/src/site-pages';
+import { ChangelogPostRoutePage, changelogIndexHead, changelogPostHead } from '@site/src/site-pages/changelog';
 import { createFileRoute } from '@tanstack/react-router';
 
 export const Route = createFileRoute('/changelog/$slug')({

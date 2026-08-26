@@ -1,6 +1,6 @@
 /**
  * Shared site footer — same structure as the homepage underwater footer:
- * copyright + Loro credit, support / terms / privacy / X.
+ * copyright, support / terms / privacy / GitHub / X.
  * Product nav lives in SiteNav only.
  */
 
@@ -9,6 +9,7 @@ import { founderCallUrl } from '@site/lib/founder-call';
 export type SiteFooterLocale = 'en' | 'zh';
 
 const X_HREF = 'https://x.com/lody_ai';
+const GITHUB_HREF = 'https://github.com/loro-dev/lody-oss';
 
 const copy = {
   en: {
@@ -39,12 +40,7 @@ export function SiteFooter({ locale }: { locale: SiteFooterLocale }) {
   return (
     <footer className="underwater-footer site-footer">
       <div className="underwater-footer__inner">
-        <p className="underwater-footer__rights">
-          {t.rights} · Powered by{' '}
-          <a href="https://loro.dev" rel="noreferrer" target="_blank">
-            Loro Stack
-          </a>
-        </p>
+        <p className="underwater-footer__rights">{t.rights}</p>
         <nav className="underwater-footer__links" aria-label="Footer">
           <a href={t.supportHref}>{t.support}</a>
           <a href={founderCallUrl('footer')} rel="noreferrer" target="_blank">
@@ -52,6 +48,9 @@ export function SiteFooter({ locale }: { locale: SiteFooterLocale }) {
           </a>
           <a href={t.termsHref}>{t.terms}</a>
           <a href={t.privacyHref}>{t.privacy}</a>
+          <a href={GITHUB_HREF} rel="noreferrer" target="_blank">
+            GitHub
+          </a>
           <a href={X_HREF} rel="noreferrer" target="_blank">
             X
           </a>

@@ -14,7 +14,6 @@ import {
   type LocalProjectControlErrorCode,
   type LocalProjectControlRequest,
   type LocalProjectControlResponse,
-  type LocalLoroDataPlaneServer,
   type LocalProjectId,
   type LocalSessionControlRequest,
   type LocalSessionControlResponse,
@@ -22,6 +21,7 @@ import {
   type SessionId,
   type SessionMeta,
 } from '@lody/shared';
+import type { LocalLoroDataPlaneServer } from '@lody/shared/local-loro-data-plane-server';
 import pkg from '@/pkg';
 import { Logger } from '@/utils/logger';
 import { Lody } from '@/lib/lody';
@@ -29,6 +29,7 @@ import {
   startLocalIpcSocketServers,
   stopLocalIpcSocketServers,
 } from '@/lib/local-ipc-socket-server';
+import { startLodyMcpHttpServer, stopLodyMcpHttpServer } from '@/mcp/lody-mcp-http-server';
 import type { LocalProbeConfig } from '@/lib/local-probe';
 import type { LocalSessionControlConfig } from '@/lib/local-session-control';
 import { startLocalTerminalServer, stopLocalTerminalServer } from '@/lib/local-terminal-server';
@@ -297,6 +298,10 @@ export class LodyFleet {
           getWorkspaceServer: (workspaceId) => this.getWorkspaceLoroDataPlaneServer(workspaceId),
         });
       }),
+      traceAsync(this.logger, 'startup.mcp_http', undefined, async () => {
+        // Never fatal: on failure agents keep the per-session stdio MCP entry.
+        await startLodyMcpHttpServer({ logger: this.logger });
+      }),
     ]);
 
     // Start the PR poller BEFORE any workspace runtime can connect: the
@@ -538,6 +543,7 @@ export class LodyFleet {
       stopLocalIpcSocketServers(),
       stopLocalTerminalServer(),
       stopLocalLoroDataPlaneServer(),
+      stopLodyMcpHttpServer(),
     ]);
 
     for (const timer of this.retryTimers.values()) {
@@ -1218,27 +1224,27 @@ export class LodyFleet {
       }
 
       if (matches.length === 0) {
-        return [
-          {
-            type: responseType,
-            sessionId: message.sessionId,
-            success: false,
-            error: 'session_not_found',
-            message: `Session not found: ${message.sessionId}`,
-          } as LocalSessionControlResponse,
-        ];
+        const response = {
+          type: responseType,
+          sessionId: message.sessionId,
+          success: false,
+          error: 'session_not_found',
+          message: `Session not found: ${message.sessionId}`,
+        } as LocalSessionControlResponse;
+        options.onResponse?.(response);
+        return [response];
       }
 
       if (matches.length > 1) {
-        return [
-          {
-            type: responseType,
-            sessionId: message.sessionId,
-            success: false,
-            error: 'session_ambiguous',
-            message: `Session ${message.sessionId} exists in multiple active workspace runtimes`,
-          } as LocalSessionControlResponse,
-        ];
+        const response = {
+          type: responseType,
+          sessionId: message.sessionId,
+          success: false,
+          error: 'session_ambiguous',
+          message: `Session ${message.sessionId} exists in multiple active workspace runtimes`,
+        } as LocalSessionControlResponse;
+        options.onResponse?.(response);
+        return [response];
       }
 
       return await matches[0]!.lody.dispatchLocalControl(

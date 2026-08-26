@@ -11,6 +11,24 @@ import {
 
 const ARCH_NAMES = { 0: 'ia32', 1: 'x64', 2: 'armv7l', 3: 'arm64', 4: 'universal' }
 const SMOKE_TIMEOUT_MS = 120_000
+const DEEPSEEK_PACKAGED_ASSETS = [
+  'deepseek-acp.js',
+  ...['standard', 'code', 'minimal', 'cordis'].map((preset) =>
+    path.join('deepseek-agent-presets', preset, 'agent.cordis.yml')
+  )
+]
+
+function assertPackagedDeepSeekAssets(packedCliDir) {
+  const missing = DEEPSEEK_PACKAGED_ASSETS.filter(
+    (relativePath) => !fs.existsSync(path.join(packedCliDir, relativePath))
+  )
+  if (missing.length > 0) {
+    throw new Error(
+      `[embedded-cli] missing DeepSeek Harness assets after pack: ${missing.join(', ')}`
+    )
+  }
+  console.log('[embedded-cli] DeepSeek Harness adapter and presets are packaged')
+}
 
 /**
  * Two jobs, in order, before code signing:
@@ -19,11 +37,11 @@ const SMOKE_TIMEOUT_MS = 120_000
  *    the embedded CLI. electron-builder's file collector ignores arbitrary
  *    nested node_modules directories (it only collects node_modules via the
  *    app's dependency graph), so the staging cannot ride along with `files`.
- * 2. Regression gate: launch the packaged CLI runtime in
+ * 2. Assert provider assets, then launch the packaged CLI runtime in
  *    ELECTRON_RUN_AS_NODE mode against app.asar.unpacked/resources/cli/index.js
- *    exactly like production autostart does, so missing externals or
+ *    exactly like production autostart does, so missing assets or externals and
  *    ABI-mismatched bindings fail the build instead of crash-looping on user
- *    machines. Runs only when the target matches the build host.
+ *    machines. The runtime probe runs only when the target matches the build host.
  */
 export default async function afterPack(context) {
   const archName = ARCH_NAMES[context.arch]
@@ -57,6 +75,7 @@ export default async function afterPack(context) {
   if (!fs.existsSync(cliEntry)) {
     throw new Error(`[embedded-cli] missing expected path: ${cliEntry}`)
   }
+  assertPackagedDeepSeekAssets(packedCliDir)
   // beforePack staged both native bindings for this exact target, so mirror their
   // staged-relative locations rather than guessing the per-platform file names here.
   const nativeTarget = { platform: platform === 'mas' ? 'darwin' : platform, arch: archName }

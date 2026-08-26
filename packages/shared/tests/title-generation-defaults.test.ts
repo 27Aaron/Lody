@@ -113,18 +113,8 @@ describe('computeTitleGenerationDefaults', () => {
 });
 
 describe('getBuiltinTitleGenerationDefaults', () => {
-  it('returns undefined for claude', () => {
-    const result = getBuiltinTitleGenerationDefaults('claude');
-    expect(result).toBeUndefined();
-  });
-
-  it('returns undefined for codex', () => {
-    const result = getBuiltinTitleGenerationDefaults('codex');
-    expect(result).toBeUndefined();
-  });
-
-  it('returns undefined for unknown agent types', () => {
-    expect(getBuiltinTitleGenerationDefaults('custom-agent')).toBeUndefined();
+  it('does not provide static defaults to compatibility callers', () => {
+    expect(getBuiltinTitleGenerationDefaults('claude')).toBeUndefined();
   });
 });
 

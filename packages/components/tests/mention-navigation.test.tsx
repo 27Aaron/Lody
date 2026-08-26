@@ -16,6 +16,7 @@ type ItemSpec = {
   label?: string;
   insertText?: string;
   navigateText?: string;
+  onMentionNavigate?: () => void;
   kind?: ItemData['kind'];
 };
 
@@ -65,6 +66,7 @@ function Harness({ items, initialValue }: { items: ItemSpec[]; initialValue: str
           label={item.label ?? item.value}
           insertText={item.insertText}
           navigateText={item.navigateText}
+          onMentionNavigate={item.onMentionNavigate}
           kind={item.kind}
         >
           {item.value}
@@ -130,8 +132,8 @@ describe('Mention navigation and insertion', () => {
     });
   }
 
-  function pressKey(input: HTMLTextAreaElement, key: string) {
-    const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+  function pressKey(input: HTMLTextAreaElement, key: string, init?: KeyboardEventInit) {
+    const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...init });
     act(() => {
       input.dispatchEvent(event);
     });
@@ -167,6 +169,50 @@ describe('Mention navigation and insertion', () => {
     expect(latest.mentions).toEqual([]);
     expect(latest.values).toEqual([]);
     expect(latest.open).toBe(true);
+  });
+
+  it('starts destination work synchronously when selecting a navigation item', () => {
+    let navigations = 0;
+    render(
+      [
+        {
+          value: 'skill',
+          label: 'Skills',
+          navigateText: '@skill:',
+          onMentionNavigate: () => {
+            navigations += 1;
+          },
+        },
+      ],
+      '@'
+    );
+
+    commit('skill', 0);
+
+    expect(navigations).toBe(1);
+    expect(latest.inputValue).toBe('@skill:');
+  });
+
+  it('does not start destination work when a navigation item is force-committed', () => {
+    let navigations = 0;
+    render(
+      [
+        {
+          value: 'src/',
+          navigateText: '@src/',
+          insertText: '@src',
+          onMentionNavigate: () => {
+            navigations += 1;
+          },
+        },
+      ],
+      '@src/'
+    );
+
+    commit('src/', 0, { commit: true });
+
+    expect(navigations).toBe(0);
+    expect(latest.inputValue).toBe('@src ');
   });
 
   it('commits a navigation item through insertText when commit is requested', () => {
@@ -217,13 +263,20 @@ describe('Mention navigation and insertion', () => {
     expect(latest.mentions).toEqual([]);
   });
 
-  it('leaves Tab alone when the highlighted item is not a navigation item', () => {
-    // Tab must stay a plain focus move here: it neither descends nor inserts.
-    // (Whether the menu reopens afterwards is decided by trigger re-detection,
-    // which this contract does not cover.)
-    const input = render([{ value: '3312', insertText: '#3312' }], '@');
+  it('commits the highlighted non-navigation item on Tab', () => {
+    const input = render([{ value: '3312', insertText: '#3312', kind: 'issue' }], '@');
 
     const event = pressKey(input, 'Tab');
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(latest.inputValue).toBe('#3312 ');
+    expect(latest.mentions).toEqual([{ value: '3312', start: 0, end: 5, kind: 'issue' }]);
+  });
+
+  it('leaves Shift+Tab alone so it does not commit the highlighted item', () => {
+    const input = render([{ value: '3312', insertText: '#3312', kind: 'issue' }], '@');
+
+    const event = pressKey(input, 'Tab', { shiftKey: true });
 
     expect(event.defaultPrevented).toBe(false);
     expect(latest.inputValue).toBe('@');

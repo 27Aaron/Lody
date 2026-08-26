@@ -1247,11 +1247,12 @@ export const PrTabView = memo(function PrTabView({
                   <SessionCommentMarkdown body={pr.body} allowHtml />
                 </div>
               ) : (
-                <ScrollArea className="mt-2.5" viewportClassName="max-h-[320px]">
-                  <div className="pr-1 text-sm leading-relaxed text-foreground/90">
-                    <SessionCommentMarkdown body={pr.body} allowHtml />
-                  </div>
-                </ScrollArea>
+                <div
+                  data-pr-description=""
+                  className="mt-2.5 pr-1 text-sm leading-relaxed text-foreground/90"
+                >
+                  <SessionCommentMarkdown body={pr.body} allowHtml />
+                </div>
               )
             ) : (
               <p className="mt-2.5 text-xs italic text-muted-foreground">
@@ -1296,7 +1297,7 @@ export const PrTabView = memo(function PrTabView({
                 })}
               </ul>
             )}
-            {onPostComment && (
+            {embedded && onPostComment && (
               <Composer
                 isPending={Boolean(isPostingComment)}
                 onSubmit={(commentBody) => onPostComment(commentBody)}
@@ -1400,7 +1401,23 @@ export const PrTabView = memo(function PrTabView({
 
       {!embedded && pr && <BranchRow pr={pr} />}
 
-      <ScrollArea className="min-h-0 flex-1">{body}</ScrollArea>
+      <ScrollArea data-pr-content-scroll-area="" className="min-h-0 flex-1">
+        {body}
+      </ScrollArea>
+
+      {!embedded && onPostComment && (
+        <div
+          data-pr-comment-composer=""
+          className="shrink-0 border-t border-border/60 bg-background px-4 pt-4 pb-[calc(1rem+var(--safe-area-bottom))]"
+        >
+          <div className="mx-auto w-full max-w-3xl">
+            <Composer
+              isPending={Boolean(isPostingComment)}
+              onSubmit={(commentBody) => onPostComment(commentBody)}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 });

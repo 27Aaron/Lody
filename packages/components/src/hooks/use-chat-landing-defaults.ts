@@ -1,5 +1,11 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { AgentConfigMeta, LocalProjectId, MachineId, MachineViewMeta } from '@lody/shared';
+import type {
+  AgentConfigMeta,
+  AgentRoleId,
+  LocalProjectId,
+  MachineId,
+  MachineViewMeta,
+} from '@lody/shared';
 import type { AgentSelection } from '@/components/shared';
 import {
   readChatLandingDefaults,
@@ -31,6 +37,13 @@ type UseChatLandingDefaultsArgs = {
   setSelectedLocalProject: (selection: LocalProjectSelection | null) => void;
   selectedLocalBranch: string | null;
   setSelectedLocalBranch: (branch: string | null) => void;
+  /**
+   * The Agent Role the composer currently IS, or `undefined` while the Role
+   * catalog cannot yet answer. `undefined` keeps whatever is stored: a Role
+   * that has not loaded is not a Role the user deselected, and writing null for
+   * it would drop the remembered Role before it could ever be restored.
+   */
+  selectedAgentRoleId?: AgentRoleId | null;
 };
 
 function pickPreferredMachineId(
@@ -65,6 +78,7 @@ export function useChatLandingDefaults({
   setSelectedLocalProject,
   selectedLocalBranch,
   setSelectedLocalBranch,
+  selectedAgentRoleId,
 }: UseChatLandingDefaultsArgs) {
   const initializedRef = useRef(false);
   const initializedWorkspaceIdRef = useRef<string | null>(null);
@@ -222,6 +236,8 @@ export function useChatLandingDefaults({
       localMachineId: selectedLocalProject?.machineId ?? null,
       localProjectId: selectedLocalProject?.localProjectId ?? null,
       localBranch: selectedLocalBranch ?? null,
+      agentRoleId:
+        selectedAgentRoleId === undefined ? (previous?.agentRoleId ?? null) : selectedAgentRoleId,
     });
   }, [
     workspaceId,
@@ -232,6 +248,7 @@ export function useChatLandingDefaults({
     selectedBranch,
     selectedLocalProject,
     selectedLocalBranch,
+    selectedAgentRoleId,
   ]);
 
   // After the initial defaults pass completes, the current `selectedAgent` may

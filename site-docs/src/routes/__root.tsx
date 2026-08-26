@@ -3,7 +3,7 @@ import '@site/app/pricing.css';
 import '@site/app/legal.css';
 import '@site/components/app-preview-shims/pierre-diffs-web-components';
 import { SiteRootProvider } from '@site/components/site-root-provider';
-import { SiteNotFound } from '@site/src/site-pages';
+import { SiteNotFound } from '@site/src/site-pages/not-found';
 import { createRootRoute, HeadContent, Outlet, Scripts, useLocation } from '@tanstack/react-router';
 
 const description =
@@ -34,7 +34,7 @@ export const Route = createRootRoute({
         type: 'image/svg+xml',
         media: '(prefers-color-scheme: dark)',
       },
-      { rel: 'apple-touch-icon', href: '/_docs-assets/logo.svg' },
+      { rel: 'apple-touch-icon', href: '/_docs-assets/logo-180.png' },
     ],
     scripts: [
       {

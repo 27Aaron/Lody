@@ -10,10 +10,12 @@ import {
   type ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
+import { useTranslation } from 'react-i18next';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Check, Loader2, Search } from 'lucide-react';
+import { Check, Loader2, Search, X } from 'lucide-react';
 
+import { filterFuzzyOptions } from '@/lib/fuzzy-option-filter';
 import { cn } from '@/lib/utils';
 
 // Above this many (filtered) options the dropdown list is virtualized — big branch
@@ -227,14 +229,18 @@ export function MobileInlinePicker<T extends string = string>({
     if (!open) setQuery('');
   }, [open]);
 
-  const filteredOptions = useMemo(() => {
-    if (!searchable || !query.trim()) return options;
-    const q = query.toLowerCase();
-    return options.filter((opt) => {
-      const text = (opt.searchText ?? String(opt.label ?? '')).toLowerCase();
-      return text.includes(q);
-    });
-  }, [options, query, searchable]);
+  /* Fuzzy, not substring: a provider's model list can run to dozens of ids, and
+     `op5` should still find `claude-opus-5`. Ranked, so the best match is the
+     one the highlight lands on. An empty query returns `options` itself, which
+     is every render without a search field. */
+  const filteredOptions = useMemo(
+    () =>
+      filterFuzzyOptions(options, query, (opt) => ({
+        primary: opt.searchText ?? String(opt.label ?? ''),
+        secondary: [opt.value],
+      })),
+    [options, query]
+  );
 
   const handleSelect = (next: T) => {
     onChange(next);
@@ -531,7 +537,10 @@ export function MobileInlinePicker<T extends string = string>({
               {filteredOptions.length === 0 ? (
                 <div className="px-3 py-2 text-sm text-muted-foreground">{emptyText ?? '—'}</div>
               ) : shouldVirtualize ? (
-                <div className="relative w-full" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
+                <div
+                  className="relative w-full"
+                  style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
+                >
                   {rowVirtualizer.getVirtualItems().map((virtualItem) => {
                     const opt = filteredOptions[virtualItem.index];
                     if (!opt) return null;
@@ -691,7 +700,8 @@ export function MobileInlineMenu({
     function onKeyDown(event: KeyboardEvent) {
       const target = event.target as Element | null;
       const targetInsideMenu =
-        !!target && (triggerRef.current?.contains(target) || expansionRef.current?.contains(target));
+        !!target &&
+        (triggerRef.current?.contains(target) || expansionRef.current?.contains(target));
       if (!targetInsideMenu && event.key !== 'Escape') return;
 
       if (event.key === 'Escape') {
@@ -810,6 +820,13 @@ export function MobileInlineMenu({
  * focus on open so the user can type immediately, then drive the list with
  * ↑/↓/Enter/Esc via `onKeyDown`. On touch it stays unfocused so the soft
  * keyboard doesn't pop up.
+ *
+ * `type="text"`, not `type="search"`: the search type draws
+ * `::-webkit-search-cancel-button` in the browser's own accent — a blue ✕ in
+ * Chromium's dark scheme, a grey disc in WebKit — which belongs to no theme and
+ * is the wrong size for a thumb, and declining to summon it is cheaper than
+ * un-drawing it. The clear button below is ours, and touch is exactly where one
+ * earns its place: there is no Esc key to abandon a query with.
  */
 function PickerSearchInput({
   query,
@@ -826,11 +843,15 @@ function PickerSearchInput({
   autoFocus?: boolean;
   onKeyDown?: (event: ReactKeyboardEvent<HTMLInputElement>) => void;
 }) {
+  const { t } = useTranslation();
+  const inputRef = useRef<HTMLInputElement>(null);
+
   return (
     <div className="flex items-center gap-2 border-b border-border/40 px-3 py-2">
       <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
       <input
-        type="search"
+        ref={inputRef}
+        type="text"
         value={query}
         onChange={(event) => onQueryChange(event.target.value)}
         onKeyDown={onKeyDown}
@@ -840,6 +861,21 @@ function PickerSearchInput({
         autoFocus={autoFocus}
         className="min-w-0 flex-1 border-none bg-transparent text-sm outline-none focus:outline-none focus:ring-0 placeholder:text-muted-foreground"
       />
+      {query ? (
+        <button
+          type="button"
+          aria-label={t('common.clear', 'Clear')}
+          // Clearing keeps the field focused: on touch, blurring here would
+          // drop the keyboard the user is still typing on.
+          onClick={() => {
+            onQueryChange('');
+            inputRef.current?.focus();
+          }}
+          className="-mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-hover/60 hover:text-foreground active:bg-hover/60"
+        >
+          <X className="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
+      ) : null}
     </div>
   );
 }

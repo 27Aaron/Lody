@@ -675,7 +675,9 @@ describe('acp history apply', () => {
       | undefined;
     expect(toolCall).toBeDefined();
     expect(toolCall?.status).toBe('completed');
-    expect(toolCall?.title).toBe('CronCreate');
+    // The agent's own wording survives; the canonical name rides alongside it.
+    expect(toolCall?.title).toBe('Schedule a cron job');
+    expect(toolCall?.toolName).toBe('CronCreate');
     expect(toolCall?.rawInput).toEqual({
       cron: '0 9 * * *',
       recurring: true,
@@ -684,6 +686,42 @@ describe('acp history apply', () => {
     expect(toolCall?.rawOutput).toEqual({ id: 'job_abc123' });
     // Cron is local-time to the machine, so its IANA zone is captured (value = this runner's).
     expect(typeof toolCall?.schedulingTimeZone).toBe('string');
+    expect(toolCall?.schedulingTimeZone?.length).toBeGreaterThan(0);
+  });
+
+  it('recognizes a scheduling tool from _meta.lody.toolName', () => {
+    // Agents that describe their calls (Kimi titles a cron call "Scheduling
+    // cron …") publish the canonical name neutrally rather than under the
+    // Claude Code namespace; the panel must derive from that just the same.
+    const notifications = [
+      makeNotification({
+        sessionUpdate: 'tool_call',
+        toolCallId: 'cron-tc-2',
+        title: 'Scheduling cron */5 * * * *',
+        status: 'in_progress',
+        rawInput: { cron: '*/5 * * * *', recurring: true, prompt: 'check CI' },
+        _meta: { lody: { toolName: 'CronCreate' } },
+      }),
+      makeNotification({
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'cron-tc-2',
+        status: 'completed',
+      }),
+    ];
+
+    const history = applyNotificationOnHistory([], notifications);
+    const items = (history[0]?.items ?? []) as unknown as MessageContent[];
+    const toolCall = items.find((i) => i.type === 'tool_call') as
+      | Extract<MessageContent, { type: 'tool_call' }>
+      | undefined;
+    expect(toolCall?.title).toBe('Scheduling cron */5 * * * *');
+    expect(toolCall?.toolName).toBe('CronCreate');
+    expect(toolCall?.status).toBe('completed');
+    expect(toolCall?.rawInput).toEqual({
+      cron: '*/5 * * * *',
+      recurring: true,
+      prompt: 'check CI',
+    });
     expect(toolCall?.schedulingTimeZone?.length).toBeGreaterThan(0);
   });
 

@@ -168,6 +168,12 @@ async function createListeningHost(
   const server = net.createServer((socket) => {
     sockets.add(socket);
     socket.once('close', () => sockets.delete(socket));
+    // Electron probes this endpoint with a short timeout. If the CLI event loop
+    // is temporarily busy, the probe can reset its socket before this callback
+    // gets to write the host record. A reset on an accepted socket is a normal
+    // peer disconnect, not a host-fatal error; without a listener Node promotes
+    // it to an uncaught exception and terminates the CLI.
+    socket.on('error', () => socket.destroy());
     socket.write(`${JSON.stringify(record)}\n`);
 
     let buffer = '';

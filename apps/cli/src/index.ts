@@ -5,7 +5,7 @@
 import './utils/sqlite-runtime-support';
 import './instrument';
 import { Command } from 'commander';
-import { version } from '../package.json';
+import { version } from '@/pkg';
 import { startCommand } from './commands/start';
 
 import { appCommand } from './commands/app';
@@ -24,6 +24,7 @@ import { daemonCommand } from './commands/daemon';
 import { daemonRunnerCommand } from './commands/daemon-runner';
 import { internalCommand } from './commands/internal';
 import { feedbackCommand } from './commands/feedback';
+import { mcpCommand } from './commands/mcp';
 import { loadEnv } from './utils/const';
 import { getLogger } from './utils/logger';
 import { registerProcessErrorHandlers, reportError } from './utils/telemetry';
@@ -56,6 +57,7 @@ program.addCommand(sessionCommand);
 program.addCommand(syncCommand);
 program.addCommand(workspaceCommand);
 program.addCommand(agentConfigCommand);
+program.addCommand(mcpCommand);
 program.addCommand(machineCommand);
 program.addCommand(exportCommand);
 program.addCommand(reviewCommand);

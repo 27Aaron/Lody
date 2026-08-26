@@ -31,6 +31,7 @@ const ENV_KEYS = [
   'LODY_MCP_SESSION_ID',
   'LODY_MCP_SOCKET_PATH',
   'LODY_MCP_WORKDIR',
+  'LODY_MCP_TASK_TOOLS_ENABLED',
   'LODY_PREVIEW_MCP_MACHINE_ID',
   'LODY_PREVIEW_MCP_WORKSPACE_ID',
   'LODY_PREVIEW_MCP_SESSION_ID',
@@ -264,6 +265,7 @@ describe('lody MCP server internals', () => {
     process.env.LODY_MCP_SESSION_ID = 'session';
     process.env.LODY_MCP_SOCKET_PATH = '/tmp/lody-control.sock';
     process.env.LODY_MCP_WORKDIR = '/workdir';
+    process.env.LODY_MCP_TASK_TOOLS_ENABLED = '1';
 
     expect(getSessionContext()).toEqual({
       machineId: 'machine',
@@ -271,6 +273,7 @@ describe('lody MCP server internals', () => {
       sessionId: 'session',
       localControlSocketPath: '/tmp/lody-control.sock',
       workdir: '/workdir',
+      taskToolsEnabled: true,
     });
   });
 
@@ -287,6 +290,7 @@ describe('lody MCP server internals', () => {
       sessionId: 'legacy-session',
       localControlSocketPath: '/tmp/legacy-control.sock',
       workdir: '/legacy-workdir',
+      taskToolsEnabled: false,
     });
   });
 
@@ -308,6 +312,7 @@ describe('lody MCP server internals', () => {
       sessionId: 'session',
       localControlSocketPath: '/tmp/lody-control.sock',
       workdir: '/workdir',
+      taskToolsEnabled: false,
     });
   });
 

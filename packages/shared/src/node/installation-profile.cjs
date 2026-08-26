@@ -23,7 +23,7 @@ const LOCAL_PROFILE = Object.freeze({
 
 function resolvePlatformKind(raw) {
   const value = raw?.trim();
-  if (!value) return 'cloud';
+  if (!value) return 'local';
   if (value === 'local' || value === 'cloud') return value;
   throw new Error(
     `Unrecognized LODY_PLATFORM value: ${JSON.stringify(raw)} (expected "local" or "cloud")`

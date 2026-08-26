@@ -11,6 +11,7 @@ import {
   useState,
 } from 'react';
 import { createPortal } from 'react-dom';
+import { type LandingDemo, WORKTREE_DEMO_DURATION_MS } from './landing-demo-durations';
 import {
   ArrowUp,
   ChevronDown,
@@ -104,8 +105,10 @@ import {
 import { Button } from '@/ui/button';
 import { TooltipProvider } from '@/ui/tooltip';
 import {
+  CODEX_COLLABORATION_MODE_CONFIG_ID,
+  CODEX_COLLABORATION_MODE_DEFAULT_VALUE,
+  CODEX_COLLABORATION_MODE_PLAN_VALUE,
   CODEX_FAST_MODE_CONFIG_ID,
-  CODEX_PLAN_MODE_CONFIG_ID,
 } from '@/components/shared/acp-selector-options';
 import type {
   AgentConfigMeta,
@@ -210,7 +213,7 @@ const WORKSPACE_LOGO = '/landing/icon-transparent.png';
    never competes with the WebGL scene's first paint. */
 const DEMO_IMAGE_WARMUP = [
   '/landing/iphone-17-pro-silver.png',
-  '/landing/jellyfish.png',
+  '/landing/jellyfish.webp',
   WORKSPACE_LOGO,
 ];
 
@@ -1181,7 +1184,7 @@ const copy: Record<LandingLocale, PreviewCopy> = {
       // 1:1 with the app's rotating landing heading (`chat.heading2`).
       title: 'What should we work on?',
       prompt: 'Generate a photo of a jellyfish floating in deep blue water.',
-      placeholder: "Press '/' for commands, '@' for files, '#' for issues/PRs.",
+      placeholder: "Press '/' for commands, '@' for mentions.",
     },
     mobile: {
       allChats: 'All chats',
@@ -1362,7 +1365,7 @@ const copy: Record<LandingLocale, PreviewCopy> = {
       // 1:1 with the app's rotating landing heading (`chat.heading2`).
       title: '今天想做点什么？',
       prompt: '生成一张水母漂浮在深蓝色海水里的照片。',
-      placeholder: "按 '/' 使用命令，'@' 提及文件，'#' 提及 Issue/PR。",
+      placeholder: "按 '/' 使用命令，'@' 添加提及。",
     },
     mobile: {
       allChats: '全部对话',
@@ -2598,26 +2601,17 @@ function MobileSessionView({
 // types a prompt → sends — then the sidebar gains the new project/session, the
 // view jumps to the session page, and the assistant reply streams in.
 
-// Tab fill used to outlive the script by ~half; keep a short hold after the
-// reply stream, not empty dead air (was 12s).
-export const WORKTREE_DEMO_DURATION_MS = 7_200;
-// Feature-tab 2 (live diff review). Boots already on the GitHub clipping session
-// with the right panel open — ghost cursor widens + opens the first file slowly
-// enough to read, then holds on the live diff.
-export const DIFF_DEMO_DURATION_MS = 6_000;
+// Tab durations + the demo id union live in `landing-demo-durations.ts` so
+// `underwater-experience.tsx` can build `TAB_DURATIONS` at module scope without
+// importing this (lazily loaded) module. Re-exported here for existing callers.
+export {
+  DESIGN_DEMO_DURATION_MS,
+  DIFF_DEMO_DURATION_MS,
+  MOBILE_DEMO_DURATION_MS,
+  WORKTREE_DEMO_DURATION_MS,
+} from './landing-demo-durations';
 // Brief flash only — long skeleton made the tab read as "diff never loaded".
 const DIFF_SKELETON_MS = 90;
-// Feature-tab 3 (design mode / Lody Preview). Back on the `lody` session, the user
-// asks for the landing dev server; the reply runs `pnpm dev` + the real
-// `lody_report_preview_candidate` MCP tool, the header gains the preview action,
-// and the ghost user opens Lody Preview, widens the panel, inspects the hero copy,
-// leaves a visual comment, sends it — and the page hot-reloads with the edit.
-// Ends with a short hold on the hot-reloaded page so the copy change registers.
-export const DESIGN_DEMO_DURATION_MS = 24_000;
-// Feature-tab 4 (mobile access). Real mobile UI inside the device frame at the
-// same stage height as desktop demos: all-conversations home → new-chat sheet →
-// send the jellyfish prompt → the reply streams the image.
-export const MOBILE_DEMO_DURATION_MS = 13_000;
 
 /** Design canvas of the desktop demo shell (must match CSS --ld-design-*). */
 const LD_DESIGN_W = 1120;
@@ -3115,7 +3109,7 @@ export function LandingAppPreview({
 }: {
   locale: LandingLocale;
   /** Scripted scenario for the active feature tab; null = static open session. */
-  demo?: 'worktree' | 'diff' | 'design' | 'mobile' | null;
+  demo?: LandingDemo;
   /**
    * When false, ghost cursor clicks/drags are suppressed (stage mostly off-screen).
    * Demo state may still advance via fallbacks; the page scroll is never yanked.
@@ -3255,7 +3249,7 @@ export function LandingAppPreview({
   }, []);
   const [configValues, setConfigValues] = useState<Record<string, AcpConfigOptionValue>>({
     reasoning_effort: 'medium',
-    [CODEX_PLAN_MODE_CONFIG_ID]: false,
+    [CODEX_COLLABORATION_MODE_CONFIG_ID]: CODEX_COLLABORATION_MODE_DEFAULT_VALUE,
     [CODEX_FAST_MODE_CONFIG_ID]: false,
   });
 
@@ -3319,7 +3313,7 @@ export function LandingAppPreview({
     if (selectedProvider === 'claude') {
       setConfigValues((prev) => ({
         ...prev,
-        [CODEX_PLAN_MODE_CONFIG_ID]: false,
+        [CODEX_COLLABORATION_MODE_CONFIG_ID]: CODEX_COLLABORATION_MODE_DEFAULT_VALUE,
         [CODEX_FAST_MODE_CONFIG_ID]: false,
       }));
     }
@@ -3410,11 +3404,15 @@ export function LandingAppPreview({
     if (selectedProvider === 'codex') {
       selectors.push(
         {
-          configId: CODEX_PLAN_MODE_CONFIG_ID,
+          configId: CODEX_COLLABORATION_MODE_CONFIG_ID,
           label: t.config.planMode,
-          type: 'boolean',
-          currentValue: false,
-          options: [],
+          category: CODEX_COLLABORATION_MODE_CONFIG_ID,
+          type: 'select',
+          currentValue: CODEX_COLLABORATION_MODE_DEFAULT_VALUE,
+          options: [
+            { value: CODEX_COLLABORATION_MODE_DEFAULT_VALUE, label: 'Default' },
+            { value: CODEX_COLLABORATION_MODE_PLAN_VALUE, label: t.config.planMode },
+          ],
         },
         {
           configId: CODEX_FAST_MODE_CONFIG_ID,

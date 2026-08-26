@@ -70,6 +70,10 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
+vi.mock('sonner', () => ({
+  toast: { error: vi.fn() },
+}));
+
 vi.mock('../src/lib/commands', () => ({
   useKeyScope: vi.fn(),
 }));
@@ -159,6 +163,36 @@ describe('TaskBodyEditorSurface lifecycle', () => {
     root = createRoot(container);
   });
 
+  it('reissues an in-flight body when the editor unmounts', async () => {
+    vi.useFakeTimers();
+    let resolveCommit: (() => void) | undefined;
+    const inFlight = new Promise<void>((resolve) => {
+      resolveCommit = resolve;
+    });
+    const onCommit = vi.fn(() => inFlight);
+
+    await act(async () => {
+      root.render(<TaskBodyEditorSurface value="" onCommit={onCommit} />);
+    });
+
+    meowdownMock.markdown = 'draft while saving';
+    await act(async () => {
+      meowdownMock.onDocChange?.();
+      vi.advanceTimersByTime(1_200);
+    });
+    expect(onCommit).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      root.unmount();
+    });
+    expect(onCommit).toHaveBeenCalledTimes(2);
+    expect(onCommit).toHaveBeenLastCalledWith('draft while saving');
+
+    resolveCommit?.();
+    await Promise.resolve();
+    root = createRoot(container);
+  });
+
   it('does not re-adopt the stale empty body while a local commit is awaiting its echo', async () => {
     vi.useFakeTimers();
     const onCommit = vi.fn();
@@ -185,6 +219,51 @@ describe('TaskBodyEditorSurface lifecycle', () => {
 
     await act(async () => {
       root.render(<TaskBodyEditorSurface value="new local body" onCommit={onCommit} />);
+    });
+    expect(meowdownMock.setState).not.toHaveBeenCalled();
+  });
+
+  it('keeps a rejected body dirty and retries it on blur', async () => {
+    vi.useFakeTimers();
+    const onCommit = vi
+      .fn<(next: string) => Promise<void>>()
+      .mockRejectedValueOnce(new Error('write failed'))
+      .mockResolvedValueOnce();
+
+    await act(async () => {
+      root.render(<TaskBodyEditorSurface value="" onCommit={onCommit} />);
+    });
+
+    meowdownMock.markdown = 'unsaved local body';
+    await act(async () => {
+      meowdownMock.onDocChange?.();
+      vi.advanceTimersByTime(1_200);
+      await Promise.resolve();
+    });
+
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    meowdownMock.setState.mockClear();
+
+    // A reconnect can replay the old empty document after the failed write.
+    // It must not erase the local draft merely because the editor is idle.
+    await act(async () => {
+      root.render(<TaskBodyEditorSurface value="" onCommit={onCommit} />);
+    });
+    expect(meowdownMock.setState).not.toHaveBeenCalled();
+    expect(meowdownMock.markdown).toBe('unsaved local body');
+
+    const editor = container.querySelector('.task-body-editor');
+    expect(editor).not.toBeNull();
+    await act(async () => {
+      editor?.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    expect(onCommit).toHaveBeenCalledTimes(2);
+    expect(onCommit).toHaveBeenLastCalledWith('unsaved local body');
+
+    await act(async () => {
+      root.render(<TaskBodyEditorSurface value="unsaved local body" onCommit={onCommit} />);
     });
     expect(meowdownMock.setState).not.toHaveBeenCalled();
   });

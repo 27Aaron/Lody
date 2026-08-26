@@ -1,4 +1,5 @@
 import { atom } from 'jotai';
+import type { PersistedMentionRange } from '@/components/mentions/mention-persistence';
 import { atomFamily, atomWithStorage } from 'jotai/utils';
 import type { PastedTextDraft } from '@/lib/pasted-text-draft';
 import {
@@ -38,10 +39,20 @@ export const setWorkspaceReposCacheAtom = atom(
 export interface ChatLandingSessionState {
   prompt: string;
   pastedTextDrafts?: PastedTextDraft[];
+  /**
+   * Mention ranges for `prompt`. Stored so a returning draft shows its mentions
+   * without waiting for the file index, the slug cache or the issue list to
+   * load — and without depending on them ever loading.
+   */
+  mentionRanges?: PersistedMentionRange[];
 }
 
 const CHAT_LANDING_STATE_KEY_PREFIX = 'lody:chatLandingState';
-const DEFAULT_CHAT_LANDING_STATE: ChatLandingSessionState = { prompt: '', pastedTextDrafts: [] };
+const DEFAULT_CHAT_LANDING_STATE: ChatLandingSessionState = {
+  prompt: '',
+  pastedTextDrafts: [],
+  mentionRanges: [],
+};
 
 /**
  * Chat landing state atom family. Normal chat uses the userId key; alternate

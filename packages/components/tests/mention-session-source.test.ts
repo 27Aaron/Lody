@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { SessionMeta } from '@lody/shared';
+import { applyTextRewrites, type SessionMeta } from '@lody/shared';
 
 import {
   buildSessionMentionItems,
   buildSessionMentionSlug,
-  expandSessionMentionsInText,
+  buildSessionMentionRewrites,
   hydrateSessionMentionsFromText,
   rememberSessionMentionSlugs,
   resolveSessionMentionIds,
@@ -91,46 +91,78 @@ describe('buildSessionMentionItems', () => {
   });
 });
 
-describe('expandSessionMentionsInText', () => {
-  const ids = new Map([['fix-ci', 'ses_7f3ac91b']]);
+describe('buildSessionMentionRewrites', () => {
+  const range = (start: number, end: number, value = 'ses_7f3ac91b') => ({
+    start,
+    end,
+    kind: 'session',
+    value,
+  });
+  const expand = (text: string, mentions: Parameters<typeof buildSessionMentionRewrites>[1]) =>
+    applyTextRewrites(text, buildSessionMentionRewrites(text, mentions)).text;
 
-  it('replaces the token with an id-bearing instruction', () => {
-    expect(expandSessionMentionsInText('look at @session:fix-ci please', ids)).toBe(
+  it('replaces the range with an id-bearing instruction', () => {
+    const text = 'look at @fix-ci please';
+    expect(expand(text, [range(8, 15)])).toBe(
       'look at use lody mcp to query session[id: ses_7f3ac91b] history please'
     );
   });
 
-  it('is idempotent because expansion consumes its own anchor', () => {
-    const once = expandSessionMentionsInText('@session:fix-ci', ids);
-    expect(expandSessionMentionsInText(once, ids)).toBe(once);
+  it('keeps the slug as the span label so the transcript can show it back', () => {
+    const text = 'look at @fix-ci please';
+    const [rewrite] = buildSessionMentionRewrites(text, [range(8, 15)]);
+    // The label is what the user typed; the replacement is what the agent gets.
+    expect(rewrite?.span).toEqual({ kind: 'session', label: 'fix-ci', target: 'ses_7f3ac91b' });
   });
 
-  it('leaves an unresolvable slug untouched rather than guessing an id', () => {
-    // A renamed session we never cached: a stale token the agent can ignore is
-    // better than a confidently wrong session id.
-    expect(expandSessionMentionsInText('@session:renamed-away', ids)).toBe('@session:renamed-away');
+  it('ignores ranges of other kinds', () => {
+    const text = 'look at @src/a.ts';
+    expect(buildSessionMentionRewrites(text, [{ start: 8, end: 17, kind: 'file', value: 'a' }])).toEqual(
+      []
+    );
   });
 
-  it('expands every occurrence', () => {
-    expect(expandSessionMentionsInText('@session:fix-ci and @session:fix-ci', ids)).toBe(
+  it('expands every range', () => {
+    const text = '@fix-ci and @fix-ci';
+    expect(expand(text, [range(0, 7), range(12, 19)])).toBe(
       'use lody mcp to query session[id: ses_7f3ac91b] history and use lody mcp to query session[id: ses_7f3ac91b] history'
     );
+  });
+
+  it('drops a range with no session id rather than emitting a broken instruction', () => {
+    const text = 'look at @fix-ci';
+    expect(buildSessionMentionRewrites(text, [range(8, 15, '')])).toEqual([]);
   });
 });
 
 describe('hydrateSessionMentionsFromText', () => {
-  it('rebuilds ranges carrying the session id, not the slug', () => {
-    const hydrated = hydrateSessionMentionsFromText(
-      'see @session:fix-ci now',
-      new Map([['fix-ci', 'ses_7f3ac91b']])
-    );
+  const ids = new Map([['fix-ci', 'ses_7f3ac91b']]);
 
-    expect(hydrated.mentions).toEqual([{ value: 'ses_7f3ac91b', start: 4, end: 19 }]);
+  it('rebuilds ranges carrying the session id, not the slug', () => {
+    const hydrated = hydrateSessionMentionsFromText('see @fix-ci now', ids);
+
+    expect(hydrated.mentions).toEqual([
+      { value: 'ses_7f3ac91b', start: 4, end: 11, kind: 'session' },
+    ]);
     expect(hydrated.values).toEqual(['ses_7f3ac91b']);
   });
 
   it('ignores tokens it cannot resolve', () => {
-    expect(hydrateSessionMentionsFromText('@session:unknown', new Map()).mentions).toEqual([]);
+    expect(hydrateSessionMentionsFromText('@unknown', new Map()).mentions).toEqual([]);
+  });
+
+  it('leaves a token the file source also claims to the file hydrator', () => {
+    // Without the old `@session:` marker a slug and a path are the same shape,
+    // so a collision has to resolve somewhere. Paths win.
+    expect(
+      hydrateSessionMentionsFromText('see @fix-ci now', ids, new Set(['fix-ci'])).mentions
+    ).toEqual([]);
+  });
+
+  it('still hydrates a slug the file source does not know', () => {
+    expect(
+      hydrateSessionMentionsFromText('see @fix-ci now', ids, new Set(['src/a.ts'])).mentions
+    ).toEqual([{ value: 'ses_7f3ac91b', start: 4, end: 11, kind: 'session' }]);
   });
 });
 
@@ -156,5 +188,32 @@ describe('slug cache', () => {
     const items = buildSessionMentionItems([session({ id: 'fresh', title: 'dup' })], null);
 
     expect(resolveSessionMentionIds(items).get('dup')).toBe('fresh');
+  });
+});
+
+describe('hydration records the kind', () => {
+  // Ranges are not persisted with a draft, so returning to a composer rebuilds
+  // them from text. A rebuilt range with no `kind` is not merely missing its
+  // icon: `buildSessionMentionRewrites` dispatches on `kind`, so a session
+  // mention would silently stop expanding on the way to the agent.
+  it('marks a rebuilt session range as a session', () => {
+    const hydrated = hydrateSessionMentionsFromText(
+      'see @fix-ci now',
+      new Map([['fix-ci', 'ses_7f3ac91b']])
+    );
+    expect(hydrated.mentions).toEqual([
+      { value: 'ses_7f3ac91b', start: 4, end: 11, kind: 'session' },
+    ]);
+  });
+
+  it('still expands a rebuilt range, which a kindless one would not', () => {
+    const text = 'see @fix-ci now';
+    const { mentions } = hydrateSessionMentionsFromText(
+      text,
+      new Map([['fix-ci', 'ses_7f3ac91b']])
+    );
+    expect(applyTextRewrites(text, buildSessionMentionRewrites(text, mentions)).text).toBe(
+      'see use lody mcp to query session[id: ses_7f3ac91b] history now'
+    );
   });
 });

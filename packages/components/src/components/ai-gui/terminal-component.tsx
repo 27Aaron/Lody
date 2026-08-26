@@ -16,10 +16,10 @@ import {
   type VSCodeTerminalTheme,
 } from '@/lib/vscode-theme';
 import { useActiveVSCodeTheme } from '../../theme-provider';
-import type { ConversationFontSize } from '@/atoms/settings';
+import { DEFAULT_CONVERSATION_FONT_SIZE, type ConversationFontSize } from '@/atoms/settings';
 import {
-  CONVERSATION_TEXT_FONT_SIZE_CLASSES,
-  TERMINAL_TEXT_FONT_SIZE_CLASSES,
+  conversationTextFontSizeStyle,
+  terminalTextFontSizeStyle,
 } from './conversation-font-size-classes';
 import { prepareTerminalPreview } from './terminal-preview';
 
@@ -104,7 +104,7 @@ export const TerminalComponent = memo(function TerminalComponent({
   bodyVisible = true,
   onHeaderClick,
   headerExpanded,
-  fontSize = 'default',
+  fontSize = DEFAULT_CONVERSATION_FONT_SIZE,
 }: TerminalComponentProps) {
   const outputRef = useRef<HTMLDivElement>(null);
   const [isFocused, setIsFocused] = useState(false);
@@ -196,18 +196,14 @@ export const TerminalComponent = memo(function TerminalComponent({
               )}
             >
               <span
-                className={cn(
-                  'leading-none text-muted-foreground',
-                  CONVERSATION_TEXT_FONT_SIZE_CLASSES[fontSize]
-                )}
+                className="leading-none text-muted-foreground"
+                style={conversationTextFontSizeStyle(fontSize)}
               >
                 $
               </span>
               <pre
-                className={cn(
-                  'scrollbar-pro min-w-0 flex-1 overflow-x-auto whitespace-pre-wrap break-words font-terminal',
-                  TERMINAL_TEXT_FONT_SIZE_CLASSES[fontSize]
-                )}
+                className="scrollbar-pro min-w-0 flex-1 overflow-x-auto whitespace-pre-wrap break-words font-terminal"
+                style={terminalTextFontSizeStyle(fontSize)}
               >
                 {command}
               </pre>
@@ -236,10 +232,8 @@ export const TerminalComponent = memo(function TerminalComponent({
               }}
             >
               <pre
-                className={cn(
-                  'px-3 py-2 font-terminal leading-relaxed whitespace-pre-wrap break-words',
-                  TERMINAL_TEXT_FONT_SIZE_CLASSES[fontSize]
-                )}
+                className="px-3 py-2 font-terminal leading-relaxed whitespace-pre-wrap break-words"
+                style={terminalTextFontSizeStyle(fontSize)}
               >
                 {renderAnsiToReactNodes({ value: outputTextForDisplay, terminalTheme })}
               </pre>

@@ -154,13 +154,15 @@ describe('speculative worktree ownership', () => {
     });
 
     expect(manager.removeWorktree).not.toHaveBeenCalled();
-    await claimSpeculativeWorktreeForDurableSession({
-      sessionId,
-      workspaceId: 'workspace-1' as WorkspaceId,
-      machineId: 'machine-1' as MachineId,
-      target: durableTarget(),
-      logger: createLogger(),
-    });
+    await expect(
+      claimSpeculativeWorktreeForDurableSession({
+        sessionId,
+        workspaceId: 'workspace-1' as WorkspaceId,
+        machineId: 'machine-1' as MachineId,
+        target: durableTarget(),
+        logger: createLogger(),
+      })
+    ).resolves.toBe('claimed');
     await completeSpeculativeWorktreeSetup({
       sessionId,
       workspaceId: 'workspace-1' as WorkspaceId,
@@ -184,7 +186,7 @@ describe('speculative worktree ownership', () => {
         target: durableTarget('repo-2' as RepoId),
         logger: createLogger(),
       })
-    ).resolves.toBe(false);
+    ).resolves.toBe('mismatch');
     await expect(
       claimSpeculativeWorktreeForDurableSession({
         sessionId,
@@ -193,9 +195,41 @@ describe('speculative worktree ownership', () => {
         target: durableTarget(),
         logger: createLogger(),
       })
-    ).resolves.toBe(false);
+    ).resolves.toBe('no-marker');
 
     await prepared.dispose();
     expect(manager.removeWorktree).not.toHaveBeenCalled();
+  });
+
+  it('a superseded preparation dispose cannot delete its replacement worktree', async () => {
+    const sessionId = 'session-superseded' as SessionId;
+    const { manager } = createManager({ sessionId });
+    const first = await materializeSpeculativeWorktree({
+      ...materializeArgs(manager, sessionId),
+      preparationId: 'prepare-1',
+    });
+
+    // The replacement starts materializing while the superseded preparation's
+    // dispose is in flight — the exact overlap where an unserialized dispose
+    // reads the old marker, loses the rewrite race, and deletes the worktree
+    // the replacement just produced.
+    const replacementPromise = materializeSpeculativeWorktree({
+      ...materializeArgs(manager, sessionId),
+      preparationId: 'prepare-2',
+    });
+    const disposePromise = first.dispose();
+    await replacementPromise;
+    await disposePromise;
+
+    expect(manager.removeWorktree).not.toHaveBeenCalled();
+    await expect(
+      claimSpeculativeWorktreeForDurableSession({
+        sessionId,
+        workspaceId: 'workspace-1' as WorkspaceId,
+        machineId: 'machine-1' as MachineId,
+        target: durableTarget(),
+        logger: createLogger(),
+      })
+    ).resolves.toBe('claimed');
   });
 });

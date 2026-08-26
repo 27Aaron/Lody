@@ -125,6 +125,15 @@ const getExtension = (fileName: string): string => {
   return base.slice(dot + 1).toLowerCase();
 };
 
+/** HTML attachments use the live-file/browser affordance instead of text preview. */
+export const isHtmlSessionFile = (
+  file: Pick<SessionFilePayload, 'fileName' | 'mimeType'>
+): boolean => {
+  const extension = getExtension(file.fileName);
+  const mimeType = file.mimeType.split(';', 1)[0]?.trim().toLowerCase();
+  return extension === 'html' || extension === 'htm' || mimeType === 'text/html';
+};
+
 /** Pick a coarse file kind from the name (then MIME) for icon selection. */
 export const getSessionFileKind = (fileName: string, mimeType?: string): SessionFileKind => {
   const ext = getExtension(fileName);

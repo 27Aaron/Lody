@@ -19,13 +19,6 @@ interface CompactRowProps {
   children?: ReactNode;
   className?: string;
   alignTop?: boolean;
-  /**
-   * Override the responsive grid template for the [label, control] columns. The
-   * default caps the label at ~200px (so controls line up across rows); pass a
-   * label-favoring template (e.g. `sm:grid-cols-[minmax(0,1fr)_auto]`) when the
-   * control is a fixed narrow width and the label is long enough to wrap.
-   */
-  labelColumnClassName?: string;
 }
 
 export function CompactSection({
@@ -89,25 +82,23 @@ export function CompactRow({
   children,
   className,
   alignTop = false,
-  labelColumnClassName: labelColumnClassNameProp,
 }: CompactRowProps) {
-  const labelColumnClassName =
-    labelColumnClassNameProp ??
-    (helper
-      ? 'sm:grid-cols-[minmax(0,360px)_minmax(0,1fr)] md:grid-cols-[minmax(0,520px)_minmax(0,1fr)]'
-      : 'sm:grid-cols-[minmax(0,280px)_minmax(0,1fr)] md:grid-cols-[320px_minmax(0,1fr)]');
-
   return (
     <div
       className={cn(
-        'flex flex-col gap-2 px-3 py-2 sm:grid sm:gap-4',
-        labelColumnClassName,
+        // The control column hugs its content and the label column absorbs the rest. Settings
+        // render inside a panel that is much narrower than the window, so a column capped at a
+        // fixed px width (which a viewport breakpoint cannot see) would eat the whole row and
+        // push the control past the panel's clipped edge.
+        'flex flex-col gap-2 px-3 py-2 sm:grid sm:grid-cols-[minmax(0,1fr)_auto] sm:gap-4',
         alignTop && 'sm:items-start sm:[&>div:last-child]:self-start',
         !alignTop && 'sm:items-center',
         className
       )}
     >
-      <div className="min-w-0">
+      {/* Helper copy is capped so it stays readable on a wide panel; a bare label is free to
+          use the whole column, because long command names should not wrap early. */}
+      <div className={cn('min-w-0', helper && 'sm:max-w-[520px]')}>
         <p className="font-medium leading-tight text-foreground">{label}</p>
         {helper && <p className="text-[11px] text-muted-foreground leading-tight">{helper}</p>}
       </div>

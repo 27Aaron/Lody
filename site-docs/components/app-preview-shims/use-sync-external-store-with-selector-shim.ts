@@ -45,3 +45,5 @@ export function useSyncExternalStoreWithSelector<Snapshot, Selection>(
 
   return useSyncExternalStore(subscribe, getSelection, getServerSelection ?? getSelection);
 }
+
+export default { useSyncExternalStoreWithSelector };

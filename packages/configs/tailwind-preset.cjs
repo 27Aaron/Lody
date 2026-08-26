@@ -91,6 +91,9 @@ module.exports = {
         border: 'hsl(var(--border) / <alpha-value>)',
         input: {
           DEFAULT: 'hsl(var(--input) / <alpha-value>)',
+          // Fill of an editable control. Separate from `input.DEFAULT`, which
+          // doubles as a muted chip/pill fill and may recess below the page.
+          field: 'hsl(var(--input-field) / <alpha-value>)',
           foreground: 'hsl(var(--input-foreground) / <alpha-value>)',
           placeholder: 'hsl(var(--input-placeholder) / <alpha-value>)',
           border: 'hsl(var(--input-border) / <alpha-value>)',

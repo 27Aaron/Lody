@@ -36,6 +36,13 @@ export type BuildSessionListRowsOptions = {
   members?: WorkspaceMember[];
   lineChangeScope?: LineChangeScope;
   liveSessionStatuses?: ReadonlyMap<string, SessionStatus>;
+  /**
+   * Precise opener id → sidebar row id to nest under. The sidebar already
+   * memoizes one over the same `allSessions` for its other lists and the
+   * keyboard nav model; pass it in rather than indexing every session twice.
+   * Omitted callers get one built here from `allSessions`.
+   */
+  resolveOpenerRowId?: (openerSessionId: string | null | undefined) => string | null;
 };
 
 function normalizeString(value: string | null | undefined): string {
@@ -76,6 +83,70 @@ export function buildChildSessionsByParent(
     }
   }
   return map;
+}
+
+/**
+ * Resolves a PRECISE opener id (`SessionMeta.openedBySessionId`) to the session
+ * whose sidebar ROW should host the nested indentation.
+ *
+ * An agent running inside a child Tab Session (`parentSessionId` set) can call
+ * `lody_session_create`, and the created independent Session then records that
+ * child Tab as its opener. Child Tabs are deliberately absent from every sidebar
+ * list (`sessionListAtom` filters `parentSessionId`), so the precise opener has
+ * no row to nest under and the Session would fall back to top-level — visually
+ * detached from the work that spawned it.
+ *
+ * So nesting walks UP the `parentSessionId` chain to the root Session, which is
+ * the one the sidebar actually renders. This is presentation only: the precise
+ * `openedBySessionId` is never rewritten. Navigation pairs this root result
+ * with that precise id, so "Go to Opener Session" and the Session's "Opened
+ * by" entry open the root route and restore the exact child Tab.
+ *
+ * Returns the opener id unchanged when it is already a root, or when the session
+ * cache has no entry for it — an unknown opener still resolves to itself, so the
+ * tree's existing orphan fallback decides what happens.
+ */
+export function resolveSidebarOpenerRowId(
+  openerSessionId: string | null | undefined,
+  sessionsById: ReadonlyMap<string, SessionMeta>
+): string | null {
+  const openerId = normalizeString(openerSessionId);
+  if (!openerId) return null;
+  let current = openerId;
+  const seen = new Set<string>([current]);
+  for (;;) {
+    const meta = sessionsById.get(current);
+    const parentId = normalizeString(meta?.parentSessionId);
+    // No parent (or the parent is unknown / already visited) → this is the row.
+    if (!parentId || seen.has(parentId)) return current;
+    seen.add(parentId);
+    current = parentId;
+  }
+}
+
+/**
+ * Index every known session by id so {@link resolveSidebarOpenerRowId} can walk
+ * the `parentSessionId` chain. Callers pass the FULL active-session list
+ * (children included) — the child Tabs are exactly what the sidebar rows omit.
+ */
+export function buildSessionMetaById(
+  allSessions: SessionMeta[] | undefined
+): Map<string, SessionMeta> {
+  const map = new Map<string, SessionMeta>();
+  if (!allSessions) return map;
+  for (const session of allSessions) map.set(session.id, session);
+  return map;
+}
+
+/**
+ * Ready-made resolver: precise opener id → sidebar row id to nest under.
+ * Shared by every sidebar list so they agree on where a Session lands.
+ */
+export function buildSidebarOpenerRowResolver(
+  allSessions: SessionMeta[] | undefined
+): (openerSessionId: string | null | undefined) => string | null {
+  const sessionsById = buildSessionMetaById(allSessions);
+  return (openerSessionId) => resolveSidebarOpenerRowId(openerSessionId, sessionsById);
 }
 
 /**
@@ -196,7 +267,13 @@ export function mapSessionMetaToSessionListRow(
   onlineMachineIds?: ReadonlySet<MachineId>,
   owner?: SessionListRowOwner | null,
   lineChangeScope: LineChangeScope = 'all',
-  liveStatus?: SessionStatus | null
+  liveStatus?: SessionStatus | null,
+  /**
+   * Maps the precise opener to the sidebar row that should host the nesting
+   * (see {@link buildSidebarOpenerRowResolver}). Omitted callers keep the
+   * precise id, which is correct whenever the opener is already a root.
+   */
+  resolveOpenerRowId?: (openerSessionId: string | null | undefined) => string | null
 ): SessionListRow {
   const title = normalizeString(session.title) || defaultTitle;
   // Align with the info bar (`getSessionGitHubState`): the GitHub repo identity
@@ -228,6 +305,21 @@ export function mapSessionMetaToSessionListRow(
   return {
     sessionId: session.id,
     title,
+    // Presentation-only provenance: the Session that created this one (MCP
+    // `lody_session_create` / `lody session create` from inside a session).
+    // Deliberately NOT parentSessionId — see `lib/session-opened-by-tree.ts`.
+    // PRECISE: keeps the exact opener even when that opener is a child Tab with
+    // no sidebar row, so navigation back to it stays truthful.
+    openedBySessionId: session.openedBySessionId ?? null,
+    // Sidebar row to nest under: the opener's root Session when the opener is a
+    // child Tab, otherwise the opener itself. New Sessions persist that root;
+    // resolving the opener meta keeps pre-existing relationships working.
+    // Nesting only.
+    openedByRowSessionId:
+      session.openedByRootSessionId ??
+      resolveOpenerRowId?.(session.openedBySessionId) ??
+      session.openedBySessionId ??
+      null,
     machineId: session.machineId,
     repoFullName: repoFullNameRaw ? repoFullNameRaw : null,
     branchName,
@@ -310,6 +402,10 @@ export function buildSessionListRows(
 
   // Build child session lookup for status aggregation
   const childSessionsByParent = buildChildSessionsByParent(allSessions);
+  // `allSessions` is the only place child Tabs are visible, so it is also the
+  // only place the opener→row mapping can be resolved.
+  const resolveOpenerRowId =
+    options.resolveOpenerRowId ?? buildSidebarOpenerRowResolver(allSessions);
 
   // Build a map of userId to owner info for efficient lookup
   const membersByUserId = new Map<string, SessionListRowOwner>();
@@ -344,7 +440,8 @@ export function buildSessionListRows(
       onlineMachineIds,
       owner,
       lineChangeScope,
-      liveSessionStatuses?.get(session.id) ?? null
+      liveSessionStatuses?.get(session.id) ?? null,
+      resolveOpenerRowId
     );
     return aggregateChildStatus(session, task, childSessionsByParent, liveSessionStatuses);
   };

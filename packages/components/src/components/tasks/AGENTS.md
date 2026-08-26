@@ -10,8 +10,10 @@ starts now and a Task for work recorded for later.
 
 - The complete UI is gated by `tasksFeatureEnabledAtom` (developer mode AND the
   per-device Tasks beta toggle). When disabled, routes, navigation, commands,
-  quick-add, subscriptions, watchers, chips, and proposal cards must not mount. Task
-  CLI/MCP storage is deliberately independent of this presentation gate.
+  quick-add, subscriptions, watchers, chips, and proposal cards must not mount. Every
+  human-authored Turn freezes that effective gate as `taskToolsEnabled`; ordinary Agent
+  sessions omit all `lody_task_*` MCP tools while it is false. Task-originated runs and
+  comments set it true explicitly so delegated work can report back after the UI closes.
 - The Task document is authoritative. Mutations update it first, then derive and
   publish the index row with the shared `buildTaskIndexRow`/`countTaskLinks` helpers.
   Board and list views read only the index and must never open every Task document.
@@ -51,6 +53,9 @@ starts now and a Task for work recorded for later.
   defaults.
 - Board view always renders every status column; list view omits empty groups. List rows
   are fixed-height single lines, not stacked cards.
+- Board wheel remaps a vertical mouse wheel to horizontal board scroll only when the
+  pointer is outside a column. A column under the pointer owns the wheel even at its
+  scroll ends — never chain that overscroll sideways.
 - Board drag-and-drop updates only the moved row's fractional `order`; cross-column
   moves also update `status`. List view is not draggable.
 - The desktop shell pins All Tasks and opens Task details as closable tabs. The URL is
@@ -62,6 +67,8 @@ starts now and a Task for work recorded for later.
   `ProjectRef` conversion in `task-project-key.ts`; do not fork project search or
   ranking for Tasks.
 - Unknown owners render a neutral user icon, never a raw user id.
+- Task Agent run configuration must render provider-defined ACP select options in
+  addition to the known model/reasoning/permission buckets.
 - Task surface tokens may customize the light theme only. Dark mode aliases global
   popover/border/hover tokens so themes such as Vesper stay intact.
 
@@ -72,6 +79,9 @@ starts now and a Task for work recorded for later.
 - Loro text is authoritative. Apply remote changes through `setState(markdown)` without
   passing a selection, reject self-echoes while editing, flush before unmount, and key
   the editor by `taskId`.
+- A body commit is not synced merely because its write started. Await the commit result,
+  keep guarding the local draft until the exact Loro echo arrives, and leave a rejected
+  commit dirty so a stale snapshot cannot erase it and a later flush can retry it.
 - Keep both meowdown stylesheets, explicit `mode="hide"`, the app theme variable mapping,
   and the manual `handle.editor.unmount()` cleanup.
 - Selection-toolbar pointer-down handlers must preserve editor focus. Keep the popover

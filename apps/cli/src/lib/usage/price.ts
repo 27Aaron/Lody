@@ -71,5 +71,16 @@ export const PRICE_DATA: { [key: string]: Price } = {
         inputCostPerToken: 1.75e-06,
         cacheReadInputTokenCost: 1.75e-07,
         outputCostPerToken: 1.4e-05
+    },
+    // https://www.kimi.com/resources/kimi-k2-7-code-pricing
+    'kimi-for-coding': {
+        inputCostPerToken: 0.95e-06,
+        cacheReadInputTokenCost: 0.19e-06,
+        outputCostPerToken: 4e-06
+    },
+    'kimi-for-coding-highspeed': {
+        inputCostPerToken: 0.95e-06,
+        cacheReadInputTokenCost: 0.19e-06,
+        outputCostPerToken: 8e-06
     }
-} 
+}

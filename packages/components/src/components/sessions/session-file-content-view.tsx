@@ -1,14 +1,28 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Eye, EyeClosed, Loader2, RefreshCw, Save, Search, WrapText } from 'lucide-react';
+import {
+  Copy,
+  Eye,
+  EyeClosed,
+  Loader2,
+  MessageCircle,
+  RefreshCw,
+  Save,
+  Search,
+  ShieldAlert,
+  WrapText,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { toast } from 'sonner';
 import {
   getMachineFlockLocalProjects,
   type CodeCollabContentUnavailableReason,
   type SessionId,
   type SessionMeta,
+  type VisualAnnotationReferencePayload,
 } from '@lody/shared';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { cn } from '@/lib/utils';
+import { writeTextToClipboard } from '@/lib/clipboard';
 import { useActiveVSCodeTheme, useResolvedTheme } from '../../theme-provider';
 import {
   conversationFontSizeAtom,
@@ -70,11 +84,20 @@ import {
   buildCodeCollabMonacoUri,
   registerCodeCollabMonacoModelProvider,
 } from '@/lib/session-monaco-language-providers';
-import type { SessionMonacoSelectedLines } from '@/lib/session-monaco-viewer-state';
+import {
+  normalizeSessionMonacoSelectedLines,
+  type SessionMonacoSelectedLines,
+} from '@/lib/session-monaco-viewer-state';
 import type { SessionMonacoSelectionRestore } from '@/lib/session-monaco-editor-controller';
 import { useMachineOnlineStatus } from '@/hooks/use-machine-online-status';
 import { FamiconsCloudOfflineOutline } from '@/components/icons/famicons-cloud-offline-outline';
 import { SessionFileErrorState } from './session-file-error-state';
+import { ManagedPreviewSurface } from './managed-preview-surface';
+import { supportsCredentiallessManagedPreviewFrames } from './managed-preview-frame-cache';
+import {
+  buildStaticHtmlPreviewDocument,
+  getStaticHtmlPreviewLogicalUrl,
+} from './static-html-preview-document';
 
 type ViewData =
   | { status: 'loading' }
@@ -125,7 +148,16 @@ export type SessionFileContentViewProps = {
   startLine?: number;
   endLine?: number;
   focusRequestSeq?: number;
+  /** Explicit user request to enter rendered HTML for this open action. */
+  htmlPreviewRequestSeq?: number;
   saveRequestSeq?: number;
+  copyMarkdownRequestSeq?: number;
+  /**
+   * Mobile file drawers use the platform text surface for Markdown source so
+   * long-press opens the OS selection controls instead of Monaco's desktop
+   * context menu. Rendered Markdown opts into native selection as well.
+   */
+  preferNativeMarkdownSelection?: boolean;
   className?: string;
   active?: boolean;
   fileProvider?: SessionFileProvider | null;
@@ -151,7 +183,12 @@ export type SessionFileContentViewProps = {
     readonly line?: number;
     readonly character?: number;
   }) => void;
+  visualAnnotationReferenceKeys?: readonly string[];
+  onAddVisualAnnotationToChat?: (reference: VisualAnnotationReferencePayload) => boolean | void;
+  onToggleVisualAnnotationInChat?: (reference: VisualAnnotationReferencePayload) => boolean | void;
 };
+
+const isHtmlPath = (filePath: string): boolean => /\.(?:html|htm)$/iu.test(filePath);
 
 function getCodeCollabTextChangeChecker(
   provider: SessionFileProvider
@@ -169,7 +206,10 @@ function SessionFileContentViewImpl({
   startLine,
   endLine,
   focusRequestSeq,
+  htmlPreviewRequestSeq,
   saveRequestSeq,
+  copyMarkdownRequestSeq,
+  preferNativeMarkdownSelection = false,
   className,
   active = true,
   fileProvider,
@@ -178,6 +218,9 @@ function SessionFileContentViewImpl({
   fileProviderRole,
   onSaveStateChange,
   onOpenFile,
+  visualAnnotationReferenceKeys,
+  onAddVisualAnnotationToChat,
+  onToggleVisualAnnotationInChat,
 }: SessionFileContentViewProps) {
   const { t } = useTranslation();
   const tRef = useLatestRef(t);
@@ -252,11 +295,30 @@ function SessionFileContentViewImpl({
   // SVG is text, so it is shown in the code viewer by default but can be toggled
   // to a rendered preview.
   const [svgRenderMode, setSvgRenderMode] = useState<'rendered' | 'code'>('rendered');
-  // Markdown defaults to `code` (not `rendered` like SVG): Code Collab markdown
-  // files are commonly co-edited, so the editable Monaco surface stays the
-  // default and the rendered preview is one toggle away. The user can flip to
-  // `rendered` to read the formatted document.
-  const [markdownRenderMode, setMarkdownRenderMode] = useState<'rendered' | 'code'>('code');
+  // Markdown opens as a rendered document by default, matching SVG previews.
+  // The source remains one toggle away in the editable source surface.
+  const [markdownRenderMode, setMarkdownRenderMode] = useState<'rendered' | 'code'>('rendered');
+  // HTML starts as source because entering preview executes its inline scripts.
+  const [htmlRenderMode, setHtmlRenderMode] = useState<'rendered' | 'code'>('code');
+  const handledHtmlPreviewRequestSeqRef = useRef<number | undefined>(undefined);
+  const [htmlAnnotationEnabled, setHtmlAnnotationEnabled] = useState(false);
+  const [htmlAnnotationAvailable, setHtmlAnnotationAvailable] = useState(false);
+  const [htmlPreviewLoading, setHtmlPreviewLoading] = useState(false);
+  const [htmlRuntimeError, setHtmlRuntimeError] = useState<string | null>(null);
+  const [htmlPreviewCommand, setHtmlPreviewCommand] = useState<
+    { id: number; action: 'reload' } | undefined
+  >(undefined);
+  useEffect(() => {
+    if (
+      htmlPreviewRequestSeq === undefined ||
+      handledHtmlPreviewRequestSeqRef.current === htmlPreviewRequestSeq
+    ) {
+      return;
+    }
+    handledHtmlPreviewRequestSeqRef.current = htmlPreviewRequestSeq;
+    setHtmlAnnotationEnabled(false);
+    setHtmlRenderMode('rendered');
+  }, [htmlPreviewRequestSeq]);
   // Incremented by the top-bar search button to open Monaco's find widget.
   const [findRequestSeq, setFindRequestSeq] = useState(0);
   // Soft refresh: keep the current body mounted; only the toolbar button spins.
@@ -530,21 +592,21 @@ function SessionFileContentViewImpl({
   // 2. file is text + not flagged readonly + has no unavailable reason,
   // 3. source is `live-collaborative` (serving machine reachable),
   // 4. caller role authorises writes (`host` or `write`).
-  const isProviderFileEditable =
-    isActiveSurface &&
+  const isProviderFileWritable =
     shouldUseProviderFileContent &&
     providerEntry?.kind === 'text' &&
     providerEntry.readonly !== true &&
     providerEntry.sourceState === 'live-collaborative' &&
     providerEntry.unavailableReason === undefined &&
     (fileProviderRole === 'host' || fileProviderRole === 'write');
+  const isProviderFileEditable = isActiveSurface && isProviderFileWritable;
 
-  const editableFileId = isProviderFileEditable ? (providerEntry?.fileId ?? fileId ?? null) : null;
+  const editableFileId = isProviderFileWritable ? (providerEntry?.fileId ?? fileId ?? null) : null;
 
   // Text feed for the provider surface. In v2 this is driven by the
   // path-keyed provider cache plus explicit refresh/save RPC responses.
   const liveFileId =
-    isActiveSurface && shouldUseProviderFileContent && providerEntry?.kind === 'text'
+    shouldUseProviderFileContent && providerEntry?.kind === 'text'
       ? (providerEntry.fileId ?? fileId ?? null)
       : null;
   const [externalTextUpdate, setExternalTextUpdate] = useState<
@@ -576,7 +638,7 @@ function SessionFileContentViewImpl({
   } = useCodeCollabSaveText({
     provider: shouldUseProviderFileContent ? fileProvider : null,
     fileId: liveFileId,
-    enabled: isProviderFileEditable,
+    enabled: isProviderFileWritable,
     onLiveTextSynced: handleLocalLiveTextSynced,
   });
 
@@ -716,6 +778,59 @@ function SessionFileContentViewImpl({
   );
 
   const isTextFileReady = data.status === 'ready' && data.snapshot.kind === 'text';
+  const supportsHtmlPreview = supportsCredentiallessManagedPreviewFrames();
+  const htmlPreviewSource =
+    supportsHtmlPreview &&
+    data.status === 'ready' &&
+    data.snapshot.kind === 'text' &&
+    data.snapshot.truncated !== true &&
+    isHtmlPath(normalizedPath)
+      ? (latestEditorTextRef.current ?? data.snapshot.text)
+      : null;
+  const isHtmlTextFile = htmlPreviewSource !== null;
+  const showHtmlRendered = isActiveSurface && isHtmlTextFile && htmlRenderMode === 'rendered';
+  const htmlPreviewDocument = useMemo(
+    () =>
+      showHtmlRendered && htmlPreviewSource !== null
+        ? buildStaticHtmlPreviewDocument(htmlPreviewSource)
+        : null,
+    [htmlPreviewSource, showHtmlRendered]
+  );
+  const htmlPreviewLogicalUrl = useMemo(
+    () => getStaticHtmlPreviewLogicalUrl(normalizedPath),
+    [normalizedPath]
+  );
+
+  useEffect(() => {
+    if (showHtmlRendered) return;
+    setHtmlAnnotationEnabled(false);
+    setHtmlAnnotationAvailable(false);
+    setHtmlPreviewLoading(false);
+    setHtmlRuntimeError(null);
+    setHtmlPreviewCommand(undefined);
+  }, [showHtmlRendered]);
+
+  const handleHtmlAnnotationAvailabilityChange = useCallback((available: boolean) => {
+    setHtmlAnnotationAvailable(available);
+    if (!available) setHtmlAnnotationEnabled(false);
+  }, []);
+  const handleHtmlRuntimeError = useCallback((error: string | null) => {
+    setHtmlRuntimeError(error);
+  }, []);
+  const handleHtmlPreviewLoadingChange = useCallback((loading: boolean) => {
+    setHtmlPreviewLoading(loading);
+  }, []);
+  const handleHtmlBrowserStateChange = useCallback(() => undefined, []);
+  const handleHtmlNavigationRequest = useCallback(() => {
+    setHtmlAnnotationEnabled(false);
+    setHtmlRenderMode('code');
+    toast.warning(
+      tRef.current(
+        'sessions.fileViewer.htmlPreview.navigationDisabled',
+        'Navigation is disabled for self-contained HTML previews.'
+      )
+    );
+  }, [tRef]);
   const isProviderEditorDirty =
     saveStatus.kind === 'pending' ||
     saveStatus.kind === 'saving' ||
@@ -746,6 +861,52 @@ function SessionFileContentViewImpl({
     if (!canSaveProviderEditor) return;
     void saveProviderEditorText();
   }, [canSaveProviderEditor, saveProviderEditorText, saveRequestSeq]);
+
+  const handleCopyMarkdown = useCallback(async () => {
+    if (
+      data.status !== 'ready' ||
+      data.snapshot.kind !== 'text' ||
+      !isSessionMarkdownPath(normalizedPath)
+    ) {
+      return;
+    }
+    if (data.snapshot.truncated === true) {
+      toast.error(
+        tRef.current(
+          'sessions.fileViewer.markdownCopyTruncated',
+          'Full Markdown is unavailable because this preview is truncated'
+        )
+      );
+      return;
+    }
+    const markdown = latestEditorTextRef.current ?? data.snapshot.text;
+    const copied = await writeTextToClipboard(markdown);
+    if (copied) {
+      toast.success(tRef.current('sessions.fileViewer.markdownCopied', 'Markdown copied'));
+    } else {
+      toast.error(
+        tRef.current('sessions.fileViewer.markdownCopyFailed', 'Failed to copy Markdown')
+      );
+    }
+  }, [data, normalizedPath, tRef]);
+  const lastCopyMarkdownRequestSeqRef = useRef(copyMarkdownRequestSeq ?? 0);
+  useEffect(() => {
+    if (
+      copyMarkdownRequestSeq === undefined ||
+      copyMarkdownRequestSeq === lastCopyMarkdownRequestSeqRef.current
+    ) {
+      return;
+    }
+    if (
+      data.status !== 'ready' ||
+      data.snapshot.kind !== 'text' ||
+      !isSessionMarkdownPath(normalizedPath)
+    ) {
+      return;
+    }
+    lastCopyMarkdownRequestSeqRef.current = copyMarkdownRequestSeq;
+    void handleCopyMarkdown();
+  }, [copyMarkdownRequestSeq, data, handleCopyMarkdown, normalizedPath]);
   const saveViewState = useMemo<SessionFileSaveViewState>(
     () => ({
       dirty: isProviderEditorDirty,
@@ -866,6 +1027,11 @@ function SessionFileContentViewImpl({
     data.status === 'ready' &&
     data.snapshot.kind === 'text' &&
     isSessionMarkdownPath(normalizedPath);
+  const canCopyFullMarkdown =
+    data.status === 'ready' &&
+    data.snapshot.kind === 'text' &&
+    isSessionMarkdownPath(normalizedPath) &&
+    data.snapshot.truncated !== true;
   const showMarkdownRendered = isMarkdownTextFile && markdownRenderMode === 'rendered';
   // Source text for the rendered Markdown preview. Prefer the latest text the
   // editor has committed (local edits + applied live syncs) over the opened
@@ -882,7 +1048,10 @@ function SessionFileContentViewImpl({
   // Typography tracks conversationFontSize so side-panel README preview matches
   // the left chat Markdown (default = text-sm; was hard-coded large/"base").
   const previewSurface: ReactNode = isMarkdownTextFile ? (
-    <div className="mx-auto w-full max-w-3xl px-3 py-3 sm:px-4 sm:py-4">
+    <div
+      className="mx-auto w-full max-w-3xl px-3 py-3 select-text sm:px-4 sm:py-4"
+      data-native-selection-allow
+    >
       <MarkdownRenderer text={markdownPreviewText} size={conversationFontSize} />
     </div>
   ) : isSvgTextFile && data.status === 'ready' && data.snapshot.kind === 'text' ? (
@@ -967,6 +1136,42 @@ function SessionFileContentViewImpl({
         reason="deleted"
       />
     );
+  } else if (showHtmlRendered && htmlPreviewDocument !== null) {
+    body = (
+      <div className="relative h-full min-h-0 overflow-hidden bg-background">
+        <ManagedPreviewSurface
+          session={session}
+          viewerUrl={htmlPreviewLogicalUrl}
+          logicalUrl={htmlPreviewLogicalUrl}
+          documentHtml={htmlPreviewDocument}
+          annotationEnabled={htmlAnnotationEnabled}
+          command={htmlPreviewCommand}
+          className="h-full"
+          visualAnnotationReferenceKeys={visualAnnotationReferenceKeys}
+          onAnnotationAvailabilityChange={handleHtmlAnnotationAvailabilityChange}
+          onRuntimeError={handleHtmlRuntimeError}
+          onLoadingChange={handleHtmlPreviewLoadingChange}
+          onBrowserStateChange={handleHtmlBrowserStateChange}
+          onNavigationRequest={handleHtmlNavigationRequest}
+          onAddVisualAnnotationToChat={onAddVisualAnnotationToChat}
+          onToggleVisualAnnotationInChat={onToggleVisualAnnotationInChat}
+        />
+        {htmlPreviewLoading ? (
+          <div className="pointer-events-none absolute right-3 top-3 rounded bg-background/90 p-1.5 text-muted-foreground shadow-sm">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+          </div>
+        ) : null}
+        {htmlRuntimeError ? (
+          <div className="absolute bottom-3 left-3 right-3 flex items-start gap-2 rounded-md border border-status-warning/30 bg-background/95 px-3 py-2 text-xs text-foreground shadow-sm">
+            <ShieldAlert
+              className="mt-0.5 h-3.5 w-3.5 shrink-0 text-status-warning"
+              aria-hidden="true"
+            />
+            <span>{htmlRuntimeError}</span>
+          </div>
+        ) : null}
+      </div>
+    );
   } else if (showSvgRendered || showMarkdownRendered) {
     body = previewSurface;
   } else {
@@ -974,27 +1179,54 @@ function SessionFileContentViewImpl({
       body = (
         <div className="flex h-full min-h-0 flex-col">
           <div className="min-h-0 flex-1">
-            <LazyProviderTextMonacoViewer
-              key={lspModelUri?.toString() ?? liveFileId ?? normalizedPath}
-              text={data.snapshot.text}
-              language={getSessionFileMonacoLanguageId(normalizedPath)}
-              selectedLines={selectedLines}
-              resolvedTheme={resolvedTheme}
-              vscodeTheme={activeVSCodeTheme ?? null}
-              readOnly={!isProviderFileEditable}
-              onContentChange={
-                isProviderFileEditable ? handleProviderEditorContentChange : undefined
-              }
-              onSelectionChange={
-                liveFileId !== null ? handleProviderEditorSelectionChange : undefined
-              }
-              onGoToDefinition={isLspEnabled ? handleGoToDefinition : undefined}
-              onFindReferences={isLspEnabled ? handleFindReferences : undefined}
-              externalTextUpdate={externalTextUpdate}
-              onExternalTextUpdateApplied={handleExternalTextUpdateApplied}
-              findRequestSeq={findRequestSeq}
-              modelUri={lspModelUri}
-            />
+            {isMarkdownTextFile && preferNativeMarkdownSelection ? (
+              <NativeMarkdownSource
+                key={liveFileId ?? normalizedPath}
+                text={
+                  hasAcceptedLocalContentChangeRef.current || isProviderEditorDirty
+                    ? (latestEditorTextRef.current ?? data.snapshot.text)
+                    : data.snapshot.text
+                }
+                readOnly={!isProviderFileEditable}
+                wordWrap={wordWrapEnabled}
+                selectedLines={selectedLines}
+                externalTextUpdate={externalTextUpdate}
+                onContentChange={
+                  isProviderFileEditable ? handleProviderEditorContentChange : undefined
+                }
+                onSelectionChange={
+                  liveFileId !== null ? handleProviderEditorSelectionChange : undefined
+                }
+                onExternalTextUpdateApplied={handleExternalTextUpdateApplied}
+                ariaLabel={t('sessions.fileViewer.markdownSource', 'Markdown source')}
+              />
+            ) : (
+              <LazyProviderTextMonacoViewer
+                key={lspModelUri?.toString() ?? liveFileId ?? normalizedPath}
+                text={
+                  hasAcceptedLocalContentChangeRef.current || isProviderEditorDirty
+                    ? (latestEditorTextRef.current ?? data.snapshot.text)
+                    : data.snapshot.text
+                }
+                language={getSessionFileMonacoLanguageId(normalizedPath)}
+                selectedLines={selectedLines}
+                resolvedTheme={resolvedTheme}
+                vscodeTheme={activeVSCodeTheme ?? null}
+                readOnly={!isProviderFileEditable}
+                onContentChange={
+                  isProviderFileEditable ? handleProviderEditorContentChange : undefined
+                }
+                onSelectionChange={
+                  liveFileId !== null ? handleProviderEditorSelectionChange : undefined
+                }
+                onGoToDefinition={isLspEnabled ? handleGoToDefinition : undefined}
+                onFindReferences={isLspEnabled ? handleFindReferences : undefined}
+                externalTextUpdate={externalTextUpdate}
+                onExternalTextUpdateApplied={handleExternalTextUpdateApplied}
+                findRequestSeq={findRequestSeq}
+                modelUri={lspModelUri}
+              />
+            )}
           </div>
           {data.snapshot.truncated ? (
             <div className="px-3 py-2 text-xs text-muted-foreground">
@@ -1016,16 +1248,27 @@ function SessionFileContentViewImpl({
       body = (
         <div className="flex h-full min-h-0 flex-col">
           <div className="min-h-0 flex-1">
-            <LazyTextMonacoViewer
-              key={normalizedPath}
-              text={data.snapshot.text}
-              language={getSessionFileMonacoLanguageId(normalizedPath)}
-              selectedLines={selectedLines}
-              resolvedTheme={resolvedTheme}
-              vscodeTheme={activeVSCodeTheme ?? null}
-              findRequestSeq={findRequestSeq}
-              readOnly
-            />
+            {isMarkdownTextFile && preferNativeMarkdownSelection ? (
+              <NativeMarkdownSource
+                key={normalizedPath}
+                text={data.snapshot.text}
+                readOnly
+                wordWrap={wordWrapEnabled}
+                selectedLines={selectedLines}
+                ariaLabel={t('sessions.fileViewer.markdownSource', 'Markdown source')}
+              />
+            ) : (
+              <LazyTextMonacoViewer
+                key={normalizedPath}
+                text={data.snapshot.text}
+                language={getSessionFileMonacoLanguageId(normalizedPath)}
+                selectedLines={selectedLines}
+                resolvedTheme={resolvedTheme}
+                vscodeTheme={activeVSCodeTheme ?? null}
+                findRequestSeq={findRequestSeq}
+                readOnly
+              />
+            )}
           </div>
           {data.snapshot.truncated ? (
             <div className="px-3 py-2 text-xs text-muted-foreground">
@@ -1043,12 +1286,23 @@ function SessionFileContentViewImpl({
   // status bar (which now only carries save/live/offline state). The search
   // button only appears when a Monaco editor is mounted — a rendered SVG/Markdown
   // preview has no editor to search.
-  const showPreviewToggle = isSvgTextFile || isMarkdownTextFile;
-  const showSearchButton = isTextFileReady && !showSvgRendered && !showMarkdownRendered;
+  const showPreviewToggle = isSvgTextFile || isMarkdownTextFile || isHtmlTextFile;
+  const showSearchButton =
+    isTextFileReady &&
+    !showSvgRendered &&
+    !showMarkdownRendered &&
+    !showHtmlRendered &&
+    !(isMarkdownTextFile && preferNativeMarkdownSelection);
+  const showWordWrapButton =
+    isTextFileReady && !showSvgRendered && !showMarkdownRendered && !showHtmlRendered;
   const showSaveButton = isProviderFileEditable && isTextFileReady;
   const showRefreshButton = shouldUseProviderFileContent && isTextFileReady;
   const showViewerTopBar =
-    showPreviewToggle || showSearchButton || showSaveButton || showRefreshButton;
+    showPreviewToggle ||
+    isMarkdownTextFile ||
+    showSearchButton ||
+    showSaveButton ||
+    showRefreshButton;
 
   return (
     <div className={cn('flex h-full min-h-0 flex-col overflow-hidden', className)}>
@@ -1058,20 +1312,82 @@ function SessionFileContentViewImpl({
             {showPreviewToggle ? (
               <FilePreviewToggle
                 active={
-                  isSvgTextFile ? svgRenderMode === 'rendered' : markdownRenderMode === 'rendered'
+                  isSvgTextFile
+                    ? svgRenderMode === 'rendered'
+                    : isMarkdownTextFile
+                      ? markdownRenderMode === 'rendered'
+                      : htmlRenderMode === 'rendered'
                 }
                 onToggle={() => {
                   if (isSvgTextFile) {
                     setSvgRenderMode((mode) => (mode === 'rendered' ? 'code' : 'rendered'));
-                  } else {
+                  } else if (isMarkdownTextFile) {
                     setMarkdownRenderMode((mode) => (mode === 'rendered' ? 'code' : 'rendered'));
+                  } else {
+                    setHtmlAnnotationEnabled(false);
+                    setHtmlRenderMode((mode) => (mode === 'rendered' ? 'code' : 'rendered'));
                   }
                 }}
-                showLabel={t('sessions.fileViewer.preview.show', 'Preview')}
+                showLabel={
+                  isHtmlTextFile
+                    ? t('sessions.fileViewer.htmlPreview.show', 'Preview HTML (runs scripts)')
+                    : t('sessions.fileViewer.preview.show', 'Preview')
+                }
                 hideLabel={t('sessions.fileViewer.preview.hide', 'Hide preview')}
               />
             ) : null}
-            {showSearchButton ? (
+            {isMarkdownTextFile ? (
+              <button
+                type="button"
+                onClick={() => void handleCopyMarkdown()}
+                disabled={!canCopyFullMarkdown}
+                title={
+                  canCopyFullMarkdown
+                    ? t('sessions.fileViewer.copyMarkdown', 'Copy full Markdown')
+                    : t(
+                        'sessions.fileViewer.markdownCopyTruncated',
+                        'Full Markdown is unavailable because this preview is truncated'
+                      )
+                }
+                aria-label={t('sessions.fileViewer.copyMarkdown', 'Copy full Markdown')}
+                className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            ) : null}
+            {showHtmlRendered ? (
+              <button
+                type="button"
+                aria-pressed={htmlAnnotationEnabled}
+                onClick={() => setHtmlAnnotationEnabled((enabled) => !enabled)}
+                disabled={!htmlAnnotationAvailable}
+                title={t('sessions.preview.annotation.addComment', 'Add comment')}
+                aria-label={t('sessions.preview.annotation.addComment', 'Add comment')}
+                className={cn(
+                  'flex h-6 w-6 items-center justify-center rounded transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50',
+                  htmlAnnotationEnabled ? 'text-foreground' : 'text-muted-foreground'
+                )}
+              >
+                <MessageCircle className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            ) : null}
+            {showHtmlRendered ? (
+              <button
+                type="button"
+                onClick={() =>
+                  setHtmlPreviewCommand((current) => ({
+                    id: (current?.id ?? 0) + 1,
+                    action: 'reload',
+                  }))
+                }
+                title={t('sessions.browser.reload', 'Reload')}
+                aria-label={t('sessions.browser.reload', 'Reload')}
+                className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            ) : null}
+            {showWordWrapButton ? (
               <button
                 type="button"
                 aria-pressed={wordWrapEnabled}
@@ -1180,6 +1496,113 @@ function SessionFileContentViewImpl({
 }
 
 export const SessionFileContentView = memo(SessionFileContentViewImpl);
+
+function NativeMarkdownSource({
+  text,
+  readOnly,
+  wordWrap,
+  selectedLines,
+  externalTextUpdate,
+  onContentChange,
+  onSelectionChange,
+  onExternalTextUpdateApplied,
+  ariaLabel,
+}: {
+  readonly text: string;
+  readonly readOnly: boolean;
+  readonly wordWrap: boolean;
+  readonly selectedLines?: SessionMonacoSelectedLines;
+  readonly externalTextUpdate?: SessionMonacoExternalTextUpdate;
+  readonly onContentChange?: (text: string) => void;
+  readonly onSelectionChange?: (state: ProviderEditorSelectionState) => void;
+  readonly onExternalTextUpdateApplied?: (result: 'applied' | 'no-op') => void;
+  readonly ariaLabel: string;
+}) {
+  const [value, setValue] = useState(text);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const lastAppliedSeqRef = useRef<number | undefined>(undefined);
+  const pendingSelectionRestoreRef = useRef<SessionMonacoSelectionRestore | null>(null);
+
+  useEffect(() => {
+    if (!readOnly) return;
+    setValue(text);
+  }, [readOnly, text]);
+
+  useEffect(() => {
+    if (!externalTextUpdate || lastAppliedSeqRef.current === externalTextUpdate.seq) return;
+    lastAppliedSeqRef.current = externalTextUpdate.seq;
+    const result = value === externalTextUpdate.text ? 'no-op' : 'applied';
+    if (result === 'applied') {
+      pendingSelectionRestoreRef.current = externalTextUpdate.restoreSelection ?? null;
+      setValue(externalTextUpdate.text);
+    }
+    onExternalTextUpdateApplied?.(result);
+  }, [externalTextUpdate, onExternalTextUpdateApplied, value]);
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    const currentValue = textarea.value;
+    const lineCount = currentValue.split('\n').length;
+    const range = normalizeSessionMonacoSelectedLines(selectedLines, lineCount);
+    if (!range) return;
+    const lineStarts = [0];
+    for (let index = 0; index < currentValue.length; index += 1) {
+      if (currentValue[index] === '\n') lineStarts.push(index + 1);
+    }
+    const startOffset = lineStarts[range.startLineNumber - 1] ?? 0;
+    const nextLineOffset = lineStarts[range.endLineNumber];
+    const endOffset =
+      nextLineOffset === undefined
+        ? currentValue.length
+        : Math.max(startOffset, nextLineOffset - 1);
+    textarea.setSelectionRange(startOffset, endOffset);
+    textarea.scrollTop = Math.max(0, range.startLineNumber - 1) * 20;
+  }, [selectedLines]);
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    const restore = pendingSelectionRestoreRef.current;
+    if (!textarea || !restore) return;
+    pendingSelectionRestoreRef.current = null;
+    const anchor = Math.min(value.length, Math.max(0, restore.anchorOffset));
+    const head = Math.min(value.length, Math.max(0, restore.headOffset));
+    textarea.setSelectionRange(
+      Math.min(anchor, head),
+      Math.max(anchor, head),
+      anchor > head ? 'backward' : 'forward'
+    );
+  }, [value]);
+
+  return (
+    <textarea
+      ref={textareaRef}
+      value={value}
+      readOnly={readOnly}
+      wrap={wordWrap ? 'soft' : 'off'}
+      spellCheck={false}
+      aria-label={ariaLabel}
+      data-native-selection-allow
+      className="h-full min-h-[240px] w-full resize-none overflow-auto border-0 bg-background p-3 font-mono text-xs leading-5 text-foreground outline-none"
+      onChange={(event) => {
+        const nextValue = event.currentTarget.value;
+        setValue(nextValue);
+        onContentChange?.(nextValue);
+      }}
+      onSelect={(event) => {
+        const textarea = event.currentTarget;
+        const selectionStart = textarea.selectionStart;
+        const selectionEnd = textarea.selectionEnd;
+        const backwards = textarea.selectionDirection === 'backward';
+        onSelectionChange?.({
+          anchorOffset: backwards ? selectionEnd : selectionStart,
+          headOffset: backwards ? selectionStart : selectionEnd,
+          isEmpty: selectionStart === selectionEnd,
+        });
+      }}
+    />
+  );
+}
 
 // Eye-icon preview toggle for text files that also have a rendered preview
 // (SVG, Markdown). Click commits the render mode; hover only shows a tooltip

@@ -1,4 +1,4 @@
-import { useEffect, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, type CSSProperties, type RefObject } from 'react';
 
 /**
  * Keeps the focused control inside a scroll container visible above the native
@@ -59,7 +59,14 @@ export function useKeyboardAwareScrollIntoView(containerRef: RefObject<HTMLEleme
       if ((detail?.height ?? 0) > 0) scrollActiveIntoView();
     };
 
-    const handleFocusIn = () => {
+    const handleFocusIn = (event: FocusEvent) => {
+      // Cheap check first: this listener is on `document`, and several of these
+      // sheets are mounted for the whole session view, so every focus change in
+      // the app reaches every one of them. Only the sheet that owns the focused
+      // field should go on to read a computed style.
+      const container = containerRef.current;
+      const target = event.target;
+      if (!container || !(target instanceof Node) || !container.contains(target)) return;
       // Only act when the keyboard is already up; otherwise the keyboard-resize
       // event drives the scroll once it opens (focusin fires before the keyboard,
       // when the layout is still full-height).
@@ -76,4 +83,58 @@ export function useKeyboardAwareScrollIntoView(containerRef: RefObject<HTMLEleme
       document.removeEventListener('focusin', handleFocusIn);
     };
   }, [containerRef]);
+}
+
+/* One lift for every sheet that can put a field on screen. */
+const KEYBOARD_LIFT_CLASS = 'bottom-[var(--native-keyboard-height,0px)]!';
+
+export type KeyboardAwareSheet = {
+  /** Goes on the sheet's scrolling body, which the hook keeps focus centered in. */
+  scrollRef: RefObject<HTMLDivElement | null>;
+  /** Goes on the drawer/dialog content: lifts the whole sheet off the keyboard. */
+  contentClassName: string;
+  /** Goes on the scrolling body: caps it to the visible region and pads it. */
+  scrollStyle: CSSProperties;
+};
+
+/**
+ * The whole native-keyboard contract for a bottom sheet, in one call.
+ *
+ * vaul portals a drawer out of the layout, so the root's global
+ * `pb-[var(--native-keyboard-height)]` never reaches it, and each sheet has to
+ * (1) lift itself by the keyboard height, (2) cap its scroll area to what is
+ * still visible — without the cap there is nothing to center inside — and
+ * (3) center the focused field in that area. Three parts that only work
+ * together, which is exactly why they should not be three things to remember:
+ * sheets that copied two of the three exist, and they misbehave on iOS.
+ *
+ * All of it is inert on web and Android, where the WebView resizes itself and
+ * `--native-keyboard-height` stays `0px`; iOS Capacitor is where it matters.
+ *
+ * The lift is deliberately NOT transitioned: the sheet's height is driven by
+ * `scrollStyle`'s `maxHeight`, which reacts to the keyboard var instantly, so
+ * animating `bottom` would drop the sheet's top for a frame and slide it back.
+ */
+export function useKeyboardAwareSheet({
+  /** Height of the sheet chrome above the scroll body (grabber + header). */
+  chromeHeight = '3.25rem',
+  /** The body's own bottom padding, before the safe area is folded in. */
+  bodyPadding = '16px',
+}: { chromeHeight?: string; bodyPadding?: string } = {}): KeyboardAwareSheet {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useKeyboardAwareScrollIntoView(scrollRef);
+
+  return useMemo(
+    () => ({
+      scrollRef,
+      contentClassName: KEYBOARD_LIFT_CLASS,
+      scrollStyle: {
+        maxHeight: `calc(100dvh - var(--native-keyboard-height, 0px) - ${chromeHeight})`,
+        // The safe area is already covered by the keyboard once it is up, so
+        // paying for both would leave a gap under the sheet.
+        paddingBottom: `calc(${bodyPadding} + max(0px, var(--safe-area-bottom, 0px) - var(--native-keyboard-height, 0px)))`,
+      },
+    }),
+    [bodyPadding, chromeHeight]
+  );
 }

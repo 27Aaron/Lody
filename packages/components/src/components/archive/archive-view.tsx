@@ -68,6 +68,7 @@ import {
   type SessionMeta,
 } from '@lody/shared';
 import { useMachineFlockRowsByMachineIds } from '@/hooks/use-machine-flock-rows';
+import { buildArchivedSessionTree } from '@/lib/archived-session-tree';
 
 type ArchivedSessionGroup = {
   key: string;
@@ -174,10 +175,7 @@ function sortArchivedSessions(
 function sessionMatchesArchiveQuery(
   session: SessionMeta,
   query: string,
-  localProjectLabelByKey: Map<
-    string,
-    { name: string; path?: string | null; title?: string | null }
-  >
+  localProjectLabelByKey: Map<string, { name: string; path?: string | null; title?: string | null }>
 ): boolean {
   if (!query) return true;
   const haystacks: string[] = [
@@ -351,6 +349,7 @@ function getArchivedSessionItemViewModel(
 
 type ArchivedSessionItemBaseProps = {
   session: SessionMeta;
+  depth: 0 | 1;
   now: Date;
   onRestore: (sessionId: SessionId) => void;
   onDelete: (session: SessionMeta) => void;
@@ -372,6 +371,7 @@ type MobileArchivedSessionItemProps = ArchivedSessionItemBaseProps & {
 
 function DesktopArchivedSessionItem({
   session,
+  depth,
   now,
   onRestore,
   onDelete,
@@ -408,12 +408,14 @@ function DesktopArchivedSessionItem({
     <div
       className={cn(
         'group relative flex w-full min-w-0 items-center gap-2 rounded-md py-1.5 pl-6 pr-2',
+        depth === 1 && 'pl-10',
         'border border-transparent bg-transparent',
         'hover:bg-hover hover:text-hover-foreground',
         isSelected && 'bg-selection text-selection-foreground hover:bg-selection',
         'cursor-pointer',
         'transition-colors'
       )}
+      data-session-depth={depth}
       onClick={handleRowClick}
     >
       {isMultiSelectMode ? (
@@ -577,6 +579,7 @@ function DesktopArchivedSessionItem({
 
 function MobileArchivedSessionItem({
   session,
+  depth,
   now,
   onRestore,
   onDelete,
@@ -641,10 +644,12 @@ function MobileArchivedSessionItem({
     <div
       className={cn(
         'group relative flex w-full min-w-0 items-center gap-2 rounded-md py-1 pl-6 pr-2',
+        depth === 1 && 'pl-10',
         'border border-transparent bg-transparent',
         'cursor-pointer',
         'transition-colors'
       )}
+      data-session-depth={depth}
       onClick={handleRowClick}
       onTouchStart={handleTouchStart}
       onTouchEnd={clearLongPressTimer}
@@ -831,6 +836,7 @@ function ArchivedSessionGroupSection({
 
   const showHeader = !hideGroupHeader;
   const showSessions = hideGroupHeader || !group.collapsed;
+  const sessionTree = useMemo(() => buildArchivedSessionTree(group.sessions), [group.sessions]);
 
   return (
     <div className={cn('mb-4 w-full min-w-0', group.collapsed && showHeader ? 'mb-2' : '')}>
@@ -898,11 +904,12 @@ function ArchivedSessionGroupSection({
 
       {showSessions ? (
         <div className={cn('flex w-full min-w-0 flex-col', showHeader && 'mt-1')}>
-          {group.sessions.map((session) =>
+          {sessionTree.map(({ item: session, depth }) =>
             isMobile ? (
               <MobileArchivedSessionItem
                 key={session.id}
                 session={session}
+                depth={depth}
                 now={now}
                 onRestore={onRestore}
                 onDelete={onDelete}
@@ -922,6 +929,7 @@ function ArchivedSessionGroupSection({
               <DesktopArchivedSessionItem
                 key={session.id}
                 session={session}
+                depth={depth}
                 now={now}
                 onRestore={onRestore}
                 onDelete={onDelete}

@@ -113,6 +113,7 @@ FOO=from-file
   it('infers cli type from agent type', () => {
     expect(inferAgentConfigCliType('codex')).toBe('builtin');
     expect(inferAgentConfigCliType('claude')).toBe('builtin');
+    expect(inferAgentConfigCliType('grok')).toBe('builtin');
     expect(inferAgentConfigCliType('claude-p')).toBe('registry');
     expect(inferAgentConfigCliType('opencode')).toBe('registry');
     expect(inferAgentConfigCliType('kimi')).toBe('registry');

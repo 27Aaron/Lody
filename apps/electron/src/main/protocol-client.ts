@@ -9,6 +9,8 @@ type ProtocolRegistrationLogger = (message: string, meta?: Record<string, unknow
 interface RegisterProtocolClientOptions {
   protocol: string
   productName: string
+  desktopFileName: string
+  iconPath: string
   log: ProtocolRegistrationLogger
 }
 
@@ -95,6 +97,22 @@ function writeFileIfChanged(filePath: string, content: string): boolean {
   return true
 }
 
+function copyFileIfChanged(sourcePath: string, destinationPath: string): boolean {
+  try {
+    if (
+      fs.existsSync(destinationPath) &&
+      fs.readFileSync(sourcePath).equals(fs.readFileSync(destinationPath))
+    ) {
+      return false
+    }
+  } catch {
+    // If either file cannot be read, let copyFileSync report the useful error below.
+  }
+
+  fs.copyFileSync(sourcePath, destinationPath)
+  return true
+}
+
 function runDesktopIntegrationCommand(
   command: string,
   args: string[],
@@ -147,6 +165,8 @@ function runDesktopIntegrationCommand(
 function registerLinuxAppImageProtocolHandler({
   protocol,
   productName,
+  desktopFileName,
+  iconPath,
   log
 }: RegisterProtocolClientOptions): void {
   if (process.platform !== 'linux' || !app.isPackaged) {
@@ -169,17 +189,23 @@ function registerLinuxAppImageProtocolHandler({
     return
   }
 
-  const desktopFileId = `${protocol}-desktop.desktop`
+  const desktopFileId = desktopFileName
+  const desktopAppId = desktopFileName.replace(/\.desktop$/, '')
   const applicationsDir = path.join(dataHome, 'applications')
   const desktopFilePath = path.join(applicationsDir, desktopFileId)
+  const iconsDir = path.join(dataHome, 'icons')
+  const installedIconPath = path.join(iconsDir, `${desktopAppId}.png`)
   const launchArgs = collectLinuxProtocolLaunchArgs(process.argv)
   let didWriteDesktopFile = false
+  let didWriteIcon = false
   const desktopFileContent = [
     '[Desktop Entry]',
     `Name=${sanitizeDesktopEntryValue(productName)}`,
     `Exec=${[appImagePath, ...launchArgs].map(quoteDesktopExecArg).join(' ')} %U`,
     'Terminal=false',
     'Type=Application',
+    `Icon=${sanitizeDesktopEntryValue(installedIconPath)}`,
+    `StartupWMClass=${sanitizeDesktopEntryValue(desktopAppId)}`,
     `MimeType=x-scheme-handler/${protocol};`,
     'Categories=Utility;',
     ''
@@ -187,12 +213,16 @@ function registerLinuxAppImageProtocolHandler({
 
   try {
     fs.mkdirSync(applicationsDir, { recursive: true })
+    fs.mkdirSync(iconsDir, { recursive: true })
+    didWriteIcon = copyFileIfChanged(iconPath, installedIconPath)
     didWriteDesktopFile = writeFileIfChanged(desktopFilePath, desktopFileContent)
     log('linux AppImage protocol desktop entry ensured', {
       protocol,
       desktopFileId,
       desktopFilePath,
       didWriteDesktopFile,
+      installedIconPath,
+      didWriteIcon,
       preservedLaunchArgs: launchArgs
     })
   } catch (error) {
@@ -216,7 +246,7 @@ function registerLinuxAppImageProtocolHandler({
     }
   )
 
-  if (!didWriteDesktopFile) {
+  if (!didWriteDesktopFile && !didWriteIcon) {
     return
   }
 

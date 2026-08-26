@@ -242,7 +242,9 @@ describe('message-schemas image upload response', () => {
 describe('message-schemas machine ACP capabilities refresh', () => {
   it('accepts builtin Kimi runtime fields', () => {
     expect(CliTypeSchema.safeParse('kimi').success).toBe(true);
+    expect(CliTypeSchema.safeParse('grok').success).toBe(true);
     expect(BuiltinRuntimeOverridesSchema.safeParse({ kimiPath: '/opt/kimi' }).success).toBe(true);
+    expect(BuiltinRuntimeOverridesSchema.safeParse({ grokPath: '/opt/grok' }).success).toBe(true);
   });
 
   it('accepts provider env for capability probing', () => {
@@ -638,6 +640,7 @@ describe('normalizeSessionTurnInputConfig', () => {
       },
       resume: 'acp-1',
       inputBlocks: [{ type: 'text', text: 'hello' }],
+      taskToolsEnabled: false,
       issuePRMentions: 'invalid',
     });
 
@@ -651,6 +654,7 @@ describe('normalizeSessionTurnInputConfig', () => {
       },
       resume: 'acp-1',
       inputBlocks: [{ type: 'text', text: 'hello' }],
+      taskToolsEnabled: false,
     });
   });
 });

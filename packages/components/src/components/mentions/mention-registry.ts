@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useTranslation } from 'react-i18next';
-import type { AcpCommandSummary } from '@lody/shared';
+import { getAgentRoleEmoji, type AcpCommandSummary } from '@lody/shared';
 import { filterAndRankSlashCommands } from '@/lib/command-slash-search';
 import {
   buildPathSuggestions,
@@ -18,26 +18,42 @@ import {
   type SkillMentionItem,
 } from '@/components/mentions/mention-skill-source';
 import {
-  SESSION_MENTION_PREFIX,
   selectSessionMentionCandidates,
   type SessionMentionItem,
 } from '@/components/mentions/mention-session-source';
+import {
+  selectAgentRoleMentionCandidates,
+  type AgentRoleMentionItem,
+} from '@/components/mentions/mention-agent-role-source';
+import type { AgentRoleDetailSubject } from '@/components/sessions/agent-role-detail-pane';
 import { parseMentionNamespaceSearch } from '@/ui/mention/mention-trigger';
 import type { MentionKind } from '@/ui/mention/index';
 
-/**
- * The single composer trigger. Every category is reached through `@`; the
- * per-type markers (`#`, `$`, `/`) survive only as the text a committed
- * candidate writes, so the prompt an agent receives is unchanged.
- */
+/** The shared category-menu trigger. Skills and commands also retain their
+ * direct `$` and `/` entry points. */
 export const MENTION_TRIGGER = '@';
 
 /** Per-category cap when one query is answered across every category. */
 export const AGGREGATE_LIMIT_PER_CATEGORY = 4;
 
-export type MentionCategoryId = 'file' | 'issue' | 'pr' | 'skill' | 'command' | 'session';
+export type MentionCategoryId =
+  | 'file'
+  | 'issue'
+  | 'pr'
+  | 'skill'
+  | 'command'
+  | 'session'
+  | 'agent_role';
 
-export type MentionIcon = 'file' | 'dir' | 'issue' | 'pr' | 'skill' | 'command' | 'session';
+export type MentionIcon =
+  | 'file'
+  | 'dir'
+  | 'issue'
+  | 'pr'
+  | 'skill'
+  | 'command'
+  | 'session'
+  | 'agent_role';
 
 export type MentionCategoryStatus = 'ready' | 'loading' | 'error';
 
@@ -47,10 +63,19 @@ export type MentionCategoryStatus = 'ready' | 'loading' | 'error';
  * plain fields rather than shipping its own component.
  */
 export type MentionCandidateDetail = {
-  title: string;
+  /** Absent on a candidate whose pane carries its own heading — a Role's does. */
+  title?: string;
   badges?: string[];
   description?: string;
   rows?: Array<{ label: string; value: string; mono?: boolean }>;
+  /**
+   * An Agent Role reads through its own pane instead of these fields.
+   *
+   * A Role is the same object the composer's Role submenu previews, so it gets
+   * the same pane; the neutral fields above stay for every candidate whose
+   * description IS a title, a badge, and some rows.
+   */
+  agentRole?: AgentRoleDetailSubject;
 };
 
 export type MentionCandidate = {
@@ -74,8 +99,23 @@ export type MentionCandidate = {
   mono?: boolean;
   /** Path an extension-aware icon derives its glyph from. */
   iconPath?: string;
+  /**
+   * The candidate's OWN mark, rendered instead of `icon`. An Agent Role is
+   * picked by its emoji, and showing the category glyph beside it says only
+   * what the category header already did.
+   */
+  iconEmoji?: string;
   /** Rendered in the desktop side panel while this candidate is highlighted. */
   detail?: MentionCandidateDetail;
+};
+
+export type MentionCategoryActivation = {
+  /**
+   * Identifies the backing source. Categories fed by one source share a key, so
+   * the menu starts that source's work once however many of them are queried.
+   */
+  sourceKey: MentionSourceKey;
+  activate: () => void;
 };
 
 export type MentionCategory = {
@@ -84,13 +124,15 @@ export type MentionCategory = {
   namespace: string;
   /**
    * A trigger character that opens this category directly, bypassing the
-   * category list. Only `/` keeps one: a slash command must own the whole
-   * prompt, so it never nests under a category.
+   * category list. Skills retain `$` for compatibility and commands retain `/`
+   * because a slash command must own the whole prompt.
    */
   directTrigger?: string;
   label: string;
   icon: MentionIcon;
   status: MentionCategoryStatus;
+  /** Lazy work this category needs before it can answer. */
+  activation?: MentionCategoryActivation;
   /** Rendered instead of rows: an error, or "select a repo first". */
   message?: string;
   /** Rendered above the rows, e.g. the truncated-file-list warning. */
@@ -140,6 +182,24 @@ export function getMentionViewCandidates(view: MentionMenuView | null): MentionC
   if (view.level === 'category') return view.candidates;
   if (view.level === 'aggregate') return view.groups.flatMap((group) => group.candidates);
   return [];
+}
+
+/**
+ * The lazy sources a view needs, one entry per source. A scoped view touches
+ * its one category; an aggregate query asks every category, so it needs them
+ * all; the first-level category index queries nothing and so activates nothing.
+ */
+export function selectMentionViewActivations(
+  view: MentionMenuView | null,
+  categories: readonly MentionCategory[]
+): MentionCategoryActivation[] {
+  const queried =
+    view?.level === 'category' ? [view.category] : view?.level === 'aggregate' ? categories : [];
+  const bySource = new Map<MentionSourceKey, MentionCategoryActivation>();
+  for (const category of queried) {
+    if (category.activation) bySource.set(category.activation.sourceKey, category.activation);
+  }
+  return [...bySource.values()];
 }
 
 function matchesCategoryName(category: MentionCategory, term: string): boolean {
@@ -378,7 +438,9 @@ export function toSessionCandidate(
     // The range payload is the real id; the text only ever carries the slug.
     value: item.sessionId,
     label: item.slug,
-    insertText: `${SESSION_MENTION_PREFIX}${item.slug}`,
+    // No `session:` marker: the slug alone is what the user sees, and the
+    // committed range is what carries the id to the before-send rewrite.
+    insertText: `${MENTION_TRIGGER}${item.slug}`,
     kind: 'session',
     icon: 'session',
     title: item.title || labels.untitled,
@@ -395,6 +457,59 @@ export function buildSessionCandidates(
   return selectSessionMentionCandidates(items, term, limit).map((item) =>
     toSessionCandidate(item, labels)
   );
+}
+
+/**
+ * A Role candidate shows the whole binding it would execute — agent, machine,
+ * model, reasoning, permission, instruction — because accepting it authorizes
+ * exactly that, and a Role never silently resolves to anything else.
+ *
+ * That reading is handed to `AgentRoleDetailPane`, the same pane the composer's
+ * Role submenu renders, rather than restated as generic rows here: a Role is
+ * one object, and describing it twice is how the two descriptions drift. The
+ * generic rows had already drifted — they printed the stored ids raw and
+ * labelled the permission mode "Reasoning".
+ */
+export function toAgentRoleCandidate(item: AgentRoleMentionItem): MentionCandidate {
+  const { role } = item;
+  // The emoji REPLACES the category glyph on the row: the category header above
+  // already says these are Agent Roles, so a second generic glyph only crowds
+  // out the Role's own mark. Every Role has one, defaulted, so rows stay aligned.
+  const emoji = getAgentRoleEmoji(role);
+  return {
+    // The range payload is the stable Role id; the text only carries the token
+    // derived from the name, which its owner may rename at any time.
+    value: role.id,
+    label: item.slug,
+    insertText: `${MENTION_TRIGGER}${item.slug}`,
+    kind: 'agent_role',
+    icon: 'agent_role',
+    iconEmoji: emoji,
+    title: role.name,
+    detail: {
+      // No `title` and no badges: the pane heads itself with the Role's own
+      // mark and name, and visibility is deliberately absent — every Role the menu
+      // offers is one this user may run, so private-vs-workspace changes
+      // nothing about accepting it. It is a Settings concern.
+      agentRole: {
+        role,
+        agentConfig: item.agentConfig,
+        machine: item.machine,
+        // Named here, unlike the composer's list: this menu offers Roles from
+        // every machine the user may reach, so which one a Role binds to is
+        // part of what accepting it authorizes.
+        machineLabel: item.machine?.name,
+      },
+    },
+  };
+}
+
+export function buildAgentRoleCandidates(
+  items: readonly AgentRoleMentionItem[],
+  term: string,
+  limit?: number
+): MentionCandidate[] {
+  return selectAgentRoleMentionCandidates(items, term, limit).map(toAgentRoleCandidate);
 }
 
 export function toCommandCandidate(command: AcpCommandSummary): MentionCandidate {
@@ -427,7 +542,22 @@ type SourceState = {
   enabled: boolean;
   status?: MentionCategoryStatus;
   message?: string;
+  /** Starts this source's lazy work. Shared by every category it feeds. */
+  onActivate?: () => void;
 };
+
+/**
+ * The fields a category copies verbatim from its source. Spread at every
+ * `categories.push` so a new `SourceState` field reaches all of them at once —
+ * forgetting one is invisible until that single category misbehaves.
+ */
+function sourceCategoryFields(sourceKey: MentionSourceKey, source: SourceState) {
+  return {
+    status: source.status ?? 'ready',
+    message: source.message,
+    activation: source.onActivate ? { sourceKey, activate: source.onActivate } : undefined,
+  };
+}
 
 export type MentionCategorySources = {
   file?: SourceState & {
@@ -454,7 +584,12 @@ export type MentionCategorySources = {
   session?: SourceState & {
     items: readonly SessionMentionItem[];
   };
+  agentRole?: SourceState & {
+    items: readonly AgentRoleMentionItem[];
+  };
 };
+
+export type MentionSourceKey = keyof MentionCategorySources;
 
 /**
  * The enabled mention categories, in first-level display order. Files lead
@@ -462,7 +597,7 @@ export type MentionCategorySources = {
  */
 export function useMentionCategories(sources: MentionCategorySources): MentionCategory[] {
   const { t } = useTranslation();
-  const { file, issuePr, skill, command, session } = sources;
+  const { file, issuePr, skill, command, session, agentRole } = sources;
 
   // Partitioned once and shared with the Fuse indexes: the cache holds both
   // types, and re-splitting it inside `getCandidates` walked the whole list
@@ -494,8 +629,7 @@ export function useMentionCategories(sources: MentionCategorySources): MentionCa
         namespace: 'file',
         label: t('mention.category.file.label', 'Files'),
         icon: 'file',
-        status: file.status ?? 'ready',
-        message: file.message,
+        ...sourceCategoryFields('file', file),
         notice: file.notice,
         getCandidates: (term, limit) => buildFileCandidates(file.index, term, file.fuse, limit),
       });
@@ -507,8 +641,7 @@ export function useMentionCategories(sources: MentionCategorySources): MentionCa
         namespace: 'issue',
         label: t('mention.category.issue.label', 'Issues'),
         icon: 'issue',
-        status: issuePr.status ?? 'ready',
-        message: issuePr.message,
+        ...sourceCategoryFields('issuePr', issuePr),
         getCandidates: (term, limit) =>
           buildIssuePrCandidates(issueSuggestions, term, issueFuse, limit),
       });
@@ -517,8 +650,7 @@ export function useMentionCategories(sources: MentionCategorySources): MentionCa
         namespace: 'pr',
         label: t('mention.category.pr.label', 'Pull Requests'),
         icon: 'pr',
-        status: issuePr.status ?? 'ready',
-        message: issuePr.message,
+        ...sourceCategoryFields('issuePr', issuePr),
         getCandidates: (term, limit) => buildIssuePrCandidates(prSuggestions, term, prFuse, limit),
       });
     }
@@ -527,10 +659,10 @@ export function useMentionCategories(sources: MentionCategorySources): MentionCa
       categories.push({
         id: 'skill',
         namespace: 'skill',
+        directTrigger: SKILL_MENTION_TRIGGER,
         label: t('mention.category.skill.label', 'Skills'),
         icon: 'skill',
-        status: skill.status ?? 'ready',
-        message: skill.message,
+        ...sourceCategoryFields('skill', skill),
         getCandidates: (term, limit) =>
           buildSkillCandidates(
             skill.items,
@@ -560,8 +692,7 @@ export function useMentionCategories(sources: MentionCategorySources): MentionCa
         namespace: 'session',
         label: t('mention.category.session.label', 'Sessions'),
         icon: 'session',
-        status: session.status ?? 'ready',
-        message: session.message,
+        ...sourceCategoryFields('session', session),
         getCandidates: (term, limit) =>
           buildSessionCandidates(
             session.items,
@@ -572,6 +703,17 @@ export function useMentionCategories(sources: MentionCategorySources): MentionCa
       });
     }
 
+    if (agentRole?.enabled) {
+      categories.push({
+        id: 'agent_role',
+        namespace: 'role',
+        label: t('mention.category.agentRole.label', 'Agent Roles'),
+        icon: 'agent_role',
+        ...sourceCategoryFields('agentRole', agentRole),
+        getCandidates: (term, limit) => buildAgentRoleCandidates(agentRole.items, term, limit),
+      });
+    }
+
     if (command?.enabled) {
       categories.push({
         id: 'command',
@@ -579,14 +721,14 @@ export function useMentionCategories(sources: MentionCategorySources): MentionCa
         directTrigger: '/',
         label: t('mention.category.command.label', 'Commands'),
         icon: 'command',
-        status: command.status ?? 'ready',
-        message: command.message,
+        ...sourceCategoryFields('command', command),
         getCandidates: (term, limit) => buildCommandCandidates(command.commands, term, limit),
       });
     }
 
     return categories;
   }, [
+    agentRole,
     command,
     file,
     issueFuse,

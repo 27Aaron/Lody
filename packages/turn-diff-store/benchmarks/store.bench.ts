@@ -11,7 +11,6 @@
  */
 
 import { mkdtempSync, rmSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { monitorEventLoopDelay, performance } from 'node:perf_hooks';
@@ -51,7 +50,6 @@ interface Observation {
   readonly metrics: RecordTurnDiffMetrics;
 }
 
-const require = createRequire(import.meta.url);
 const options = parseOptions(process.argv.slice(2));
 const fixtures = createFixtures(options);
 const temporaryDirectory = mkdtempSync(path.join(os.tmpdir(), 'lody-turn-diff-bench-'));
@@ -65,7 +63,6 @@ const store = new TurnDiffStore({
     options.workerPath === null
       ? new URL('./worker-entry.mjs', import.meta.url)
       : pathToFileURL(path.resolve(options.workerPath)),
-  ...(options.workerPath === null ? { workerExecArgv: ['--import', require.resolve('tsx')] } : {}),
   onBackgroundError: (error) => backgroundErrors.push(error),
 });
 

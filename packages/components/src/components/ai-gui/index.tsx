@@ -1,12 +1,22 @@
-import { forwardRef, memo, useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
+import {
+  forwardRef,
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  type MutableRefObject,
+  type ReactNode,
+} from 'react';
 import type {
   SessionDoc,
+  SessionFilePayload,
   SessionHistory,
   SessionHistoryParsed,
   SessionId,
   WorkspaceId,
 } from '@lody/shared';
-import type { ConversationFontSize } from '@/atoms/settings';
+import { DEFAULT_CONVERSATION_FONT_SIZE, type ConversationFontSize } from '@/atoms/settings';
 import { cloudOperations } from '@/lib/cloud-api-operations';
 import type { AgentActivityTone } from '@/components/shared';
 import {
@@ -19,6 +29,11 @@ import {
 import { buildChatStreamItems, type BuildChatStreamItemsCache } from './build-chat-stream-items';
 import { useStableCallback } from '@/hooks/use-stable-callback';
 import { useCloudQuery } from '@lody/platform/react';
+import type { SessionNavigationTarget } from '@/lib/session-navigation';
+import type {
+  SessionForkDestination,
+  SessionForkWorktreeAvailability,
+} from '@/components/sessions/session-fork-destination-menu';
 
 const emptyHistory = [] as SessionDoc['history'];
 const CHAT_STREAM_ITEMS_CACHE_LIMIT = 20;
@@ -60,6 +75,8 @@ export interface SessionChatStreamProps {
   sessionCreatedAt?: string;
   dividerLabel?: string;
   className?: string;
+  /** Scrolls as the first conversation row (for example, Session provenance). */
+  leadingContent?: ReactNode;
   emptyState?: ReactNode;
   onAtBottomChange?: (atBottom: boolean) => void;
   showScrollToLatest?: boolean;
@@ -67,16 +84,22 @@ export interface SessionChatStreamProps {
   agentActivityTone?: AgentActivityTone;
   onFileDiffClick?: (turnId: string, filePath: string) => void;
   onFilePathClick?: (filePath: string) => void;
+  /** Routes HTML attachment clicks to a live file or Browser surface. */
+  onOpenHtmlFile?: (file: SessionFilePayload) => boolean;
   messageFileDiffEntriesByTurn?: MessageFileDiffEntriesByTurn;
   assistantActions?: AssistantMessageAction[];
   assistantActionsMessageId?: string | null;
-  onForkLastAssistant?: (turnId: string) => void;
+  onForkLastAssistant?: (turnId: string, destination?: SessionForkDestination) => void;
+  forkWorktreeAvailability?: SessionForkWorktreeAvailability;
+  onForkWorktreeMenuOpen?: () => void;
   onEditLastUser?: (message: SessionHistoryParsed, text: string) => Promise<boolean>;
   forkingAssistantMessageId?: string | null;
   /** Opens another session from an in-conversation link (e.g. a fork's origin). */
-  onNavigateSession?: (sessionId: SessionId) => void;
+  onNavigateSession?: (target: SessionNavigationTarget) => void;
   onLastCompletedAssistantMessageIdChange?: (messageId: string | null) => void;
   conversationFontSize?: ConversationFontSize;
+  /** Skips one auto-follow caused by the session composer changing height. */
+  skipNextViewportResizeAutoScrollRef?: MutableRefObject<boolean>;
   suppressStickyAutoScrollRef?: React.RefObject<boolean>;
 }
 
@@ -91,7 +114,7 @@ const MessageRowConnected = memo(function MessageRowConnected({
   message: SessionHistoryParsed;
   sessionId: SessionId;
   workspaceId?: WorkspaceId | null;
-  onNavigateSession?: (sessionId: SessionId) => void;
+  onNavigateSession?: (target: SessionNavigationTarget) => void;
   onEditLastUser?: (message: SessionHistoryParsed, text: string) => Promise<boolean>;
   conversationFontSize: ConversationFontSize;
 }) {
@@ -121,6 +144,7 @@ const SessionChatStreamImpl = forwardRef<SessionChatStreamHandle, SessionChatStr
       sessionCreatedAt: _sessionCreatedAt,
       dividerLabel: _dividerLabel,
       className,
+      leadingContent,
       emptyState,
       onAtBottomChange,
       showScrollToLatest = true,
@@ -128,15 +152,19 @@ const SessionChatStreamImpl = forwardRef<SessionChatStreamHandle, SessionChatStr
       agentActivityTone = 'primary',
       onFileDiffClick,
       onFilePathClick,
+      onOpenHtmlFile,
       messageFileDiffEntriesByTurn,
       assistantActions,
       assistantActionsMessageId,
       onForkLastAssistant,
+      forkWorktreeAvailability,
+      onForkWorktreeMenuOpen,
       forkingAssistantMessageId,
       onNavigateSession,
       onEditLastUser,
       onLastCompletedAssistantMessageIdChange,
-      conversationFontSize = 'default',
+      conversationFontSize = DEFAULT_CONVERSATION_FONT_SIZE,
+      skipNextViewportResizeAutoScrollRef,
       suppressStickyAutoScrollRef,
     },
     ref
@@ -164,12 +192,14 @@ const SessionChatStreamImpl = forwardRef<SessionChatStreamHandle, SessionChatStr
     const stableOnFilePathClick = useStableCallback((filePath: string) => {
       onFilePathClick?.(filePath);
     });
-    const stableOnNavigateSession = useStableCallback((targetSessionId: SessionId) => {
-      onNavigateSession?.(targetSessionId);
+    const stableOnNavigateSession = useStableCallback((target: SessionNavigationTarget) => {
+      onNavigateSession?.(target);
     });
-    const stableOnForkLastAssistant = useStableCallback((turnId: string) => {
-      onForkLastAssistant?.(turnId);
-    });
+    const stableOnForkLastAssistant = useStableCallback(
+      (turnId: string, destination?: SessionForkDestination) => {
+        onForkLastAssistant?.(turnId, destination);
+      }
+    );
     const hasFileDiffClick = onFileDiffClick !== undefined;
     const hasFilePathClick = onFilePathClick !== undefined;
     const hasNavigateSession = onNavigateSession !== undefined;
@@ -216,22 +246,27 @@ const SessionChatStreamImpl = forwardRef<SessionChatStreamHandle, SessionChatStr
         items={items}
         sessionId={sessionId}
         className={className}
+        leadingContent={leadingContent}
         emptyState={emptyState}
         onAtBottomChange={onAtBottomChange}
         showScrollToLatest={showScrollToLatest}
         renderMessageRow={renderMessageRow}
         onFileDiffClick={hasFileDiffClick ? stableOnFileDiffClick : undefined}
         onFilePathClick={hasFilePathClick ? stableOnFilePathClick : undefined}
+        onOpenHtmlFile={onOpenHtmlFile}
         lastAssistantMessageId={lastAssistantMessageId}
         lastCompletedAssistantMessageId={lastCompletedAssistantMessageId}
         messageFileDiffEntriesByTurn={messageFileDiffEntriesByTurn}
         assistantActions={assistantActions}
         assistantActionsMessageId={assistantActionsMessageId}
         onForkLastAssistant={hasForkLastAssistant ? stableOnForkLastAssistant : undefined}
+        forkWorktreeAvailability={forkWorktreeAvailability}
+        onForkWorktreeMenuOpen={onForkWorktreeMenuOpen}
         forkingAssistantMessageId={forkingAssistantMessageId}
         agentActivityLabel={agentActivityLabel}
         agentActivityTone={agentActivityTone}
         conversationFontSize={conversationFontSize}
+        skipNextViewportResizeAutoScrollRef={skipNextViewportResizeAutoScrollRef}
         suppressStickyAutoScrollRef={suppressStickyAutoScrollRef}
       />
     );

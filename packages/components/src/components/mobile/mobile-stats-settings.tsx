@@ -16,39 +16,9 @@ import {
   type SettingsUsageTimelineData,
 } from '@/components/settings/settings-data-cache';
 import { UsageCalendarVisualization } from '@/components/settings/usage-calendar-visualization';
-
-const TWO_HOUR_MS = 2 * 60 * 60 * 1000;
-
-function formatTokens(value: number): string {
-  return new Intl.NumberFormat().format(Math.round(value));
-}
-
-function formatTokensCompact(value: number): string {
-  const abs = Math.abs(value);
-  const sign = value < 0 ? '-' : '';
-  const trim = (input: string) =>
-    input.includes('.') ? input.replace(/0+$/, '').replace(/\.$/, '') : input;
-  if (abs >= 1_000_000) {
-    const scaled = abs / 1_000_000;
-    const digits = scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2;
-    return `${sign}${trim(scaled.toFixed(digits))}M`;
-  }
-  if (abs >= 1_000) {
-    const scaled = abs / 1_000;
-    const digits = scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2;
-    return `${sign}${trim(scaled.toFixed(digits))}K`;
-  }
-  return `${sign}${formatTokens(abs)}`;
-}
-
-function formatUSD(value: number): string {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(value);
-}
+import { formatUsageTimelineBucketLabel } from '@/components/settings/usage-timeline-bucket-label';
+import { formatCompactNumber, formatUsdAmount } from '@/lib/format-compact-number';
+import { toIntlLocaleOrEn } from '@/lib/intl-locale';
 
 /* Full-bleed hero stat: oversized count-up number with a quiet label
    above it. Used for the headline tokens + cost totals so they read
@@ -80,7 +50,8 @@ function HeroStat({
 }
 
 export function MobileStatsSettings() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const locale = toIntlLocaleOrEn(i18n.resolvedLanguage ?? i18n.language);
   const { activeOrganization } = useOrganization();
   const [range, setRange] = useState<SettingsUsageRange>('day');
   const { workspaceId, usageTimelineByRange, usageCalendar } = useSettingsDataCache();
@@ -88,12 +59,24 @@ export function MobileStatsSettings() {
   const { day: usageDay, loading: usageDayLoading } = useSettingsUsageDay(selectedUsageDayMs);
   const dayTimeFormatter = useMemo(
     () =>
-      new Intl.DateTimeFormat(undefined, {
+      new Intl.DateTimeFormat(locale, {
         hour: '2-digit',
         minute: '2-digit',
         hour12: false,
       }),
-    []
+    [locale]
+  );
+  const formatTokensCompact = useMemo(
+    () => (value: number) => formatCompactNumber(value, locale),
+    [locale]
+  );
+  const formatUSD = useMemo(
+    () => (value: number) =>
+      formatUsdAmount(value, locale, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }),
+    [locale]
   );
 
   const usageTimeline = usageTimelineByRange[range];
@@ -105,15 +88,7 @@ export function MobileStatsSettings() {
       if (!usageTimeline) {
         return bucket.bucketLabel;
       }
-      if (usageTimeline.bucketSizeMs !== TWO_HOUR_MS) {
-        return bucket.bucketLabel;
-      }
-
-      const bucketEndMs = Math.min(
-        usageTimeline.endMs,
-        bucket.bucketStartMs + usageTimeline.bucketSizeMs
-      );
-      return dayTimeFormatter.format(new Date(bucketEndMs));
+      return formatUsageTimelineBucketLabel(usageTimeline, bucket, dayTimeFormatter);
     },
     [dayTimeFormatter, usageTimeline]
   );

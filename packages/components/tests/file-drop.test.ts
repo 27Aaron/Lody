@@ -1,15 +1,25 @@
-import { describe, expect, it } from 'vitest';
+// @vitest-environment jsdom
 
+import { describe, expect, it } from 'vitest';
 import { splitImageAndFileAttachments } from '../src/lib/file-drop';
 
 describe('splitImageAndFileAttachments', () => {
-  it('keeps images and regular files in their upload lanes', () => {
-    const image = new File(['image'], 'screenshot.png', { type: 'image/png' });
-    const document = new File(['document'], 'notes.txt', { type: 'text/plain' });
+  it('routes picker selections by MIME type rather than filename', () => {
+    const imageWithTextExtension = new File(['image'], 'preview.txt', { type: 'image/png' });
+    const fileWithImageExtension = new File(['document'], 'report.png', {
+      type: 'application/pdf',
+    });
+    const fileWithoutMime = new File(['data'], 'archive.bin');
 
-    expect(splitImageAndFileAttachments([image, document])).toEqual({
-      images: [image],
-      attachments: [document],
+    expect(
+      splitImageAndFileAttachments([
+        imageWithTextExtension,
+        fileWithImageExtension,
+        fileWithoutMime,
+      ])
+    ).toEqual({
+      images: [imageWithTextExtension],
+      attachments: [fileWithImageExtension, fileWithoutMime],
     });
   });
 });

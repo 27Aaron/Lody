@@ -8,7 +8,11 @@ import type {
   BuiltinRuntimeOverrides,
   CustomAcpLaunchSpec,
 } from '@lody/shared';
-import { getManagedBuiltinRuntimeByAgentType, isBuiltinAgentType } from '@lody/shared';
+import {
+  getManagedBuiltinRuntimeByAgentType,
+  hasBuiltinEnvAuthentication,
+  isManagedBuiltinAgentType,
+} from '@lody/shared';
 
 import { withoutElectronBootstrapCredentials } from '@/electron-bootstrap-env';
 import type { Logger } from '@/utils/logger';
@@ -51,27 +55,6 @@ const DEFAULT_AUTHENTICATION_TIMEOUT_MS = 285_000;
 const DEFAULT_TERMINATION_GRACE_MS = 3_000;
 const DEFAULT_STATUS_PROBE_TIMEOUT_MS = 15_000;
 
-// These variables can supply credentials directly or route Claude through a
-// separately authenticated provider. Claude's native credential-store status
-// command does not reliably represent those paths, so the ACP adapter must stay
-// the source of truth when any of them is configured.
-const CLAUDE_ENV_AUTH_KEYS = [
-  'ANTHROPIC_API_KEY',
-  'ANTHROPIC_AUTH_TOKEN',
-  'ANTHROPIC_CUSTOM_HEADERS',
-  'ANTHROPIC_BASE_URL',
-  'ANTHROPIC_BEDROCK_BASE_URL',
-  'ANTHROPIC_VERTEX_BASE_URL',
-  'ANTHROPIC_FOUNDRY_BASE_URL',
-  'ANTHROPIC_FOUNDRY_RESOURCE',
-  'ANTHROPIC_FOUNDRY_API_KEY',
-  'CLAUDE_CODE_USE_BEDROCK',
-  'CLAUDE_CODE_USE_VERTEX',
-  'CLAUDE_CODE_USE_FOUNDRY',
-  'AWS_BEARER_TOKEN_BEDROCK',
-  'ANTHROPIC_VERTEX_PROJECT_ID',
-] as const;
-
 const BUILTIN_AUTH_METHODS = {
   kimi: [
     {
@@ -80,6 +63,15 @@ const BUILTIN_AUTH_METHODS = {
       description: 'Sign in with Kimi Code',
       type: 'terminal',
       args: ['--login'],
+    },
+  ],
+  grok: [
+    {
+      id: 'xai-device-login',
+      name: 'xAI',
+      description: 'Sign in with an xAI account',
+      type: 'terminal',
+      args: ['login', '--device-auth'],
     },
   ],
   claude: [
@@ -151,17 +143,6 @@ function formatAuthenticationExitError(
   return `${base}. Make sure device-code login is enabled in your ChatGPT security settings or workspace permissions, then try again.`;
 }
 
-function hasNonEmptyEnvValue(env: NodeJS.ProcessEnv | undefined, key: string): boolean {
-  return Boolean(env?.[key]?.trim());
-}
-
-function hasEnvironmentAuthentication(agentType: BuiltinCliType, env: NodeJS.ProcessEnv): boolean {
-  if (agentType === 'claude') {
-    return CLAUDE_ENV_AUTH_KEYS.some((key) => hasNonEmptyEnvValue(env, key));
-  }
-  return false;
-}
-
 async function buildAuthenticationProcessEnv(options: {
   launch: ResolvedACPProcessLaunch;
   agentType: string;
@@ -185,19 +166,23 @@ async function buildAuthenticationProcessEnv(options: {
 
 /**
  * Uses the provider's official status command to distinguish missing local
- * credentials from an ACP startup failure. Kimi has no equivalent lightweight
- * status command. Codex's status command only describes its OpenAI credential
- * store and cannot account for custom model providers, so both adapters remain
- * the source of truth.
+ * credentials from an ACP startup failure. Kimi and Grok have no equivalent
+ * lightweight status command. Codex's status command only describes its OpenAI
+ * credential store and cannot account for custom model providers, so those ACP
+ * adapters remain the source of truth.
  */
 export async function probeBuiltinAuthentication(
   options: ProbeBuiltinAuthenticationOptions
 ): Promise<BuiltinAuthenticationProbeResult> {
   options.signal?.throwIfAborted();
-  if (options.cliType !== 'builtin' || !isBuiltinAgentType(options.agentType)) {
+  if (options.cliType !== 'builtin' || !isManagedBuiltinAgentType(options.agentType)) {
     return { status: 'unknown' };
   }
-  if (options.agentType === 'kimi' || options.agentType === 'codex') {
+  if (
+    options.agentType === 'kimi' ||
+    options.agentType === 'grok' ||
+    options.agentType === 'codex'
+  ) {
     return { status: 'unknown' };
   }
   const launch = await resolveBuiltinAuthenticationProcessLaunch({
@@ -218,7 +203,7 @@ export async function probeBuiltinAuthentication(
     resolveLoginShellEnv: options.resolveLoginShellEnv ?? getLoginShellEnv,
   });
   options.signal?.throwIfAborted();
-  if (hasEnvironmentAuthentication(options.agentType, env)) {
+  if (hasBuiltinEnvAuthentication(options.agentType, env)) {
     return { status: 'unknown' };
   }
   const child = (options.spawnProcess ?? spawn)(launch.command, launch.args, {
@@ -330,7 +315,7 @@ export class AcpAuthenticationManager {
     env?: Record<string, string>;
     onProgress?: (event: AcpAuthenticationProgressEvent) => void;
   }): Promise<AcpAuthenticationResult> {
-    if (options.cliType !== 'builtin' || !isBuiltinAgentType(options.agentType)) {
+    if (options.cliType !== 'builtin' || !isManagedBuiltinAgentType(options.agentType)) {
       return {
         success: false,
         disposition: 'error',

@@ -4,10 +4,24 @@ import {
   type LocalProjectHistoryCatalogItem,
   type LocalProjectHistoryCatalogResult,
   type LocalProjectHistoryProvider,
+  type LocalProjectHistorySyncSummary,
   type LocalProjectId,
   type MachineId,
   type SessionMeta,
 } from '@lody/shared';
+
+export const MAX_VISIBLE_LOCAL_PROJECT_HISTORY_FAILURES = 3;
+
+export function getVisibleLocalProjectHistoryFailures(
+  summary: LocalProjectHistorySyncSummary,
+  limit = MAX_VISIBLE_LOCAL_PROJECT_HISTORY_FAILURES
+) {
+  const failures = summary.failures.slice(0, Math.max(0, limit));
+  return {
+    failures,
+    remaining: Math.max(0, summary.failures.length - failures.length),
+  };
+}
 
 function buildActiveImportIndex(options: {
   machineId: MachineId;
@@ -66,11 +80,16 @@ function reconcileCatalogItem(options: {
   });
   const importedSession = options.activeImports.get(key);
   if (importedSession) {
+    const externalHistoryStatus = importedSession.externalHistory?.status;
     return {
       ...options.item,
       importedSessionId: importedSession.id,
       status:
-        importedSession.externalHistory?.status === 'sync_conflict' ? 'sync_conflict' : 'imported',
+        externalHistoryStatus === 'metadata_only'
+          ? 'available'
+          : externalHistoryStatus === 'sync_conflict'
+            ? 'sync_conflict'
+            : 'imported',
     };
   }
 

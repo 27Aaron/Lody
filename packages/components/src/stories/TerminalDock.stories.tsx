@@ -85,6 +85,12 @@ class StoryTerminalChannel implements TerminalChannel {
     }
   }
 
+  readClipboardText(): string {
+    return '';
+  }
+
+  writeClipboardText(): void {}
+
   onData(handler: (event: TerminalDataEvent) => void): Unsubscribe {
     this.dataHandlers.add(handler);
     return () => this.dataHandlers.delete(handler);

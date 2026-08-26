@@ -1,34 +1,40 @@
 import { getMDXComponents } from '@site/components/mdx';
+import { SiteFooter } from '@site/components/site-footer';
 import { SiteNav } from '@site/components/site-nav';
 import browserCollections from '@site/.source/browser';
 import { formatBlogDate, type BlogEntry, type BlogLocale } from '@site/lib/blog';
+import type { ReactNode } from 'react';
 
 const copy = {
   en: {
-    eyebrow: 'Blog',
-    title: 'News & Updates',
-    description: 'Product announcements, engineering insights, and stories from the Lody team.',
+    title: 'Blog',
+    dek: 'Product announcements, engineering notes, and stories from the Lody team.',
+    more: 'More posts',
+    readTime: (minutes: number) => `${minutes} min read`,
     emptyTitle: 'No posts yet',
     emptyDescription: "We're still writing. Check back soon.",
-    defaultTag: 'Announcement',
     back: 'Back to blog',
-    docs: 'Docs',
-    home: 'Home',
-    homeHref: '/home',
-    docsHref: '/docs',
+    read: 'Read',
+    adjacent: 'More posts',
+    older: 'Older post',
+    newer: 'Newer post',
+    languageHref: '/zh/blog',
+    indexHref: '/blog',
   },
   zh: {
-    eyebrow: '博客',
-    title: '新闻与更新',
-    description: '产品公告、工程洞见以及来自 Lody 团队的故事。',
+    title: '博客',
+    dek: '来自 Lody 团队的产品发布、工程实践与故事。',
+    more: '更多文章',
+    readTime: (minutes: number) => `${minutes} 分钟阅读`,
     emptyTitle: '暂无文章',
     emptyDescription: '我们还在准备内容，稍后再来看看。',
-    defaultTag: '公告',
     back: '返回博客',
-    docs: '文档',
-    home: '首页',
-    homeHref: '/zh/home',
-    docsHref: '/zh/docs',
+    read: '阅读',
+    adjacent: '更多文章',
+    older: '更早的文章',
+    newer: '更新的文章',
+    languageHref: '/blog',
+    indexHref: '/zh/blog',
   },
 } as const;
 
@@ -59,11 +65,10 @@ export async function preloadBlogContent(locale: BlogLocale, docPath: string) {
   await blogContentLoaders[locale].preload(docPath);
 }
 
-function CalendarIcon() {
+function ArrowRightIcon() {
   return (
     <svg
       aria-hidden="true"
-      className="h-3.5 w-3.5"
       fill="none"
       focusable="false"
       stroke="currentColor"
@@ -72,177 +77,262 @@ function CalendarIcon() {
       strokeWidth="2"
       viewBox="0 0 24 24"
     >
-      <rect height="18" rx="2" ry="2" width="18" x="3" y="4" />
-      <path d="M16 2v4" />
-      <path d="M8 2v4" />
-      <path d="M3 10h18" />
+      <path d="M5 12h14" />
+      <path d="m13 5 7 7-7 7" />
     </svg>
   );
 }
 
-function BlogFooter({ locale }: { locale: BlogLocale }) {
-  const text = copy[locale];
+function ArrowLeftIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      fill="none"
+      focusable="false"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="2"
+      viewBox="0 0 24 24"
+    >
+      <path d="M19 12H5" />
+      <path d="m12 19-7-7 7-7" />
+    </svg>
+  );
+}
+
+function MetaDot() {
+  return <span aria-hidden="true" className="blog-meta-dot" />;
+}
+
+/** Joins meta parts with dots; renders nothing when every part is absent. */
+function MetaLine({ className, items }: { className?: string; items: ReactNode[] }) {
+  const parts = items.filter((item) => item !== null && item !== undefined);
+  if (parts.length === 0) return null;
 
   return (
-    <footer className="flex justify-center gap-6 text-sm text-fd-muted-foreground">
-      <a className="hover:text-fd-foreground" href={text.docsHref}>
-        {text.docs}
-      </a>
-      <a className="hover:text-fd-foreground" href={text.homeHref}>
-        {text.home}
-      </a>
-      <a className="hover:text-fd-foreground" href="https://discord.gg/E8mZtMu38s">
-        Discord
-      </a>
-    </footer>
+    <p className={className === undefined ? 'blog-meta' : `blog-meta ${className}`}>
+      {parts.flatMap((item, index) =>
+        index === 0 ? [item] : [<MetaDot key={`dot-${index}`} />, item]
+      )}
+    </p>
+  );
+}
+
+function dateItem(entry: BlogEntry, locale: BlogLocale): ReactNode {
+  const label = formatBlogDate(entry.date, locale);
+  if (!hasText(entry.date) || !hasText(label)) return null;
+  return (
+    <time dateTime={entry.date} key="date">
+      {label}
+    </time>
+  );
+}
+
+function authorItem(entry: BlogEntry): ReactNode {
+  if (!hasText(entry.author)) return null;
+  if (!hasText(entry.authorLink)) return <span key="author">{entry.author}</span>;
+
+  const external = isExternalLink(entry.authorLink);
+  return (
+    <a
+      href={entry.authorLink}
+      key="author"
+      rel={external ? 'noreferrer' : undefined}
+      target={external ? '_blank' : undefined}
+    >
+      {entry.author}
+    </a>
+  );
+}
+
+function tagItem(entry: BlogEntry): ReactNode {
+  return hasText(entry.tag) ? <span key="tag">{entry.tag}</span> : null;
+}
+
+function readTimeItem(entry: BlogEntry, locale: BlogLocale): ReactNode {
+  const minutes = entry.readingMinutes;
+  if (minutes === undefined || minutes <= 0) return null;
+  return <span key="read">{copy[locale].readTime(minutes)}</span>;
+}
+
+/**
+ * Cover art is always redundant with the adjacent headline, so it carries an
+ * empty alt rather than repeating the title to screen readers.
+ */
+function BlogCover({
+  src,
+  className,
+  eager = false,
+}: {
+  src: string;
+  className: string;
+  eager?: boolean;
+}) {
+  return (
+    <img
+      alt=""
+      className={className}
+      decoding="async"
+      loading={eager ? 'eager' : 'lazy'}
+      src={src}
+    />
+  );
+}
+
+function AdjacentLink({
+  entry,
+  label,
+  direction,
+}: {
+  entry: BlogEntry;
+  label: string;
+  direction: 'previous' | 'next';
+}) {
+  return (
+    <a
+      className={`blog-adjacent__link blog-adjacent__link--${direction}`}
+      href={entry.url}
+      rel={direction === 'previous' ? 'prev' : 'next'}
+    >
+      <span className="blog-adjacent__label">
+        {direction === 'previous' ? <ArrowLeftIcon /> : null}
+        {label}
+        {direction === 'next' ? <ArrowRightIcon /> : null}
+      </span>
+      <span className="blog-adjacent__title">{entry.title}</span>
+    </a>
   );
 }
 
 export function BlogIndexPage({ entries, locale }: { entries: BlogEntry[]; locale: BlogLocale }) {
   const text = copy[locale];
+  const [featured, ...rest] = entries;
 
   return (
-    <main className="lody-blog-shell">
-      <SiteNav locale={locale} languageHref={locale === 'zh' ? '/blog' : '/zh/blog'} />
-      <div className="mx-auto flex w-[min(1100px,92vw)] flex-col gap-12 pb-16 pt-28">
-        <header className="text-center">
-          <p className="mb-3 text-xs font-semibold uppercase tracking-[0.22em] text-fd-primary">
-            {text.eyebrow}
-          </p>
-          <h1 className="m-0 text-4xl font-bold tracking-tight md:text-5xl">{text.title}</h1>
-          <p className="mx-auto mt-4 max-w-2xl text-fd-muted-foreground">{text.description}</p>
+    <main className="lody-blog-shell blog-shell">
+      <SiteNav locale={locale} languageHref={text.languageHref} />
+      <div className="blog-container">
+        <header className="blog-masthead">
+          <h1 className="blog-masthead__title">{text.title}</h1>
+          <p className="blog-masthead__dek">{text.dek}</p>
         </header>
 
-        {entries.length > 0 ? (
-          <section className="grid gap-5 md:grid-cols-2">
-            {entries.map((entry) => (
-              <a
-                className="group overflow-hidden rounded-3xl border bg-fd-card text-fd-foreground shadow-sm transition hover:-translate-y-0.5 hover:border-fd-primary/60 hover:shadow-xl"
-                href={entry.url}
-                key={entry.url}
-              >
-                <div className="flex h-full flex-col">
-                  <div className="relative flex min-h-56 items-center justify-center overflow-hidden border-b bg-fd-muted">
-                    {hasText(entry.image) ? (
-                      <img
-                        alt={entry.title}
-                        className="h-full min-h-56 w-full object-cover transition duration-500 group-hover:scale-[1.03]"
-                        loading="lazy"
-                        src={entry.image}
-                      />
-                    ) : (
-                      <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,color-mix(in_oklab,var(--color-fd-primary)_34%,transparent),transparent_35%),linear-gradient(135deg,var(--color-fd-muted),var(--color-fd-background))]" />
-                    )}
-                  </div>
-                  <div className="flex flex-1 flex-col gap-4 p-6">
-                    <div className="flex flex-wrap items-center gap-2 text-xs text-fd-muted-foreground">
-                      {hasText(entry.date) ? (
-                        <span className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1">
-                          <CalendarIcon />
-                          {formatBlogDate(entry.date, locale)}
-                        </span>
-                      ) : null}
-                      {hasText(entry.author) ? (
-                        <span className="rounded-full border px-2.5 py-1">{entry.author}</span>
-                      ) : null}
-                      <span className="rounded-full border border-fd-primary/40 bg-fd-primary/10 px-2.5 py-1 text-fd-primary">
-                        {entry.tag ?? text.defaultTag}
-                      </span>
-                    </div>
-                    <div className="space-y-3">
-                      <h2 className="m-0 text-2xl font-semibold tracking-tight">{entry.title}</h2>
-                      {hasText(entry.description) ? (
-                        <p className="m-0 line-clamp-3 text-sm leading-6 text-fd-muted-foreground">
-                          {entry.description}
-                        </p>
-                      ) : null}
-                    </div>
-                  </div>
-                </div>
-              </a>
-            ))}
-          </section>
+        {featured ? (
+          <a className="blog-lead" href={featured.url}>
+            <MetaLine className="blog-lead__date" items={[dateItem(featured, locale)]} />
+            <div className="blog-lead__body">
+              <h2 className="blog-lead__title">{featured.title}</h2>
+              {hasText(featured.description) ? (
+                <p className="blog-lead__dek">{featured.description}</p>
+              ) : null}
+              <MetaLine
+                className="blog-lead__byline"
+                items={[tagItem(featured), authorItem(featured), readTimeItem(featured, locale)]}
+              />
+              <span className="blog-lead__read">
+                {text.read}
+                <ArrowRightIcon />
+              </span>
+              {hasText(featured.image) ? (
+                <BlogCover className="blog-lead__cover" eager src={featured.image} />
+              ) : null}
+            </div>
+          </a>
         ) : (
-          <section className="mx-auto max-w-xl rounded-3xl border bg-fd-card p-10 text-center shadow-sm">
-            <h2 className="m-0 text-2xl font-semibold">{text.emptyTitle}</h2>
-            <p className="mt-3 text-fd-muted-foreground">{text.emptyDescription}</p>
+          <section className="blog-empty">
+            <h2>{text.emptyTitle}</h2>
+            <p>{text.emptyDescription}</p>
           </section>
         )}
 
-        <BlogFooter locale={locale} />
+        {rest.length > 0 ? (
+          <section className="blog-more">
+            <h2 className="blog-section-label">{text.more}</h2>
+            <ol className="blog-list">
+              {rest.map((entry) => (
+                <li key={entry.url}>
+                  <a className="blog-row" href={entry.url}>
+                    <MetaLine className="blog-row__date" items={[dateItem(entry, locale)]} />
+                    <div className="blog-row__body">
+                      <h3 className="blog-row__title">{entry.title}</h3>
+                      {hasText(entry.description) ? (
+                        <p className="blog-row__dek">{entry.description}</p>
+                      ) : null}
+                      <MetaLine
+                        className="blog-row__meta"
+                        items={[tagItem(entry), readTimeItem(entry, locale)]}
+                      />
+                    </div>
+                  </a>
+                </li>
+              ))}
+            </ol>
+          </section>
+        ) : null}
       </div>
+      <SiteFooter locale={locale} />
     </main>
   );
 }
 
-export function BlogPostPage({ entry, locale }: { entry: BlogEntry; locale: BlogLocale }) {
+export function BlogPostPage({
+  entry,
+  locale,
+  previous,
+  next,
+}: {
+  entry: BlogEntry;
+  locale: BlogLocale;
+  previous?: BlogEntry;
+  next?: BlogEntry;
+}) {
   const text = copy[locale];
-  const formattedDate = formatBlogDate(entry.date, locale);
 
   return (
-    <main className="lody-blog-shell">
+    <main className="lody-blog-shell blog-shell">
       <SiteNav
         locale={locale}
         languageHref={locale === 'zh' ? `/blog/${entry.slug}` : `/zh/blog/${entry.slug}`}
       />
-      <article className="mx-auto flex w-[min(860px,92vw)] flex-col gap-8 pb-16 pt-28">
-        <header>
-          <a
-            className="text-sm text-fd-muted-foreground hover:text-fd-foreground"
-            href={locale === 'zh' ? '/zh/blog' : '/blog'}
-          >
-            {text.back}
-          </a>
+      <article className="blog-article">
+        <a className="blog-back" href={text.indexHref}>
+          <ArrowLeftIcon />
+          {text.back}
+        </a>
 
-          <div className="mt-8 space-y-5 rounded-3xl border bg-fd-card p-7 shadow-sm md:p-9">
-            <div className="flex flex-wrap items-center gap-2 text-xs text-fd-muted-foreground">
-              {hasText(entry.tag) ? (
-                <span className="rounded-full border border-fd-primary/40 bg-fd-primary/10 px-2.5 py-1 text-fd-primary">
-                  {entry.tag}
-                </span>
-              ) : null}
-              {hasText(entry.date) && hasText(formattedDate) ? (
-                <time className="rounded-full border px-2.5 py-1" dateTime={entry.date}>
-                  {formattedDate}
-                </time>
-              ) : null}
-              {hasText(entry.author) && hasText(entry.authorLink) ? (
-                <a
-                  className="rounded-full border px-2.5 py-1 hover:text-fd-foreground"
-                  href={entry.authorLink}
-                  rel={isExternalLink(entry.authorLink) ? 'noreferrer' : undefined}
-                  target={isExternalLink(entry.authorLink) ? '_blank' : undefined}
-                >
-                  {entry.author}
-                </a>
-              ) : hasText(entry.author) ? (
-                <span className="rounded-full border px-2.5 py-1">{entry.author}</span>
-              ) : null}
-            </div>
-            <h1 className="m-0 text-4xl font-bold tracking-tight md:text-5xl">{entry.title}</h1>
-            {hasText(entry.description) ? (
-              <p className="m-0 text-lg leading-8 text-fd-muted-foreground">{entry.description}</p>
-            ) : null}
-          </div>
-
-          {hasText(entry.image) ? (
-            <div className="mt-8 overflow-hidden rounded-3xl border bg-fd-muted shadow-sm">
-              <img
-                alt={entry.title}
-                className="max-h-[460px] w-full object-cover"
-                loading="eager"
-                src={entry.image}
-              />
-            </div>
+        <header className="blog-article-header">
+          <MetaLine
+            className="blog-article-meta"
+            items={[
+              dateItem(entry, locale),
+              authorItem(entry),
+              tagItem(entry),
+              readTimeItem(entry, locale),
+            ]}
+          />
+          <h1 className="blog-article-title">{entry.title}</h1>
+          {hasText(entry.description) ? (
+            <p className="blog-article-dek">{entry.description}</p>
           ) : null}
         </header>
 
-        <div className="lody-blog-post-body prose max-w-none dark:prose-invert">
-          {blogContentLoaders[locale].useContent(entry.docPath)}
-        </div>
+        {hasText(entry.image) ? (
+          <BlogCover className="blog-article-cover" eager src={entry.image} />
+        ) : null}
 
-        <BlogFooter locale={locale} />
+        <div className="blog-prose">{blogContentLoaders[locale].useContent(entry.docPath)}</div>
+
+        {previous || next ? (
+          <nav aria-label={text.adjacent} className="blog-adjacent">
+            {previous ? (
+              <AdjacentLink direction="previous" entry={previous} label={text.older} />
+            ) : null}
+            {next ? <AdjacentLink direction="next" entry={next} label={text.newer} /> : null}
+          </nav>
+        ) : null}
       </article>
+      <SiteFooter locale={locale} />
     </main>
   );
 }

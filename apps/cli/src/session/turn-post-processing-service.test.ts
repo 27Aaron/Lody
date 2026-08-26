@@ -66,10 +66,21 @@ const createService = (options: {
   });
 
 describe('TurnPostProcessingService', () => {
-  it('does not detect or associate a PR for a direct local project', async () => {
+  it('detects a PR for a GitHub-capable direct local project', async () => {
     const logger = createLogger();
     const service = createService({ logger });
-    const exec = vi.fn();
+    const exec = vi.fn(async () =>
+      JSON.stringify([
+        {
+          number: 42,
+          url: 'https://github.com/owner/repo/pull/42',
+          state: 'OPEN',
+          isDraft: false,
+          headRefName: 'feature/local',
+          baseRefName: 'main',
+        },
+      ])
+    );
     const session = {
       getWorkdir: () => '/repo',
       exec,
@@ -80,11 +91,11 @@ describe('TurnPostProcessingService', () => {
       session,
       sessionDoc: createSessionDoc(),
       project: localProject,
-      branchName: 'main',
+      branchName: 'feature/local',
     });
 
-    expect(detected).toBeNull();
-    expect(exec).not.toHaveBeenCalled();
+    expect(detected?.prNumber).toBe(42);
+    expect(exec).toHaveBeenCalledTimes(1);
   });
 
   it('still detects a PR for a local-project worktree', async () => {

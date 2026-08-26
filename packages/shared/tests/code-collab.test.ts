@@ -157,6 +157,28 @@ describe('Code Collab shared protocol helpers', () => {
     expect(flock.commits).toBe(1);
   });
 
+  // A replica poisoned before the data-plane decode fix keeps rows whose key
+  // carries U+FFFD. They are LWW records under their own key, so a correct
+  // republish never overwrites them: they must be invisible on read and pruned
+  // on the next write, or the garbled path stays in the `@file` menu forever.
+  it('hides and prunes file-index rows with a corrupted path key', () => {
+    const corrupted = '01_CH3.5.5_\uFFFD\uFFFD\uFFFD\u7814\u7a76/README.md';
+    const flock = new FakeFileIndexFlock();
+    flock.set(['README.md'], { kind: 'text' });
+    flock.set([corrupted], { kind: 'text' });
+
+    expect(readCodeCollabFileIndexFromFlock(flock)).toEqual({ 'README.md': { kind: 'text' } });
+
+    expect(writeCodeCollabFileIndexToFlock(flock, { 'README.md': { kind: 'text' } }, 123)).toBe(
+      true
+    );
+    expect([...flock.rows.keys()]).toEqual(['README.md']);
+
+    expect(
+      applyCodeCollabFileIndexFlockEvents({}, [{ key: [corrupted], value: { kind: 'text' } }])
+    ).toEqual({});
+  });
+
   it('reads and writes the file-index signal Flock revision', () => {
     const flock = new FakeFileIndexFlock();
 

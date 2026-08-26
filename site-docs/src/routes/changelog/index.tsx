@@ -1,6 +1,6 @@
 import { preloadChangelogContents } from '@site/components/changelog';
 import { loadChangelogIndexRoute } from '@site/src/changelog-loader';
-import { changelogIndexHead, ChangelogIndexRoutePage } from '@site/src/site-pages';
+import { ChangelogIndexRoutePage, changelogIndexHead } from '@site/src/site-pages/changelog';
 import { createFileRoute } from '@tanstack/react-router';
 
 export const Route = createFileRoute('/changelog/')({

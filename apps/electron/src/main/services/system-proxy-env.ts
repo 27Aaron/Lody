@@ -1,41 +1,42 @@
 import { session } from 'electron'
-
-const DEFAULT_NO_PROXY = 'localhost,127.0.0.1,::1'
-const PROXY_ENV_KEYS = [
-  'ALL_PROXY',
-  'all_proxy',
-  'HTTP_PROXY',
-  'http_proxy',
-  'HTTPS_PROXY',
-  'https_proxy',
-  'npm_config_proxy',
-  'npm_config_http_proxy',
-  'npm_config_https_proxy'
-] as const
+import {
+  DEFAULT_NO_PROXY,
+  PROXY_ENV_KEYS,
+  hasProxyEnvValue,
+  withLoopbackNoProxy
+} from '@lody/shared/proxy-env'
 
 export const DEFAULT_SYSTEM_PROXY_PROBE_URLS = ['https://registry.npmjs.org'] as const
 
 export function hasProxyEnv(env: NodeJS.ProcessEnv): boolean {
-  return PROXY_ENV_KEYS.some((key) => {
-    const value = env[key]
-    return typeof value === 'string' && value.trim().length > 0
-  })
+  return hasProxyEnvValue(env)
 }
 
+/**
+ * Fill proxy variables from the system configuration when the inherited
+ * environment has none, then guarantee loopback bypasses the proxy either way.
+ *
+ * The loopback guarantee is NOT part of the fallback: an environment that
+ * already carries a proxy skipped the fallback entirely and so never had its
+ * `NO_PROXY` normalized, which is how a shell exporting `no_proxy=…` next to
+ * an empty `NO_PROXY=` reached the bundled CLI and its agent children. Clients
+ * that read the uppercase spelling first then proxied Lody's own loopback
+ * services. See `@lody/shared/proxy-env`.
+ */
 export function applyProxyEnvFallback(env: NodeJS.ProcessEnv, proxyEnv: NodeJS.ProcessEnv): void {
-  if (hasProxyEnv(env) || !hasProxyEnv(proxyEnv)) {
-    return
-  }
-
-  for (const key of PROXY_ENV_KEYS) {
-    const value = proxyEnv[key]
-    if (typeof value === 'string' && value.trim().length > 0 && env[key] === undefined) {
-      env[key] = value
+  if (!hasProxyEnv(env) && hasProxyEnv(proxyEnv)) {
+    for (const key of PROXY_ENV_KEYS) {
+      const value = proxyEnv[key]
+      if (typeof value === 'string' && value.trim().length > 0 && env[key] === undefined) {
+        env[key] = value
+      }
     }
   }
 
-  if (!env.NO_PROXY && !env.no_proxy) {
-    env.NO_PROXY = DEFAULT_NO_PROXY
+  const normalized = withLoopbackNoProxy(env)
+  if (normalized !== env) {
+    env.NO_PROXY = normalized.NO_PROXY
+    env.no_proxy = normalized.no_proxy
   }
 }
 

@@ -40,10 +40,6 @@ const CATEGORY_ORDER: CommandCategory[] = [
 // nothing to delete so the column doesn't shift when neighbors do.
 const SHORTCUT_SLOT_CLASS = 'flex w-36 justify-end';
 const TRASH_SLOT_CLASS = 'flex w-9 justify-center';
-// The control on the right is a fixed ~180px (shortcut slot + trash slot), so let the
-// command label take all remaining width instead of the default ~200px cap — long names
-// like "Toggle Files and Changes Sidebar" then stay on one line instead of wrapping.
-const SHORTCUT_ROW_COLUMNS_CLASS = 'sm:grid-cols-[minmax(0,1fr)_auto]';
 
 export function KeyboardShortcutsSetting() {
   const { t } = useTranslation();
@@ -212,12 +208,7 @@ function GlobalShortcutRow({
   }
 
   return (
-    <CompactRow
-      label={label}
-      helper={helper}
-      alignTop
-      labelColumnClassName={SHORTCUT_ROW_COLUMNS_CLASS}
-    >
+    <CompactRow label={label} helper={helper} alignTop>
       <div className="flex items-center">
         <div className={SHORTCUT_SLOT_CLASS}>
           {recording ? (
@@ -351,7 +342,6 @@ function ShortcutRow({
       label={resolveTitle(command, command.title)}
       helper={helper}
       alignTop={Boolean(helper)}
-      labelColumnClassName={SHORTCUT_ROW_COLUMNS_CLASS}
     >
       <div className="flex items-center">
         <div className={SHORTCUT_SLOT_CLASS}>

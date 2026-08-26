@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ACP_ERROR_CODES,
   getACPErrorUserMessage,
+  isAcpSessionStorageIncompatibleError,
   isAuthenticationRequiredACPError,
   isAgentDisconnectedError,
   isAcpSessionNotFoundError,
@@ -70,6 +71,24 @@ describe('ACP error classification', () => {
     }
     expect(mapACPErrorToFailureReason(parsed)).toBe('acp_upstream_api_error');
     expect(shouldTerminateOnACPError(parsed, 'acp_upstream_api_error')).toBe(false);
+  });
+
+  it('maps DeepSeek Harness compression conflicts to an actionable storage reason', () => {
+    const details =
+      'turn failed: session artifact "/Users/test/.dsh/sessions/project/session/session.jsonl.zstd" uses .jsonl.zstd, but this backend is configured for compression "none"; use a separate root or select the matching compression mode';
+    const parsed = parseACPError({
+      code: ACP_ERROR_CODES.INTERNAL_ERROR,
+      message: 'Internal error',
+      data: { details },
+    });
+
+    if (!parsed) {
+      throw new Error('expected ACP error to parse');
+    }
+    expect(isAcpSessionStorageIncompatibleError(parsed)).toBe(true);
+    expect(mapACPErrorToFailureReason(parsed)).toBe('acp_session_storage_incompatible');
+    expect(shouldTerminateOnACPError(parsed, 'acp_session_storage_incompatible')).toBe(true);
+    expect(getACPErrorUserMessage(parsed)).toBe(details);
   });
 
   it('keeps ordinary internal errors classified as acp_internal_error', () => {

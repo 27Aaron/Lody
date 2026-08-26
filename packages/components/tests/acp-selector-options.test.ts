@@ -577,6 +577,26 @@ describe('buildAcpSelectorOptions', () => {
     expect(options.modeOptions.length).toBeGreaterThan(0);
   });
 
+  it('keeps builtin Grok interaction mode in the run-config selectors', () => {
+    const options = buildAcpSelectorOptions({
+      configId: agentConfigId,
+      cliType: 'builtin',
+      agentType: 'grok',
+      machine: machineWithCapabilities({}),
+    });
+
+    expect(options.capabilityAuthority).toBe('provisional');
+    expect(options.modeOptions).toEqual([]);
+    expect(options.defaultModeId).toBeNull();
+    expect(
+      options.configOptionSelectors.find((selector) => selector.configId === 'interaction_mode')
+    ).toMatchObject({
+      label: 'Interaction Mode',
+      currentValue: 'agent',
+      options: [{ value: 'agent' }, { value: 'plan' }],
+    });
+  });
+
   it('does not use static or default cached builtin capabilities when a runtime override is set', () => {
     const options = buildAcpSelectorOptions({
       configId: agentConfigId,

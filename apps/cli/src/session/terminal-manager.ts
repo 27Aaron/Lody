@@ -291,8 +291,7 @@ export class ShellTerminalManager
   ): Promise<ShellTerminalHandle> {
     const workdir = this.resolveWorkdir(params.cwd);
     const env = this.buildEnv(params.env);
-    const formattedCommand = formatCommand(params.command, params.args);
-    const processHandle = await this.sandbox.spawn('bash', ['-lc', formattedCommand], {
+    const processHandle = await this.sandbox.spawn(params.command, params.args, {
       cwd: workdir,
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -349,14 +348,6 @@ export class ShellTerminalManager
   protected async disposeHandle(state: TerminalState<ShellTerminalHandle>): Promise<void> {
     state.handle.dispose();
   }
-}
-
-function formatCommand(command: string, args: string[]): string {
-  if (!args.length) {
-    return command;
-  }
-  const serializedArgs = args.map((arg) => `'${arg.replace(/'/g, `'"'"'`)}'`).join(' ');
-  return `${command} ${serializedArgs}`;
 }
 
 function truncateBuffer(buffer: Buffer, limit: number): Buffer {

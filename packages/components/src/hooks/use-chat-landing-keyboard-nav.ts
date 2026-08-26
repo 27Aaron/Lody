@@ -1,4 +1,5 @@
 import { useEffect, useRef, type RefObject } from 'react';
+import { isImeComposingNativeKeyboardEvent } from '@/lib/ime';
 
 /**
  * Keyboard control over the desktop chat landing's config + composer column.
@@ -183,6 +184,9 @@ export function useChatLandingKeyboardNav(
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (!enabledRef.current) return;
+      // Esc belongs to the IME while it is cancelling a preedit; do not turn
+      // that same keydown into a focus-mode transition.
+      if (isImeComposingNativeKeyboardEvent(event)) return;
       // A key press means the user is driving with the keyboard, so the focus ring may
       // show; a pointerdown flips this back off. Covers native Tab and ⌘L too (they
       // move focus via focusin, not focusOption).

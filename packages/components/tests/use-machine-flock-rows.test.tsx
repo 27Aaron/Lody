@@ -1434,12 +1434,122 @@ describe('useMachineFlockRows', () => {
     expect(updates.at(-1)?.[dotlodyPathRowId]?.value).toBe(dotlodyPath);
   });
 
+  it('does not republish an explicit resync at the already materialized version', async () => {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+    const store = createStore();
+    const workspaceId = 'workspace-machine-flock-resync-version-test' as WorkspaceId;
+    const machineId = 'machine-machine-flock-resync-version-test' as MachineId;
+    const dotlodyPath = '/Users/resync-version/.lody';
+    const scan = vi.fn(() => [{ key: machineFlockKeys.dotlodyPath(), value: dotlodyPath }]);
+    const handle = {
+      flock: {
+        scan,
+        version: vi.fn(() => ({
+          'test-peer': { physicalTime: 1, logicalCounter: 0 },
+        })),
+        subscribe: vi.fn(() => vi.fn()),
+      },
+      syncOnce: vi.fn(async () => ({
+        ok: true,
+        transports: [{ transportId: 'cloud', ok: true, failures: [] }],
+      })),
+      joinRoom: vi.fn(),
+    };
+    const runtime = {
+      workspaceId,
+      workspaceSlug: 'workspace-machine-flock-resync-version-test',
+      repo: { openFlockDoc: vi.fn(async () => handle) },
+    } as unknown as WorkspaceRuntime;
+    store.set(runtimeAtom, runtime);
+    store.set(currentWorkspaceIdAtom, workspaceId);
+    store.set(currentWorkspaceSlugAtom, 'workspace-machine-flock-resync-version-test');
+
+    const updates: MachineFlockRowMap[] = [];
+    render(
+      createElement(
+        Provider,
+        { store },
+        createElement(RowsProbe, {
+          machineId,
+          remoteMachineIds: [],
+          onRows: (rows) => updates.push(rows),
+        })
+      )
+    );
+    await flushMicrotasks();
+    const updateCountBeforeResync = updates.length;
+
+    await resyncMachineFlockRows(runtime, machineId, { requireRemoteSync: true });
+    await flushMicrotasks();
+
+    expect(scan).toHaveBeenCalledTimes(1);
+    expect(updates).toHaveLength(updateCountBeforeResync);
+  });
+
+  it('materializes different row-family projections at the same Flock version', async () => {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+    const store = createStore();
+    const workspaceId = 'workspace-machine-flock-family-version-test' as WorkspaceId;
+    const machineId = 'machine-machine-flock-family-version-test';
+    const scan = vi.fn(() => []);
+    const openFlockDoc = vi.fn(async () => ({
+      flock: {
+        scan,
+        version: vi.fn(() => ({
+          'test-peer': { physicalTime: 1, logicalCounter: 0 },
+        })),
+        subscribe: vi.fn(() => vi.fn()),
+      },
+      syncOnce: vi.fn(),
+      joinRoom: vi.fn(),
+    }));
+
+    store.set(runtimeAtom, {
+      workspaceId,
+      workspaceSlug: 'workspace-machine-flock-family-version-test',
+      repo: { openFlockDoc },
+    } as unknown as WorkspaceRuntime);
+    store.set(currentWorkspaceIdAtom, workspaceId);
+    store.set(currentWorkspaceSlugAtom, 'workspace-machine-flock-family-version-test');
+
+    render(
+      createElement(
+        Provider,
+        { store },
+        createElement(
+          Fragment,
+          null,
+          createElement(RowsProbe, {
+            machineId,
+            families: ['dotlodyPath'],
+            remoteMachineIds: [],
+            onRows: vi.fn(),
+          }),
+          createElement(RowsProbe, {
+            machineId,
+            families: ['localProject'],
+            remoteMachineIds: [],
+            onRows: vi.fn(),
+          })
+        )
+      )
+    );
+    await flushMicrotasks();
+
+    expect(scan).toHaveBeenCalledTimes(2);
+    expect(scan).toHaveBeenCalledWith({ prefix: ['dotlodyPath'] });
+    expect(scan).toHaveBeenCalledWith({ prefix: ['localProject'] });
+  });
+
   it('reuses the published rows instead of re-scanning the flock for every new consumer', async () => {
     // The local read is an O(whole-flock) scan. While a shared subscription is
     // alive it keeps the atom current incrementally, so extra consumers — and
     // remounts, which is what a session switch does to the chat surface — must
-    // not repeat it. Once the last consumer goes away the subscription drops
-    // and a fresh mount has to scan again, because nothing was tracking drift.
+    // not repeat it. Once the last consumer goes away the subscription drops,
+    // but a fresh mount can still compare the persisted projection version
+    // before deciding whether another scan is necessary.
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
     const store = createStore();
@@ -1450,10 +1560,14 @@ describe('useMachineFlockRows', () => {
     const dotlodyPathRowId = serializeMachineFlockKey(machineFlockKeys.dotlodyPath());
     const scan = vi.fn(() => [{ key: machineFlockKeys.dotlodyPath(), value: dotlodyPath }]);
     const unsubscribeFlock = vi.fn();
+    let versionClock = 1;
     let emitFlockBatch: ((batch: { events: MachineFlockEvent[] }) => void) | null = null;
     const openFlockDoc = vi.fn(async () => ({
       flock: {
         scan,
+        version: vi.fn(() => ({
+          'test-peer': { physicalTime: versionClock, logicalCounter: 0 },
+        })),
         subscribe: vi.fn((listener: (batch: { events: MachineFlockEvent[] }) => void) => {
           emitFlockBatch = listener;
           return unsubscribeFlock;
@@ -1523,6 +1637,7 @@ describe('useMachineFlockRows', () => {
     expect(secondUpdates.at(-1)?.[dotlodyPathRowId]?.value).toBe(dotlodyPath);
 
     // The skipped read must not cost liveness: events still reach every consumer.
+    versionClock = 2;
     act(() => {
       emitFlockBatch?.({
         events: [{ key: machineFlockKeys.dotlodyPath(), value: '/Users/dedupe/.lody-next' }],
@@ -1531,7 +1646,8 @@ describe('useMachineFlockRows', () => {
     expect(firstUpdates.at(-1)?.[dotlodyPathRowId]?.value).toBe('/Users/dedupe/.lody-next');
     expect(secondUpdates.at(-1)?.[dotlodyPathRowId]?.value).toBe('/Users/dedupe/.lody-next');
 
-    // Last consumer gone -> subscription released -> the next mount must re-read.
+    // Last consumer gone -> subscription released. The unchanged Flock version
+    // still proves that the materialized rows are current on the next mount.
     act(() => {
       root?.render(createElement(Provider, { store }, createElement(Fragment, null)));
     });
@@ -1550,7 +1666,27 @@ describe('useMachineFlockRows', () => {
     });
     await flushMicrotasks();
 
+    expect(scan).toHaveBeenCalledTimes(1);
+    expect(revisitUpdates.at(-1)?.[dotlodyPathRowId]?.value).toBe('/Users/dedupe/.lody-next');
+
+    // If the local Flock changed while no subscription was alive, the version
+    // mismatch forces a fresh scan instead of trusting the warm atom snapshot.
+    act(() => {
+      root?.render(createElement(Provider, { store }, createElement(Fragment, null)));
+    });
+    await flushMicrotasks();
+    versionClock = 3;
+    act(() => {
+      root?.render(
+        createElement(
+          Provider,
+          { store },
+          createElement(Fragment, null, probe('drifted-revisit', revisitUpdates))
+        )
+      );
+    });
+    await flushMicrotasks();
+
     expect(scan).toHaveBeenCalledTimes(2);
-    expect(revisitUpdates.at(-1)?.[dotlodyPathRowId]?.value).toBe(dotlodyPath);
   });
 });

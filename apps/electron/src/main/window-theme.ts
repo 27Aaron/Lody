@@ -1,4 +1,11 @@
 export type ResolvedWindowTheme = 'light' | 'dark'
+export type NativeWindowThemeSource = ResolvedWindowTheme | 'system'
+
+export function getInitialMainWindowThemeSource(
+  initialPath: '/' | '/onboarding' = '/'
+): NativeWindowThemeSource {
+  return initialPath === '/onboarding' ? 'light' : 'system'
+}
 
 const WINDOW_BACKGROUND_COLORS: Record<ResolvedWindowTheme, string> = {
   light: '#FFFFFF',
@@ -34,5 +41,29 @@ export function getMainWindowTitleBarOverlay(theme: ResolvedWindowTheme): {
   return {
     ...TITLE_BAR_OVERLAY_COLORS[theme],
     height: MAIN_WINDOW_TITLE_BAR_OVERLAY_HEIGHT
+  }
+}
+
+export function resolveNativeWindowTheme(shouldUseDarkColors: boolean): ResolvedWindowTheme {
+  return shouldUseDarkColors ? 'dark' : 'light'
+}
+
+export type NativeWindowAppearanceTarget = {
+  setBackgroundColor: (color: string) => void
+  setTitleBarOverlay?: (overlay: {
+    color: string
+    symbolColor: string
+    height: number
+  }) => void
+}
+
+export function applyResolvedWindowTheme(
+  window: NativeWindowAppearanceTarget,
+  theme: ResolvedWindowTheme,
+  platform: NodeJS.Platform
+): void {
+  window.setBackgroundColor(getMainWindowBackgroundColor(theme))
+  if (platform === 'win32') {
+    window.setTitleBarOverlay?.(getMainWindowTitleBarOverlay(theme))
   }
 }

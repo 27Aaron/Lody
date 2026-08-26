@@ -37,7 +37,7 @@
   height/opacity for promo banner, strike-through reference, and note swap.
 - Framework boundary files live under `src/`: `src/router.tsx`,
   `src/routes/__root.tsx`, file routes in `src/routes/**`, and shared route/page
-  adapters in `src/site-pages.tsx`. Do not add new route logic under `app/`;
+  adapters in `src/site-pages/**`. Do not add new route logic under `app/`;
   `app/` is now CSS-only.
 - Content is Fumadocs MDX. `fumadocs-mdx` generates `.source/`, and
   `scripts/site-paths.mjs` enumerates prerender paths for docs/blog/changelog.
@@ -51,11 +51,26 @@
   `scripts/generate-sitemap.mjs` writes `public/sitemap.xml` from the same path
   source. `scripts/generate-llms.mjs` validates docs title/description
   frontmatter and generates root `public/llms.txt` + `public/llms-full.txt` from
-  the ordered English docs and public blog content. Root `public/robots.txt` is
-  also owned here; the App build must not overwrite public-site SEO files.
+  the ordered English docs and public blog content. `scripts/generate-rss.mjs`
+  writes `public/rss.xml` (en) and `public/rss-zh.xml` (zh) from the same blog
+  frontmatter, skipping drafts; both feeds are linked from every blog `head()`.
+  Root `public/robots.txt` is also owned here; the App build must not overwrite
+  public-site SEO files.
 - `prebuild` runs `scripts/clean-output.mjs` before content generation. Keep this:
   stale Next/static prerender files in `out/` can create Vite preview redirect
-  loops during TanStack prerender.
+  loops during TanStack prerender. Downstream deployments that immediately run
+  `build` may set `LODY_SKIP_SITE_DOCS_POSTINSTALL=1` to avoid generating the same
+  content during install; never use the switch unless a later build/generate step
+  is guaranteed.
+- `app/reading-theme.css` owns the dark **reading** palette (`--ink-*`) shared by
+  blog and docs, and is the single source of truth for both: `blog.css` maps the
+  `--landing-*` tokens onto it and the same file remaps Fumadocs' `--color-fd-*`.
+  It exists because the stock grounds (marketing `222 55% 9.6%`, Fumadocs ocean
+  `220 60% 8%`) are too saturated for long-form reading. It also cancels the
+  ocean preset's `.dark body` blue glow. Light mode intentionally keeps stock
+  values. Marketing pages (landing/pricing/changelog/download) must stay on
+  `--landing-*` / `--mkt-*` and reference no `fd-` token, which is what keeps
+  this override off them — check that before moving a component between them.
 - SEO lives in `lib/metadata.ts` and TanStack route `head()` functions. Canonical
   page URLs should match Cloudflare Pages' directory form (`/`, `/zh/`,
   `/docs/.../`, `/zh/docs/.../`); file URLs keep their extension. `/home` and
@@ -63,10 +78,11 @@
 - `vite.config.ts` is the build integration point. Keep TanStack Start, Fumadocs
   MDX, Tailwind, React, and preview-only aliases there. The deployable static
   build output is `site-docs/out/client`; do not publish the SSR server bundle.
-- `src/routeTree.gen.ts`, `public/sitemap.xml`, `public/llms.txt`, and
-  `public/llms-full.txt` are generated and ignored. `pretypecheck` runs
-  `tsr generate`; `generate` writes the SEO files. Do not edit or format the
-  generated route tree or generated public SEO files.
+- `src/routeTree.gen.ts`, `public/sitemap.xml`, `public/llms.txt`,
+  `public/llms-full.txt`, `public/rss.xml`, and `public/rss-zh.xml` are
+  generated and ignored. `pretypecheck` runs `tsr generate`; `generate` writes
+  the SEO files. Do not edit or format the generated route tree or generated
+  public SEO files.
 - The public site imports real workspace components through the `@/*` alias to
   `packages/components/src`. Exact aliases in `vite.config.ts` redirect app-only
   modules to `components/app-preview-shims/`. A `forceSingletonDeps` Vite plugin
@@ -137,7 +153,17 @@
   immediately; (3) first render waits on `renderer.compileAsync` (`ready` gate)
   so shader compilation never blocks the main thread. Tune/downgrade rebuilds
   stay synchronous on the main thread.
-- `landing-app-preview.tsx` is the live product mock for the center stage.
+- `landing-app-preview.tsx` is the live product mock for the center stage, and the
+  landing's heaviest module (real product UI + composer/markdown/katex behind it).
+  `underwater-experience.tsx` mounts it via `lazy()` — deliberately NOT module-eval
+  `import()` like the background, so hero + WebGL keep first-paint bandwidth. The
+  `previewArmed` latch fires one viewport ahead (idle fallback for non-scrollers)
+  and never flips back, so the frame is filled before arrival and ghost scripts
+  never remount. Tab durations + the demo id union live in
+  `landing-demo-durations.ts`; importing them from the preview would pull it back
+  into the critical chunk. The stage frame carries `aria-hidden` + `inert` — the
+  replica is `pointer-events: none`, but its real buttons/session rows otherwise
+  stayed in the a11y tree and tab order.
   `landing-control-plane.tsx` remains an unmounted reference component on disk.
 - The desktop session shell must track `packages/components/src/components/sessions`
   1:1 — read that directory's `AGENTS.md` before touching it. Current shape:
@@ -175,12 +201,18 @@ bg-sidebar`) whose `SessionSidePanelTabBar` carries Files / All Changes /
 
 - `src/routes/**` maps URLs to TanStack routes. Keep route files thin: define
   `createFileRoute`, `loader`, `head`, and component wiring only.
-- `src/site-pages.tsx` adapts reusable page components to TanStack loaders/head.
-  Put shared route data and locale logic here; do not import `.source/server`
-  from this client-shared module.
+- `src/site-pages/<domain>.tsx` adapts reusable page components to TanStack
+  loaders/head — one module per domain (`landing`, `docs`, `blog`, `changelog`,
+  `pricing`, `download`, `legal`, `not-found`). Do not reintroduce a barrel that
+  re-exports them: every route file imports this layer, so a barrel puts the docs
+  layout, blog, changelog and pricing on the landing's chunk. `SiteNotFound` has
+  its own module for the same reason — `__root.tsx` is on every page.
+  `src/site-pages/shared.ts` holds `SiteLocale`, `localeCode` and the route-data
+  types and must stay free of page-component imports. Do not import
+  `.source/server` from these client-shared modules.
 - `lib/docs.server.ts` is the server-only docs lookup layer for Fumadocs page
   metadata/tree/toc. Docs route files call it through `src/docs-loader.ts`, and
-  `src/site-pages.tsx` renders MDX through `.source/browser` client loaders.
+  `src/site-pages/docs.tsx` renders MDX through `.source/browser` client loaders.
 - `lib/blog.server.ts` and `lib/changelog.server.ts` are the server-only
   Fumadocs lookup layers for those collections. `lib/blog.ts` and
   `lib/changelog.ts` must stay browser-safe: types, formatting, and pure

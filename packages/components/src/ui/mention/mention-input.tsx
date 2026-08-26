@@ -635,41 +635,54 @@ const MentionInput = React.forwardRef<InputElement, MentionInputProps>((props, f
         return context.onNavigateBack();
       }
 
+      /** Commit the highlighted (or exact-match) item, matching Enter. */
+      function trySelectHighlighted() {
+        const span = getTriggerSpan();
+        if (!span) return false;
+
+        const searchText = span.search;
+        const exactMatchItem =
+          searchText.length > 0
+            ? context.getEnabledItems().find((item) => item.label === searchText)
+            : null;
+
+        const selectedItem = context.highlightedItem ?? exactMatchItem;
+        if (!selectedItem) return false;
+
+        // Enter/Tab on a navigation item the user has already typed out in full
+        // commits it rather than descending again: typing `@src/` then Enter
+        // inserts `@src`.
+        const registeredItem = getRegisteredItem(selectedItem.value) ?? selectedItem;
+        const shouldCommit =
+          Boolean(registeredItem.navigateText) && registeredItem.label === searchText;
+
+        context.onMentionAdd(selectedItem.value, span.triggerIndex, {
+          commit: shouldCommit,
+        });
+        return true;
+      }
+
       switch (event.key) {
         case 'Enter': {
-          const span = getTriggerSpan();
-          if (!span) {
+          if (!trySelectHighlighted()) {
             onMenuClose();
             return;
           }
-
-          const searchText = span.search;
-          const exactMatchItem =
-            searchText.length > 0
-              ? context.getEnabledItems().find((item) => item.label === searchText)
-              : null;
-
-          const selectedItem = context.highlightedItem ?? exactMatchItem;
-          if (!selectedItem) {
-            onMenuClose();
-            return;
-          }
-
           event.preventDefault();
-          // Enter on a navigation item the user has already typed out in full
-          // commits it rather than descending again: typing `@src/` then Enter
-          // inserts `@src`.
-          const registeredItem = getRegisteredItem(selectedItem.value) ?? selectedItem;
-          const shouldCommit =
-            Boolean(registeredItem.navigateText) && registeredItem.label === searchText;
-
-          context.onMentionAdd(selectedItem.value, span.triggerIndex, {
-            commit: shouldCommit,
-          });
           break;
         }
         case 'Tab': {
+          // ⇧Tab is the composer mode-cycle binding; do not steal it to select.
+          if (event.shiftKey) {
+            if (context.modal) event.preventDefault();
+            onMenuClose();
+            break;
+          }
           if (tryNavigateInto()) {
+            event.preventDefault();
+            break;
+          }
+          if (trySelectHighlighted()) {
             event.preventDefault();
             break;
           }
@@ -785,6 +798,16 @@ const MentionInput = React.forwardRef<InputElement, MentionInputProps>((props, f
         onCompositionEnd={composeEventHandlers(inputProps.onCompositionEnd, onCompositionEnd)}
         onSelect={composeEventHandlers(inputProps.onSelect, onSelect)}
       />
+      {/*
+        The chip mirror is a second full copy of the draft, re-split into
+        segments on every keystroke and measuring the textarea's computed style
+        of its own. With no committed range it paints nothing — its text is
+        `transparent` and only a chip is ever opaque — so it is worth exactly
+        nothing until there is one, which is most of a composer's life.
+      */}
+      {context.getMentionChip && context.mentions.length > 0 ? (
+        <MentionHighlighter layer="chip" className={highlighterClassName} />
+      ) : null}
     </div>
   );
 });

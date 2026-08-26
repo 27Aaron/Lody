@@ -109,7 +109,7 @@ describe('WorktreeManager', () => {
       ).rejects.toThrow();
     });
 
-    it('should preserve a reused non-default base branch when removing the worktree', async () => {
+    it('should preserve a legacy reused non-default base branch when removing the worktree', async () => {
       const { sourceDir, remoteBareDir } = createRemoteRepo(testDir, 'main');
       manager.updateRepoUrl(toFileUrl(remoteBareDir));
 
@@ -120,14 +120,18 @@ describe('WorktreeManager', () => {
       runGit(sourceDir, ['checkout', 'main']);
 
       const sessionId = 'preserve1-session-base-branch' as SessionId;
-      const info = await manager.createWorktree(sessionId, 'feature/preserve-on-delete');
-      expect(info.branch).toBe('feature/preserve-on-delete');
+      await manager.ensureRepo();
+      // Model a worktree created by an older Lody version, which attached the
+      // session directly to the selected non-default base branch.
+      const worktreePath = manager.getWorktreeHostPath(sessionId);
+      // @ts-expect-error - accessing private property for testing
+      runGit(manager.bareGitDir, ['worktree', 'add', worktreePath, 'feature/preserve-on-delete']);
 
-      await manager.removeWorktree(sessionId, true, info.branch, {
+      await manager.removeWorktree(sessionId, true, 'feature/preserve-on-delete', {
         baseBranchName: 'feature/preserve-on-delete',
       });
 
-      expect(fs.existsSync(info.hostPath)).toBe(false);
+      expect(fs.existsSync(worktreePath)).toBe(false);
       // @ts-expect-error - accessing private property for testing
       await expect(
         manager.runGit(

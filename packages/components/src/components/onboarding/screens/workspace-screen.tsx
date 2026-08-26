@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from '@tanstack/react-router';
+import { useSetAtom } from 'jotai';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ArrowRight, Building2, Check, Loader2, Plus } from 'lucide-react';
+import type { WorkspaceId } from '@lody/shared';
+import { currentWorkspaceIdAtom, currentWorkspaceSlugAtom } from '@/atoms/workspace-context';
 import { cloudOperations } from '@/lib/cloud-api-operations';
 import { toast } from 'sonner';
-import { useAuthenticatedConvex } from '@/hooks/use-authenticated-convex';
-import { useCloudQuery } from '@lody/platform/react';
+import { useCloudQuery, usePlatform, usePlatformWorkspaces } from '@lody/platform/react';
 import { Button } from '@/ui/button';
 import { Input } from '@/ui/input';
 import { Label } from '@/ui/label';
@@ -18,7 +19,6 @@ import {
   normalizeWorkspaceSlugInput,
   type WorkspaceSlugRuleError,
 } from '@/lib/workspace';
-import { useOrganization } from '@/hooks/useOrganization';
 import { OnboardingShell, OnboardingBackButton, OnboardingNextButton } from '../onboarding-shell';
 
 type SlugError = 'required' | WorkspaceSlugRuleError | 'unavailable';
@@ -110,6 +110,9 @@ export function WorkspaceScreenView({
     newNameError === null &&
     newSlugError === null &&
     newSlug.length > 0;
+  const previewWorkspaceName = creating
+    ? newName.trim()
+    : workspaces.find((workspace) => workspace.id === selectedWorkspaceId)?.name;
 
   return (
     <OnboardingShell
@@ -135,6 +138,14 @@ export function WorkspaceScreenView({
                 'Create your first workspace to get started.'
               )
       }
+      previewIdentity={previewWorkspaceName ? { workspaceName: previewWorkspaceName } : undefined}
+      previewState={{
+        workspaceStatus: saving
+          ? 'draft'
+          : previewWorkspaceName || hasWorkspaces
+            ? 'ready'
+            : 'missing',
+      }}
       secondaryAction={
         creating ? (
           <OnboardingBackButton
@@ -263,7 +274,7 @@ export function WorkspaceScreenView({
                         onClick={() => onSelectWorkspace(workspace.id)}
                         aria-pressed={isSelected}
                         className={cn(
-                          'group flex w-full items-center gap-3 rounded-xl border p-3 text-left transition-all',
+                          'group flex w-full items-center gap-3 rounded-lg border p-3 text-left transition-all',
                           'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring',
                           'disabled:cursor-not-allowed disabled:opacity-60',
                           isSelected
@@ -317,7 +328,7 @@ export function WorkspaceScreenView({
               disabled={saving}
               onClick={onStartCreate}
               className={cn(
-                'group flex items-center justify-center gap-2 rounded-xl border-2 border-dashed py-4 text-sm font-medium transition-all',
+                'group flex items-center justify-center gap-2 rounded-lg border-2 border-dashed py-4 text-sm font-medium transition-all',
                 'border-border/60 text-muted-foreground hover:border-primary/60 hover:bg-primary/[0.04] hover:text-foreground',
                 'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring',
                 'disabled:opacity-50'
@@ -342,20 +353,32 @@ interface WorkspaceScreenProps {
 // workspace settings, where it can be undone.
 export function WorkspaceScreen({ onBack, onNext }: WorkspaceScreenProps) {
   const { t } = useTranslation();
-  const { isAuthenticated, isLoading: isAuthLoading } = useAuthenticatedConvex();
-  const { organizations, activeOrganization, createOrganization } = useOrganization();
-  const navigate = useNavigate();
+  const platform = usePlatform();
+  const workspaceState = usePlatformWorkspaces();
+  const setCurrentWorkspaceId = useSetAtom(currentWorkspaceIdAtom);
+  const setCurrentWorkspaceSlug = useSetAtom(currentWorkspaceSlugAtom);
 
   const workspaces = useMemo<WorkspaceListEntry[]>(
     () =>
-      (organizations ?? []).map((org) => ({
-        id: org.id,
-        name: org.name,
-        slug: org.slug ?? '',
+      (workspaceState.status === 'ready' ? workspaceState.workspaces : []).map((workspace) => ({
+        id: workspace.id,
+        name: workspace.name,
+        slug: workspace.slug ?? '',
       })),
-    [organizations]
+    [workspaceState]
   );
-  const activeWorkspaceId = activeOrganization?.id ?? null;
+  const activeWorkspaceId =
+    workspaceState.status === 'ready' ? workspaceState.activeWorkspaceId : null;
+  const activeWorkspace =
+    workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null;
+
+  const commitWorkspaceContext = useCallback(
+    (workspace: WorkspaceListEntry | null) => {
+      setCurrentWorkspaceId(workspace ? (workspace.id as WorkspaceId) : null);
+      setCurrentWorkspaceSlug(workspace?.slug || null);
+    },
+    [setCurrentWorkspaceId, setCurrentWorkspaceSlug]
+  );
 
   const [creating, setCreating] = useState(workspaces.length === 0);
   const [saving, setSaving] = useState(false);
@@ -378,15 +401,13 @@ export function WorkspaceScreen({ onBack, onNext }: WorkspaceScreenProps) {
   const newSlug = slugDraft ?? suggestedSlug;
 
   const shouldCheckAvailability = isUsableWorkspaceSlug(newSlug);
-  const canCheckAvailability = creating && shouldCheckAvailability && isAuthenticated;
+  const canCheckAvailability = creating && shouldCheckAvailability;
   const availability = useCloudQuery(
     cloudOperations.auth.isWorkspaceSlugAvailable,
     creating && shouldCheckAvailability ? { slug: newSlug } : 'skip'
   );
   const newSlugChecking =
-    creating &&
-    shouldCheckAvailability &&
-    (isAuthLoading || (canCheckAvailability && availability === undefined));
+    creating && shouldCheckAvailability && canCheckAvailability && availability === undefined;
   const newSlugIsAvailable = canCheckAvailability && Boolean(availability?.available);
 
   const newSlugError = useMemo<SlugError | null>(() => {
@@ -402,32 +423,22 @@ export function WorkspaceScreen({ onBack, onNext }: WorkspaceScreenProps) {
 
   const handleConfirmSelection = useCallback(() => {
     if (selectedWorkspaceId === null) return;
+    const target = workspaces.find((workspace) => workspace.id === selectedWorkspaceId);
+    if (!target?.slug) return;
     if (selectedWorkspaceId === activeWorkspaceId) {
-      onNext();
-      return;
-    }
-    const target = workspaces.find((w) => w.id === selectedWorkspaceId);
-    if (!target?.slug) {
-      // Defensive: every entry should carry a slug, but bail safely if not.
+      commitWorkspaceContext(target);
       onNext();
       return;
     }
     setSaving(true);
+    commitWorkspaceContext(null);
     void (async () => {
       try {
-        // Drive the active org via the URL rather than calling
-        // `setActive` directly. The outer `_auth.tsx` runs
-        // `useOrganization({ targetSlug: $workspaceName })`, which has
-        // an effect that will yank active back to whatever the URL
-        // says — so navigating first lets the route layer handle the
-        // switch and prevents a race that would leave the rest of
-        // onboarding mutating the previous workspace.
+        await platform.workspaces.setActive(selectedWorkspaceId);
+        commitWorkspaceContext(target);
         onNext();
-        await navigate({
-          to: '/$workspaceName/chat',
-          params: { workspaceName: target.slug },
-        });
       } catch (error) {
+        commitWorkspaceContext(activeWorkspace);
         toast.error(
           t('onboarding.workspace.switchFailed', 'Could not switch workspace. Try again.'),
           { description: error instanceof Error ? error.message : undefined }
@@ -436,28 +447,37 @@ export function WorkspaceScreen({ onBack, onNext }: WorkspaceScreenProps) {
         setSaving(false);
       }
     })();
-  }, [activeWorkspaceId, navigate, onNext, selectedWorkspaceId, t, workspaces]);
+  }, [
+    activeWorkspace,
+    activeWorkspaceId,
+    commitWorkspaceContext,
+    onNext,
+    platform.workspaces,
+    selectedWorkspaceId,
+    t,
+    workspaces,
+  ]);
 
   const handleSubmitCreate = useCallback(() => {
     const trimmedName = newName.trim();
     if (!trimmedName || newSlugError !== null || newSlugChecking) return;
     setSaving(true);
+    commitWorkspaceContext(null);
     void (async () => {
       try {
-        const created = await createOrganization(trimmedName, newSlug);
-        const targetSlug = created?.slug ?? newSlug;
-        onNext();
-        if (targetSlug) {
-          // Sync the URL to the freshly-created workspace's slug. Without
-          // this, the outer route's `useOrganization({ targetSlug })`
-          // effect would switch active back to the previous workspace —
-          // see `handleConfirmSelection` for the same rationale.
-          await navigate({
-            to: '/$workspaceName/chat',
-            params: { workspaceName: targetSlug },
-          });
+        if (!platform.workspaces.create) {
+          throw new Error('Workspace creation is unavailable on this platform');
         }
+        const created = await platform.workspaces.create({ name: trimmedName, slug: newSlug });
+        await platform.workspaces.setActive(created.id);
+        commitWorkspaceContext({
+          id: created.id,
+          name: created.name,
+          slug: created.slug ?? newSlug,
+        });
+        onNext();
       } catch (error) {
+        commitWorkspaceContext(activeWorkspace);
         toast.error(
           t('onboarding.workspace.createFailed', 'Could not create workspace. Try again.'),
           { description: error instanceof Error ? error.message : undefined }
@@ -466,7 +486,17 @@ export function WorkspaceScreen({ onBack, onNext }: WorkspaceScreenProps) {
         setSaving(false);
       }
     })();
-  }, [createOrganization, navigate, newName, newSlug, newSlugChecking, newSlugError, onNext, t]);
+  }, [
+    activeWorkspace,
+    commitWorkspaceContext,
+    newName,
+    newSlug,
+    newSlugChecking,
+    newSlugError,
+    onNext,
+    platform.workspaces,
+    t,
+  ]);
 
   return (
     <WorkspaceScreenView

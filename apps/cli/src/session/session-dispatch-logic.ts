@@ -35,6 +35,46 @@ export type SessionDispatchSnapshot = {
   hasRewriteBarrier: boolean;
 };
 
+/** Metadata and process-local signals that decide whether to open a Session Doc room. */
+export type SessionWatchSnapshot = {
+  meta: SessionMeta;
+  hasUnprocessedCancelRequest: boolean;
+  hasRpcTurnOffer: boolean;
+  hasAccessRetry: boolean;
+};
+
+/**
+ * Resolve the metadata activation whose payload the machine still needs to consume.
+ *
+ * `lastMissingHistoryUserMsgId` is a negative acknowledgement for one exact
+ * activation. Keeping the producer-owned pointers intact avoids racing a later
+ * producer write; comparing ids makes the acknowledgement harmless as soon as a
+ * different turn is published.
+ */
+export function getPendingUserTurnActivationId(meta: SessionMeta): string | undefined {
+  const missingUserTurnId = meta.lastMissingHistoryUserMsgId;
+  if (
+    typeof meta.processingUserMsgId === 'string' &&
+    meta.processingUserMsgId.length > 0 &&
+    meta.processingUserMsgId !== missingUserTurnId
+  ) {
+    return meta.processingUserMsgId;
+  }
+  if (
+    typeof meta.latestUserMsgId === 'string' &&
+    meta.latestUserMsgId.length > 0 &&
+    meta.latestUserMsgId !== meta.lastHandledUserMsgId &&
+    meta.latestUserMsgId !== missingUserTurnId
+  ) {
+    return meta.latestUserMsgId;
+  }
+  return undefined;
+}
+
+export function hasPendingUserTurnActivation(meta: SessionMeta): boolean {
+  return getPendingUserTurnActivationId(meta) !== undefined;
+}
+
 // ── Action types ────────────────────────────────────────────────────────────
 
 export type DispatchAction =
@@ -54,6 +94,36 @@ export type DispatchTurnInput = {
   inputBlocks: SessionInputBlock[];
   prompt: string;
 };
+
+/**
+ * Decide whether a session needs its history room joined.
+ *
+ * Session metadata is the durable activation index. History is intentionally
+ * absent from this snapshot so startup remains O(metadata) even in workspaces
+ * with thousands of historical sessions.
+ */
+export function shouldWatchSession(snapshot: SessionWatchSnapshot): boolean {
+  const { meta, hasUnprocessedCancelRequest, hasRpcTurnOffer, hasAccessRetry } = snapshot;
+  const statusType = meta.status?.type;
+
+  if (
+    statusType === 'running' ||
+    statusType === 'initializing' ||
+    statusType === 'requestPermission'
+  ) {
+    return true;
+  }
+
+  if (hasPendingUserTurnActivation(meta)) {
+    return true;
+  }
+
+  if ((meta.messageQueueUpdatedAt ?? 0) > (meta.messageQueueCheckedAt ?? 0)) {
+    return true;
+  }
+
+  return hasUnprocessedCancelRequest || hasRpcTurnOffer || hasAccessRetry;
+}
 
 function getImportedAcpSourceAcpSessionId(meta: SessionMeta): string | undefined {
   const externalHistory = meta.externalHistory;
@@ -216,6 +286,10 @@ export function resolveSessionCancelAction(
  * 4. **Meta pointer: latestUserMsgId ≠ lastHandledUserMsgId**: Legacy dispatch
  *    mechanism.
  *
+ * A turn matching `lastMissingHistoryUserMsgId` is excluded from every path:
+ * recovery already surfaced its delivery failure, so a late payload must not be
+ * resurrected by an unrelated activation.
+ *
  * Returns the first matching entry (chronological scan), or null.
  */
 export function findNextDispatchableUserTurn(
@@ -227,6 +301,12 @@ export function findNextDispatchableUserTurn(
       continue;
     }
     if (isImportedAcpReplayUserTurn(entry, meta)) {
+      continue;
+    }
+    // Recovery already surfaced a delivery failure for this exact activation.
+    // A history payload that arrives after the bounded wait must not resurrect
+    // the failed turn when an unrelated signal opens the room later.
+    if (entry.id === meta.lastMissingHistoryUserMsgId) {
       continue;
     }
 

@@ -10,6 +10,7 @@ import type {
 import { LoroSidebar } from '@/components/loro-sidebar';
 import { LocalProjectItem } from '@/components/loro-app-sidebar';
 import { SidebarSectionHeader } from '@/components/sidebar-row-shared';
+import { buildSidebarOpenerRowResolver } from '@/components/sessions/session-list-rows';
 import { SessionList } from '@/components/session-list';
 import type { SessionListProps } from '@/components/session-list';
 import type {
@@ -482,6 +483,8 @@ function buildDemoUpdatedItems(
         hasUnreadMessages: task.hasUnreadMessages,
         isOffline: task.isOffline,
         isWaitingPermission: task.isWaitingPermission,
+        openedBySessionId: task.openedBySessionId ?? null,
+        openedByRowSessionId: task.openedByRowSessionId ?? null,
       };
     }
     if (task.repoFullName) {
@@ -498,6 +501,8 @@ function buildDemoUpdatedItems(
         hasUnreadMessages: task.hasUnreadMessages,
         isOffline: task.isOffline,
         isWaitingPermission: task.isWaitingPermission,
+        openedBySessionId: task.openedBySessionId ?? null,
+        openedByRowSessionId: task.openedByRowSessionId ?? null,
         prStatus: task.prStatus,
         prCiState: task.prCiState,
         prNumber: task.prNumber,
@@ -519,6 +524,8 @@ function buildDemoUpdatedItems(
       hasUnreadMessages: task.hasUnreadMessages,
       isOffline: task.isOffline,
       isWaitingPermission: task.isWaitingPermission,
+      openedBySessionId: task.openedBySessionId ?? null,
+      openedByRowSessionId: task.openedByRowSessionId ?? null,
     };
   });
 }
@@ -562,6 +569,31 @@ export const ElectronMacOSCollapseToggle: Story = {
     isElectronMacOS: true,
   },
 };
+
+/** Compact builder for the opened-by demo rows below. */
+function buildOpenedDemoRow(
+  sessionId: string,
+  title: string,
+  openedBySessionId: string | undefined,
+  minutesAgo: number,
+  overrides: Partial<SessionListRow> = {}
+): SessionListRow {
+  return {
+    sessionId,
+    title,
+    repoFullName: 'loro-dev/loro',
+    branchName: `feat/${sessionId}`,
+    latestMessageAt: NOW - minutesAgo * 60 * 1000,
+    addedLines: 0,
+    deletedLines: 0,
+    isWorking: false,
+    hasUnreadMessages: false,
+    isOffline: false,
+    isWaitingPermission: false,
+    ...(openedBySessionId ? { openedBySessionId, openedByRowSessionId: openedBySessionId } : {}),
+    ...overrides,
+  };
+}
 
 const demoUpdatedTaskListProps: SessionListProps = {
   ...demoTaskListProps,
@@ -687,6 +719,64 @@ export const UpdatedMode: Story = {
 };
 
 /**
+ * Updated mode with MCP-opened independent Sessions. `task-2` opened three of
+ * them, so they indent beneath it with a disclosure chevron and tree connector
+ * lines. `task-1` is PINNED, so it renders in the Pinned section while the
+ * Session it opened stays a top-level row in Updated — nesting never crosses a
+ * section boundary. `orphan-updated` was opened by a Session that is not in
+ * this list at all and falls back to top-level too.
+ *
+ * `stale-opener` is the ordering case: it is the oldest row here, but the
+ * Session it opened is the newest, so the whole group still sorts to the top —
+ * Updated mode stays a recency list. It is also WORKING, so its leading slot
+ * shows the status spinner instead of the disclosure chevron (loading
+ * outranks folding; collapse stays in the row's context menu).
+ */
+export const UpdatedModeOpenedSessions: Story = {
+  name: 'Updated Mode · Opened Sessions (MCP)',
+  render: (args) => <StoryLayout {...args} />,
+  args: {
+    ...UpdatedMode.args!,
+    sessionListProps: {
+      ...demoUpdatedTaskListProps,
+      sessions: [
+        ...demoUpdatedTaskListProps.sessions,
+        buildOpenedDemoRow('opened-tests', 'Write the migration tests', 'task-2', 45, {
+          isWorking: true,
+          addedLines: 38,
+          deletedLines: 4,
+        }),
+        buildOpenedDemoRow('opened-docs', 'Update the persistence docs', 'task-2', 70, {
+          hasUnreadMessages: true,
+        }),
+        buildOpenedDemoRow('opened-audit', 'Audit archive + scope behavior', 'task-2', 110, {
+          addedLines: 12,
+          deletedLines: 3,
+        }),
+        // Opener (`task-1`) is pinned into the other section — stays top-level.
+        buildOpenedDemoRow('opened-across-section', 'Opened by a pinned session', 'task-1', 150),
+        // Precise opener is a child Tab of `task-2`; the row nests under `task-2`.
+        {
+          ...buildOpenedDemoRow('opened-from-child-tab', 'Opened from a child tab', undefined, 130),
+          openedBySessionId: 'task-2-child-tab',
+          openedByRowSessionId: 'task-2',
+        },
+        buildOpenedDemoRow(
+          'orphan-updated',
+          'Opened by an archived session',
+          'missing-opener',
+          190
+        ),
+        buildOpenedDemoRow('stale-opener', 'Long-running orchestration', undefined, 6 * 24 * 60, {
+          isWorking: true,
+        }),
+        buildOpenedDemoRow('stale-opened', 'Just finished a subtask', 'stale-opener', 2),
+      ],
+    },
+  },
+};
+
+/**
  * Variant of UpdatedMode showing the team scope (All Tasks).
  */
 export const UpdatedModeTeam: Story = {
@@ -739,6 +829,46 @@ const demoLocalSessions: SessionMeta[] = [
     isWorktree: true,
     lastMessageAt: NOW - 3 * 60 * 60 * 1000,
   },
+  // Independent Session opened by an agent running inside a CHILD TAB of
+  // `local-sess-worktree`. Its precise opener is the Tab (`demoChildTabSession`
+  // below), which has no sidebar row of its own — so the sidebar nests it under
+  // the Tab's ROOT Session while "Go to Opener Session" still targets the Tab.
+  {
+    id: 'local-sess-opened-from-tab' as SessionId,
+    machineId: demoMachineId,
+    createdAt: new Date(NOW - 25 * 60 * 1000).toISOString(),
+    userId: 'user-demo',
+    cliType: 'builtin',
+    agentType: 'claude',
+    title: 'Opened from a child tab',
+    openedBySessionId: 'local-sess-child-tab' as SessionId,
+    lastMessageAt: NOW - 25 * 60 * 1000,
+  },
+  // Independent Sessions the first one opened through the `lody_session_create`
+  // MCP tool: they indent under it, but keep their own lifecycle and row.
+  {
+    id: 'local-sess-opened-tests' as SessionId,
+    machineId: demoMachineId,
+    createdAt: new Date(NOW - 2 * 60 * 60 * 1000).toISOString(),
+    userId: 'user-demo',
+    cliType: 'builtin',
+    agentType: 'claude',
+    title: 'Write the migration tests',
+    openedBySessionId: 'local-sess-worktree' as SessionId,
+    isWorktree: true,
+    lastMessageAt: NOW - 2 * 60 * 60 * 1000,
+  },
+  {
+    id: 'local-sess-opened-docs' as SessionId,
+    machineId: demoMachineId,
+    createdAt: new Date(NOW - 90 * 60 * 1000).toISOString(),
+    userId: 'user-demo',
+    cliType: 'builtin',
+    agentType: 'claude',
+    title: 'Update the persistence docs',
+    openedBySessionId: 'local-sess-worktree' as SessionId,
+    lastMessageAt: NOW - 90 * 60 * 1000,
+  },
   {
     id: 'local-sess-plain' as SessionId,
     machineId: demoMachineId,
@@ -751,6 +881,30 @@ const demoLocalSessions: SessionMeta[] = [
     lastMessageAt: NOW - 26 * 60 * 60 * 1000,
   },
 ];
+
+/**
+ * A child Tab of `local-sess-worktree`. Child Tabs are deliberately absent from
+ * every sidebar list, so this one is NOT in `demoLocalSessions` — it exists only
+ * in the resolver's session view, exactly as in production where the sidebar
+ * reads rows from `sessionListAtom` and the resolver from `allActiveSessions`.
+ */
+const demoChildTabSession: SessionMeta = {
+  id: 'local-sess-child-tab' as SessionId,
+  machineId: demoMachineId,
+  createdAt: new Date(NOW - 90 * 60 * 1000).toISOString(),
+  userId: 'user-demo',
+  cliType: 'builtin',
+  agentType: 'claude',
+  title: 'Child tab: try the alternative fix',
+  parentSessionId: 'local-sess-worktree' as SessionId,
+  lastMessageAt: NOW - 40 * 60 * 1000,
+};
+
+/** Mirrors `allActiveSessions`: sidebar rows PLUS the child Tabs they hide. */
+const demoResolveOpenerRowId = buildSidebarOpenerRowResolver([
+  ...demoLocalSessions,
+  demoChildTabSession,
+]);
 
 function ProductionLikeTopContent({
   chatSessions,
@@ -771,7 +925,6 @@ function ProductionLikeTopContent({
   chatsCollapsed: boolean;
   onToggleChatsCollapsed: () => void;
 }) {
-  const now = new Date(NOW);
   const isMobile = useIsMobile();
   const [localProjectsCollapsed, setLocalProjectsCollapsed] = useState(false);
   const [githubCollapsed, setGithubCollapsed] = useState(false);
@@ -781,6 +934,14 @@ function ProductionLikeTopContent({
   );
   const [collapsedProjects, setCollapsedProjects] =
     useState<Record<string, boolean>>(projectCollapseStates);
+  const [collapsedOpenedBySessionIds, setCollapsedOpenedBySessionIds] = useState<
+    Record<string, boolean>
+  >({});
+  const toggleOpenedBySessions = (openerSessionId: string) =>
+    setCollapsedOpenedBySessionIds((prev) => ({
+      ...prev,
+      [openerSessionId]: !prev[openerSessionId],
+    }));
 
   return (
     // Mirrors LoroAppSidebar's sidebarTopContent: sections carry their own
@@ -841,7 +1002,6 @@ function ProductionLikeTopContent({
                     liveSessionStatuses={EMPTY_LIVE_SESSION_STATUSES}
                     formattedPath={project.rootPath}
                     defaultSessionTitle="Untitled"
-                    now={now}
                     selectedSessionId={null}
                     removeProjectLabel="Remove folder"
                     archiveTooltipLabel="Archive"
@@ -852,6 +1012,9 @@ function ProductionLikeTopContent({
                     onNavigateProject={() => {}}
                     onNavigateSession={() => {}}
                     onArchive={() => {}}
+                    collapsedOpenedBySessionIds={collapsedOpenedBySessionIds}
+                    onToggleOpenedBySessions={toggleOpenedBySessions}
+                    resolveOpenerRowId={demoResolveOpenerRowId}
                     onToggleCollapsed={() =>
                       setCollapsedProjects((prev) => ({ ...prev, [key]: !(prev[key] ?? false) }))
                     }
@@ -892,7 +1055,6 @@ function ProductionLikeTopContent({
                   liveSessionStatuses={EMPTY_LIVE_SESSION_STATUSES}
                   formattedPath={project.rootPath}
                   defaultSessionTitle="Untitled"
-                  now={now}
                   selectedSessionId={null}
                   removeProjectLabel="Remove folder"
                   archiveTooltipLabel="Archive"
@@ -903,6 +1065,9 @@ function ProductionLikeTopContent({
                   onNavigateProject={() => {}}
                   onNavigateSession={() => {}}
                   onArchive={() => {}}
+                  collapsedOpenedBySessionIds={collapsedOpenedBySessionIds}
+                  onToggleOpenedBySessions={toggleOpenedBySessions}
+                  resolveOpenerRowId={demoResolveOpenerRowId}
                   onToggleCollapsed={() =>
                     setCollapsedProjects((prev) => ({ ...prev, [key]: !(prev[key] ?? false) }))
                   }

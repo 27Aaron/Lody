@@ -5,7 +5,11 @@ import { buildSidebarNavigationItems } from '../src/components/sidebar-navigatio
 import type { SidebarUpdatedItem } from '../src/components/sidebar-updated-task-list';
 import type { SessionListRow } from '../src/components/session-list';
 
-function sessionRow(sessionId: string, latestMessageAt: string, repoFullName?: string): SessionListRow {
+function sessionRow(
+  sessionId: string,
+  latestMessageAt: string,
+  repoFullName?: string
+): SessionListRow {
   return {
     sessionId,
     title: sessionId,
@@ -173,5 +177,86 @@ describe('sidebar navigation model', () => {
       updated: { items: updatedItems, collapsed: true, showFull: true },
     });
     expect(sessionIds(updatedCollapsed)).toEqual(['pinned']);
+  });
+});
+
+describe('sidebar navigation model opened-by tree', () => {
+  it('visits opened sessions right after their opener in Updated mode', () => {
+    const items = buildSidebarNavigationItems({
+      ...baseOptions,
+      organizeMode: 'updated',
+      updated: {
+        items: [
+          updatedItem('opener', '2026-04-22T10:00:00.000Z'),
+          { ...updatedItem('other', '2026-04-22T09:00:00.000Z') },
+          { ...updatedItem('opened', '2026-04-22T08:00:00.000Z'), openedBySessionId: 'opener' },
+        ],
+        collapsed: false,
+        showFull: false,
+      },
+    });
+
+    expect(sessionIds(items)).toEqual(['opener', 'opened', 'other']);
+  });
+
+  it('skips opened sessions hidden behind a collapsed opener', () => {
+    const items = buildSidebarNavigationItems({
+      ...baseOptions,
+      organizeMode: 'updated',
+      collapsedOpenedBySessions: { opener: true },
+      updated: {
+        items: [
+          updatedItem('opener', '2026-04-22T10:00:00.000Z'),
+          { ...updatedItem('opened', '2026-04-22T08:00:00.000Z'), openedBySessionId: 'opener' },
+          updatedItem('other', '2026-04-22T07:00:00.000Z'),
+        ],
+        collapsed: false,
+        showFull: false,
+      },
+    });
+
+    expect(sessionIds(items)).toEqual(['opener', 'other']);
+  });
+
+  it('does not nest across the Pinned/Updated section boundary', () => {
+    // Opener is pinned (its own section); the Session it opened is not. Neither
+    // list contains both, so both rows stay top-level in their own section.
+    const items = buildSidebarNavigationItems({
+      ...baseOptions,
+      organizeMode: 'updated',
+      pinnedItems: [{ ...updatedItem('opener', '2026-04-22T10:00:00.000Z'), isPinned: true }],
+      updated: {
+        items: [
+          { ...updatedItem('opened', '2026-04-22T08:00:00.000Z'), openedBySessionId: 'opener' },
+          updatedItem('other', '2026-04-22T07:00:00.000Z'),
+        ],
+        collapsed: false,
+        showFull: false,
+      },
+    });
+
+    expect(items.filter((item) => item.kind === 'session').map((item) => item.groupKey)).toEqual([
+      '__pinned__',
+      '__updated__',
+      '__updated__',
+    ]);
+    expect(sessionIds(items)).toEqual(['opener', 'opened', 'other']);
+  });
+
+  it('nests inside the Pinned section when both rows are pinned', () => {
+    const items = buildSidebarNavigationItems({
+      ...baseOptions,
+      pinnedItems: [
+        { ...updatedItem('opener', '2026-04-22T10:00:00.000Z'), isPinned: true },
+        { ...updatedItem('unrelated', '2026-04-22T09:00:00.000Z'), isPinned: true },
+        {
+          ...updatedItem('opened', '2026-04-22T08:00:00.000Z'),
+          isPinned: true,
+          openedBySessionId: 'opener',
+        },
+      ],
+    });
+
+    expect(sessionIds(items)).toEqual(['opener', 'opened', 'unrelated']);
   });
 });

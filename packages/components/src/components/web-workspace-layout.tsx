@@ -18,7 +18,10 @@ const DEFAULT_SIDEBAR_WIDTH = 280;
 const SIDEBAR_GUTTER = 12;
 
 export function WebWorkspaceLayout({ children }: { children: ReactNode }) {
-  const location = useLocation();
+  // Only the pathname drives this layout (settings branch + error boundary
+  // resets), so search-only navigations (dialogs, panels) don't re-render the
+  // whole workspace shell.
+  const pathname = useLocation({ select: (l) => l.pathname });
   const focusLayer = useAtomValue(focusLayerAtom);
   const sidebarCollapsed = useAtomValue(sidebarCollapsedAtom);
   const sidebarLastWidth = useAtomValue(sidebarLastWidthAtom);
@@ -35,7 +38,7 @@ export function WebWorkspaceLayout({ children }: { children: ReactNode }) {
   const windowsTitleBarPadding =
     isWindowsElectronRenderer() && !isElectronFullscreen ? 'pt-9' : undefined;
 
-  if (isSettingsRoute(location.pathname)) {
+  if (isSettingsRoute(pathname)) {
     return (
       <div
         className={cn(
@@ -45,7 +48,7 @@ export function WebWorkspaceLayout({ children }: { children: ReactNode }) {
         )}
       >
         <div className="min-h-0 flex-1 overflow-hidden">
-          <ErrorBoundary name="AppContent" variant="section" resetKeys={[location.pathname]}>
+          <ErrorBoundary name="AppContent" variant="section" resetKeys={[pathname]}>
             {children}
           </ErrorBoundary>
         </div>
@@ -80,7 +83,7 @@ export function WebWorkspaceLayout({ children }: { children: ReactNode }) {
             exit={{ marginLeft: -sidebarSlideWidth }}
             transition={{ duration: shouldReduceMotion ? 0 : 0.22, ease: [0.32, 0.72, 0, 1] }}
           >
-            <ErrorBoundary name="AppSidebar" variant="section" resetKeys={[location.pathname]}>
+            <ErrorBoundary name="AppSidebar" variant="section" resetKeys={[pathname]}>
               <LoroAppSidebar
                 className={cn(
                   'h-full transition-shadow duration-150',
@@ -92,7 +95,7 @@ export function WebWorkspaceLayout({ children }: { children: ReactNode }) {
         )}
       </AnimatePresence>
       <div className="flex min-w-0 flex-1 overflow-hidden">
-        <ErrorBoundary name="AppContent" variant="section" resetKeys={[location.pathname]}>
+        <ErrorBoundary name="AppContent" variant="section" resetKeys={[pathname]}>
           <div className="flex h-full min-w-0 w-full flex-1 flex-col overflow-hidden">
             {children}
           </div>

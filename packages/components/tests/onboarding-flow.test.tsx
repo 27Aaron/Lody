@@ -4,20 +4,15 @@ import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { Provider, createStore, type Store } from 'jotai';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { MachineId, ProviderSetupTask, WorkspaceId } from '@lody/shared';
+import type { LocalProjectId, MachineId, ProviderSetupTask, WorkspaceId } from '@lody/shared';
 
 const mocks = vi.hoisted(() => ({
   createGitHubInstallState: vi.fn(),
   getCliState: vi.fn(),
-  selectLocalProjectDirectory: vi.fn(),
   onCliState: vi.fn(),
   openExternalUrl: vi.fn(),
-  postHog: { capture: vi.fn() },
+  selectLocalProjectDirectory: vi.fn(),
   useVisibleLocalProjects: vi.fn(),
-}));
-
-vi.mock('@posthog/react', () => ({
-  usePostHog: () => mocks.postHog,
 }));
 
 vi.mock('convex/react', () => ({
@@ -25,6 +20,7 @@ vi.mock('convex/react', () => ({
 }));
 
 vi.mock('../src/hooks/use-recoverable-convex-query', () => ({
+  usePublicConvexQuery: () => undefined,
   useRecoverableConvexQuery: () => [],
 }));
 
@@ -42,10 +38,16 @@ vi.mock('../src/lib/native-browser', () => ({
 
 import { localCliStartingAtom, localProbeResultAtom } from '../src/atoms/local-probe';
 import { runtimeAtom } from '../src/atoms/runtime';
-import { desktopOnboardingPhaseAtom } from '../src/atoms/onboarding';
 import { currentWorkspaceIdAtom, currentWorkspaceSlugAtom } from '../src/atoms/workspace-context';
-import { OnboardingOverlay } from '../src/components/onboarding/onboarding-overlay';
-import { ProjectsScreen } from '../src/components/onboarding/screens/projects-screen';
+import {
+  OnboardingOverlay,
+  resolveDesktopOnboardingPhase,
+} from '../src/components/onboarding/onboarding-overlay';
+import { getDesktopOnboardingSteps } from '../src/components/onboarding/onboarding-steps';
+import {
+  ProjectsScreen,
+  ProjectsScreenView,
+} from '../src/components/onboarding/screens/projects-screen';
 import { ProvidersScreenView } from '../src/components/onboarding/screens/providers-screen';
 import { initI18n } from '../src/i18n';
 import { TestCloudPlatformProvider } from './test-platform';
@@ -57,17 +59,11 @@ function installElectronWindowApi() {
   mocks.getCliState.mockReturnValue(new Promise(() => undefined));
   mocks.onCliState.mockReturnValue(() => undefined);
 
-  Object.defineProperty(window, '__LODY_ELECTRON__', {
-    configurable: true,
-    value: true,
-  });
+  Object.defineProperty(window, '__LODY_ELECTRON__', { configurable: true, value: true });
   Object.defineProperty(window, 'api', {
     configurable: true,
     value: {
-      cliState: {
-        getState: mocks.getCliState,
-        onState: mocks.onCliState,
-      },
+      cliState: { getState: mocks.getCliState, onState: mocks.onCliState },
       selectLocalProjectDirectory: mocks.selectLocalProjectDirectory,
     },
   });
@@ -82,15 +78,13 @@ function findButton(container: HTMLElement, label: string): HTMLButtonElement {
   const button = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((item) =>
     item.textContent?.includes(label)
   );
-  if (!button) {
-    throw new Error(`Expected button containing "${label}"`);
-  }
+  if (!button) throw new Error(`Expected button containing "${label}"`);
   return button;
 }
 
 describe('desktop onboarding flow', () => {
   let root: Root | undefined;
-  let container: HTMLDivElement | undefined;
+  let container: HTMLDivElement;
   let store: Store;
 
   beforeEach(async () => {
@@ -100,14 +94,16 @@ describe('desktop onboarding flow', () => {
     mocks.createGitHubInstallState.mockResolvedValue({ state: 'github-state-1' });
     mocks.openExternalUrl.mockResolvedValue(true);
     mocks.useVisibleLocalProjects.mockReturnValue({ projects: new Map() });
-
     installElectronWindowApi();
+
     store = createStore();
     store.set(currentWorkspaceIdAtom, workspaceId);
     store.set(currentWorkspaceSlugAtom, 'workspace-1');
     store.set(runtimeAtom, {
       workspaceId,
       workspaceSlug: 'workspace-1',
+      getMachineAcpBinaryProgress: () => null,
+      subscribeMachineAcpBinaryProgress: () => () => undefined,
     } as never);
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -115,111 +111,114 @@ describe('desktop onboarding flow', () => {
   });
 
   afterEach(() => {
-    if (root) {
-      act(() => {
-        root?.unmount();
-      });
-    }
-    root = undefined;
-    container?.remove();
-    container = undefined;
+    act(() => root?.unmount());
+    container.remove();
     document.body.innerHTML = '';
     uninstallElectronWindowApi();
     vi.clearAllMocks();
   });
 
-  it('shows the language screen immediately even when Electron CLI state never resolves', async () => {
+  it('renders the welcome step without waiting for the Electron CLI bootstrap', async () => {
     await act(async () => {
       root?.render(
         <TestCloudPlatformProvider>
           <Provider store={store}>
-            <OnboardingOverlay />
+            <OnboardingOverlay onCompleted={vi.fn()} />
           </Provider>
         </TestCloudPlatformProvider>
       );
     });
 
-    expect(container?.textContent).toContain('Choose your language');
-    expect(container?.textContent).not.toContain('Preparing your workspace');
+    expect(container.textContent).toContain('Stay in the flow.');
+    expect(container.querySelector('img')).not.toBeNull();
+    expect(container.textContent).not.toContain('Preparing your workspace');
     expect(mocks.getCliState).not.toHaveBeenCalled();
   });
 
-  it('captures the initial and subsequent onboarding steps', async () => {
+  it('derives steps and repairs stale phases from platform capabilities', () => {
+    expect(getDesktopOnboardingSteps({ cloudAccount: false, multiWorkspace: false })).toEqual([
+      'ceremony',
+      'providers',
+      'projects',
+      'firstTask',
+    ]);
+    expect(getDesktopOnboardingSteps({ cloudAccount: true, multiWorkspace: true })).toEqual([
+      'ceremony',
+      'login',
+      'workspace',
+      'providers',
+      'projects',
+      'firstTask',
+    ]);
+    expect(
+      resolveDesktopOnboardingPhase('login', {
+        cloudAccount: false,
+        multiWorkspace: false,
+        hasAgent: false,
+        hasProject: false,
+      })
+    ).toBe('providers');
+    expect(
+      resolveDesktopOnboardingPhase('firstTask', {
+        cloudAccount: false,
+        multiWorkspace: false,
+        hasAgent: true,
+        hasProject: false,
+      })
+    ).toBe('projects');
+  });
+
+  it('returns the exact selected local project', async () => {
+    const onComplete = vi.fn();
+    const selectedMachine = 'machine-2' as MachineId;
+    const selectedProject = 'project-2' as LocalProjectId;
     await act(async () => {
       root?.render(
-        <TestCloudPlatformProvider>
-          <Provider store={store}>
-            <OnboardingOverlay />
-          </Provider>
-        </TestCloudPlatformProvider>
+        <ProjectsScreenView
+          local={[
+            {
+              key: `${machineId}:project-1`,
+              machineId,
+              localProjectId: 'project-1' as LocalProjectId,
+              name: 'first',
+              detail: '/first',
+            },
+            {
+              key: `${selectedMachine}:${selectedProject}`,
+              machineId: selectedMachine,
+              localProjectId: selectedProject,
+              name: 'selected',
+              detail: '/selected',
+            },
+          ]}
+          github={[]}
+          importing={false}
+          connectingGitHub={false}
+          canImportLocal
+          canConnectGitHub={false}
+          selectedProjectKey={`local:${selectedMachine}:${selectedProject}`}
+          onAddLocal={vi.fn()}
+          onConnectGitHub={vi.fn()}
+          onBack={vi.fn()}
+          onComplete={onComplete}
+        />
       );
     });
 
-    expect(mocks.postHog.capture).toHaveBeenCalledWith('onboarding/desktop_step_viewed', {
-      step: 'language',
-    });
-
     await act(async () => {
-      store.set(desktopOnboardingPhaseAtom, 'theme');
+      findButton(container, 'Next').dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
-
-    expect(mocks.postHog.capture).toHaveBeenLastCalledWith('onboarding/desktop_step_viewed', {
-      step: 'theme',
+    expect(onComplete).toHaveBeenCalledWith({
+      kind: 'local',
+      machineId: selectedMachine,
+      localProjectId: selectedProject,
+      name: 'selected',
     });
   });
 
-  it.each([
-    {
-      name: 'the local CLI is still starting',
-      localProbeResult: { ok: true, machineId },
-      localCliStarting: true,
-    },
-    {
-      name: 'the local machine id is missing',
-      localProbeResult: null,
-      localCliStarting: false,
-    },
-  ])(
-    'disables only local import while waiting for the local agent when $name',
-    async ({ localProbeResult, localCliStarting }) => {
-      store.set(localProbeResultAtom, localProbeResult);
-      store.set(localCliStartingAtom, localCliStarting);
-
-      await act(async () => {
-        root?.render(
-          <TestCloudPlatformProvider>
-            <Provider store={store}>
-              <ProjectsScreen onBack={vi.fn()} onComplete={vi.fn()} />
-            </Provider>
-          </TestCloudPlatformProvider>
-        );
-      });
-
-      const addLocalButton = findButton(container!, 'Add a local project');
-      const connectGitHubButton = findButton(container!, 'Connect a GitHub repository');
-
-      expect(addLocalButton.disabled).toBe(true);
-      expect(container?.textContent).toContain('Waiting for the local agent to connect');
-      expect(connectGitHubButton.disabled).toBe(false);
-
-      await act(async () => {
-        connectGitHubButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-      });
-
-      expect(mocks.createGitHubInstallState).toHaveBeenCalledWith({
-        workspaceId,
-        workspaceSlug: 'workspace-1',
-        returnTarget: 'desktop',
-      });
-      expect(mocks.selectLocalProjectDirectory).not.toHaveBeenCalled();
-    }
-  );
-
-  it('enables local import once the local agent is connected and ready', async () => {
-    mocks.selectLocalProjectDirectory.mockResolvedValue(null);
-    store.set(localProbeResultAtom, { ok: true, machineId });
+  it('keeps GitHub available while the local agent is not ready', async () => {
+    store.set(localProbeResultAtom, null);
     store.set(localCliStartingAtom, false);
-
     await act(async () => {
       root?.render(
         <TestCloudPlatformProvider>
@@ -230,19 +229,20 @@ describe('desktop onboarding flow', () => {
       );
     });
 
-    const addLocalButton = findButton(container!, 'Add a local project');
-
-    expect(addLocalButton.disabled).toBe(false);
-    expect(container?.textContent).not.toContain('Waiting for the local agent to connect');
-
+    expect(findButton(container, 'Add a local project').disabled).toBe(true);
+    const githubButton = findButton(container, 'Connect a GitHub repository');
+    expect(githubButton.disabled).toBe(false);
     await act(async () => {
-      addLocalButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      githubButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
-
-    expect(mocks.selectLocalProjectDirectory).toHaveBeenCalledWith();
+    expect(mocks.createGitHubInstallState).toHaveBeenCalledWith({
+      workspaceId,
+      workspaceSlug: 'workspace-1',
+      returnTarget: 'desktop',
+    });
   });
 
-  it('allows onboarding to continue while a durable provider setup is running', async () => {
+  it('continues with the exact durable provider setup id', async () => {
     const onNext = vi.fn();
     const setup: ProviderSetupTask = {
       v: 1,
@@ -266,35 +266,27 @@ describe('desktop onboarding flow', () => {
 
     await act(async () => {
       root?.render(
-        <TestCloudPlatformProvider>
-          <Provider store={store}>
-            <ProvidersScreenView
-              configs={[]}
-              setups={[setup]}
-              testStatuses={{}}
-              noLocalMachine={false}
-              localMachineId={machineId}
-              onEdit={vi.fn()}
-              onTest={vi.fn()}
-              onDelete={vi.fn()}
-              onRetrySetup={vi.fn(async () => {})}
-              onDeleteSetup={vi.fn(async () => {})}
-              onAdd={vi.fn()}
-              onBack={vi.fn()}
-              onSkip={vi.fn()}
-              onNext={onNext}
-            />
-          </Provider>
-        </TestCloudPlatformProvider>
+        <ProvidersScreenView
+          configs={[]}
+          setups={[setup]}
+          testStatuses={{}}
+          selectedConfigId={setup.id}
+          noLocalMachine={false}
+          localMachineId={machineId}
+          onEdit={vi.fn()}
+          onTest={vi.fn()}
+          onDelete={vi.fn()}
+          onAdd={vi.fn()}
+          onBack={vi.fn()}
+          onSkip={vi.fn()}
+          onNext={onNext}
+        />
       );
     });
 
-    expect(container?.textContent).toContain('Downloading the agent runtime');
-    const nextButton = findButton(container!, 'Next');
-    expect(nextButton.disabled).toBe(false);
     await act(async () => {
-      nextButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      findButton(container, 'Next').dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
-    expect(onNext).toHaveBeenCalledOnce();
+    expect(onNext).toHaveBeenCalledWith(setup.id);
   });
 });

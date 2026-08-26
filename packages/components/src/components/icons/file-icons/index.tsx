@@ -88,6 +88,40 @@ export const FileIcon = ({ filePath, className = 'h-4 w-4' }: FileIconProps) => 
   return <img src={iconUrl} alt="" className={className} />;
 };
 
+/**
+ * The same glyphs, drawn in `currentColor` instead of their own palette.
+ *
+ * These are `<img>` elements pointing at SVG files, so their colours cannot be
+ * overridden — an `<img>` has no inner DOM to style. Masking is the way round
+ * that: the SVG becomes the alpha channel and the element paints a flat
+ * `bg-current` through it. The shapes survive, the palette does not, which is
+ * the point where a mention chip wants one colour with its label.
+ */
+const maskStyle = (url: string): React.CSSProperties => ({
+  maskImage: `url("${url}")`,
+  WebkitMaskImage: `url("${url}")`,
+  maskRepeat: 'no-repeat',
+  WebkitMaskRepeat: 'no-repeat',
+  maskPosition: 'center',
+  WebkitMaskPosition: 'center',
+  maskSize: 'contain',
+  WebkitMaskSize: 'contain',
+});
+
+export const MonochromeFileIcon = ({ filePath, className = 'h-4 w-4' }: FileIconProps) => {
+  const iconUrl = useMemo(() => getFileIconUrl(getFileIconName(filePath)), [filePath]);
+  return (
+    <span aria-hidden="true" className={`${className} bg-current`} style={maskStyle(iconUrl)} />
+  );
+};
+
+export const MonochromeFolderIcon = ({ folderPath, className = 'h-4 w-4' }: FolderIconProps) => {
+  const iconUrl = useMemo(() => getFolderIconUrl(getFolderIconName(folderPath)), [folderPath]);
+  return (
+    <span aria-hidden="true" className={`${className} bg-current`} style={maskStyle(iconUrl)} />
+  );
+};
+
 export const FolderIcon = ({ folderPath, className = 'h-4 w-4' }: FolderIconProps) => {
   const iconUrl = useMemo(() => {
     const iconName = getFolderIconName(folderPath);

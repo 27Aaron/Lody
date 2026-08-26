@@ -39,6 +39,7 @@ import {
   ensureSessionCreateWorkspaceMetaFresh,
   resolveCreateAgentSelector,
   resolveCreateCurrentSessionId,
+  resolveOpenedBySessionRelation,
   resolveSessionCreateOwnerUserId,
   selectDefaultAgentConfigForCreate,
   resolveSessionCommandRequesterUserId,
@@ -144,6 +145,23 @@ describe('session command helpers', () => {
   it('normalizes blank CLI values to undefined', () => {
     expect(normalizeCliValue('   ')).toBeUndefined();
     expect(normalizeCliValue(' value ')).toBe('value');
+  });
+
+  it('records both the root Session and exact child Tab that opened a Session', () => {
+    expect(
+      resolveOpenedBySessionRelation(
+        createSessionMeta({
+          id: 'child-tab' as SessionId,
+          parentSessionId: 'root-session' as SessionId,
+        })
+      )
+    ).toEqual({
+      openedBySessionId: 'child-tab',
+      openedByRootSessionId: 'root-session',
+    });
+    expect(
+      resolveOpenedBySessionRelation(createSessionMeta({ id: 'root-session' as SessionId }))
+    ).toEqual({ openedBySessionId: 'root-session' });
   });
 
   it('materializes automatic approval defaults for builtin agent turns', () => {
@@ -1039,6 +1057,18 @@ describe('session command helpers', () => {
         getMachineFlockDocId('workspace-1' as WorkspaceId, 'machine-id' as MachineId),
         expect.objectContaining({ reason: 'session.local-projects:machine-id' })
       );
+
+      await expect(
+        resolveLocalProjectRefOrThrow(
+          manager,
+          'workspace-1' as WorkspaceId,
+          'machine-id' as MachineId,
+          'lody'
+        )
+      ).resolves.toEqual({
+        kind: 'local',
+        localProjectId: 'local-project-1',
+      });
     } finally {
       rmSync(rootPath, { recursive: true, force: true });
     }
@@ -1048,6 +1078,34 @@ describe('session command helpers', () => {
     const rootPath = mkdtempSync(path.join(os.tmpdir(), 'lody-session-non-git-'));
     try {
       expect(await resolveLocalProjectBranchForCreate({ rootPath })).toBeUndefined();
+    } finally {
+      rmSync(rootPath, { recursive: true, force: true });
+    }
+  });
+
+  it('does not capture the current branch for a direct local project session', async () => {
+    const rootPath = mkdtempSync(path.join(os.tmpdir(), 'lody-session-direct-local-'));
+    try {
+      execFileSync('git', ['init', '-b', 'main'], { cwd: rootPath, stdio: 'ignore' });
+      execFileSync(
+        'git',
+        [
+          '-c',
+          'user.name=Test',
+          '-c',
+          'user.email=test@example.com',
+          'commit',
+          '--allow-empty',
+          '-m',
+          'init',
+        ],
+        { cwd: rootPath, stdio: 'ignore' }
+      );
+
+      await expect(resolveLocalProjectBranchForCreate({ rootPath })).resolves.toBeUndefined();
+      await expect(
+        resolveLocalProjectBranchForCreate({ rootPath }, undefined, { requireGit: true })
+      ).resolves.toBe('main');
     } finally {
       rmSync(rootPath, { recursive: true, force: true });
     }

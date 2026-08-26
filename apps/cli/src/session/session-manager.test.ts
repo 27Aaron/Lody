@@ -7,6 +7,7 @@ import {
   buildSessionPreparationClaimKey,
   buildSessionPreparationRequestKey,
   buildSessionLaunchConfig,
+  normalizeSessionPreparationRunConfigForDedup,
   type AgentConfigId,
   type LocalProjectId,
   type MachineId,
@@ -131,11 +132,35 @@ const createSessionConfig = (
   machineId: 'machine-1' as MachineId,
   agentCliType: 'builtin',
   agentType: 'codex',
+  mcpServerIds: [],
+  taskToolsEnabled: false,
   assumeDocExisting: true,
   userName: 'Test User',
   userEmail: 'test@example.com',
   ...overrides,
 });
+
+const createPreparedTestCompatibility = (
+  launchSource: Partial<SessionLaunchConfig>,
+  mcpServerIds: SessionConfig['mcpServerIds'] = [],
+  configOptionValues?: SessionConfig['configOptionValues']
+) => ({
+  launch: buildSessionLaunchConfig(launchSource),
+  runConfig: normalizeSessionPreparationRunConfigForDedup({
+    mcpServerIds,
+    configOptionValues,
+    taskToolsEnabled: false,
+  }),
+});
+
+type PreparedTestResource = SessionPreparationResource & {
+  config: Pick<SessionConfig, 'mcpServerIds' | 'configOptionValues' | 'taskToolsEnabled'>;
+  compatibility: ReturnType<typeof createPreparedTestCompatibility>;
+  readCurrentLaunchConfig?: () => {
+    config: SessionLaunchConfig | undefined;
+    source: 'agent-config';
+  };
+};
 
 const deferred = <T>() => {
   let resolvePromise!: (value: T) => void;
@@ -171,6 +196,7 @@ describe('SessionManager cleanup phases', () => {
       workspaceDocument,
       {
         sessionSandboxFactory: async () => createNoopSessionSandbox(),
+        cloudPort: createTestCloudPort(),
       }
     );
     const cleanupSessionsSpy = vi
@@ -284,6 +310,7 @@ describe('SessionManager child session workdir resolution', () => {
       workspaceDocument,
       {
         sessionSandboxFactory: async () => createNoopSessionSandbox(),
+        cloudPort: createTestCloudPort(),
       }
     );
 
@@ -419,6 +446,7 @@ describe('SessionManager child session workdir resolution', () => {
       workspaceDocument,
       {
         sessionSandboxFactory: async () => createNoopSessionSandbox(),
+        cloudPort: createTestCloudPort(),
       }
     );
 
@@ -526,6 +554,7 @@ describe('SessionManager worktree setup', () => {
       createWorkspaceDocument(docs),
       {
         sessionSandboxFactory: async () => createNoopSessionSandbox(),
+        cloudPort: createTestCloudPort(),
       }
     );
     const worktreeManager = getWorktreeManager({
@@ -593,6 +622,7 @@ describe('SessionManager worktree setup', () => {
       createWorkspaceDocument(new Map()),
       {
         sessionSandboxFactory: async () => createNoopSessionSandbox(),
+        cloudPort: createTestCloudPort(),
       }
     );
     const worktreeManager = getWorktreeManager({
@@ -646,6 +676,76 @@ describe('SessionManager worktree setup', () => {
 
     await preparedWorktree.dispose();
     expect(existsSync(preparedWorktree.info.hostPath)).toBe(true);
+  });
+
+  it('rebuilds a prepared worktree whose directory disappeared before adoption', async () => {
+    const sourceDir = createLocalRepo(tempHome);
+    const originalRootPath = normalizeLocalProjectRootPath(sourceDir);
+    const sessionId = 'setup-prepared-vanished' as SessionId;
+    const localProjectId = 'local-project-prepared-vanished' as LocalProjectId;
+    const repoId = deriveRepoIdFromLocalProjectPath(originalRootPath);
+    const logger = createLogger();
+    const manager = new SessionManager(
+      logger,
+      'token',
+      'machine-1' as MachineId,
+      'workspace-1' as WorkspaceId,
+      createWorkspaceDocument(new Map()),
+      {
+        sessionSandboxFactory: async () => createNoopSessionSandbox(),
+        cloudPort: createTestCloudPort(),
+      }
+    );
+    const worktreeManager = getWorktreeManager({
+      repoId,
+      source: {
+        kind: 'local-shared',
+        originalRootPath,
+      },
+      logger,
+    });
+    const preparedWorktree = await materializeSpeculativeWorktree({
+      preparationId: 'prepare-setup-vanished',
+      sessionId,
+      workspaceId: 'workspace-1' as WorkspaceId,
+      machineId: 'machine-1' as MachineId,
+      manager: worktreeManager,
+      managerConfig: {
+        repoId,
+        source: {
+          kind: 'local-shared',
+          originalRootPath,
+        },
+      },
+      baseBranch: 'main',
+      logger,
+    });
+    await preparedWorktree.claim();
+
+    // The production failure: an unserialized late dispose (or a cross-process
+    // sweep) removed the materialized directory after preparation but before
+    // adoption. The prepared info then names a path that is not on disk; the
+    // session must rebuild it instead of starting against a dead workdir.
+    rmSync(preparedWorktree.info.hostPath, { recursive: true, force: true });
+
+    const session = await createSessionInner(
+      manager,
+      createSessionConfig({
+        sessionId,
+        branch: 'main',
+        workdir: sourceDir,
+        project: {
+          kind: 'local',
+          localProjectId,
+          branch: 'main',
+          useWorktree: true,
+        },
+      }),
+      preparedWorktree.info
+    );
+
+    expect(session.getWorkdir()).toBe(preparedWorktree.info.hostPath);
+    expect(existsSync(session.getWorkdir())).toBe(true);
   });
 });
 
@@ -772,6 +872,71 @@ describe('SessionManager durable create ownership', () => {
 });
 
 describe('SessionManager preparation compatibility', () => {
+  it('rejects a prepared session with different initial config option values', async () => {
+    const manager = new SessionManager(
+      createLogger(),
+      'token',
+      'machine-1' as MachineId,
+      'workspace-1' as WorkspaceId,
+      createWorkspaceDocument(new Map()),
+      {
+        sessionSandboxFactory: async () => createNoopSessionSandbox(),
+        cloudPort: createTestCloudPort(),
+      }
+    );
+    const sessionId = 'changed-grok-permission-cold-fallback' as SessionId;
+    const agentConfigId = 'agent-grok' as AgentConfigId;
+    const prepared = {
+      config: {
+        mcpServerIds: [],
+        configOptionValues: { permission_mode: 'always-approve' },
+        taskToolsEnabled: false,
+      },
+      compatibility: createPreparedTestCompatibility({}, [], { permission_mode: 'always-approve' }),
+      initialized: Promise.resolve(),
+      sessionReady: Promise.resolve(),
+      dispose: vi.fn(async () => undefined),
+    } satisfies PreparedTestResource;
+    const identity = {
+      requestedByUserId: 'user-1',
+      agentConfigId,
+      cliType: 'builtin' as const,
+      agentType: 'grok',
+    };
+    const internals = manager as unknown as {
+      preparationService: SessionPreparationService<PreparedTestResource>;
+      createSessionFromPreparationOrCold(config: SessionConfig): Promise<ISession>;
+      createSessionInnerWithAgent(config: SessionConfig): Promise<ISession>;
+    };
+    internals.preparationService.start({
+      preparationId: 'prepare-grok-always-approve',
+      sessionId,
+      requesterUserId: 'user-1',
+      requestKey: buildSessionPreparationRequestKey(identity),
+      claimKey: buildSessionPreparationClaimKey(identity),
+      create: async () => prepared,
+    });
+    await vi.waitFor(() =>
+      expect(internals.preparationService.getState(sessionId)).toBe('session-ready')
+    );
+    const coldSession = { sessionId } as ISession;
+    const coldCreate = vi
+      .spyOn(internals, 'createSessionInnerWithAgent')
+      .mockResolvedValue(coldSession);
+    const durableConfig = createSessionConfig({
+      sessionId,
+      agentConfigId,
+      agentType: 'grok',
+      configOptionValues: { permission_mode: 'ask' },
+    });
+
+    await expect(internals.createSessionFromPreparationOrCold(durableConfig)).resolves.toBe(
+      coldSession
+    );
+    expect(prepared.dispose).toHaveBeenCalledTimes(1);
+    expect(coldCreate).toHaveBeenCalledWith(durableConfig, undefined);
+  });
+
   it('waits for a published preparation to release its worktree when durable launch config is absent', async () => {
     const manager = new SessionManager(
       createLogger(),
@@ -781,15 +946,14 @@ describe('SessionManager preparation compatibility', () => {
       createWorkspaceDocument(new Map()),
       {
         sessionSandboxFactory: async () => createNoopSessionSandbox(),
+        cloudPort: createTestCloudPort(),
       }
     );
     const sessionId = 'missing-agent-config-cold-fallback' as SessionId;
     const cleanup = deferred<void>();
-    type PreparedTestResource = SessionPreparationResource & {
-      compatibility: SessionLaunchConfig | undefined;
-    };
     const prepared = {
-      compatibility: buildSessionLaunchConfig({}),
+      config: { mcpServerIds: [], taskToolsEnabled: false },
+      compatibility: createPreparedTestCompatibility({}),
       initialized: Promise.resolve(),
       sessionReady: Promise.resolve(),
       dispose: vi.fn(async () => await cleanup.promise),
@@ -833,16 +997,15 @@ describe('SessionManager preparation compatibility', () => {
       createWorkspaceDocument(new Map()),
       {
         sessionSandboxFactory: async () => createNoopSessionSandbox(),
+        cloudPort: createTestCloudPort(),
       }
     );
     const sessionId = 'changed-project-cold-fallback' as SessionId;
     const agentConfigId = 'agent-1' as AgentConfigId;
     const cleanup = deferred<void>();
-    type PreparedTestResource = SessionPreparationResource & {
-      compatibility: SessionLaunchConfig | undefined;
-    };
     const prepared = {
-      compatibility: buildSessionLaunchConfig({}),
+      config: { mcpServerIds: [], taskToolsEnabled: false },
+      compatibility: createPreparedTestCompatibility({}),
       initialized: Promise.resolve(),
       sessionReady: Promise.resolve(),
       dispose: vi.fn(async () => await cleanup.promise),
@@ -911,11 +1074,9 @@ describe('SessionManager preparation compatibility', () => {
     );
     const sessionId = 'empty-launch-config' as SessionId;
     const agentConfigId = 'agent-1' as AgentConfigId;
-    type PreparedTestResource = SessionPreparationResource & {
-      compatibility: SessionLaunchConfig | undefined;
-    };
     const prepared = {
-      compatibility: buildSessionLaunchConfig({ env: {} }),
+      config: { mcpServerIds: [], taskToolsEnabled: false },
+      compatibility: createPreparedTestCompatibility({ env: {} }),
       initialized: Promise.resolve(),
       sessionReady: Promise.resolve(),
       dispose: vi.fn(async () => undefined),
@@ -956,7 +1117,7 @@ describe('SessionManager preparation compatibility', () => {
     await expect(internals.createSessionFromPreparationOrCold(durableConfig)).resolves.toBe(
       adoptedSession
     );
-    expect(finishPreparedSession).toHaveBeenCalledWith(durableConfig, prepared);
+    expect(finishPreparedSession).toHaveBeenCalledWith(durableConfig, prepared, undefined);
     expect(coldCreate).not.toHaveBeenCalled();
   });
 
@@ -976,15 +1137,9 @@ describe('SessionManager preparation compatibility', () => {
     const agentConfigId = 'agent-1' as AgentConfigId;
     const preparedConfig = buildSessionLaunchConfig({ env: { PREPARED: '1' } });
     let currentConfig = preparedConfig;
-    type PreparedTestResource = SessionPreparationResource & {
-      compatibility: SessionLaunchConfig | undefined;
-      readCurrentLaunchConfig: () => {
-        config: SessionLaunchConfig | undefined;
-        source: 'agent-config';
-      };
-    };
     const prepared = {
-      compatibility: preparedConfig,
+      config: { mcpServerIds: [], taskToolsEnabled: false },
+      compatibility: createPreparedTestCompatibility(preparedConfig ?? {}),
       readCurrentLaunchConfig: () => ({ config: currentConfig, source: 'agent-config' }),
       initialized: Promise.resolve(),
       sessionReady: Promise.resolve(),

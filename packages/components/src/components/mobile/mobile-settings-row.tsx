@@ -34,22 +34,30 @@ export function MobileSettingsSection({
   return (
     <section className={cn('mt-5 first:mt-3', className)}>
       {title || actions ? (
-        <header className="flex items-center justify-between gap-2 px-5 pb-1.5">
-          <div className="min-w-0">
+        <header className="px-5 pb-1.5">
+          <div className="flex items-center justify-between gap-2">
             {title ? (
-              <h2 className="text-[0.82rem] font-semibold text-muted-foreground">{title}</h2>
-            ) : null}
-            {description ? (
-              <p className="mt-0.5 text-[0.78rem] text-muted-foreground/80">{description}</p>
-            ) : null}
+              <h2 className="min-w-0 text-[0.82rem] font-semibold text-muted-foreground">
+                {title}
+              </h2>
+            ) : (
+              <span />
+            )}
+            {actions ? <div className="flex shrink-0 items-center gap-1">{actions}</div> : null}
           </div>
-          {actions ? <div className="flex shrink-0 items-center gap-1">{actions}</div> : null}
+          {/* Description gets its own full-width line under the title/action
+             row — squeezing it into the title column wrapped it to 3+ lines
+             next to wide actions (e.g. the CLI Token "Create token" button)
+             on narrow viewports. */}
+          {description ? (
+            <p className="mt-0.5 text-[0.78rem] text-muted-foreground/80">{description}</p>
+          ) : null}
         </header>
       ) : null}
       {noCard ? (
         children
       ) : (
-        <div className="mx-3 overflow-hidden rounded-2xl border border-border/40 bg-card">
+        <div className="mx-3 overflow-hidden rounded-2xl border border-border/60 bg-card">
           {children}
         </div>
       )}
@@ -137,7 +145,7 @@ export function MobileSettingsRow({
       <div className={cn('px-4 pb-3', !label && '-mt-1')}>{children}</div>
     ) : null;
 
-  const wrapperClass = cn(hasDivider && 'border-t border-border/40');
+  const wrapperClass = cn(hasDivider && 'border-t border-border');
 
   if (onClick) {
     return (

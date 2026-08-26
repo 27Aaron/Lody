@@ -50,6 +50,42 @@ describe('MemoryPressureSampler', () => {
     await expect(sampler.getLatest()).resolves.toBe(second);
   });
 
+  it('only forces a fresh OS reading when it is about to act on one', async () => {
+    // The Windows commit probe is a `powershell.exe` spawn with its own cache; the periodic
+    // sweep must be allowed to reuse it, and only the act-on-it path may bypass it.
+    const probe = vi.fn(async () => snapshot(4_000));
+    const sampler = new MemoryPressureSampler(logger, { probe });
+
+    await sampler.getLatest();
+    expect(probe).toHaveBeenLastCalledWith(false);
+
+    await sampler.refresh();
+    expect(probe).toHaveBeenLastCalledWith(true);
+  });
+
+  it('does not let a forced sample adopt an in-flight unforced one', async () => {
+    const resolvers: Array<(value: MemoryPressureSnapshot) => void> = [];
+    const probe = vi.fn(
+      async () =>
+        await new Promise<MemoryPressureSnapshot>((resolve) => {
+          resolvers.push(resolve);
+        })
+    );
+    const sampler = new MemoryPressureSampler(logger, { probe });
+
+    const background = sampler.getLatest();
+    const forced = sampler.refresh();
+
+    expect(probe.mock.calls.map(([force]) => force)).toEqual([false, true]);
+
+    const stale = snapshot(4_000);
+    const fresh = snapshot(1_000);
+    resolvers[0]?.(stale);
+    resolvers[1]?.(fresh);
+    await expect(background).resolves.toBe(stale);
+    await expect(forced).resolves.toBe(fresh);
+  });
+
   it('waits for a fresh probe when the cached snapshot exceeds the stale bound', async () => {
     let now = 0;
     const first = snapshot(4_000);

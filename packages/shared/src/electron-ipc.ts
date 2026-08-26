@@ -28,6 +28,10 @@ export type OpenExternalUrlResult = {
   error?: string;
 };
 
+export type DesktopOnboardingCompleteResult =
+  | { ok: true }
+  | { ok: false; error: 'untrusted_sender' | 'completion_failed'; message?: string };
+
 export const ElectronPublicBrowserBoundsSchema = z
   .object({
     x: z.number().finite().nonnegative(),
@@ -277,6 +281,8 @@ export type ElectronCliPhase = CliRuntimePhase | 'reconnecting' | 'stopping' | '
 export type ElectronCliState = {
   phase: ElectronCliPhase;
   desiredState: 'running' | 'stopped';
+  /** Whether this desktop should run and use a local agent runtime. */
+  localAgentEnabled: boolean;
   updatedAtMs: number;
   preventSleepEnabled: boolean;
   startupStage?: CliRuntimeStartupStage;
@@ -364,6 +370,16 @@ export type ElectronUpdaterState = {
   releaseName?: string;
   releaseDate?: string;
   releaseNotes?: string;
+  /**
+   * Release notes per UI language, so the renderer can show the changelog in
+   * the language the user picked instead of the single publisher-provided
+   * `releaseNotes` blob. Optional: a build whose main process does not publish
+   * localized notes keeps falling back to `releaseNotes`.
+   */
+  releaseNotesByLocale?: {
+    en?: string;
+    zh_CN?: string;
+  };
   percent?: number;
   bytesPerSecond?: number;
   transferred?: number;

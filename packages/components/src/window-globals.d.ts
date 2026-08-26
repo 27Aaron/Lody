@@ -6,6 +6,7 @@ import type {
   CheckForElectronUpdateResult,
   CopyImageToClipboardInput,
   CopyImageToClipboardResult,
+  DesktopOnboardingCompleteResult,
   ElectronAutoLaunchStatusResult,
   ElectronCliState,
   ElectronLocalPlatformSnapshot,
@@ -63,6 +64,7 @@ import type {
   LocalMachineRpcRequest,
 } from '@lody/shared';
 import type { LodyLiveActivityBridge } from './hooks/use-lody-live-activity';
+import type { LodyAppStoreReviewBridge } from './hooks/use-app-store-review-prompt';
 
 /**
  * Boot guard installed by the inline script in a shell's index.html (currently
@@ -90,6 +92,7 @@ declare global {
     __LODY_PLATFORM__?: { os: string; homeDir: string; machineName?: string };
     __LODY_BOOT__?: LodyBootController;
     __LODY_LIVE_ACTIVITY__?: LodyLiveActivityBridge;
+    __LODY_APP_STORE_REVIEW__?: LodyAppStoreReviewBridge;
     __LODY_APP_INFO__?: {
       version?: string;
       build?: string;
@@ -170,6 +173,8 @@ declare global {
         resize: (terminalId: string, cols: number, rows: number) => void;
         close: (terminalId: string) => void;
         closeSession: (sessionId: string) => void;
+        readClipboardText: () => string;
+        writeClipboardText: (text: string) => void;
         onData: (handler: (event: TerminalDataEvent) => void) => () => void;
         onExit: (handler: (event: TerminalExitEvent) => void) => () => void;
         onTitle: (handler: (event: TerminalTitleEvent) => void) => () => void;
@@ -247,6 +252,7 @@ declare global {
       onMenuAction?: (handler: (action: string) => void) => () => void;
       onWindowFullscreenChanged?: (handler: (isFullscreen: boolean) => void) => () => void;
       getWindowFullscreen?: () => Promise<boolean>;
+      completeOnboarding?: () => Promise<DesktopOnboardingCompleteResult>;
       getNotificationPermissionStatus?: () => Promise<GetNotificationPermissionStatusResult>;
       openSystemNotificationSettings?: () => Promise<OpenSystemNotificationSettingsResult>;
       getAutoLaunchStatus?: () => Promise<ElectronAutoLaunchStatusResult>;
@@ -271,6 +277,7 @@ declare global {
       getCliAutoStartEnabled?: () => Promise<{ enabled: boolean }>;
       setLanguage?: (locale: string) => void;
       setNativeTheme?: (source: 'dark' | 'light' | 'system') => void;
+      onNativeThemeUpdated?: (handler: (resolved: 'light' | 'dark') => void) => () => void;
     };
   }
 }

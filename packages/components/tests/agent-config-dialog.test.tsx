@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
 import {
   ACP_CAPABILITY_CACHE_VERSION,
+  PROVIDER_SETUP_PROTOCOL_VERSION,
   getAcpCapabilityCacheKey,
   type AgentConfigId,
   type AgentConfigMeta,
@@ -25,13 +26,18 @@ const claudeConfigId = 'claude-config' as AgentConfigId;
 const codexConfigId = 'codex-config' as AgentConfigId;
 type RefreshCapabilities = ComponentProps<typeof AgentConfigDialog>['onRefreshCapabilities'];
 
-const createMachine = (name: string): MachineViewMeta => ({
+/** Omits `protocolCapabilities` by default, so the machine reads as legacy. */
+const createMachine = (
+  name: string,
+  protocolCapabilities?: MachineViewMeta['protocolCapabilities']
+): MachineViewMeta => ({
   id: machineId,
   name,
   cliVersion: '0.44.0',
   os: 'macOS',
   sessions: [],
   raceLimits: {},
+  ...(protocolCapabilities ? { protocolCapabilities } : {}),
   acpCapabilities: {
     [getAcpCapabilityCacheKey(claudeConfigId)]: {
       cliType: 'builtin',
@@ -112,6 +118,15 @@ const setNativeTextAreaValue = (element: HTMLTextAreaElement, value: string): vo
   element.dispatchEvent(new Event('input', { bubbles: true }));
 };
 
+const setNativeInputValue = (element: HTMLInputElement, value: string): void => {
+  const valueSetter = Object.getOwnPropertyDescriptor(
+    window.HTMLInputElement.prototype,
+    'value'
+  )?.set;
+  valueSetter?.call(element, value);
+  element.dispatchEvent(new Event('input', { bubbles: true }));
+};
+
 describe('AgentConfigDialog', () => {
   let root: Root | undefined;
   let container: HTMLDivElement | undefined;
@@ -163,8 +178,7 @@ describe('AgentConfigDialog', () => {
       agentType: args.agentType,
       success: true,
     }),
-    onManagedRuntimeSelected?: ComponentProps<typeof AgentConfigDialog>['onManagedRuntimeSelected'],
-    deferManagedBuiltinCreation = false
+    onManagedRuntimeSelected?: ComponentProps<typeof AgentConfigDialog>['onManagedRuntimeSelected']
   ) => {
     await act(async () => {
       root?.render(
@@ -178,7 +192,6 @@ describe('AgentConfigDialog', () => {
             onRefreshCapabilities={onRefreshCapabilities}
             onCheckBinaryStatus={onCheckBinaryStatus}
             onManagedRuntimeSelected={onManagedRuntimeSelected}
-            deferManagedBuiltinCreation={deferManagedBuiltinCreation}
           />
         </TooltipProvider>
       );
@@ -192,12 +205,14 @@ describe('AgentConfigDialog', () => {
     expect(getSelectedOption()?.textContent).toContain('Kimi Code');
     expect(
       getOptionButtons()
-        .slice(0, 3)
+        .slice(0, 5)
         .map((option) => option.textContent)
     ).toEqual([
       expect.stringContaining('Kimi Code'),
+      expect.stringContaining('Grok'),
       expect.stringContaining('Claude'),
       expect.stringContaining('Codex'),
+      expect.stringContaining('DeepSeek Harness'),
     ]);
 
     await act(async () => {
@@ -236,6 +251,71 @@ describe('AgentConfigDialog', () => {
     await vi.waitFor(() => {
       expect(onManagedRuntimeSelected).toHaveBeenLastCalledWith('claude');
     });
+  });
+
+  it('collects the DeepSeek API Key directly and keeps Harness out of managed runtime setup', async () => {
+    const onManagedRuntimeSelected = vi.fn();
+    const onCheckBinaryStatus = vi.fn(async () => ({ status: 'not-installed' as const }));
+    const onSubmit = vi.fn(async (_payload: AgentConfigSubmitPayload) => {});
+    await renderDialog(
+      {
+        kind: 'create',
+        initialForm: {
+          name: 'DeepSeek Harness',
+          cliType: 'builtin',
+          agentType: 'deepseek',
+        },
+      },
+      createMachine('Workstation'),
+      onSubmit,
+      onCheckBinaryStatus,
+      undefined,
+      onManagedRuntimeSelected
+    );
+
+    expect(onManagedRuntimeSelected).not.toHaveBeenCalled();
+    expect(onCheckBinaryStatus).not.toHaveBeenCalled();
+    const apiKeyInput = document.body.querySelector<HTMLInputElement>('#deepseek-api-key');
+    expect(apiKeyInput?.type).toBe('password');
+    const createButton = Array.from(document.body.querySelectorAll('button')).find(
+      (button) => button.textContent?.trim() === 'Create'
+    );
+    expect(createButton?.disabled).toBe(true);
+
+    await act(async () => {
+      setNativeInputValue(apiKeyInput!, 'sk-deepseek-test');
+    });
+
+    const environmentSection = Array.from(document.body.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('Additional environment variables')
+    );
+    await act(async () => {
+      environmentSection?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(document.body.textContent).toContain(
+      'Optional: set DEEPSEEK_BASE_URL here to use a compatible endpoint.'
+    );
+    const envTextArea = Array.from(
+      document.body.querySelectorAll<HTMLTextAreaElement>('textarea')
+    ).at(-1);
+    expect(envTextArea?.value).not.toContain('DEEPSEEK_API_KEY');
+    await act(async () => {
+      setNativeTextAreaValue(envTextArea!, 'DEEPSEEK_BASE_URL=https://api.deepseek.com');
+    });
+    await act(async () => {
+      createButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cliType: 'builtin',
+        agentType: 'deepseek',
+        env: {
+          DEEPSEEK_API_KEY: 'sk-deepseek-test',
+          DEEPSEEK_BASE_URL: 'https://api.deepseek.com',
+        },
+      })
+    );
   });
 
   it('keeps the draft config id stable when create mode props are recreated', async () => {
@@ -350,12 +430,10 @@ describe('AgentConfigDialog', () => {
         kind: 'create',
         initialForm: { name: 'Codex', cliType: 'builtin', agentType: 'codex' },
       },
-      createMachine('Fresh workstation'),
+      createMachine('Fresh workstation', { providerSetup: PROVIDER_SETUP_PROTOCOL_VERSION }),
       onSubmit,
       vi.fn(async () => ({ status: 'not-installed' as const })),
-      onRefreshCapabilities,
-      undefined,
-      true
+      onRefreshCapabilities
     );
 
     expect(document.body.textContent).toContain(
@@ -378,11 +456,7 @@ describe('AgentConfigDialog', () => {
     expect(onRefreshCapabilities).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { agentType: 'claude', name: 'Claude Code', accountName: 'Claude' },
-    { agentType: 'codex', name: 'Codex', accountName: 'ChatGPT' },
-    { agentType: 'kimi', name: 'Kimi Code', accountName: 'Kimi' },
-  ])(
+  it.each([{ agentType: 'codex', name: 'Codex', accountName: 'ChatGPT' }])(
     'requires $accountName sign-in before creating the provider when credentials are missing',
     async ({ agentType, name, accountName }) => {
       const onSubmit = vi.fn(async () => {});
@@ -488,11 +562,7 @@ describe('AgentConfigDialog', () => {
     expect(onRefreshCapabilities).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    { agentType: 'claude', name: 'Claude Code' },
-    { agentType: 'codex', name: 'Codex' },
-    { agentType: 'kimi', name: 'Kimi Code' },
-  ])(
+  it.each([{ agentType: 'codex', name: 'Codex' }])(
     'automatically creates a verified $agentType provider after its live probe succeeds',
     async ({ agentType, name }) => {
       const onSubmit = vi.fn(async () => {});
@@ -614,6 +684,55 @@ describe('AgentConfigDialog', () => {
 
     await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
     expect(onRefreshCapabilities).toHaveBeenCalledTimes(2);
+  });
+
+  const findSignInAgainButton = (): HTMLButtonElement | undefined =>
+    Array.from(document.body.querySelectorAll('button')).find(
+      (button) => button.textContent?.trim() === 'Sign in again'
+    );
+
+  const renderEditingBuiltin = (overrides: Partial<AgentConfigMeta>) =>
+    renderDialog(
+      {
+        kind: 'edit',
+        config: {
+          id: claudeConfigId,
+          machineId,
+          name: 'Provider',
+          description: undefined,
+          cliType: 'builtin',
+          agentType: 'claude',
+          env: {},
+          ...overrides,
+        } as AgentConfigMeta,
+      },
+      createMachine('Workstation')
+    );
+
+  it.each(['claude'] as const)(
+    'offers signing in again while editing the built-in %s provider',
+    async (agentType) => {
+      await renderEditingBuiltin({ agentType });
+
+      expect(findSignInAgainButton()).toBeDefined();
+    }
+  );
+
+  it.each([
+    {
+      label: 'a DeepSeek preset',
+      overrides: {
+        brandId: 'deepseek' as const,
+        env: {
+          ANTHROPIC_BASE_URL: 'https://api.deepseek.com/anthropic',
+          ANTHROPIC_AUTH_TOKEN: 'sk-test',
+        },
+      },
+    },
+  ])('hides signing in again while editing $label', async ({ overrides }) => {
+    await renderEditingBuiltin(overrides);
+
+    expect(findSignInAgainButton()).toBeUndefined();
   });
 
   it('saves a normalized title reasoning effort after the title model changes', async () => {

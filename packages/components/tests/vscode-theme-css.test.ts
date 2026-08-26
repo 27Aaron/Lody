@@ -75,6 +75,9 @@ describe('createLodyThemeCssVariables', () => {
     expect(variables['--button-secondary-hover']).toBe(hexColorToHslChannel('#343746'));
     expect(variables['--button-hover']).toBe(hexColorToHslChannel('#FFCFA8'));
     expect(variables['--input']).toBe(hexColorToHslChannel('#1C1C1C'));
+    // The field fill keeps a dark theme's raised input.background; only a fill
+    // recessed below the page (light themes) is lifted onto the page color.
+    expect(variables['--input-field']).toBe(hexColorToHslChannel('#1C1C1C'));
     expect(variables['--tab-bar']).toBe('0 0% 6.3%');
     expect(variables['--tab-active']).toBe('0 0% 8.6%');
     expect(variables['--tab-active-foreground']).toBe('0 0% 100%');

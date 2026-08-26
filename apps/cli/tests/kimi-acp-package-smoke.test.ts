@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
+import { existsSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { Readable, Writable } from 'node:stream';
 
 import {
@@ -18,20 +19,26 @@ import {
   isNodeVersionAtLeast,
 } from '../src/agent/managed-agent-runtime';
 
+/**
+ * Kimi ships as a Lody-maintained managed runtime, not an installed npm
+ * dependency, so this smoke test runs against the submodule build output that
+ * `scripts/package-kimi-runtime.mjs` packages. A checkout without that build
+ * skips instead of failing.
+ */
+const KIMI_MAIN_PATH = resolve(
+  process.cwd(),
+  '../../packages/acp-extension-kimi/apps/kimi-code/dist/main.mjs'
+);
+
 describe('locked Kimi ACP package', () => {
-  it.skipIf(!isNodeVersionAtLeast(process.versions.node, KIMI_CODE_MIN_NODE_VERSION))(
+  it.skipIf(
+    !isNodeVersionAtLeast(process.versions.node, KIMI_CODE_MIN_NODE_VERSION) ||
+      !existsSync(KIMI_MAIN_PATH)
+  )(
     'advertises terminal login and rejects an empty home with auth_required',
     async () => {
       const home = await mkdtemp(join(tmpdir(), 'lody-kimi-empty-home-'));
-      const mainPath = join(
-        process.cwd(),
-        'node_modules',
-        '@moonshot-ai',
-        'kimi-code',
-        'dist',
-        'main.mjs'
-      );
-      const child = spawn(process.execPath, [mainPath, 'acp'], {
+      const child = spawn(process.execPath, [KIMI_MAIN_PATH, 'acp'], {
         cwd: home,
         env: {
           ...process.env,
@@ -77,7 +84,7 @@ describe('locked Kimi ACP package', () => {
         child.kill('SIGTERM');
         await Promise.race([
           once(child, 'exit'),
-          new Promise<void>((resolve) => setTimeout(resolve, 1_000)),
+          new Promise<void>((resolveTimeout) => setTimeout(resolveTimeout, 1_000)),
         ]);
         await rm(home, { recursive: true, force: true });
       }

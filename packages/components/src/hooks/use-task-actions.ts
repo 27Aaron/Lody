@@ -278,7 +278,10 @@ export function useTaskActions() {
   const setTaskBody = useCallback(
     async (taskId: TaskId, body: string): Promise<void> => {
       if (!runtime) {
-        return;
+        // The editor treats fulfillment as a durable local acknowledgement.
+        // A no-op here would falsely mark the draft synced and let the empty
+        // document snapshot replace it when the runtime returns.
+        throw new Error('Runtime not ready');
       }
       await runtime.withTaskStore(taskId, async (store) => {
         store.setState((draft: TaskDocInput) => {

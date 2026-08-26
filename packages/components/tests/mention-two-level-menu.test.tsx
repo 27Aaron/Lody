@@ -6,9 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Mention, MentionInput, useMentionContext } from '../src/ui/mention';
 import type { Mention as MentionRange } from '../src/ui/mention/mention-root';
-import { MentionTwoLevelMenuBody } from '../src/components/mentions/mention-two-level-menu';
+import {
+  MentionTwoLevelMenuBody,
+  useMentionCategoryActivation,
+} from '../src/components/mentions/mention-two-level-menu';
 import {
   selectMentionMenuView,
+  selectMentionMenuViewForTrigger,
   toSkillCandidate,
   type MentionCandidate,
   type MentionCandidateDetail,
@@ -109,9 +113,58 @@ function Harness({
     >
       <Probe />
       <MentionInput value={value} onChange={() => {}} />
-      <MentionTwoLevelMenuBody view={view} onBack={() => {}} showBack detail={detail} />
+      <MentionTwoLevelMenuBody
+        view={view}
+        onBack={() => {}}
+        showBack
+        onCategoryNavigate={(category) => category.activation?.activate()}
+        detail={detail}
+      />
     </Mention>
   );
+}
+
+function ActivationHarness({
+  open,
+  search,
+  categories,
+  navigateTo,
+}: {
+  open: boolean;
+  search: string;
+  categories: MentionCategory[];
+  navigateTo?: string;
+}) {
+  // Derived exactly as MentionTwoLevelMenu does, so the harness cannot pass on
+  // a view the real menu would never produce.
+  const view = open ? selectMentionMenuViewForTrigger(categories, '@', search) : null;
+  const activateCategory = useMentionCategoryActivation(open, view, categories);
+  React.useEffect(() => {
+    if (!navigateTo) return;
+    const category = categories.find((entry) => entry.id === navigateTo);
+    if (category) activateCategory(category);
+  }, [activateCategory, categories, navigateTo]);
+  return null;
+}
+
+/** The shared-source pair the menu must activate once: Issues and PRs. */
+function makeIssuePrActivationCategories() {
+  const activate = vi.fn();
+  const activation = { sourceKey: 'issuePr' as const, activate };
+  const categories = makeCategories();
+  const issue = categories.find((category) => category.id === 'issue');
+  if (!issue) throw new Error('makeCategories must include the issue category');
+  issue.activation = activation;
+  categories.push({
+    id: 'pr',
+    namespace: 'pr',
+    label: 'Pull Requests',
+    icon: 'pr',
+    status: 'ready',
+    activation,
+    getCandidates: () => [],
+  });
+  return { categories, activate };
 }
 
 describe('MentionTwoLevelMenuBody', () => {
@@ -157,6 +210,24 @@ describe('MentionTwoLevelMenuBody', () => {
     return input;
   }
 
+  function renderActivation(
+    open: boolean,
+    search: string,
+    categories: MentionCategory[],
+    navigateTo?: string
+  ) {
+    act(() => {
+      root?.render(
+        <ActivationHarness
+          open={open}
+          search={search}
+          categories={categories}
+          navigateTo={navigateTo}
+        />
+      );
+    });
+  }
+
   function rowTitles() {
     return Array.from(container?.querySelectorAll('[data-slot="mention-item"]') ?? []).map((node) =>
       (node.textContent ?? '').trim()
@@ -176,6 +247,21 @@ describe('MentionTwoLevelMenuBody', () => {
 
     act(() => latest.onMentionAdd?.('category:issue', 0));
 
+    expect(latest.inputValue).toBe('@issue:');
+    expect(latest.mentions).toEqual([]);
+  });
+
+  it('activates a lazy source while navigating into its category', () => {
+    const { categories, activate } = makeIssuePrActivationCategories();
+    render('@', categories);
+    const issuesRow = Array.from(
+      container?.querySelectorAll<HTMLElement>('[data-slot="mention-item"]') ?? []
+    ).find((item) => item.textContent?.includes('Issues'));
+    if (!issuesRow) throw new Error('Issues category row missing');
+
+    act(() => issuesRow.click());
+
+    expect(activate).toHaveBeenCalledOnce();
     expect(latest.inputValue).toBe('@issue:');
     expect(latest.mentions).toEqual([]);
   });
@@ -235,12 +321,73 @@ describe('MentionTwoLevelMenuBody', () => {
     expect(text).toContain('.claude/skills/x/SKILL.md');
     // The rows are still there beside it.
     expect(rowTitles()).toEqual(['Broken menu#3312', 'Slow switch#3298']);
+    const detailTitle = Array.from(container?.querySelectorAll('p') ?? []).find(
+      (entry) => entry.textContent === 'code-collab-debug'
+    );
+    expect(detailTitle?.parentElement?.classList).toContain('[scrollbar-gutter:stable]');
+    expect(detailTitle?.parentElement?.classList).toContain('h-[320px]');
   });
 
   it('omits the detail panel when the candidate has none', () => {
     render('@issue:', makeCategories(), null);
 
     expect(container?.querySelector('dl')).toBeNull();
+  });
+
+  it('does not activate lazy sources from the first-level category index', () => {
+    const { categories, activate } = makeIssuePrActivationCategories();
+
+    renderActivation(true, '', categories);
+
+    expect(activate).not.toHaveBeenCalled();
+  });
+
+  it('activates the source for a scoped category', () => {
+    const { categories, activate } = makeIssuePrActivationCategories();
+
+    renderActivation(true, 'issue:', categories);
+
+    expect(activate).toHaveBeenCalledOnce();
+  });
+
+  it('activates a shared source only once per menu-open cycle', () => {
+    const { categories, activate } = makeIssuePrActivationCategories();
+
+    renderActivation(true, 'issue:', categories);
+    renderActivation(true, 'pr:', categories);
+
+    expect(activate).toHaveBeenCalledOnce();
+
+    renderActivation(false, '', categories);
+    renderActivation(true, 'pr:', categories);
+    expect(activate).toHaveBeenCalledTimes(2);
+  });
+
+  it('deduplicates synchronous navigation and the destination-view fallback', () => {
+    const { categories, activate } = makeIssuePrActivationCategories();
+
+    renderActivation(true, '', categories, 'issue');
+    renderActivation(true, 'issue:', categories);
+
+    expect(activate).toHaveBeenCalledOnce();
+  });
+
+  it('activates a source whose callback identity changed, keyed by its source', () => {
+    const { categories } = makeIssuePrActivationCategories();
+    const rebuilt = vi.fn();
+    // `refresh` is a `useCallback`; a new identity for the same source must not
+    // look like a second source to activate.
+    for (const category of categories) {
+      if (category.activation) category.activation = { sourceKey: 'issuePr', activate: rebuilt };
+    }
+
+    renderActivation(true, 'issue:', categories);
+    for (const category of categories) {
+      if (category.activation) category.activation = { sourceKey: 'issuePr', activate: rebuilt };
+    }
+    renderActivation(true, 'pr:', categories);
+
+    expect(rebuilt).toHaveBeenCalledOnce();
   });
 });
 

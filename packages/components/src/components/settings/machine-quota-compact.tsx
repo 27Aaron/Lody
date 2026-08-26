@@ -1,17 +1,20 @@
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { MachineViewMeta } from '@lody/shared';
-import { CODEX_SPARK_LIMIT_ID, parseRateLimitEntryKey } from '@lody/shared';
+import {
+  CODEX_SPARK_LIMIT_ID,
+  normalizePersistedRateLimit,
+  parseRateLimitEntryKey,
+} from '@lody/shared';
 import { formatDistanceToNow, type Locale } from 'date-fns';
 import { enUS, zhCN } from 'date-fns/locale';
 import { AnthropicIcon } from '@/components/icons/anthropic-icon';
 import { OpenAIIcon } from '@/components/icons/openai-icon';
 import { Badge } from '@/ui/badge';
 import { cn } from '@/lib/utils';
-import { normalizeEpochMs } from '@/lib/normalize-epoch';
 import {
-  FIVE_HOUR_WINDOW_MINS,
-  SEVEN_DAY_WINDOW_MINS,
+  FIVE_HOUR_WINDOW_SECONDS,
+  SEVEN_DAY_WINDOW_SECONDS,
   formatRateLimitWindowShortLabel,
   getAgentRateLimitWindows,
 } from '@/lib/session-usage';
@@ -30,14 +33,19 @@ export function MachineQuotaCompact({ raceLimits, filterCliType }: MachineQuotaC
   const entries = useMemo(
     () =>
       Object.entries(raceLimits ?? {})
-        .map(([rawKey, limits]) => {
+        .flatMap(([rawKey, value]) => {
           const parsed = parseRateLimitEntryKey(rawKey);
-          return {
-            rawKey,
-            limits,
-            parsed,
-            windows: getAgentRateLimitWindows(limits, parsed.cliType),
-          };
+          const limits = normalizePersistedRateLimit(parsed.cliType, parsed.limitId, value);
+          return limits
+            ? [
+                {
+                  rawKey,
+                  limits,
+                  parsed,
+                  windows: getAgentRateLimitWindows(limits),
+                },
+              ]
+            : [];
         })
         .filter((entry) => !filterCliType || entry.parsed.cliType === filterCliType)
         .filter((entry) => entry.windows.length > 0)
@@ -52,9 +60,9 @@ export function MachineQuotaCompact({ raceLimits, filterCliType }: MachineQuotaC
   );
 
   const formatResetDistance = useCallback(
-    (resetAt: number | null | undefined): string => {
-      const epochMs = normalizeEpochMs(resetAt);
-      if (!epochMs) return t('machines.rateLimits.resetUnknown');
+    (resetAtEpochSeconds: number | null | undefined): string => {
+      if (!resetAtEpochSeconds) return t('machines.rateLimits.resetUnknown');
+      const epochMs = resetAtEpochSeconds * 1_000;
       return t('machines.rateLimits.resetsAt', {
         time: formatDistanceToNow(new Date(epochMs), {
           addSuffix: true,
@@ -69,7 +77,7 @@ export function MachineQuotaCompact({ raceLimits, filterCliType }: MachineQuotaC
 
   return (
     <div className="w-full space-y-2">
-      {entries.map(({ rawKey, limits, parsed, windows }) => {
+      {entries.map(({ rawKey, parsed, windows }) => {
         const isCodexSpark = parsed.limitId === CODEX_SPARK_LIMIT_ID;
         const tierLabel = isCodexSpark ? t('machines.rateLimits.codexSpark') : null;
         const cliTypeLabel =
@@ -103,21 +111,21 @@ export function MachineQuotaCompact({ raceLimits, filterCliType }: MachineQuotaC
             )}
           >
             {windows.map((window, index) => {
-              const shortLabel = formatRateLimitWindowShortLabel(window.windowDurationMins);
+              const shortLabel = formatRateLimitWindowShortLabel(window.windowDurationSeconds);
               const fullLabel =
-                window.windowDurationMins === FIVE_HOUR_WINDOW_MINS
+                window.windowDurationSeconds === FIVE_HOUR_WINDOW_SECONDS
                   ? t('machines.rateLimits.fiveHour')
-                  : window.windowDurationMins === SEVEN_DAY_WINDOW_MINS
+                  : window.windowDurationSeconds === SEVEN_DAY_WINDOW_SECONDS
                     ? t('machines.rateLimits.sevenDay')
                     : shortLabel;
               return (
                 <UsageQuotaWindow
-                  key={`${window.windowDurationMins ?? 'unknown'}-${index}`}
+                  key={`${window.windowDurationSeconds ?? 'unknown'}-${index}`}
                   shortLabel={shortLabel}
                   fullLabel={fullLabel}
                   percent={window.usedPercent}
-                  resetText={formatResetDistance(window.resetsAt)}
-                  disabled={Boolean(limits.apiUnavailable)}
+                  resetText={formatResetDistance(window.resetsAtEpochSeconds)}
+                  disabled={false}
                 />
               );
             })}

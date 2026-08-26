@@ -5,8 +5,10 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { CheckCircle2, ChevronDown, ChevronUp, Loader2, Plus, Trash2, XCircle } from 'lucide-react';
 import {
   REGISTRY_ACP_AGENTS,
+  getBuiltinAgentByAgentType,
   type AgentBrandId,
   type BuiltinAgentType,
+  type ManagedBuiltinAgentType,
   type AgentConfigCliType,
   type AgentConfigId,
   type AgentConfigMeta,
@@ -52,7 +54,6 @@ import { REGISTRY_AGENT_ICON_SVGS } from '@/components/icons/registry-agent-icon
 import {
   AgentConfigDialog,
   buildPresetCreateForm,
-  DEEPSEEK_CLAUDE_PRESET_ID,
   GLM_CLAUDE_PRESET_ID,
   MIMO_CLAUDE_PRESET_ID,
   MINIMAX_CLAUDE_PRESET_ID,
@@ -63,6 +64,7 @@ import { labelForAgent } from '@/components/settings/provider-row';
 import { ProviderSetupRow } from '@/components/settings/provider-setup-row';
 import { AcpAuthenticationPanel } from '@/components/settings/acp-authentication-panel';
 import { OnboardingShell, OnboardingBackButton, OnboardingNextButton } from '../onboarding-shell';
+import type { TourConfigurationState } from '../tour/tour-app';
 import {
   resolveInitialOnboardingProviderStatus,
   type OnboardingProviderStatus,
@@ -79,7 +81,7 @@ const PROVIDERS_SCREEN_MACHINE_TIMEOUT_MS = 15_000;
  * agents resolve from REGISTRY_AGENT_ICON_SVGS, presets from their brand icon).
  */
 type ShowcasePick =
-  | { kind: 'builtin'; agentType: 'kimi' }
+  | { kind: 'builtin'; agentType: BuiltinAgentType }
   | { kind: 'registry'; id: string }
   | { kind: 'preset'; presetId: string };
 
@@ -100,7 +102,7 @@ function showcasePickKey(pick: ShowcasePick): string {
       : `preset:${pick.presetId}`;
 }
 
-function builtinShowcase(agentType: 'kimi', label: string): ShowcaseAgent {
+function builtinShowcase(agentType: BuiltinAgentType, label: string): ShowcaseAgent {
   return { pick: { kind: 'builtin', agentType }, label, icon: { cliType: 'builtin', agentType } };
 }
 
@@ -118,13 +120,14 @@ function presetShowcase(presetId: string, label: string, brandId: AgentBrandId):
 
 /**
  * Always-visible brands beneath the Add button — makes it obvious Lody runs far
- * more than the two built-ins. Curated to ~two rows; the DeepSeek preset shows
+ * more than the two built-ins. Curated to ~two rows; DeepSeek Harness shows
  * here, the other presets live under "其他". Each maps to a
  * {@link REGISTRY_ACP_AGENTS} entry or a preset, so the icon and the quick-add
  * prefill share one source of truth.
  */
 const FEATURED_SHOWCASE_AGENTS: ShowcaseAgent[] = [
   builtinShowcase('kimi', 'Kimi'),
+  builtinShowcase('grok', 'Grok'),
   registryShowcase('amp-acp', 'Amp'),
   registryShowcase('cursor', 'Cursor'),
   registryShowcase('opencode', 'OpenCode'),
@@ -133,8 +136,7 @@ const FEATURED_SHOWCASE_AGENTS: ShowcaseAgent[] = [
   registryShowcase('pi-acp', 'Pi'),
   registryShowcase('factory-droid', 'Factory Droid'),
   registryShowcase('github-copilot-cli', 'GitHub Copilot'),
-  registryShowcase('grok-build', 'Grok'),
-  presetShowcase(DEEPSEEK_CLAUDE_PRESET_ID, 'DeepSeek', 'deepseek'),
+  builtinShowcase('deepseek', 'DeepSeek'),
 ];
 
 const FEATURED_SHOWCASE_REGISTRY_IDS = new Set(
@@ -168,11 +170,14 @@ export interface ProvidersScreenViewProps {
   setups?: ProviderSetupTask[];
   /** Per-config test status, keyed by config id. */
   testStatuses: Record<string, ProviderTestStatus>;
+  selectedConfigId?: string | null;
   /** True when the local machine record has not yet arrived. */
   noLocalMachine: boolean;
   localMachineId?: MachineId | null;
+  localMachine?: MachineViewMeta;
   /** Open the edit dialog for an existing provider. */
   onEdit: (config: AgentConfigMeta) => void;
+  onSelect?: (config: AgentConfigMeta) => void;
   /** Run the connectivity test (or re-test) for a row. */
   onTest: (config: AgentConfigMeta) => void;
   onAuthenticated?: (config: AgentConfigMeta) => void | Promise<void>;
@@ -188,16 +193,19 @@ export interface ProvidersScreenViewProps {
   onBack: () => void;
   /** Defer provider setup and jump to the next step. */
   onSkip: () => void;
-  onNext: () => void;
+  onNext: (agentConfigId: string) => void;
 }
 
 export function ProvidersScreenView({
   configs,
   setups = [],
   testStatuses,
+  selectedConfigId,
   noLocalMachine,
   localMachineId = null,
+  localMachine,
   onEdit,
+  onSelect,
   onTest,
   onAuthenticated,
   onDelete,
@@ -210,6 +218,22 @@ export function ProvidersScreenView({
 }: ProvidersScreenViewProps) {
   const { t } = useTranslation();
   const canProceed = !noLocalMachine && configs.length + setups.length > 0;
+  const resolvedSelectedConfigId = selectedConfigId ?? configs[0]?.id ?? setups[0]?.id ?? null;
+  const previewConfig = configs.find((config) => config.id === resolvedSelectedConfigId);
+  const previewStatus = previewConfig ? testStatuses[previewConfig.id] : undefined;
+  const previewAgentStatus: TourConfigurationState['agentStatus'] = noLocalMachine
+    ? 'missing'
+    : previewStatus === 'testing'
+      ? 'verifying'
+      : previewStatus === 'needs-auth'
+        ? 'awaiting-auth'
+        : previewStatus === 'failed'
+          ? 'failed'
+          : previewConfig
+            ? 'ready'
+            : setups.length > 0
+              ? 'preparing'
+              : 'missing';
 
   return (
     <OnboardingShell
@@ -220,6 +244,24 @@ export function ProvidersScreenView({
         'onboarding.providers.description',
         'Add a provider now. Runtime downloads continue in the background, and Lody asks you to sign in when ready.'
       )}
+      previewIdentity={
+        previewConfig
+          ? {
+              agentName: previewConfig.name,
+              agentType: previewConfig.agentType,
+              agentCliType: previewConfig.cliType,
+            }
+          : undefined
+      }
+      previewState={{
+        agentStatus: previewAgentStatus,
+        runConfigAgents: configs.map((config) => ({
+          cliType: config.cliType,
+          agentType: config.agentType,
+          brandId: config.brandId,
+          env: config.env,
+        })),
+      }}
       secondaryAction={<OnboardingBackButton onClick={onBack} />}
       primaryAction={
         <div className="flex items-center gap-2">
@@ -231,7 +273,10 @@ export function ProvidersScreenView({
           >
             {t('onboarding.providers.skip', 'Skip for now')}
           </Button>
-          <OnboardingNextButton onClick={onNext} disabled={!canProceed} />
+          <OnboardingNextButton
+            onClick={() => resolvedSelectedConfigId && onNext(resolvedSelectedConfigId)}
+            disabled={!canProceed || resolvedSelectedConfigId === null}
+          />
         </div>
       }
     >
@@ -252,6 +297,7 @@ export function ProvidersScreenView({
                 <ProviderSetupRow
                   key={setup.id}
                   setup={setup}
+                  machine={localMachine}
                   onRetry={onRetrySetup ?? (async () => undefined)}
                   onDelete={onDeleteSetup ?? (async () => undefined)}
                 />
@@ -259,6 +305,7 @@ export function ProvidersScreenView({
               <AnimatePresence initial={false}>
                 {configs.map((config) => {
                   const status: ProviderTestStatus = testStatuses[config.id] ?? 'untested';
+                  const selected = config.id === resolvedSelectedConfigId;
                   return (
                     <motion.div
                       key={config.id}
@@ -271,22 +318,27 @@ export function ProvidersScreenView({
                         // Hover lives on the row, not the inner edit button,
                         // so highlighting feels like one unit even though
                         // Test/Delete are separate click targets.
-                        'group flex flex-wrap items-center gap-3 rounded-xl border transition-colors',
-                        status === 'passed'
-                          ? 'border-primary/40 bg-primary/[0.04] hover:bg-primary/[0.07]'
-                          : 'border-border/60 bg-card/40 hover:border-border hover:bg-hover/40'
+                        'group flex flex-wrap items-center gap-3 rounded-lg border transition-colors',
+                        selected
+                          ? 'border-primary bg-primary/[0.06] ring-2 ring-primary/15'
+                          : status === 'passed'
+                            ? 'border-primary/40 bg-primary/[0.04] hover:bg-primary/[0.07]'
+                            : 'border-border/60 bg-card/40 hover:border-border hover:bg-hover/40'
                       )}
                     >
                       <button
                         type="button"
                         disabled={noLocalMachine}
                         className={cn(
-                          'flex min-w-0 flex-1 items-center gap-3 rounded-l-xl py-3 pl-3 text-left',
+                          'flex min-w-0 flex-1 items-center gap-3 rounded-l-lg py-3 pl-3 text-left',
                           'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
                           'disabled:cursor-not-allowed disabled:opacity-60'
                         )}
-                        aria-label={t('agents.editConfig', 'Edit config')}
-                        onClick={() => onEdit(config)}
+                        aria-pressed={selected}
+                        aria-label={t('onboarding.providers.selectConfig', 'Select {{name}}', {
+                          name: config.name,
+                        })}
+                        onClick={() => (onSelect ? onSelect(config) : onEdit(config))}
                       >
                         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted/40">
                           <AgentIcon
@@ -298,18 +350,20 @@ export function ProvidersScreenView({
                           />
                         </div>
                         <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                              {config.name}
-                            </span>
-                            <ProviderStatusBadge status={status} />
-                          </div>
+                          <div className="truncate text-sm font-medium">{config.name}</div>
                           <div className="truncate text-xs text-muted-foreground">
                             {labelForAgent(config.cliType, config.agentType)}
                           </div>
                         </div>
+                        {/* Sibling of the two-line text column, so the badge
+                            centres against the whole row instead of riding the
+                            name's baseline. */}
+                        <ProviderStatusBadge status={status} />
                       </button>
                       <div className="flex shrink-0 items-center gap-1 pr-3">
+                        <Button variant="ghost" size="sm" onClick={() => onEdit(config)}>
+                          {t('common.edit', 'Edit')}
+                        </Button>
                         {status !== 'needs-auth' ? (
                           <Button
                             variant={status === 'passed' ? 'ghost' : 'outline'}
@@ -364,7 +418,7 @@ export function ProvidersScreenView({
           disabled={noLocalMachine}
           onClick={() => onAdd()}
           className={cn(
-            'group flex items-center justify-center gap-2 rounded-xl border-2 border-dashed py-4 text-sm font-medium transition-all',
+            'group flex items-center justify-center gap-2 rounded-lg border-2 border-dashed py-4 text-sm font-medium transition-all',
             'border-border/60 text-muted-foreground hover:border-primary/60 hover:bg-primary/[0.04] hover:text-foreground',
             'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring',
             'disabled:opacity-50 disabled:hover:border-border/60 disabled:hover:bg-transparent disabled:hover:text-muted-foreground'
@@ -414,11 +468,11 @@ function AgentShowcase({
   return (
     <div className="flex flex-col gap-3 pt-2">
       <div className="flex items-center gap-3" aria-hidden>
-        <div className="h-px flex-1 bg-gradient-to-r from-transparent to-border/70" />
+        <div className="h-px flex-1 bg-border/70" />
         <span className="shrink-0 text-[11px] font-medium tracking-wide text-muted-foreground/70">
           {t('onboarding.providers.moreLabel', 'Plus many more coding agents')}
         </span>
-        <div className="h-px flex-1 bg-gradient-to-l from-transparent to-border/70" />
+        <div className="h-px flex-1 bg-border/70" />
       </div>
       <div className="flex flex-wrap justify-center gap-2">
         {visible.map((agent) => (
@@ -481,8 +535,8 @@ function AgentShowcase({
 interface ProvidersScreenProps {
   onBack: () => void;
   onSkip: () => void;
-  onNext: () => void;
-  onManagedRuntimeSelected: (agentType: BuiltinAgentType) => void;
+  onNext: (agentConfigId: string) => void;
+  onManagedRuntimeSelected: (agentType: ManagedBuiltinAgentType) => void;
 }
 
 export function ProvidersScreen({
@@ -536,8 +590,18 @@ export function ProvidersScreen({
   const dialogOpen = dialogMode !== null;
 
   const [testStatuses, setTestStatuses] = useState<Record<string, ProviderTestStatus>>({});
+  const [selectedConfigId, setSelectedConfigId] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<AgentConfigMeta | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  useEffect(() => {
+    const availableIds = new Set([
+      ...localConfigs.map((config) => config.id),
+      ...localSetups.map((setup) => setup.id),
+    ]);
+    if (selectedConfigId && availableIds.has(selectedConfigId as AgentConfigId)) return;
+    setSelectedConfigId(localConfigs[0]?.id ?? localSetups[0]?.id ?? null);
+  }, [localConfigs, localSetups, selectedConfigId]);
 
   const setStatus = (id: AgentConfigId, status: ProviderTestStatus) =>
     setTestStatuses((prev) => ({ ...prev, [id]: status }));
@@ -724,6 +788,7 @@ export function ProvidersScreen({
           } else {
             await createConfig(config);
           }
+          setSelectedConfigId(config.id);
         } else {
           await updateConfig({
             id: dialogMode.config.id,
@@ -808,9 +873,12 @@ export function ProvidersScreen({
         configs={localConfigs}
         setups={localSetups}
         testStatuses={testStatuses}
+        selectedConfigId={selectedConfigId}
         noLocalMachine={!localMachine}
         localMachineId={localMachineId}
+        localMachine={localMachine}
         onEdit={(config) => setDialogMode({ kind: 'edit', config })}
+        onSelect={(config) => setSelectedConfigId(config.id)}
         onTest={handleTest}
         onAuthenticated={(config) => setStatus(config.id, 'passed')}
         onDelete={(config) => setPendingDelete(config)}
@@ -835,7 +903,7 @@ export function ProvidersScreen({
               initialForm: {
                 cliType: 'builtin',
                 agentType: pick.agentType,
-                name: 'Kimi Code',
+                name: getBuiltinAgentByAgentType(pick.agentType)?.displayName ?? pick.agentType,
               },
             });
             return;
@@ -868,7 +936,6 @@ export function ProvidersScreen({
           onCheckBinaryStatus={checkBinaryStatus}
           onInstallBinary={installBinary}
           onManagedRuntimeSelected={onManagedRuntimeSelected}
-          deferManagedBuiltinCreation
         />
       ) : null}
 
@@ -915,7 +982,7 @@ function ProviderStatusBadge({ status }: { status: ProviderTestStatus }) {
   const { t } = useTranslation();
   if (status === 'testing') {
     return (
-      <Badge variant="outline" className="gap-1 whitespace-nowrap text-[10px]">
+      <Badge variant="outline" className="shrink-0 gap-1 whitespace-nowrap text-[10px]">
         <Loader2 className="h-2.5 w-2.5 animate-spin" />
         {t('onboarding.providers.statusTesting', 'Testing')}
       </Badge>
@@ -925,7 +992,7 @@ function ProviderStatusBadge({ status }: { status: ProviderTestStatus }) {
     return (
       <Badge
         variant="outline"
-        className="gap-1 whitespace-nowrap border-primary/40 bg-primary/10 text-[10px] text-primary"
+        className="shrink-0 gap-1 whitespace-nowrap border-primary/40 bg-primary/10 text-[10px] text-primary"
       >
         <CheckCircle2 className="h-2.5 w-2.5" />
         {t('onboarding.providers.statusPassed', 'Verified')}
@@ -936,7 +1003,7 @@ function ProviderStatusBadge({ status }: { status: ProviderTestStatus }) {
     return (
       <Badge
         variant="outline"
-        className="gap-1 whitespace-nowrap border-destructive/40 text-[10px] text-destructive"
+        className="shrink-0 gap-1 whitespace-nowrap border-destructive/40 text-[10px] text-destructive"
       >
         <XCircle className="h-2.5 w-2.5" />
         {t('onboarding.providers.statusFailed', 'Failed')}
@@ -947,14 +1014,17 @@ function ProviderStatusBadge({ status }: { status: ProviderTestStatus }) {
     return (
       <Badge
         variant="outline"
-        className="whitespace-nowrap text-[10px] text-amber-600 dark:text-amber-400"
+        className="shrink-0 whitespace-nowrap text-[10px] text-amber-600 dark:text-amber-400"
       >
         {t('onboarding.providers.statusNeedsAuth', 'Sign in')}
       </Badge>
     );
   }
   return (
-    <Badge variant="outline" className="whitespace-nowrap text-[10px] text-muted-foreground">
+    <Badge
+      variant="outline"
+      className="shrink-0 whitespace-nowrap text-[10px] text-muted-foreground"
+    >
       {t('onboarding.providers.statusUntested', 'Untested')}
     </Badge>
   );

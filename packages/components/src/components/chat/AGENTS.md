@@ -7,6 +7,13 @@
 - `chat-composer.tsx` owns the reusable composer shell: prompt textarea,
   attachment chips, status text, top/footer/bottom selector slots, image add,
   and primary/secondary action placement.
+- `attachment-add-menu.tsx` is the composer's single "+" menu and owns the
+  per-turn MCP selection (`ChatComposer mcp` → `AttachmentAddMenuMcp`), NOT the
+  footer selector row — the footer stays run config → permission → usage. MCP is
+  always a second level because the catalog is multi-select and unbounded:
+  desktop opens a hover submenu, touch has no hover so mobile pushes the panel
+  onto the same surface with a back row. Toggling never closes the menu. The
+  entry hides itself when the workspace catalog is empty.
 - `chat-landing.tsx` owns new-chat orchestration, selector state, mobile sheet
   wiring, submit behavior, and the nodes passed into `ChatComposer`.
 - `chat-landing-selectors.tsx` and `unified-project-selector.tsx` wrap shared
@@ -34,24 +41,43 @@
   this local-project access badge. The desktop machine selector marks an option as
   local only when its value exactly matches `visibleLocalMachineId`; ownership and
   Private access are independent and must never stand in for the local probe.
+- The sharing-review landing notice has two distinct durable actions: dismissing
+  it keeps the current source revision quiet, while “Don't remind me again”
+  suppresses that user's notice for the workspace across future revisions.
 - The landing composer footer is ordered run config → permission → usage on
-  desktop. Mobile new-chat uses the same consolidated `MobileSessionRunConfig`
-  face + sheet as the in-session composer (agent/model/reasoning/permission/
-  Plan/Fast), with usage beside it; do not reintroduce separate model/thinking
+  desktop. Provider interaction mode is a row inside run config; the standalone
+  button is reserved for explicit permission mode, with legacy ACP modes as its
+  fallback. Mobile new-chat uses the same consolidated `MobileSessionRunConfig`
+  face + sheet as the in-session composer (agent/model/interaction/reasoning/
+  permission/Plan/Fast), with usage beside it; do not reintroduce separate model/thinking
   chips or a below-composer agent/permission row. Usage reads subscription rate
   limits from the selected agent's Machine Flock metadata and remains hidden for
   custom or environment-overridden providers.
+- The desktop run config menu's "Recently used" group (`lib/recent-run-configs.ts`)
+  is device-local localStorage history keyed per workspace, recorded only when a
+  chat is actually STARTED — never when a knob moves. A row offers a whole
+  combination (agent + model + every config option) and is filtered to agents on
+  the selected machine; the current combination never appears. Applying one sets
+  the agent first and must wait for that agent's own reconcile pass (see
+  `use-acp-session-config-selection.ts`) before writing model/options, or the
+  seeded per-agent defaults overwrite them.
 - `chat-landing-view.tsx` is the render-only landing layout around
-  `ChatComposer`; keep stateful data loading in `chat-landing.tsx`.
+  `ChatComposer`; keep stateful data loading in `chat-landing.tsx`. Its one
+  piece of local state is the session-mention drop target: a session dragged
+  from the sidebar onto the landing writes a mention into the composer this
+  layout renders, and nothing above it participates, so plumbing the handle up
+  to `chat-landing.tsx` would buy nothing. `ConversationDropOverlay` paints the
+  page-level mask as soon as the sidebar drag starts, not only after `dragenter`.
+  Desktop only — touch has no HTML5 drag, so the mobile branch passes the handle
+  but installs no drop target.
 - `comment-reference-*` and `visual-annotation-reference-*` own attachment chip
   state and rendering for references attached to outgoing messages.
 - Landing attachment uploads use two sibling hooks in `hooks/`:
   `use-chat-landing-image-draft.ts` (images) and `use-chat-landing-file-draft.ts`
   (non-image files; cloud upload + Electron local-transport fast path, mirroring
-  `sessions/session-chat-input-area.tsx`). `chat-landing.tsx` wires BOTH
-  `onImageAddClick` and `onFileAddClick` into the desktop `ChatLandingView` and
-  the mobile new-chat sheet composer, and renders a second hidden file `<input>`
-  (no `accept`) next to the image input in every render branch.
+  `sessions/session-chat-input-area.tsx`). Every landing branch exposes ONE
+  unfiltered hidden file input and one `onAttachmentAddClick`; selected files
+  are split by MIME into those two state machines, just like paste and drop.
 
 ## Invariants
 

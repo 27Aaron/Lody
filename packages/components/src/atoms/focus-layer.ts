@@ -61,3 +61,28 @@ export const sidebarNavCallbacksAtom = atom<SidebarNavCallbacks | null>(null);
  * rendered sidebar.
  */
 export const sidebarShowFullListAtom = atom<Record<string, boolean>>({});
+
+/**
+ * Opener session ids whose MCP-opened independent Sessions are collapsed in the
+ * sidebar tree (`lib/session-opened-by-tree.ts`). Absence means EXPANDED: the
+ * opened Sessions are ordinary sidebar rows, so defaulting to collapsed would
+ * hide conversations the user can see today. Shared with the keyboard
+ * navigation model so the flat nav list matches what is rendered.
+ */
+export const sidebarCollapsedOpenedBySessionsAtom = atom<Record<string, boolean>>({});
+
+/**
+ * Fold/unfold one opener's Sessions. Every session list renders the same
+ * disclosure, so the update lives here once instead of as an identical
+ * `useCallback` in each of them.
+ */
+export const toggleSidebarCollapsedOpenedBySessionAtom = atom(
+  null,
+  (get, set, openerSessionId: string) => {
+    const current = get(sidebarCollapsedOpenedBySessionsAtom);
+    set(sidebarCollapsedOpenedBySessionsAtom, {
+      ...current,
+      [openerSessionId]: !current[openerSessionId],
+    });
+  }
+);

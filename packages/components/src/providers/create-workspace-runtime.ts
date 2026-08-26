@@ -1,7 +1,7 @@
 import { LoroRepo, type RepoRoomSubscription, type RepoWatchHandle } from 'loro-repo';
 import { IndexedDBStorageAdaptor } from 'loro-repo/storage/indexeddb';
 import { StreamsTransportAdapter } from 'loro-repo/transport/streams';
-import { StreamsCrdt, createLoroDocAdapter, createStreamUrl } from '@loro-dev/streams-crdt/loro';
+import { StreamsCrdt, createLoroDocAdapter } from '@loro-dev/streams-crdt/loro';
 import type { PlatformSyncMode } from '@lody/platform';
 import {
   createLoroStreamsJsonStreamClient,
@@ -18,6 +18,7 @@ import {
   getTaskRoomId,
   taskDocSchema,
   TASK_ORDER_MIN_KEY,
+  createLoroStreamUrl,
   getLoroMetaStreamId,
   getLoroStreamIdForDocId,
   getLoroStreamsBaseUrl,
@@ -54,7 +55,6 @@ import {
   type MachineAcpBinaryInstallResponse,
   type MachineAcpBinaryProgressMessage,
   getServerNow,
-  LocalLoroTransportAdapter,
   collectOnlineMachineIdsFromPresence,
   previewVisualCommentDocSchema,
   streamsSnapshotCodec,
@@ -65,6 +65,7 @@ import {
   type LoroStreamsTokenProviderEvent,
   type SyncReason,
 } from '@lody/shared';
+import { LocalLoroTransportAdapter } from '@lody/shared/local-loro-transport';
 import type { TaskId, WorkspaceId } from '@lody/shared';
 import { createDirectWorkspaceWriter } from './workspace-writer-impl';
 import {
@@ -118,6 +119,7 @@ import { runStartupAcpCapabilitiesRefresh } from './startup-acp-capabilities-ref
 import { createLocalLoroDataPlaneConnection } from './local-loro-data-plane-connection';
 import { createWorkspaceMachineRpcFacade } from './workspace-machine-rpc-facade';
 import { resyncMachineFlockRows } from '@/hooks/use-machine-flock-rows';
+import { createCodeCollabFileIndexCache } from '@/lib/code-collab-file-index-cache';
 
 declare global {
   interface Window {
@@ -649,6 +651,10 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
     provider?.getGatewayBaseUrl() ??
     getLoroStreamsBaseUrl(import.meta.env.VITE_LORO_STREAMS_BASE_URL);
 
+  const getStreamsShardHostSuffixForProvider = (
+    provider: LoroStreamsTokenProvider | null
+  ): string | undefined => provider?.getShardHostSuffix();
+
   const invalidateMetaRemoteCursor = async (reason: string, error: unknown): Promise<void> => {
     // Remote cursors only exist for the Streams plane; the local-only
     // platform has neither the cursor rows nor a provider to derive URLs from.
@@ -662,7 +668,7 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
 
     metaRemoteCursorInvalidated = true;
     const metaStreamId = getLoroMetaStreamId(workspaceId);
-    const metaStreamUrl = createStreamUrl({
+    const metaStreamUrl = createLoroStreamUrl({
       bucketId: LORO_STREAMS_BUCKET_ID,
       streamId: metaStreamId,
       baseUrl: transportStreamsBaseUrl ?? getStreamsBaseUrlForProvider(streamsTokenProvider),
@@ -1053,8 +1059,8 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
         !message.success || message.status === 'error'
           ? 'error'
           : message.status === 'not-applicable'
-            ? 'installed'
-            : message.status,
+          ? 'installed'
+          : message.status,
       command: message.command,
       platformArch: message.platformArch,
       version: message.version,
@@ -1538,7 +1544,10 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
         // the dispatcher's `LoroStreamsLiveModePolicy`, not by this static
         // default. The client's idle watchdog (see `liveIdleTimeoutMs`) still
         // makes an SSE stall self-heal instead of hanging.
-        shardUrls: getLoroStreamsShardUrls(streamsBaseUrl),
+        shardUrls: getLoroStreamsShardUrls(
+          streamsBaseUrl,
+          getStreamsShardHostSuffixForProvider(provider)
+        ),
       });
       // Pre-warm the shared RPC response dispatcher (create/join of the
       // response stream) so the first machine RPC of the session doesn't pay
@@ -1650,6 +1659,8 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
     requestSessionDispatchTurn,
     requestSessionPrepare,
     requestSessionPrepareCancel,
+    requestFilePreview,
+    requestLocalCodeCollabFileIndex,
     requestCodeCollabOpenText,
     requestCodeCollabRefreshText,
     requestCodeCollabSaveText,
@@ -2613,19 +2624,27 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
       return;
     }
     const durableBaseUrl = getStreamsBaseUrlForProvider(streamsTokenProvider);
-    const presenceBaseUrl = getLoroStreamsPresenceBaseUrl(durableBaseUrl);
+    const shardHostSuffix = getStreamsShardHostSuffixForProvider(streamsTokenProvider);
+    const presenceBaseUrl = getLoroStreamsPresenceBaseUrl(
+      durableBaseUrl,
+      undefined,
+      shardHostSuffix
+    );
     console.info('createWorkspaceRuntime: starting workspace presence transport', {
       workspaceId,
       baseUrl: presenceBaseUrl,
       durableBaseUrl,
+      shardHostSuffix,
     });
     presenceTransport.start({
       baseUrl: durableBaseUrl,
       auth: streamsTokenProvider.createAuthCallback(),
+      shardHostSuffix,
     });
     machineMonitorTransport.start({
       baseUrl: durableBaseUrl,
       auth: streamsTokenProvider.createAuthCallback(),
+      shardHostSuffix,
     });
   };
 
@@ -2707,7 +2726,10 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
       remoteCursorStore,
       snapshotCodec: streamsSnapshotCodec,
       baseUrl: streamsBaseUrl,
-      shardUrls: getLoroStreamsShardUrls(streamsBaseUrl),
+      shardUrls: getLoroStreamsShardUrls(
+        streamsBaseUrl,
+        getStreamsShardHostSuffixForProvider(activeStreamsTokenProvider)
+      ),
       snapshotUpload: {
         canUpload: async () => true,
       },
@@ -3508,14 +3530,17 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
 
     const attemptCreate = async (): Promise<void> => {
       const transport = new StreamsCrdt({
-        streamUrl: createStreamUrl({
+        streamUrl: createLoroStreamUrl({
           bucketId: LORO_STREAMS_BUCKET_ID,
           streamId,
           baseUrl: streamsBaseUrl,
         }),
         auth: provider.createAuthCallback(),
         adapter: createLoroDocAdapter(new LoroDoc()),
-        shardUrls: getLoroStreamsShardUrls(streamsBaseUrl),
+        shardUrls: getLoroStreamsShardUrls(
+          streamsBaseUrl,
+          getStreamsShardHostSuffixForProvider(provider)
+        ),
         snapshotCodec: streamsSnapshotCodec,
       });
       try {
@@ -4335,6 +4360,12 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
       await sessionStoreCache.disposeAll();
       await previewVisualCommentStoreCache.disposeAll();
       await taskStoreCache.disposeAll();
+      let codeCollabFileIndexCacheDisposeError: unknown = null;
+      try {
+        await codeCollabFileIndexCache.dispose();
+      } catch (error) {
+        codeCollabFileIndexCacheDisposeError = error;
+      }
 
       let teardownTransportError: unknown = null;
       try {
@@ -4359,6 +4390,9 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
       }
       if (teardownTransportError) {
         throw teardownTransportError;
+      }
+      if (codeCollabFileIndexCacheDisposeError) {
+        throw codeCollabFileIndexCacheDisposeError;
       }
     })();
 
@@ -4429,10 +4463,12 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
   }, RECONNECT_BACKSTOP_INTERVAL_MS);
 
   window.repo = repo;
+  const codeCollabFileIndexCache = createCodeCollabFileIndexCache(repo);
   return {
     workspaceSlug: deps.workspaceSlug,
     workspaceId,
     repo,
+    codeCollabFileIndexCache,
     writer: workspaceWriter,
     prepareSessionTarget: (sessionId, machineId) =>
       targetRouter.prepareSessionTarget(sessionId, machineId),
@@ -4517,6 +4553,8 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
     requestSessionDispatchTurn,
     requestSessionPrepare,
     requestSessionPrepareCancel,
+    requestFilePreview,
+    requestLocalCodeCollabFileIndex,
     requestCodeCollabOpenText,
     requestCodeCollabRefreshText,
     requestCodeCollabSaveText,

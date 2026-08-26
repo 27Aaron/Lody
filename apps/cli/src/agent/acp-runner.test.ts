@@ -1,8 +1,11 @@
 import { EventEmitter } from 'events';
 import type { ChildProcess } from 'child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { shutdownLocalAcpAgent, spawnAcpProcess } from './acp-runner';
+import { __test__, shutdownLocalAcpAgent, spawnAcpProcess } from './acp-runner';
 import type { Logger } from '@/utils/logger';
 
 const createSilentLogger = (): Logger => ({
@@ -61,6 +64,74 @@ describe('spawnAcpProcess', () => {
       detached: process.platform !== 'win32',
       windowsHide: true,
     });
+  });
+});
+
+describe('Codex title-agent environment', () => {
+  it('isolates the title agent in the workdir Codex home', () => {
+    const baseEnv = { LODY_TITLE_AGENT: '1', LODY_E2E: '1' };
+
+    const prepared = __test__.prepareCodexHomeEnv(
+      { cliType: 'builtin', agentType: 'codex', workdir: '/tmp/title-agent' },
+      baseEnv
+    );
+
+    expect(prepared.isTitleAgentCodexRun).toBe(true);
+    expect(prepared.shouldUseWorkdirCodexHome).toBe(true);
+    expect(prepared.env.CODEX_HOME).toBe(path.join('/tmp/title-agent', '.codex'));
+  });
+
+  it('merges title isolation into existing Codex session config', () => {
+    const env = __test__.withTitleAgentCodexConfig({
+      CODEX_CONFIG: JSON.stringify({
+        model_provider: 'gateway',
+        model_providers: { gateway: { base_url: 'https://gateway.example/v1' } },
+        skills: { include_instructions: true },
+      }),
+    });
+
+    expect(JSON.parse(env.CODEX_CONFIG ?? '')).toEqual({
+      model_provider: 'gateway',
+      model_providers: { gateway: { base_url: 'https://gateway.example/v1' } },
+      project_doc_max_bytes: 0,
+      include_environment_context: false,
+      skills: {
+        include_instructions: false,
+        bundled: { enabled: false },
+      },
+    });
+  });
+
+  it('copies custom provider config into the isolated Codex home', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lody-title-config-test-'));
+    const sourcePath = path.join(tempDir, 'source.toml');
+    const destinationPath = path.join(tempDir, 'isolated', 'config.toml');
+    const config = `model_provider = "gateway"
+
+[model_providers.gateway]
+base_url = "https://gateway.example/v1"
+`;
+    fs.writeFileSync(sourcePath, config);
+    fs.mkdirSync(path.dirname(destinationPath));
+
+    try {
+      __test__.copyTitleAgentCodexConfig(sourcePath, destinationPath);
+
+      expect(fs.readFileSync(destinationPath, 'utf8')).toBe(config);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('still isolates non-title Codex E2E runs in the workdir', () => {
+    const prepared = __test__.prepareCodexHomeEnv(
+      { cliType: 'builtin', agentType: 'codex', workdir: '/tmp/codex-e2e' },
+      { LODY_E2E: '1' }
+    );
+
+    expect(prepared.isTitleAgentCodexRun).toBe(false);
+    expect(prepared.shouldUseWorkdirCodexHome).toBe(true);
+    expect(prepared.env.CODEX_HOME).toBe(path.join('/tmp/codex-e2e', '.codex'));
   });
 });
 

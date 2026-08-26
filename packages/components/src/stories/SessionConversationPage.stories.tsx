@@ -719,7 +719,15 @@ function StoryComposer({ session, isAgentBusy }: { session: SessionMeta; isAgent
   );
 }
 
-function StoryShell({ state, frame }: { state: PageState; frame: DeviceFrame }) {
+function StoryShell({
+  state,
+  frame,
+  dropActive = false,
+}: {
+  state: PageState;
+  frame: DeviceFrame;
+  dropActive?: boolean;
+}) {
   const { t } = useTranslation();
   const [streamChunkCount, setStreamChunkCount] = useState(0);
   const session = useMemo(() => buildSession(state, frame), [frame, state]);
@@ -936,6 +944,8 @@ function StoryShell({ state, frame }: { state: PageState; frame: DeviceFrame }) 
               >
                 <SessionConversationPage
                   className="h-full"
+                  dropActive={dropActive}
+                  dropKind="session-mention"
                   headerSlot={
                     frame !== 'mobile' ? null : (
                       // Mirrors the production mobile header (session-detail.tsx
@@ -1159,6 +1169,12 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const DesktopIdle: Story = {
+  globals: { theme: 'dark' },
+  decorators: [withDesktopViewport],
+};
+
+export const DesktopSessionMentionDrop: Story = {
+  args: { dropActive: true },
   globals: { theme: 'dark' },
   decorators: [withDesktopViewport],
 };

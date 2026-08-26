@@ -221,22 +221,6 @@ describe('SessionTransientStore', () => {
       expect(store.hasPendingTurnWork(sid('s1'))).toBe(true);
     });
 
-    it('returns true when Codex proposed plan updates are buffered', () => {
-      const store = new SessionTransientStore();
-      const state = store.get(sid('s1'));
-      state.codexProposedPlanBuffer.set('codex-turn-1', {
-        plan: {
-          type: 'proposed_plan',
-          turnId: 'codex-turn-1',
-          markdown: '- Inspect',
-          status: 'delta',
-          isLatest: true,
-        },
-        targetEntryId: 'assistant-turn',
-      });
-      expect(store.hasPendingTurnWork(sid('s1'))).toBe(true);
-    });
-
     it('returns true when pendingUnread is set', () => {
       const store = new SessionTransientStore();
       store.get(sid('s1')).pendingUnread = true;
@@ -253,15 +237,6 @@ describe('SessionTransientStore', () => {
       // Set up turn-scoped state
       store.beginTurn(id, { turnId: 'turn-1' });
       state.acpUpdateBuffer.push({} as any);
-      state.codexProposedPlanBuffer.set('codex-turn-1', {
-        plan: {
-          type: 'proposed_plan',
-          turnId: 'codex-turn-1',
-          markdown: '- Inspect',
-          status: 'delta',
-          isLatest: true,
-        },
-      });
       state.permissionWaitMs = 42;
       state.pendingUnread = true;
       state.suppressAcpReplayUntilTurnStart = true;
@@ -280,7 +255,6 @@ describe('SessionTransientStore', () => {
       // wiping it here silently dropped the last window of streamed output
       // at the Stop boundary).
       expect(state.acpUpdateBuffer).toHaveLength(1);
-      expect(state.codexProposedPlanBuffer.size).toBe(0);
       expect(state.permissionWaitMs).toBe(0);
       expect(state.pendingUnread).toBe(false);
       expect(state.suppressAcpReplayUntilTurnStart).toBe(false);

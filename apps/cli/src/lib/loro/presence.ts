@@ -1,7 +1,6 @@
 import {
   EphemeralStoreAdaptor,
   EphemeralStreamCrdt,
-  createStreamUrl,
   type EphemeralStreamSubscription,
 } from '@loro-dev/streams-crdt/loro';
 import { EphemeralStore, type Value } from 'loro-crdt';
@@ -10,6 +9,7 @@ import {
   LODY_PRESENCE_HEARTBEAT_MS,
   LODY_PRESENCE_TTL_MS,
   LORO_STREAMS_BUCKET_ID,
+  createLoroStreamUrl,
   getLoroMetaStreamId,
   getLoroStreamsPresenceBaseUrl,
   getLodyMachinePresenceKey,
@@ -40,6 +40,8 @@ export type CliPresenceRuntimeOptions = {
 export type CliPresenceStreamsOptions = {
   streamsBaseUrl: string;
   auth: StreamsAuthCallback;
+  /** Hosted shard topology from the token response; presence publishes to its dedicated host when set. */
+  shardHostSuffix?: string;
 };
 
 // Presence is a liveness channel: a failed join or a dead room must never be
@@ -139,10 +141,14 @@ export class CliPresenceRuntime {
    */
   attachStreams(streamsOptions: CliPresenceStreamsOptions): void {
     if (this.stopped || this.transport) return;
-    const durableStreamUrl = createStreamUrl({
+    const durableStreamUrl = createLoroStreamUrl({
       bucketId: LORO_STREAMS_BUCKET_ID,
       streamId: getLoroMetaStreamId(this.options.workspaceId),
-      baseUrl: getLoroStreamsPresenceBaseUrl(streamsOptions.streamsBaseUrl),
+      baseUrl: getLoroStreamsPresenceBaseUrl(
+        streamsOptions.streamsBaseUrl,
+        undefined,
+        streamsOptions.shardHostSuffix
+      ),
     });
     this.transport = new EphemeralStreamCrdt({
       streamUrl: toLodyPresenceStreamUrl(durableStreamUrl),

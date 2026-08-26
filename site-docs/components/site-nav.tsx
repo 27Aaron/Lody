@@ -17,12 +17,14 @@ const copy = {
   en: {
     language: '简体中文',
     docs: 'Docs',
+    blog: 'Blog',
     pricing: 'Pricing',
     changelog: 'Changelog',
     download: 'Download',
     menu: 'Menu',
     homeHref: '/home',
     docsHref: '/docs',
+    blogHref: '/blog',
     pricingHref: '/price',
     changelogHref: '/changelog',
     downloadHref: '/download',
@@ -30,12 +32,14 @@ const copy = {
   zh: {
     language: 'English',
     docs: '文档',
+    blog: '博客',
     pricing: '价格',
     changelog: '更新日志',
     download: '下载',
     menu: '菜单',
     homeHref: '/zh/home',
     docsHref: '/zh/docs',
+    blogHref: '/zh/blog',
     pricingHref: '/zh/price',
     changelogHref: '/zh/changelog',
     downloadHref: '/zh/download',
@@ -182,6 +186,7 @@ export function SiteNav({ locale, languageHref }: SiteNavProps) {
 
   const navItems = [
     { label: t.docs, href: t.docsHref },
+    { label: t.blog, href: t.blogHref },
     { label: t.pricing, href: t.pricingHref },
     { label: t.changelog, href: t.changelogHref },
     { label: t.download, href: t.downloadHref },
@@ -217,7 +222,7 @@ export function SiteNav({ locale, languageHref }: SiteNavProps) {
       <header className="site-nav" data-open={open}>
         <div className="site-nav__inner">
           <a className="site-nav__brand" href={t.homeHref} onClick={routeLink(t.homeHref)}>
-            <img alt="Lody" src="/_docs-assets/logo.svg" />
+            <img alt="Lody" src="/_docs-assets/logo-96.png" width={24} height={24} />
             <span>Lody</span>
           </a>
           <div className="site-nav__right">

@@ -1,7 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { loadDocsRoute } from '@site/src/docs-loader';
-import { docsHead, DocsRoutePage, preloadDocsContent } from '@site/src/site-pages';
-
+import { DocsRoutePage, docsHead, preloadDocsContent } from '@site/src/site-pages/docs';
 export const Route = createFileRoute('/zh/docs/$')({
   loader: async ({ params }) => {
     const data = await loadDocsRoute({ data: { locale: 'zh', splat: params._splat } });

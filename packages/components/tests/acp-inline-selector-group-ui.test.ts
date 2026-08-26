@@ -60,6 +60,8 @@ describe('AcpBottomBarModeSelector UI', () => {
     configOptionValues: Record<string, AcpConfigOptionValue>,
     options?: {
       selectors?: AcpConfigOptionSelector[];
+      modeOptions?: Array<{ value: string; label: string }>;
+      selectedModeId?: string;
       onConfigOptionChange?: (configId: string, value: AcpConfigOptionValue) => void;
     }
   ) {
@@ -76,6 +78,8 @@ describe('AcpBottomBarModeSelector UI', () => {
             tone: 'light',
             configOptionSelectors: options?.selectors ?? selectors,
             configOptionValues,
+            modeOptions: options?.modeOptions,
+            selectedModeId: options?.selectedModeId,
             onConfigOptionChange: options?.onConfigOptionChange ?? vi.fn(),
           })
         )
@@ -133,5 +137,48 @@ describe('AcpBottomBarModeSelector UI', () => {
     expect(fastModeButton?.className).toContain('bg-primary/[0.12]');
     fastModeButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     expect(onChange).toHaveBeenCalledWith('fast', 'off');
+  });
+
+  it('shows an explicit permission selector instead of the provider interaction modes', () => {
+    renderSelector(
+      { permission_mode: 'ask' },
+      {
+        modeOptions: [
+          { value: 'agent', label: 'Agent' },
+          { value: 'plan', label: 'Plan' },
+        ],
+        selectedModeId: 'agent',
+        selectors: [
+          {
+            configId: 'interaction_mode',
+            label: 'Interaction Mode',
+            category: 'mode',
+            type: 'select',
+            currentValue: 'agent',
+            options: [
+              { value: 'agent', label: 'Agent' },
+              { value: 'plan', label: 'Plan' },
+            ],
+          },
+          {
+            configId: 'permission_mode',
+            label: 'Permission Mode',
+            category: '_permission',
+            type: 'select',
+            currentValue: 'ask',
+            options: [
+              { value: 'ask', label: 'Ask Every Time' },
+              { value: 'always-approve', label: 'Always Approve' },
+            ],
+          },
+        ],
+      }
+    );
+
+    const permissionButton = container?.querySelector<HTMLButtonElement>(
+      'button[aria-label="Permission Mode"]'
+    );
+    expect(permissionButton?.textContent).toContain('Ask Every Time');
+    expect(container?.textContent).not.toContain('Agent');
   });
 });

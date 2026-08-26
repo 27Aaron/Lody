@@ -7,9 +7,11 @@ import type { StreamsCrdtShardUrlsOptions } from '@loro-dev/streams-crdt';
 export type {
   AbsolutePath,
   AgentConfigId,
+  AgentRoleId,
   BindingId,
   ClientId,
   MachineId,
+  McpServerId,
   RepoId,
   ReviewRunId,
   SessionId,
@@ -18,6 +20,8 @@ export type {
 } from './ids';
 export * from './message';
 export * from './ai';
+export * from './message-text-spans';
+export * from './deepseek-harness';
 export * from './acp-run-config';
 export * from './image-file-types';
 export * from './custom-acp-command';
@@ -31,6 +35,7 @@ export * from './incremental-sha256';
 export * from './bug-report';
 export * from './billing';
 export * from './agent-brand';
+export * from './agent-authentication';
 export * from './schema';
 export * from './cron-next-fire';
 export * from './scheduled-tasks-from-history';
@@ -52,6 +57,7 @@ export * from './acp/tool-call-history';
 export * from './acp/history-apply';
 export * from './acp/history-replay-import';
 export * from './acp/ask-user-question';
+export * from './acp/lody-rate-limit-migration';
 export * from './acp/skills';
 export * from './replay-prompt-builder';
 export * from './conversation-markdown';
@@ -62,6 +68,7 @@ export * from './rpc-secret';
 export * from './streams-snapshot-codec';
 export * from './presence';
 export * from './machine-monitor';
+export * from './machine-protocol-capabilities';
 export * from './repo-doc-meta';
 export * from './session-input';
 export * from './session-preparation';
@@ -93,12 +100,13 @@ export * from './workspace-slugs';
 export * from './workspace-route';
 export * from './layout';
 export * from './code-collab';
+export * from './file-preview';
 export * from './machine-flock';
+export * from './workspace-mcp';
+export * from './agent-role';
+export * from './workspace-flock';
 export * from './local-machine-rpc';
 export * from './local-loro-data-plane';
-export * from './local-loro-data-plane-server';
-export * from './local-loro-data-plane-scheduler';
-export * from './local-loro-transport';
 export * from './json-guards';
 export * from './password-validation';
 export * from './in-flight-dedupe';
@@ -138,11 +146,31 @@ export const getLoroStreamsBaseUrl = (baseUrl?: string | null): string => {
   return trimmed.replace(/\/+$/g, '');
 };
 
+// A bare DNS name: dot-separated labels, no scheme/port/path. Anything else is
+// rejected so a hostile or malformed token response can never steer sharded
+// traffic to a stray origin.
+const LORO_STREAMS_SHARD_HOST_SUFFIX_PATTERN =
+  /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i;
+
+/**
+ * Validate a runtime-injected shard host suffix (the hosted deployment's
+ * topology, e.g. delivered in the token-mint response). Returns the normalized
+ * suffix, or `undefined` when absent/invalid — callers then fall back to
+ * unsharded traffic on the gateway origin.
+ */
+export const normalizeLoroStreamsShardHostSuffix = (value?: string | null): string | undefined => {
+  const trimmed = value?.trim().toLowerCase();
+  if (!trimmed) return undefined;
+  return LORO_STREAMS_SHARD_HOST_SUFFIX_PATTERN.test(trimmed) ? trimmed : undefined;
+};
+
 // Hosted adapters may route ephemeral traffic to a separate host. Browsers cap simultaneous connections per
 // host (Firefox defaults to ~6), so opening Lody in several tabs can exhaust that
 // budget and stall presence connections. Spreading presence across sibling
 // subdomains gives each tab its own per-host budget. These inert suffixes preserve
-// the protocol helper contract without publishing a hosted deployment topology.
+// the protocol helper contract without publishing a hosted deployment topology;
+// hosted deployments deliver their real suffix at runtime in the token-mint
+// response (`shardHostSuffix`), which the URL helpers below accept explicitly.
 export const LORO_STREAMS_PRESENCE_SHARD_IDS = [
   '01',
   '02',
@@ -197,11 +225,26 @@ export const pickLoroStreamsPresenceShardId = (): LoroStreamsPresenceShardId => 
 
 export const getLoroStreamsPresenceBaseUrl = (
   baseUrl?: string | null,
-  shardId?: LoroStreamsPresenceShardId | string | null
+  shardId?: LoroStreamsPresenceShardId | string | null,
+  shardHostSuffix?: string | null
 ): string => {
   const normalized = getLoroStreamsBaseUrl(baseUrl);
   try {
     const url = new URL(normalized);
+    // A runtime-injected topology (hosted deployments deliver it with the
+    // Streams token) wins over the inert compile-time sentinel: presence gets
+    // its own host (and per-tab shard) regardless of the gateway origin.
+    const injectedSuffix = normalizeLoroStreamsShardHostSuffix(shardHostSuffix);
+    if (injectedSuffix) {
+      url.protocol = 'https:';
+      url.host = isLoroStreamsPresenceShardId(shardId)
+        ? `presence-${shardId}.${injectedSuffix}`
+        : `presence.${injectedSuffix}`;
+      // The host setter keeps a pre-existing port; hosted topology is always
+      // on the default https port.
+      url.port = '';
+      return url.toString().replace(/\/+$/g, '');
+    }
     if (url.origin !== new URL(DEFAULT_LORO_STREAMS_BASE_URL).origin) {
       return normalized;
     }
@@ -218,11 +261,15 @@ export const getLoroStreamsPresenceBaseUrl = (
   }
 };
 
-const getLoroStreamsShardOrigin = (trafficClass: string, shardId: string): string =>
-  `https://${trafficClass}-${shardId}.${DEFAULT_LORO_STREAMS_PROXY_HOST_SUFFIX}`;
+const getLoroStreamsShardOrigin = (
+  trafficClass: string,
+  shardId: string,
+  hostSuffix: string
+): string => `https://${trafficClass}-${shardId}.${hostSuffix}`;
 
 export const getLoroStreamsShardUrls = (
-  baseUrl?: string | null
+  baseUrl?: string | null,
+  shardHostSuffix?: string | null
 ): StreamsCrdtShardUrlsOptions | undefined => {
   let origin: string;
   try {
@@ -230,16 +277,63 @@ export const getLoroStreamsShardUrls = (
   } catch {
     return undefined;
   }
-  if (origin !== new URL(DEFAULT_LORO_STREAMS_BASE_URL).origin) {
+  const suffix =
+    normalizeLoroStreamsShardHostSuffix(shardHostSuffix) ??
+    (origin === new URL(DEFAULT_LORO_STREAMS_BASE_URL).origin
+      ? DEFAULT_LORO_STREAMS_PROXY_HOST_SUFFIX
+      : undefined);
+  if (!suffix) {
     return undefined;
   }
   return {
-    bootstrap: LORO_STREAMS_CONTROL_SHARD_IDS.map((id) => getLoroStreamsShardOrigin('control', id)),
-    catchup: LORO_STREAMS_CONTROL_SHARD_IDS.map((id) => getLoroStreamsShardOrigin('control', id)),
-    largePost: LORO_STREAMS_WRITE_SHARD_IDS.map((id) => getLoroStreamsShardOrigin('write', id)),
-    other: LORO_STREAMS_OTHER_SHARD_IDS.map((id) => getLoroStreamsShardOrigin('api', id)),
+    bootstrap: LORO_STREAMS_CONTROL_SHARD_IDS.map((id) =>
+      getLoroStreamsShardOrigin('control', id, suffix)
+    ),
+    catchup: LORO_STREAMS_CONTROL_SHARD_IDS.map((id) =>
+      getLoroStreamsShardOrigin('control', id, suffix)
+    ),
+    largePost: LORO_STREAMS_WRITE_SHARD_IDS.map((id) =>
+      getLoroStreamsShardOrigin('write', id, suffix)
+    ),
+    other: LORO_STREAMS_OTHER_SHARD_IDS.map((id) => getLoroStreamsShardOrigin('api', id, suffix)),
     largePostMinBytes: LORO_STREAMS_LARGE_POST_SHARD_MIN_BYTES,
   };
+};
+
+const MAX_LORO_STREAMS_RESOURCE_ID_BYTES = 512;
+const loroStreamsResourceIdEncoder = new TextEncoder();
+
+// Durable Streams path-segment rules (formerly enforced by the removed
+// `createStreamUrl` in @loro-dev/streams-crdt <=0.14): non-empty UTF-8,
+// bounded, and no "/", NUL, or ".." so a segment cannot escape its path slot.
+const isValidLoroStreamsResourceId = (id: string): boolean =>
+  id.length > 0 &&
+  loroStreamsResourceIdEncoder.encode(id).byteLength <= MAX_LORO_STREAMS_RESOURCE_ID_BYTES &&
+  !id.includes('/') &&
+  !id.includes('\0') &&
+  !id.includes('..');
+
+/**
+ * Builds a Durable Streams HTTP URL for one `(bucketId, streamId)` pair.
+ *
+ * `@loro-dev/streams-crdt@0.15` removed its `createStreamUrl` export — URL
+ * building is caller-owned there now. Unlike the removed helper, `baseUrl`
+ * is required: callers must always target their configured gateway, never a
+ * library default host.
+ */
+export const createLoroStreamUrl = (input: {
+  bucketId: string;
+  streamId: string;
+  baseUrl: string;
+}): string => {
+  const baseUrl = input.baseUrl.replace(/\/+$/g, '');
+  if (!isValidLoroStreamsResourceId(input.bucketId)) {
+    throw new Error(`invalid Loro Streams bucketId: ${JSON.stringify(input.bucketId)}`);
+  }
+  if (!isValidLoroStreamsResourceId(input.streamId)) {
+    throw new Error(`invalid Loro Streams streamId: ${JSON.stringify(input.streamId)}`);
+  }
+  return `${baseUrl}/ds/${encodeURIComponent(input.bucketId)}/${encodeURIComponent(input.streamId)}`;
 };
 
 export const getLoroStreamsRemoteCursorUrlAliases = (streamUrl: string): string[] => {
@@ -270,7 +364,7 @@ export const getLoroStreamsRemoteCursorUrlAliases = (streamUrl: string): string[
   }
 };
 
-export const SUPPORTED_CLI_TYPES: CliType[] = ['kimi', 'claude', 'codex'];
+export const SUPPORTED_CLI_TYPES: CliType[] = ['kimi', 'grok', 'claude', 'codex'];
 export type SupportedLanguage = 'en' | 'zh_CN';
 export const AGENT_CONFIG_DOC_PREFIX = 'agent-';
 export const SESSION_DOC_PREFIX = 'session-';

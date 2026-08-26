@@ -1,4 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react';
+import { useState } from 'react';
+import type { McpServerId, WorkspaceMcpServerMeta } from '@lody/shared';
 import { AttachmentAddMenu } from '@/components/chat/attachment-add-menu';
 import { VaulDrawerEdgeBackZone } from '@/components/mobile/vaul-drawer-edge-back-zone';
 import { getSessionChatInputAreaShellClassName } from '@/components/sessions/session-chat-input-area';
@@ -13,6 +15,48 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 const noop = () => {};
+
+const mcpServers: WorkspaceMcpServerMeta[] = [
+  {
+    id: 'files' as McpServerId,
+    name: 'Workspace files',
+    transport: 'stdio',
+    connection: {
+      transport: 'stdio',
+      command: '/usr/local/bin/mcp-files',
+      args: ['--root', '${PROJECT_ROOT}'],
+    },
+    createdAt: 1,
+    updatedAt: 1,
+  },
+  {
+    id: 'search' as McpServerId,
+    name: 'Search',
+    description: 'Company-wide document search.',
+    transport: 'http',
+    connection: { transport: 'http', url: 'https://mcp.example.com/mcp' },
+    createdAt: 1,
+    updatedAt: 1,
+  },
+  {
+    id: 'issues' as McpServerId,
+    name: 'Issue tracker',
+    transport: 'stdio',
+    createdAt: 1,
+    updatedAt: 1,
+  },
+];
+
+/* Live selection so the multi-select second level actually toggles. */
+function WithMcp(args: React.ComponentProps<typeof AttachmentAddMenu>) {
+  const [selectedIds, setSelectedIds] = useState<McpServerId[]>([mcpServers[0].id]);
+  return (
+    <AttachmentAddMenu
+      {...args}
+      mcp={{ ...args.mcp!, selectedIds, onSelectedIdsChange: setSelectedIds }}
+    />
+  );
+}
 
 // Frame that mimics the bottom-left position of the composer footer so the
 // menu opens against a realistic anchor.
@@ -44,7 +88,7 @@ const NativeSessionFrame = ({ children }: { children: React.ReactNode }) => (
 );
 
 export const DesktopLight: Story = {
-  args: { isMobile: false, onAddImage: noop, onAddFile: noop },
+  args: { isMobile: false, onAddAttachment: noop },
   render: (args) => (
     <Frame>
       <AttachmentAddMenu {...args} />
@@ -53,7 +97,7 @@ export const DesktopLight: Story = {
 };
 
 export const DesktopDark: Story = {
-  args: { isMobile: false, onAddImage: noop, onAddFile: noop },
+  args: { isMobile: false, onAddAttachment: noop },
   render: (args) => (
     <Frame dark>
       <AttachmentAddMenu {...args} />
@@ -62,7 +106,7 @@ export const DesktopDark: Story = {
 };
 
 export const Mobile: Story = {
-  args: { isMobile: true, onAddImage: noop, onAddFile: noop },
+  args: { isMobile: true, onAddAttachment: noop },
   render: (args) => (
     <Frame>
       <AttachmentAddMenu {...args} />
@@ -71,7 +115,7 @@ export const Mobile: Story = {
 };
 
 export const NativeSession: Story = {
-  args: { isMobile: true, onAddImage: noop, onAddFile: noop },
+  args: { isMobile: true, onAddAttachment: noop },
   render: (args) => (
     <NativeSessionFrame>
       <AttachmentAddMenu {...args} />
@@ -80,10 +124,53 @@ export const NativeSession: Story = {
 };
 
 export const Disabled: Story = {
-  args: { isMobile: false, disabled: true, onAddImage: noop, onAddFile: noop },
+  args: { isMobile: false, disabled: true, onAddAttachment: noop },
   render: (args) => (
     <Frame>
       <AttachmentAddMenu {...args} />
+    </Frame>
+  ),
+};
+
+export const DesktopWithMcp: Story = {
+  args: {
+    isMobile: false,
+    onAddAttachment: noop,
+    mcp: { servers: mcpServers, selectedIds: [], onSelectedIdsChange: noop },
+  },
+  render: (args) => (
+    <Frame>
+      <WithMcp {...args} />
+    </Frame>
+  ),
+};
+
+export const MobileWithMcp: Story = {
+  args: {
+    isMobile: true,
+    onAddAttachment: noop,
+    mcp: {
+      servers: mcpServers,
+      selectedIds: [],
+      onSelectedIdsChange: noop,
+      existingSession: true,
+    },
+  },
+  render: (args) => (
+    <Frame>
+      <WithMcp {...args} />
+    </Frame>
+  ),
+};
+
+export const McpOnly: Story = {
+  args: {
+    isMobile: false,
+    mcp: { servers: mcpServers, selectedIds: [], onSelectedIdsChange: noop },
+  },
+  render: (args) => (
+    <Frame>
+      <WithMcp {...args} />
     </Frame>
   ),
 };

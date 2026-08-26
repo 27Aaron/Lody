@@ -22,8 +22,14 @@ vi.mock('../src/providers/convex-provider', () => ({
   useAuthClient: () => organizationMocks.authClient,
 }));
 
+vi.mock('../src/lib/app-platform', () => ({
+  isLocalAppPlatform: () => false,
+}));
+
 const { StableSessionContext } = await import('../src/hooks/useStableSession');
 const { useOrganization } = await import('../src/hooks/useOrganization');
+type OrganizationState = ReturnType<typeof useOrganization>;
+let latestOrganizationState: OrganizationState | null = null;
 
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -48,7 +54,7 @@ function createOrganization(id: string, slug: string, name: string): TestOrganiz
 }
 
 function OrganizationProbe({ targetSlug }: { targetSlug: string }) {
-  useOrganization({ targetSlug });
+  latestOrganizationState = useOrganization({ targetSlug });
   return null;
 }
 
@@ -87,6 +93,7 @@ describe('useOrganization setActive dedupe', () => {
   let listVersion = 0;
 
   beforeEach(() => {
+    latestOrganizationState = null;
     listVersion = 0;
     activeOrganization = createOrganization('workspace-old', 'old-workspace', 'Old Workspace');
     organizationMocks.refetchActiveOrganization.mockReset();
@@ -171,5 +178,17 @@ describe('useOrganization setActive dedupe', () => {
     await render('target-workspace', 2);
 
     expect(organizationMocks.setActive).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects an awaited activation when Better Auth refuses the switch', async () => {
+    organizationMocks.setActive.mockResolvedValueOnce({
+      data: null,
+      error: { message: 'membership changed' },
+    });
+    await render('old-workspace', 0);
+
+    await expect(latestOrganizationState?.activateOrganization('workspace-target')).rejects.toThrow(
+      'membership changed'
+    );
   });
 });

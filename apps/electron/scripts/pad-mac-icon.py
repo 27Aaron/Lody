@@ -63,10 +63,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         '--pad',
         type=float,
-        default=0.06,
+        default=0.10,
         help=(
-            'Padding fraction per side (0.06 means ~6%% border on each side, icon shrinks to ~88%%). '
-            'Suggested range: 0.05–0.10.'
+            'Padding fraction per side (0.10 means ~10%% border on each side, icon shrinks to ~80%%). '
+            'Suggested range: 0.08–0.12.'
         ),
     )
 

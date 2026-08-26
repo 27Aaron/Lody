@@ -538,9 +538,31 @@ export function sameRoom(a: LocalLoroDataPlaneRoom, b: LocalLoroDataPlaneRoom): 
 }
 
 /**
+ * Stateful UTF-8 decoder for a byte STREAM.
+ *
+ * `chunk.toString('utf8')` per socket chunk is wrong: a chunk boundary lands at
+ * an arbitrary byte offset, so a multi-byte character split across two chunks
+ * decodes to U+FFFD on both sides. That is not a cosmetic glitch here — a flock
+ * bundle carries file paths as literal UTF-8 JSON, and a corrupted path becomes
+ * a NEW LWW key in the receiver's replica, so nothing ever overwrites it and the
+ * garbled row survives every later sync.
+ *
+ * `TextDecoder` with `{ stream: true }` retains the partial sequence until the
+ * next chunk completes it, and exists on Node, Electron, and the browser. Keep
+ * one decoder per connection.
+ */
+export function createUtf8StreamDecoder(): (chunk: Uint8Array) => string {
+  const decoder = new TextDecoder('utf-8');
+  return (chunk) => decoder.decode(chunk, { stream: true });
+}
+
+/**
  * Incremental splitter for the newline-delimited JSON framing used on the local
- * data-plane sockets. Feed it raw string chunks; it invokes `onLine` once per
- * complete non-empty line.
+ * data-plane sockets. Feed it raw socket chunks (bytes, or strings that were
+ * already decoded by a stateful decoder); it invokes `onLine` once per complete
+ * non-empty line. Byte chunks are decoded through one `createUtf8StreamDecoder`
+ * per splitter, so the splitter owns framing AND decoding and no caller can
+ * reintroduce the split-character bug.
  *
  * When `maxBufferBytes` is set, an oversized line (a partial line whose buffer
  * exceeds the cap, or a complete line above the cap) is discarded up to its
@@ -554,10 +576,12 @@ export function createJsonLineSplitter(options: {
   onLine: (line: string) => void;
   maxBufferBytes?: number;
   onOverflow?: () => void;
-}): (chunk: string) => void {
+}): (chunk: string | Uint8Array) => void {
+  const decodeChunk = createUtf8StreamDecoder();
   let buffer = '';
   let discardingOversizedLine = false;
-  return (chunk: string) => {
+  return (input: string | Uint8Array) => {
+    let chunk = typeof input === 'string' ? input : decodeChunk(input);
     if (discardingOversizedLine) {
       const newlineIndex = chunk.indexOf('\n');
       if (newlineIndex < 0) {

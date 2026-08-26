@@ -12,6 +12,7 @@ const membershipSyncMocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../src/hooks/use-recoverable-convex-query', () => ({
+  usePublicConvexQuery: () => undefined,
   useRecoverableConvexQuery: (...args: unknown[]) => {
     membershipSyncMocks.useQuery(...args);
     return args[1] === 'skip' || !membershipSyncMocks.isAuthenticated

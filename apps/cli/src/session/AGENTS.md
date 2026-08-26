@@ -32,12 +32,25 @@ delegation proofs or a shared-machine gate without a new product and security de
   dispatch directly from the RPC handler. History synchronization continues as
   the durable fallback and output-ordering gate, not as a fast-path prerequisite.
   Missing-history delivery recovery must never advance `lastHandledUserMsgId`;
-  clear `latestUserMsgId`/`processingUserMsgId`, set `lastMissingHistoryUserMsgId`,
-  and surface a `chat_failed` notice instead. The watcher must not publish or clear
+  preserve the producer/executor pointers, set `lastMissingHistoryUserMsgId` as a
+  negative acknowledgement for that exact turn, and surface a `chat_failed` notice
+  instead. Watch activation and turn selection suppress pointers only when their id
+  matches that marker; a different producer id wakes the session without any
+  read-await-clear race. The watcher must not publish or clear
   session active presence; `../lib/loro/session-active-presence.ts` is the only owner
   for start/phase/heartbeat/clear. Owned-session startup/meta bootstrap scans may contain
-  thousands of rooms; reconcile them with the fixed four-room concurrency bound rather
-  than materializing an unbounded `Promise.all`. That scan is idempotent and costs
+  thousands of rooms. Session metadata is the activation index: an idle row with no
+  pending pointer, queue watermark, cancel, active status, RPC offer, or access retry
+  stays metadata-only even when it has no `lastHandledUserMsgId`; never inspect every
+  historical Session document to infer work from history. Reconcile activated rooms
+  with one global four-room concurrency bound shared by bootstrap and live metadata,
+  and keep initial history/cancel checks inside that bound rather than spawning
+  unbounded promise chains. Bootstrap may occupy at most three slots so a live
+  activation cannot sit behind four five-minute history probes. Live metadata events
+  must be coalesced by session before the bounded drain runs. Stop/restart generation
+  fences cover reconciliation plus the checks it enqueues; old probes may finish I/O
+  but must never subscribe, cancel, or dispatch in a new watcher lifecycle. That scan is
+  idempotent and costs
   seconds of main-thread work, so `enqueueBootstrap` folds concurrent requests into a
   single queued drain (`pendingBootstrapReasons` + `bootstrapChain`) — none are dropped.
   Do not restore a per-trigger scan: `onMetaRoomSynced` fires on Streams recovery, so a
@@ -80,6 +93,14 @@ delegation proofs or a shared-machine gate without a new product and security de
   qualify: after submission the provider may already have committed the steer, and
   re-sending would duplicate it. An entry that is already active, terminal, or past
   `lastHandledUserMsgId` is left alone so a late duplicate cannot resurrect a turn.
+  `latestUserMsgId` has single-writer-role ownership: dispatch producers (Web/CLI
+  sends, edit-and-resend, refused-steer requeue, and accepted steer ownership
+  transfer) may publish it and clear a prior missing-history marker. Ordinary turn
+  execution writes only `processingUserMsgId` and `lastHandledUserMsgId`; its start,
+  success, failure, denial, and cancel paths must never read-await-rewrite
+  `latestUserMsgId` or `lastMissingHistoryUserMsgId`. Otherwise a terminal write for
+  turn A can overwrite the activation for turn B that arrived during an awaited
+  history mutation, leaving B pending and permanently unwatched.
   Because teardown/cancel finalize (`message-handler.ts`
   `finalizeACPState`, no-turnId overload) stamps `finished=true`/`endedAt` on the
   in-progress entry, resume must **reopen** it: `writeAssistantEntryForTurn`'s
@@ -99,6 +120,21 @@ delegation proofs or a shared-machine gate without a new product and security de
   the ACP session once before retrying the same prompt, but only when no ACP output
   has buffered/flushed for that assistant turn; after visible output, never replay
   the user prompt automatically.
+  DeepSeek Harness persistence compression mismatches are a distinct
+  `acp_session_storage_incompatible` failure, not a generic internal error; keep
+  matching narrow to the backend's artifact/compression diagnostic.
+  INVARIANT: a prompt that RESOLVES is not proof the turn succeeded. Nothing reads
+  `PromptResponse.stopReason`, and an adapter may swallow an upstream failure and
+  resolve normally (observed: an over-context request answered with HTTP 400, kept
+  only in the agent's own session file), so `handleTurnError` never sees it. The
+  no-output guard is the backstop: `turnProducedVisibleOutput` is read right after
+  the prompt returns — before `finalizeTurn` clears the turn's ACP update state —
+  and a turn that emitted no ACP update at all takes `recordSilentTurnFailure`
+  (`agent_no_output` notice + `markTurnFailed`) instead of `setDispatchHandled`,
+  and skips the completion notification. It still runs the full finalization
+  (diff stats, PR detection, auto-commit) and still ADVANCES the dispatch pointer:
+  the prompt was delivered, so re-dispatching would spin the same silent failure.
+  A missing `hasPromptOutputForTurn` dep fails open — never accuse a turn on a guess.
   Code Collab v1 turn markers and history fileDiff capture were removed. v2 may
   persist exact per-turn path/add/del caches derived from the CLI-local ACP evidence
   store after ACP finalization; diff content still comes only from the CLI store.
@@ -113,7 +149,12 @@ delegation proofs or a shared-machine gate without a new product and security de
   committed PR-compare writer above; unresolved project state and incomplete
   All Changes line stats must skip instead of overwriting a trustworthy total.
 - `session-manager.ts` / `session.ts` — session/process lifecycle, workdirs and
-  worktrees. Child tab sessions must reuse the parent workspace directory: local/GitHub
+  worktrees. `Session.createAgent` acquires the shared ACP start gate before
+  spawn so a parent session cannot restore or start many Codex children at once.
+  ACP terminal creation must pass the protocol's executable and argument array
+  directly to `SessionSandbox.spawn`; never rebuild them into a shell command,
+  because doing so changes argument semantics and consumes Windows path backslashes.
+  Child tab sessions must reuse the parent workspace directory: local/GitHub
   parents reconstruct via workdir/worktree data, and chat-only parents fall back to the
   parent's default `~/.lody/chats/<parentSessionId>` path when the parent process is no
   longer in memory. Do not write per-session workspace paths into `MachineMeta`; the
@@ -122,6 +163,9 @@ delegation proofs or a shared-machine gate without a new product and security de
   Worktree setup scripts are per worktree-directory lifetime: session runtime restore
   after idle GC must skip setup when the session's worktree directory already exists,
   but setup still runs when a missing worktree directory is materialized again.
+  A fresh local/GitHub worktree always owns a newly allocated branch from its selected
+  base ref; suffix collisions instead of attaching to an existing ref. Reattaching an
+  existing branch is reserved for an explicit `restoreBranchName` from the same Session.
   INVARIANT: any `sandbox.spawn` whose OUTPUT is the result must pass
   `captureOutput: true` (`session-sandbox.ts`). spawn() does async post-spawn work
   (pid wait, resource profile, cgroup attach), and under a stalled event loop a short
@@ -148,7 +192,17 @@ delegation proofs or a shared-machine gate without a new product and security de
   claims the marker only when repo/source/base-branch target identity matches, runs
   setup, then permits the first prompt. An unpublished incompatible preparation must
   never delay cold fallback; a published incompatible resource must finish cleanup
-  before cold worktree materialization so two owners cannot race the same path. Full
+  before cold worktree materialization so two owners cannot race the same path.
+  INVARIANT: speculative-worktree marker mutations are read-check-act on one file and
+  are serialized per session (`withSessionMarkerLock` in
+  `worktree/speculative-worktree.ts`) — a superseded preparation's dispose racing its
+  replacement's materialization must never delete the replacement's directory. A
+  prepared worktree may be adopted only when the durable claim did not return
+  `mismatch` AND its directory still exists on disk; otherwise discard the prepared
+  runtime (its ACP process cwd points at a dead inode) and let the cold path rebuild
+  via `createWorktree`. A `mismatch` claim deletes the mismatched directory, so
+  adoption after it hands the session a path that is not on disk (the production
+  `ENOENT ... stat .../worktrees/<sessionId>` at `turn_pre_prompt_failed`). Full
   lifecycle, sandbox/worktree ownership, crash recovery, TTL, and transport map:
   The detailed contract remains in the private architecture context.
   Launch compatibility must use canonical `buildSessionLaunchConfig` semantics: empty
@@ -173,6 +227,35 @@ delegation proofs or a shared-machine gate without a new product and security de
   `SessionForkSpec.targetPlacement === 'side-panel'` is a sparse
   presentation hint persisted as target `childSessionPlacement`; it does not alter parent/root
   workspace ownership, history cloning, ACP lifetime, or the fork commit boundary.
+  `targetContext.kind === 'new-worktree'` is a distinct asynchronous saga: accept only when the
+  provider advertises native fork support, capture the source's committed `HEAD` after any dirty
+  source acknowledgement, then persist a target-doc `forkOperation` before returning. Create the
+  worktree from that exact commit, run setup, and invoke ACP fork from the new cwd in the background.
+  The target is an independent root Session (no `parentSessionId`) and must not publish Session meta
+  until the final local commit; failures terminate ACP, remove the worktree/branch, and retain a
+  durable failed operation receipt. Retries reuse the caller-supplied target Session id and must not
+  duplicate side effects. Startup recovery fail-closes interrupted preparing operations. Because a
+  preparing target publishes no Session meta until its final commit, the repo meta index cannot name
+  the interrupted operations — recovery discovers them from the machine-local marker store
+  (`session-fork-operation-store.ts`), recorded fail-closed at accept (before the target doc exists)
+  and cleared only after the final commit/rollback persists. The marker carries the worktree-cleanup
+  payload, so recovery never opens the source doc. A marker surviving startup is by construction an
+  anomaly (clean success clears it in the same lock as the commit), so recovery always opens the
+  named target doc and judges from it with the client's own terminal criteria (failed receipt, or
+  cleared flag plus cloned-history origin notice — never the meta record, whose write is not
+  flush-atomic with the doc's; the saga commits doc writes first — history BEFORE the flag clear —
+  and publishes meta last so a durable `acpSessionId` implies the doc writes landed). A stale
+  preparing flag with landed history is cleared and persisted, or the client's fork observer can
+  reach neither terminal branch and waits forever. Doc-landed-but-meta-missing (crash inside the
+  commit block) is repaired by republishing meta from the marker payload (`title`, `branchName`,
+  cleanup fields) with `acpSessionId` absent — the session stays visible and complete except the
+  ACP resume identity. Race discipline mirrors the
+  speculative-worktree sweep: accept, saga finalize, and recovery all hold `withForkOperationLock`
+  per target, recovery re-reads the marker inside the lock, and liveness comes from the service's
+  in-memory active-operation set — never from timestamps. Recovery must never enumerate session
+  rooms or open docs to find candidates: each open joins the room and pulls its stream, so a full
+  scan is O(all historical sessions) of Streams subscriptions at every daemon start, and it must
+  never `cleanSessionDoc` a doc it did not exclusively own (see `../lib/loro/AGENTS.md`).
 - `session-edit-and-resend-service.ts` owns same-Lody-session replacement of the last normal User
   turn for builtin Codex/Claude. Prepare provider `forkAtTurn` (or `session/new` for the first
   User) before cancelling the exact active turn, then wait for old ownership release before one
@@ -185,9 +268,12 @@ delegation proofs or a shared-machine gate without a new product and security de
   `session/create` payload is transient, resume/dispatch resolve from agent config/project,
   and the legacy row is fallback/cleanup only.
 - Resuming a Session on a local project must use the workspace's current branch as-is, including
-  worktree mode. Branch selection may resolve and check out a branch during the initial
-  `session/create`, but an ACP restore must never prepare or switch back to the Session's recorded
-  branch.
+  worktree mode. A legacy direct local Session can re-enter `session/create` when no ACP session is
+  resumable; a non-empty persisted `acpSessionId` proves prior execution, so its stored
+  `project.branch` is historical state, not a checkout request. Initial `session/create` writes
+  `project` metadata before dispatch but has no ACP session id, and must retain an explicitly
+  requested branch. ACP restore or legacy direct-session reinitialization must never switch back to
+  the Session's recorded branch.
 - `turn-post-processing-service.ts` — post-turn work (titles, notifications).
 - `session-access-policy.ts` — local-first dispatch access precheck (optimistic-allow
   cache, D11). It may allow owner-cached turns from the catalog snapshot, deny

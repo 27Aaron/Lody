@@ -1,6 +1,6 @@
 import { useMemo, type ReactNode } from 'react';
 import { useAtomValue } from 'jotai';
-import { ListChecks, ShieldAlert, Zap } from 'lucide-react';
+import { ListChecks, Plus, ShieldAlert, Zap } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { getAllAgentConfigAtom } from '@/atoms';
@@ -19,10 +19,21 @@ import {
 import type { AcpSessionSelectOption } from '@/components/shared/acp-session-select';
 import type { AgentSelection } from '@/components/shared/agent-selector';
 import { orderAcpConfigOptionSelectors } from '@/lib/acp-selector-order';
+import {
+  AGENT_ROLE_UNAVAILABLE_REASON_KEYS,
+  type ComposerAgentRoleItem,
+} from '@/lib/composer-agent-roles';
+import { shouldOfferOptionSearch } from '@/lib/fuzzy-option-filter';
+import { useKeyboardAwareSheet } from '@/hooks/use-keyboard-aware-scroll-into-view';
 import { cn } from '@/lib/utils';
 import { Drawer, DrawerContent, DrawerDescription, DrawerTitle } from '@/ui/drawer';
 import { Switch } from '@/ui/switch';
-import { classifyPermissionModeFace, type MachineId } from '@lody/shared';
+import {
+  classifyPermissionModeFace,
+  getAgentRoleEmoji,
+  type AgentRoleId,
+  type MachineId,
+} from '@lody/shared';
 import {
   MobileInlinePicker,
   MobileInlinePickerCoordinator,
@@ -35,7 +46,7 @@ import {
  * `MobileRunConfigButton`, it consolidates the run knobs that used to be
  * split across the composer footer + below rows into one vertical form:
  *
- *   Agent · Model · Reasoning · Permission · Plan · Fast
+ *   Agent · Model · Interaction · Reasoning · Permission · Plan · Fast
  *
  * Shared by the in-session composer and the mobile new-chat sheet so both
  * surfaces pick models the same way. Rows derive options from the same
@@ -44,8 +55,8 @@ import {
  *
  * - Agent: read-only when `agentLocked` (mid-session); a picker while empty
  *   or on new-chat. Options are scoped by `allowedMachineIds` when set.
- * - Model / Reasoning / Permission: inline pickers (full names live here —
- *   the button face only shows an icon / short label).
+ * - Model / Interaction / Reasoning / Permission: inline pickers (full names
+ *   live here — the button face only shows an icon / short label).
  * - Plan / Fast: labelled switch rows.
  */
 export type MobileRunConfigSheetProps = {
@@ -69,6 +80,23 @@ export type MobileRunConfigSheetProps = {
   configOptionSelectors?: AcpConfigOptionSelector[];
   configOptionValues?: Record<string, AcpConfigOptionValue>;
   onConfigOptionChange?: (configId: string, value: AcpConfigOptionValue) => void;
+  /**
+   * Agent Roles for the machine this chat starts on, as the row above Agent.
+   *
+   * Omit to leave the row out: a surface where the agent cannot change has
+   * nothing a Role could apply. Mobile deliberately has no detail pane and no
+   * create action — this is the picker, and a Role's full binding is read on
+   * desktop or in Settings.
+   */
+  agentRoles?: {
+    items: ReadonlyArray<ComposerAgentRoleItem>;
+    /** The Role the current configuration still IS, not merely the last picked. */
+    selectedRoleId: AgentRoleId | null;
+    /** `null` clears the Role and leaves the configuration exactly as it stands. */
+    onSelect: (roleId: AgentRoleId | null) => void;
+    /** Opens the Role editor seeded with what the composer is set to right now. */
+    onCreate?: () => void;
+  };
 };
 
 export function MobileRunConfigSheet({
@@ -78,10 +106,19 @@ export function MobileRunConfigSheet({
 }: MobileRunConfigSheetProps) {
   const { t } = useTranslation();
   const title = t('chat.runConfig.title', 'Run configuration');
+
+  /* This sheet's rows OPEN pickers with search fields (Model above all, which a
+     provider can fill with dozens of entries). Tapping one puts the caret at the
+     bottom of the screen, exactly where the soft keyboard lands. */
+  const keyboard = useKeyboardAwareSheet();
+
   return (
     <Drawer open={open} onOpenChange={onOpenChange} repositionInputs={false}>
       <DrawerContent
-        className="h-auto! max-h-[85dvh]! rounded-t-2xl border-border/60"
+        className={cn(
+          'h-auto! max-h-[85dvh]! rounded-t-2xl border-border/60',
+          keyboard.contentClassName
+        )}
         onCloseAutoFocus={(event) => event.preventDefault()}
       >
         <DrawerTitle className="sr-only">{title}</DrawerTitle>
@@ -91,7 +128,11 @@ export function MobileRunConfigSheet({
             {title}
           </h2>
         </header>
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-[calc(16px+var(--safe-area-bottom,0px))] pt-2">
+        <div
+          ref={keyboard.scrollRef}
+          className="min-h-0 flex-1 overflow-y-auto px-4 pt-2"
+          style={keyboard.scrollStyle}
+        >
           <MobileInlinePickerCoordinator>
             <MobileRunConfigSheetRows {...contentProps} />
           </MobileInlinePickerCoordinator>
@@ -113,6 +154,14 @@ function permissionModeIcon(modeId: string | null): ReactNode {
   return getPermissionModeIcon(modeId);
 }
 
+/* The picker carries strings, so "no Role" needs a value of its own. Not the
+   empty string: an option with a falsy value is indistinguishable from "nothing
+   selected" in the picker's own comparisons. `__create__` is the same trick for
+   the one row that is an ACTION rather than a value — the desktop submenu ends
+   with the same entry. */
+const ROLE_NONE_VALUE = '__none__';
+const ROLE_CREATE_VALUE = '__create__';
+
 type MobileRunConfigSheetRowsProps = Omit<MobileRunConfigSheetProps, 'open' | 'onOpenChange'>;
 
 function MobileRunConfigSheetRows({
@@ -129,17 +178,83 @@ function MobileRunConfigSheetRows({
   configOptionSelectors = [],
   configOptionValues,
   onConfigOptionChange,
+  agentRoles,
 }: MobileRunConfigSheetRowsProps) {
   const { t } = useTranslation();
   const executorConfigs = useAtomValue(getAllAgentConfigAtom);
 
   const {
     modelSelectors,
+    interactionModeSelectors,
+    permissionModeSelectors,
     modeSelectors,
     thoughtLevelSelectors,
     planModeSelectors,
     fastModeSelectors,
+    otherSelectors,
   } = useMemo(() => orderAcpConfigOptionSelectors(configOptionSelectors), [configOptionSelectors]);
+  const extraSelectSelectors = useMemo(
+    () =>
+      otherSelectors.filter(
+        (selector): selector is AcpSelectConfigOptionSelector => selector.type === 'select'
+      ),
+    [otherSelectors]
+  );
+
+  /* ── Role (the row above Agent, because a Role ANSWERS every row under it) ──
+     `None` leads the list: leaving a Role clears the NAME, not the
+     configuration, and that is not the same gesture as picking one. An
+     unavailable Role stays listed and disabled, carrying its reason, so a Role
+     that cannot run is visibly broken rather than missing. */
+  const roleNoneLabel = t('chat.runConfig.roles.none', 'None');
+  const roleOptions = useMemo<MobileInlinePickerOption<string>[]>(() => {
+    if (!agentRoles) return [];
+    return [
+      {
+        value: ROLE_NONE_VALUE,
+        label: roleNoneLabel,
+        searchText: roleNoneLabel,
+        // An EMPTY glyph, not a missing one: the picker only renders its
+        // fixed-size icon box when an option has an icon, so without this the
+        // one row with no emoji would start its label further left than every
+        // Role under it.
+        icon: <span aria-hidden="true" />,
+      },
+      ...agentRoles.items.map(({ role, availability }) => {
+        // Listed either way, so the reason is what makes a disabled row
+        // readable rather than broken-looking.
+        const reason =
+          availability.kind === 'unavailable'
+            ? t(AGENT_ROLE_UNAVAILABLE_REASON_KEYS[availability.reason])
+            : null;
+        return {
+          value: role.id as string,
+          label: role.name,
+          searchText: role.name,
+          icon: (
+            <span className="text-base leading-none" aria-hidden="true">
+              {getAgentRoleEmoji(role)}
+            </span>
+          ),
+          disabled: reason !== null,
+          ...(reason ? { description: reason, disabledReason: reason } : {}),
+        };
+      }),
+      ...(agentRoles.onCreate
+        ? [
+            {
+              value: ROLE_CREATE_VALUE,
+              label: t('chat.runConfig.roles.create', 'New role'),
+              searchText: t('chat.runConfig.roles.create', 'New role'),
+              icon: <Plus className="h-3.5 w-3.5" aria-hidden="true" />,
+            },
+          ]
+        : []),
+    ];
+  }, [agentRoles, roleNoneLabel, t]);
+  const selectedRole = agentRoles?.selectedRoleId
+    ? agentRoles.items.find((item) => item.role.id === agentRoles.selectedRoleId)?.role
+    : undefined;
 
   /* ── Agent (options scoped by allowedMachineIds when provided) ── */
   const agentOptions = useMemo<MobileInlinePickerOption<string>[]>(() => {
@@ -170,8 +285,7 @@ function MobileRunConfigSheetRows({
     () =>
       agentSelection
         ? executorConfigs.find(
-            (cfg) =>
-              cfg.id === agentSelection.agentId && cfg.machineId === agentSelection.machineId
+            (cfg) => cfg.id === agentSelection.agentId && cfg.machineId === agentSelection.machineId
           )
         : null,
     [agentSelection, executorConfigs]
@@ -202,6 +316,32 @@ function MobileRunConfigSheetRows({
   const modelLabel = useMemo(
     () => modelPickerOptions.find((opt) => opt.value === modelValue)?.label ?? modelValue,
     [modelPickerOptions, modelValue]
+  );
+
+  /* ── Provider-specific interaction mode (for example Grok Agent / Plan / Ask) ── */
+  const interactionSelector = interactionModeSelectors[0];
+  const interactionValue = interactionSelector
+    ? ((resolveConfigOptionValue(
+        interactionSelector,
+        configOptionValues?.[interactionSelector.configId]
+      ) as string) ?? null)
+    : null;
+  const interactionOptions = useMemo<MobileInlinePickerOption<string>[]>(
+    () =>
+      (interactionSelector?.options ?? []).map((option) => ({
+        value: option.value,
+        label: option.label,
+        searchText: option.label,
+        description: option.description,
+        disabled: option.disabled,
+      })),
+    [interactionSelector]
+  );
+  const interactionLabel = useMemo(
+    () =>
+      interactionOptions.find((option) => option.value === interactionValue)?.label ??
+      interactionValue,
+    [interactionOptions, interactionValue]
   );
 
   /* ── Reasoning / thought level (first thought-level select selector) ── */
@@ -235,9 +375,15 @@ function MobileRunConfigSheetRows({
   );
 
   /* ── Permission / mode (modeOptions first, else the mode selector) ── */
-  const modeConfigSelector: AcpSelectConfigOptionSelector | undefined = modeSelectors[0];
+  const explicitPermissionSelector = permissionModeSelectors[0];
+  const modeConfigSelector: AcpSelectConfigOptionSelector | undefined =
+    explicitPermissionSelector ?? modeSelectors[0];
   const permissionOptions = useMemo<MobileInlinePickerOption<string>[]>(() => {
-    const source = modeOptions.length > 0 ? modeOptions : (modeConfigSelector?.options ?? []);
+    const source = explicitPermissionSelector
+      ? explicitPermissionSelector.options
+      : modeOptions.length > 0
+        ? modeOptions
+        : (modeConfigSelector?.options ?? []);
     return source.map((opt) => ({
       value: opt.value,
       label: opt.label,
@@ -246,16 +392,16 @@ function MobileRunConfigSheetRows({
       disabled: opt.disabled,
       icon: permissionModeIcon(opt.value),
     }));
-  }, [modeConfigSelector, modeOptions]);
+  }, [explicitPermissionSelector, modeConfigSelector, modeOptions]);
   const permissionValue =
-    modeOptions.length > 0
-      ? selectedModeId
-      : modeConfigSelector
+    explicitPermissionSelector || modeOptions.length === 0
+      ? modeConfigSelector
         ? ((resolveConfigOptionValue(
             modeConfigSelector,
             configOptionValues?.[modeConfigSelector.configId]
           ) as string) ?? null)
-        : null;
+        : null
+      : selectedModeId;
   const permissionLabel = useMemo(
     () => permissionOptions.find((opt) => opt.value === permissionValue)?.label ?? null,
     [permissionOptions, permissionValue]
@@ -271,8 +417,11 @@ function MobileRunConfigSheetRows({
     ? resolveOnOffConfigOptionEnabled(fastSelector, configOptionValues?.[fastSelector.configId])
     : false;
 
+  const roleRowLabel = t('chat.runConfig.roles.label', 'Role');
   const agentLabel = t('chat.agentSelector.placeholder', 'Agent');
   const modelRowLabel = t('chat.runConfig.modelLabel', 'Model');
+  const modelSearchPlaceholder = t('chat.runConfig.modelSearchPlaceholder', 'Search models');
+  const modelSearchEmptyLabel = t('chat.runConfig.modelSearchEmpty', 'No models match');
   const reasoningLabel = t('chat.runConfig.reasoningLabel', 'Reasoning');
   const permissionRowLabel = t('chat.runConfig.permissionLabel', 'Permission');
   const planRowLabel = t('chat.mobileNewChat.planModeLabel', 'Plan');
@@ -280,6 +429,42 @@ function MobileRunConfigSheetRows({
 
   return (
     <div className="flex flex-col gap-1">
+      {/* Rendered whenever the caller offers Roles at all, even with none to
+          list: the row then reads `None` and its list is the way to make the
+          first one, which is what the desktop row does too. */}
+      {agentRoles ? (
+        <RunConfigRow label={roleRowLabel}>
+          <MobileInlinePicker<string>
+            id="run-config-role"
+            value={agentRoles.selectedRoleId ?? ROLE_NONE_VALUE}
+            onChange={(value) => {
+              if (value === ROLE_CREATE_VALUE) {
+                agentRoles.onCreate?.();
+                return;
+              }
+              agentRoles.onSelect(value === ROLE_NONE_VALUE ? null : (value as AgentRoleId));
+            }}
+            options={roleOptions}
+            ariaLabel={roleRowLabel}
+            searchable={shouldOfferOptionSearch(roleOptions.length)}
+            triggerContent={
+              <>
+                {/* No reserved slot here: the trigger is one value, not a list,
+                    so `None` reads better flush against the row than indented
+                    past an empty box. The OPTIONS keep the slot, because there
+                    the labels are read as a column. */}
+                {selectedRole ? (
+                  <span className="text-base leading-none" aria-hidden="true">
+                    {getAgentRoleEmoji(selectedRole)}
+                  </span>
+                ) : null}
+                <span className="truncate">{selectedRole?.name ?? roleNoneLabel}</span>
+              </>
+            }
+          />
+        </RunConfigRow>
+      ) : null}
+
       {showAgent ? (
         <RunConfigRow label={agentLabel}>
           <MobileInlinePicker<string>
@@ -296,7 +481,7 @@ function MobileRunConfigSheetRows({
             }}
             options={agentOptions}
             ariaLabel={agentLabel}
-            searchable={agentOptions.length > 5}
+            searchable={shouldOfferOptionSearch(agentOptions.length)}
             disabled={agentRowLocked}
             triggerContent={
               <>
@@ -316,6 +501,40 @@ function MobileRunConfigSheetRows({
         </RunConfigRow>
       ) : null}
 
+      {extraSelectSelectors.map((selector) => {
+        const selectedValue =
+          (resolveConfigOptionValue(selector, configOptionValues?.[selector.configId]) as string) ??
+          null;
+        const pickerOptions: MobileInlinePickerOption<string>[] = selector.options.map(
+          (option) => ({
+            value: option.value,
+            label: option.label,
+            searchText: option.label,
+            description: option.description,
+            disabled: option.disabled,
+          })
+        );
+        const selectedLabel =
+          pickerOptions.find((option) => option.value === selectedValue)?.label ?? selectedValue;
+        const locked = selector.configId === 'agent_preset' && agentLocked;
+        return (
+          <RunConfigRow key={selector.configId} label={selector.label}>
+            <MobileInlinePicker<string>
+              id={`run-config-${selector.configId}`}
+              value={selectedValue}
+              onChange={(nextValue) =>
+                onConfigOptionChange?.(selector.configId, nextValue as AcpConfigOptionValue)
+              }
+              options={pickerOptions}
+              ariaLabel={selector.label}
+              searchable={shouldOfferOptionSearch(pickerOptions.length)}
+              disabled={locked}
+              triggerContent={<span className="truncate">{selectedLabel ?? selector.label}</span>}
+            />
+          </RunConfigRow>
+        );
+      })}
+
       {modelPickerOptions.length > 0 ? (
         <RunConfigRow label={modelRowLabel}>
           <MobileInlinePicker<string>
@@ -330,8 +549,30 @@ function MobileRunConfigSheetRows({
             }}
             options={modelPickerOptions}
             ariaLabel={modelRowLabel}
-            searchable={modelPickerOptions.length > 5}
+            /* A provider can publish dozens of models, so this row is the one
+               that most needs typing at — name the search and say when nothing
+               matched rather than leaving an unlabelled field and a dash. */
+            searchable={shouldOfferOptionSearch(modelPickerOptions.length)}
+            searchPlaceholder={modelSearchPlaceholder}
+            emptyText={modelSearchEmptyLabel}
             triggerContent={<span className="truncate">{modelLabel ?? modelRowLabel}</span>}
+          />
+        </RunConfigRow>
+      ) : null}
+
+      {interactionSelector && interactionOptions.length > 0 ? (
+        <RunConfigRow label={interactionSelector.label}>
+          <MobileInlinePicker<string>
+            id="run-config-interaction"
+            value={interactionValue}
+            onChange={(value) =>
+              onConfigOptionChange?.(interactionSelector.configId, value as AcpConfigOptionValue)
+            }
+            options={interactionOptions}
+            ariaLabel={interactionSelector.label}
+            triggerContent={
+              <span className="truncate">{interactionLabel ?? interactionSelector.label}</span>
+            }
           />
         </RunConfigRow>
       ) : null}
@@ -357,10 +598,11 @@ function MobileRunConfigSheetRows({
             id="run-config-permission"
             value={permissionValue}
             onChange={(value) => {
-              if (modeOptions.length > 0) {
-                onModeChange(value);
-              } else if (modeConfigSelector) {
+              if (explicitPermissionSelector || modeOptions.length === 0) {
+                if (!modeConfigSelector) return;
                 onConfigOptionChange?.(modeConfigSelector.configId, value as AcpConfigOptionValue);
+              } else {
+                onModeChange(value);
               }
             }}
             options={permissionOptions}

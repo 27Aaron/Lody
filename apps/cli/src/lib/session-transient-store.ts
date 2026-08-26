@@ -95,11 +95,6 @@ export type TurnPhase =
       userTurnId?: string;
     };
 
-export type CodexProposedPlanSnapshot = {
-  plan: Extract<MessageContent, { type: 'proposed_plan' }>;
-  targetEntryId?: string;
-};
-
 // ---------------------------------------------------------------------------
 // Per-session state bag
 // ---------------------------------------------------------------------------
@@ -125,11 +120,6 @@ export interface SessionState {
   acpFlushCountInTurn: number;
   acpFlushConsecutiveFailures: number;
 
-  // ── Codex proposed plan streaming ──────────────────────────────────────
-  codexProposedPlanBuffer: Map<string, CodexProposedPlanSnapshot>;
-  codexProposedPlanFlushInFlight: Promise<void> | null;
-  codexProposedPlanFlushTimer: NodeJS.Timeout | null;
-
   // ── Context window usage (throttled) ────────────────────────────────────
   contextWindowUsageBuffer: SessionContextWindowUsage | null;
   contextWindowUsageTimer: NodeJS.Timeout | null;
@@ -145,13 +135,13 @@ export interface SessionState {
   // ── Codex image generation uploads ──────────────────────────────────────
   // Session-scoped on purpose: image_generation_end may arrive after prompt return,
   // and clearing this with turn state would detach the generated image from its turn.
-  codexImageGenerationTurnIds: Map<string, string | null>;
+  imageGenerationTurnIds: Map<string, string | null>;
   // callId -> in-flight upload promise. Doubles as the dedupe set (callId presence
   // means an upload is in flight) and the drainable set (values() for flush).
-  codexImageGenerationUploads: Map<string, Promise<void>>;
-  codexImageGenerationUploadedCallIds: Set<string>;
-  codexImageGenerationActiveCallIds: Set<string>;
-  codexImageGenerationActivityStatusChain: Promise<void>;
+  imageGenerationUploads: Map<string, Promise<void>>;
+  imageGenerationUploadedCallIds: Set<string>;
+  imageGenerationActiveCallIds: Set<string>;
+  imageGenerationActivityStatusChain: Promise<void>;
 
   // ── Permission timing (per-turn, accumulated) ───────────────────────────
   permissionWaitMs: number;
@@ -181,20 +171,17 @@ function createSessionState(): SessionState {
     acpFlushTimer: null,
     acpFlushCountInTurn: 0,
     acpFlushConsecutiveFailures: 0,
-    codexProposedPlanBuffer: new Map(),
-    codexProposedPlanFlushInFlight: null,
-    codexProposedPlanFlushTimer: null,
     contextWindowUsageBuffer: null,
     contextWindowUsageTimer: null,
     pendingContextWindowHandlers: new Set(),
     pendingUsageHandlers: new Set(),
     pendingHistoryNoticeHandlers: new Set(),
     historyNoticePersistChain: Promise.resolve(),
-    codexImageGenerationTurnIds: new Map(),
-    codexImageGenerationUploads: new Map(),
-    codexImageGenerationUploadedCallIds: new Set(),
-    codexImageGenerationActiveCallIds: new Set(),
-    codexImageGenerationActivityStatusChain: Promise.resolve(),
+    imageGenerationTurnIds: new Map(),
+    imageGenerationUploads: new Map(),
+    imageGenerationUploadedCallIds: new Set(),
+    imageGenerationActiveCallIds: new Set(),
+    imageGenerationActivityStatusChain: Promise.resolve(),
     permissionWaitMs: 0,
     pendingUnread: false,
     lastActivityMs: Date.now(),
@@ -407,14 +394,11 @@ export class SessionTransientStore {
       state.acpUpdateBuffer.length > 0 ||
       state.acpFlushInFlight !== null ||
       state.acpFlushTimer !== null ||
-      state.codexProposedPlanBuffer.size > 0 ||
-      state.codexProposedPlanFlushInFlight !== null ||
-      state.codexProposedPlanFlushTimer !== null ||
       state.contextWindowUsageBuffer !== null ||
       state.contextWindowUsageTimer !== null ||
       state.pendingContextWindowHandlers.size > 0 ||
       state.pendingHistoryNoticeHandlers.size > 0 ||
-      state.codexImageGenerationUploads.size > 0 ||
+      state.imageGenerationUploads.size > 0 ||
       state.pendingUnread
     );
   }
@@ -454,13 +438,6 @@ export class SessionTransientStore {
     // naturally (they self-clean in their finally callback). cleanup() relies on
     // collecting these promises to await them before shutdown. Only full session
     // deletion (deleteSession) should discard them.
-    state.codexProposedPlanBuffer.clear();
-    if (state.codexProposedPlanFlushTimer) {
-      clearTimeout(state.codexProposedPlanFlushTimer);
-      state.codexProposedPlanFlushTimer = null;
-    }
-    // Note: codexProposedPlanFlushInFlight follows the same lifecycle as ACP flushes.
-
     if (state.contextWindowUsageTimer) {
       clearTimeout(state.contextWindowUsageTimer);
       state.contextWindowUsageTimer = null;
@@ -468,7 +445,7 @@ export class SessionTransientStore {
     state.contextWindowUsageBuffer = null;
     // Note: pending async handlers are NOT cleared here. They are drained explicitly by
     // finalizeACPState()/flushSessionUsage(). Clearing them prematurely would drop writes.
-    state.codexImageGenerationActiveCallIds.clear();
+    state.imageGenerationActiveCallIds.clear();
     state.permissionWaitMs = 0;
     state.pendingUnread = false;
   }
@@ -491,10 +468,6 @@ export class SessionTransientStore {
     if (state.acpFlushTimer) {
       clearTimeout(state.acpFlushTimer);
     }
-    if (state.codexProposedPlanFlushTimer) {
-      clearTimeout(state.codexProposedPlanFlushTimer);
-    }
-
     this.sessions.delete(sessionId);
   }
 }

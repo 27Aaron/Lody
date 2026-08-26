@@ -9,6 +9,8 @@ import {
   type WorktreeCleanupScriptConfig,
   type WorktreeSetupScriptConfig,
   WorkspaceId,
+  type McpServerId,
+  type SessionTurnInputConfig,
 } from '@lody/shared';
 import type { SessionActivePresencePhase } from '@/lib/loro/session-active-presence';
 /**
@@ -21,6 +23,12 @@ export interface SessionConfig {
   agentConfigId?: AgentConfigId;
   agentCliType: AgentConfigCliType;
   agentType: string;
+  /** Config selected by the driving turn and carried into ACP session startup. */
+  configOptionValues?: SessionTurnInputConfig['configOptionValues'];
+  /** Selection carried by the dispatching turn; ACP startup must not re-read history for it. */
+  mcpServerIds: McpServerId[];
+  /** Whether this driving Turn mounts the built-in Lody Task MCP tools. */
+  taskToolsEnabled: boolean;
   /** Launch spec for this execution request; durable default lives on the agent config. */
   customAcp?: CustomAcpLaunchSpec;
   /** Advanced runtime binary override for builtin Claude/Codex. */
@@ -39,6 +47,10 @@ export interface SessionConfig {
   branch?: string;
   /** Existing session branch to reattach when restoring a cleaned-up archived worktree. */
   restoreBranchName?: string;
+  /** Internally captured, verified commit used as the exact worktree start point. */
+  worktreeStartPoint?: string;
+  /** Let a higher-level saga publish worktree metadata with its final commit. */
+  deferWorktreeMetaPersistence?: boolean;
 
   // Worktree fields
   /** Repository identifier for worktree management */

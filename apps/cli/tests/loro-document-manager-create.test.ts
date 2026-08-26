@@ -3,11 +3,11 @@ import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import {
-  LocalLoroDataPlaneServer,
   LOCAL_LORO_DATA_PLANE_PROTOCOL_VERSION,
   type LocalLoroDataPlaneServerMessage,
-  type WorkspaceId,
-} from '@lody/shared';
+} from '@lody/shared/local-loro-data-plane';
+import { LocalLoroDataPlaneServer } from '@lody/shared/local-loro-data-plane-server';
+import type { WorkspaceId } from '@lody/shared';
 
 import type { Logger } from '../src/utils/logger';
 
@@ -33,6 +33,7 @@ vi.mock('@lody/shared', async (importOriginal) => {
     createLoroStreamsTokenProvider: vi.fn(() => ({
       getToken: mocks.streamsGetToken,
       getGatewayBaseUrl: () => mocks.streamsGatewayBaseUrl,
+      getShardHostSuffix: () => undefined,
       invalidate: () => {},
       createAuthCallback: () => async () => 'streams-jwt',
     })),
@@ -98,6 +99,7 @@ const testStreamsTokens = {
   createTokenProvider: () => ({
     getToken: mocks.streamsGetToken,
     getGatewayBaseUrl: () => mocks.streamsGatewayBaseUrl,
+    getShardHostSuffix: () => undefined,
     invalidate: () => {},
     createAuthCallback: () => async () => 'streams-jwt',
   }),
@@ -650,6 +652,55 @@ describe('LoroDocumentManager.create degraded startup behavior', () => {
     await expect(confirmation).rejects.toThrow(
       'Remote Streams transport changed during document sync'
     );
+    await manager.cleanUp({ fast: true });
+  });
+
+  it('shares one Flock document sync between concurrent callers and starts a fresh one after', async () => {
+    process.env.LODY_LORO_AUTO_RECONNECT_INTERVAL_MS = '0';
+    const metaSub = createMetaSubscription();
+    let releaseSync!: () => void;
+    let markSyncStarted!: () => void;
+    const syncStarted = new Promise<void>((resolve) => {
+      markSyncStarted = resolve;
+    });
+    const syncRelease = new Promise<void>((resolve) => {
+      releaseSync = resolve;
+    });
+    const sync = vi.fn(async () => {
+      markSyncStarted();
+      await syncRelease;
+    });
+    const repo = {
+      destroy: vi.fn(async () => {}),
+      joinMetaRoom: vi.fn(async () => metaSub),
+      reconnect: vi.fn(async () => {}),
+      sync,
+    } as unknown as LoroDocumentManager['repo'];
+    const manager = new LoroDocumentManager({
+      repo,
+      workspaceId: 'workspace-flock-sync-coalesce' as WorkspaceId,
+      userId: 'user-1',
+      metaSub,
+      logger: createSilentLogger(),
+      initialTransportStatus: 'connected',
+      initialMetaSyncPromise: Promise.resolve(true),
+      initialMetaSyncCompleted: true,
+    });
+
+    const docId = 'workspace-flock-sync-coalesce:wf:workspace';
+    const first = manager.syncFlockDocOrThrow(docId, { reason: 'a' });
+    await syncStarted;
+    const joined = manager.syncFlockDocOrThrow(docId, { reason: 'b' });
+    // A different document is never folded into the in-flight attempt.
+    const other = manager.syncFlockDocOrThrow(`${docId}-other`, { reason: 'c' });
+    expect(sync).toHaveBeenCalledTimes(2);
+
+    releaseSync();
+    await Promise.all([first, joined, other]);
+
+    // The entry is dropped once it settles, so a later caller syncs for real.
+    await manager.syncFlockDocOrThrow(docId, { reason: 'd' });
+    expect(sync).toHaveBeenCalledTimes(3);
     await manager.cleanUp({ fast: true });
   });
 

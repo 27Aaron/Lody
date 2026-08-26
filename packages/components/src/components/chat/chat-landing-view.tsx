@@ -1,13 +1,19 @@
+import { useCallback, useRef } from 'react';
 import type { ClipboardEvent, KeyboardEvent, ReactNode, Ref } from 'react';
+import type { Mention as MentionRange } from '@/ui/mention/index';
+import type { CombinedMentionTextareaHandle } from '@/components/mentions/combined-mention-textarea';
+import type { PersistedMentionRange } from '@/components/mentions/mention-persistence';
 
 import type { AcpCommandSummary, AgentConfigCliType } from '@lody/shared';
 import { cn } from '@/lib/utils';
+import { useSessionMentionDropZone } from '@/hooks/use-session-mention-drag';
 import { Button } from '@/ui/button';
 import {
   ChatComposer,
   type ChatComposerFileItem,
   type ChatComposerImageItem,
 } from '@/components/chat/chat-composer';
+import type { AttachmentAddMenuMcp } from '@/components/chat/attachment-add-menu';
 import { ErrorBoundary } from '@/components/error-boundary';
 import type { MentionProjectSource } from '@/components/mentions/mention-project-file-source';
 import { ArrowUp, Bug, Download, ExternalLink, Loader2, Settings } from 'lucide-react';
@@ -57,30 +63,26 @@ export interface ChatLandingViewProps {
   pastedTextDrafts?: PastedTextDraft[];
   /** Callback when pasted text draft ranges change */
   onPastedTextDraftsChange?: (drafts: PastedTextDraft[]) => void;
+  onMentionRangesChange?: (ranges: MentionRange[]) => void;
+  persistedMentions?: readonly PersistedMentionRange[];
   /** Pending image drafts shown above the textarea */
   imageItems?: ChatComposerImageItem[];
-  /** Whether add-image button should be disabled */
-  imageAddDisabled?: boolean;
-  /** Aria label for add-image button */
-  imageAddAriaLabel?: string;
-  /** Callback when add-image button is clicked */
-  onImageAddClick?: () => void;
+  /** Whether the unified attachment picker should be disabled */
+  attachmentAddDisabled?: boolean;
+  /** Callback when the unified attachment picker is clicked */
+  onAttachmentAddClick?: () => void;
   /** Callback when a pending image is removed */
   onImageRemove?: (id: string) => void;
   /** Callback when retrying a failed image upload */
   onImageRetry?: (id: string) => void;
   /** Pending file (non-image) drafts shown above the textarea */
   fileItems?: ChatComposerFileItem[];
-  /** Whether the add-file menu item should be disabled */
-  fileAddDisabled?: boolean;
-  /** Aria label for the add-file action */
-  fileAddAriaLabel?: string;
-  /** Callback when the add-file menu item is clicked */
-  onFileAddClick?: () => void;
   /** Callback when a pending file is removed */
   onFileRemove?: (id: string) => void;
   /** Callback when retrying a failed file upload */
   onFileRetry?: (id: string) => void;
+  /** Per-turn MCP selection, rendered inside the composer's "+" menu. */
+  mcp?: AttachmentAddMenuMcp;
   /** @deprecated Use topSelector and footerSelector instead */
   selector?: ReactNode;
   /** Selector node displayed above the textarea (e.g., repo, branch) */
@@ -156,6 +158,29 @@ export interface ChatLandingViewProps {
   };
 }
 
+/**
+ * Landing-wide drop target for a session dragged out of the sidebar.
+ *
+ * Owned here rather than in `chat-landing.tsx` because nothing outside this
+ * layout needs it: the handle goes straight into the composer it renders, and
+ * the drop writes a mention into that composer's draft. Mobile gets the handle
+ * but no drop target — touch has no HTML5 drag.
+ */
+function useSessionMentionDrop(enabled: boolean) {
+  const mentionActionsRef = useRef<CombinedMentionTextareaHandle | null>(null);
+  const { dropZone, overlayActive } = useSessionMentionDropZone({
+    enabled,
+    onDropSessionId: useCallback((sessionId: string) => {
+      mentionActionsRef.current?.insertSessionMention(sessionId);
+    }, []),
+  });
+  return {
+    mentionActionsRef,
+    dropZone,
+    overlayActive,
+  };
+}
+
 export function ChatLandingView({
   tone,
   isMobile = false,
@@ -174,18 +199,17 @@ export function ChatLandingView({
   promptRef,
   pastedTextDrafts = [],
   onPastedTextDraftsChange,
+  onMentionRangesChange,
+  persistedMentions,
   imageItems = [],
-  imageAddDisabled = false,
-  imageAddAriaLabel,
-  onImageAddClick,
+  attachmentAddDisabled = false,
+  onAttachmentAddClick,
   onImageRemove,
   onImageRetry,
   fileItems = [],
-  fileAddDisabled = false,
-  fileAddAriaLabel,
-  onFileAddClick,
   onFileRemove,
   onFileRetry,
+  mcp,
   selector,
   topSelector,
   footerSelector,
@@ -218,6 +242,9 @@ export function ChatLandingView({
   errorLabels = {},
 }: ChatLandingViewProps) {
   const isDark = tone === 'dark';
+  const { mentionActionsRef, dropZone, overlayActive } = useSessionMentionDrop(
+    !isMobile && !submissionPending
+  );
 
   const {
     somethingWentWrong = 'Something went wrong',
@@ -348,7 +375,7 @@ export function ChatLandingView({
         placeholder={promptPlaceholder}
         disabled={submissionPending}
         className={cn(
-          'input-scrollbar mt-3 w-full resize-none rounded-lg border border-input-border/70 bg-input px-3 py-2 text-sm text-input-foreground placeholder:text-input-placeholder focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring'
+          'input-scrollbar mt-3 w-full resize-none rounded-lg border border-input-border/70 bg-input-field px-3 py-2 text-sm text-input-foreground placeholder:text-input-placeholder focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring'
         )}
       />
       {composerStatusMessage ? (
@@ -411,18 +438,18 @@ export function ChatLandingView({
         promptEnterKeyHint={promptEnterKeyHint}
         pastedTextDrafts={submissionPending ? [] : pastedTextDrafts}
         onPastedTextDraftsChange={submissionPending ? undefined : onPastedTextDraftsChange}
+        onMentionRangesChange={onMentionRangesChange}
+        mentionActionsRef={mentionActionsRef}
+        persistedMentions={persistedMentions}
         imageItems={submissionPending ? [] : imageItems}
-        imageAddDisabled={submissionPending || imageAddDisabled}
-        imageAddAriaLabel={imageAddAriaLabel}
-        onImageAddClick={onImageAddClick}
+        attachmentAddDisabled={submissionPending || attachmentAddDisabled}
+        onAttachmentAddClick={onAttachmentAddClick}
         onImageRemove={submissionPending ? undefined : onImageRemove}
         onImageRetry={submissionPending ? undefined : onImageRetry}
         fileItems={submissionPending ? [] : fileItems}
-        fileAddDisabled={submissionPending || fileAddDisabled}
-        fileAddAriaLabel={fileAddAriaLabel}
-        onFileAddClick={onFileAddClick}
         onFileRemove={submissionPending ? undefined : onFileRemove}
         onFileRetry={submissionPending ? undefined : onFileRetry}
+        mcp={mcp}
         topSelector={topSelector}
         footerSelector={footerSelector ?? selector}
         bottomBar={bottomBar}
@@ -451,6 +478,9 @@ export function ChatLandingView({
   return (
     <WebChatLandingScreen
       title={title}
+      dropActive={overlayActive}
+      dropKind="session-mention"
+      dropHandlers={dropZone.handlers}
       navRootRef={navRootRef}
       contextSwitch={contextSwitch}
       composer={composerNode}

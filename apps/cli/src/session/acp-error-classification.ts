@@ -84,6 +84,18 @@ export const getACPErrorUserMessage = (error: ParsedACPError): string => {
 export const isUpstreamApiACPError = (error: ParsedACPError): boolean =>
   /API Error:\s*(?:500|502|503|529)\b/.test(getACPDiagnosticText(error, error));
 
+export const isAcpSessionStorageIncompatibleError = (error: unknown): boolean => {
+  const diagnosticText = getACPDiagnosticText(error);
+  return (
+    /session artifact[\s\S]{0,1000}uses \.jsonl(?:\.zstd)?[\s\S]{0,1000}configured for compression/iu.test(
+      diagnosticText
+    ) ||
+    /session root[\s\S]{0,1000}contains both raw and Zstandard session artifacts/iu.test(
+      diagnosticText
+    )
+  );
+};
+
 export const isAgentDisconnectedError = (error: unknown): boolean => {
   const errorMessage = getACPDiagnosticText(error).toLowerCase();
   return (
@@ -132,6 +144,9 @@ export const mapACPErrorToFailureReason = (error: ParsedACPError): ChatFailedRea
       }
       if (isUpstreamApiACPError(error)) {
         return 'acp_upstream_api_error';
+      }
+      if (isAcpSessionStorageIncompatibleError(error)) {
+        return 'acp_session_storage_incompatible';
       }
       return 'acp_internal_error';
     case ACP_ERROR_CODES.RESOURCE_NOT_FOUND:

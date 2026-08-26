@@ -1,5 +1,6 @@
 import {
   CODEX_SPARK_LIMIT_ID,
+  normalizePersistedRateLimit,
   parseRateLimitEntryKey,
   resolveAgentBrandId,
   type AgentConfigCliType,
@@ -9,11 +10,8 @@ import {
 } from '@lody/shared';
 import { clamp } from './clamp';
 
-// Provider rate-limit windows Lody knows by name. Kept here (beside the legacy
-// window mapping below) so the duration↔label knowledge has one home instead of
-// being re-special-cased with bare magic numbers at each UI call site.
-export const FIVE_HOUR_WINDOW_MINS = 5 * 60;
-export const SEVEN_DAY_WINDOW_MINS = 7 * 24 * 60;
+export const FIVE_HOUR_WINDOW_SECONDS = 5 * 60 * 60;
+export const SEVEN_DAY_WINDOW_SECONDS = 7 * 24 * 60 * 60;
 
 export type MachineRateLimits = MachineViewMeta['raceLimits'];
 export type MachineRateLimitUsage = MachineRateLimits[string];
@@ -36,102 +34,49 @@ export type ContextWindowUsageData = {
 export type AgentRateLimitWindow = {
   usedPercent: number;
   remainingPercent: number;
-  windowDurationMins: number | null;
-  resetsAt: number | null;
+  windowDurationSeconds: number | null;
+  resetsAtEpochSeconds: number | null;
 };
 
 const clampPercentage = (value: number): number => clamp(value, [0, 100]);
 
-export function normalizeRateLimitUsedPercent(
-  value: number | null | undefined,
-  cliType: string
-): number | null {
+export function normalizeRateLimitUsedPercent(value: number | null | undefined): number | null {
   if (value == null || !Number.isFinite(value)) return null;
-
-  // Claude's usage endpoint reports a 0..1 fraction, while Codex reports a
-  // 0..100 percentage. Keep accepting old/mock percentage-shaped Claude data.
-  if (cliType === 'claude' && value >= 0 && value <= 1) {
-    return clampPercentage(value * 100);
-  }
-  if (cliType !== 'codex' && value > 0 && value < 1) {
-    return clampPercentage(value * 100);
-  }
   return clampPercentage(value);
 }
 
-export function getRateLimitRemainingPercent(
-  value: number | null | undefined,
-  cliType: string
-): number | null {
-  const usedPercent = normalizeRateLimitUsedPercent(value, cliType);
+export function getRateLimitRemainingPercent(value: number | null | undefined): number | null {
+  const usedPercent = normalizeRateLimitUsedPercent(value);
   return usedPercent == null ? null : clampPercentage(100 - usedPercent);
 }
 
-export function getAgentRateLimitWindows(
-  limits: MachineRateLimitUsage,
-  cliType: string
-): AgentRateLimitWindow[] {
-  if (limits.apiUnavailable) return [];
-
-  if (Array.isArray(limits.windows)) {
-    return limits.windows.flatMap((window) => {
-      if (!Number.isFinite(window.usedPercent)) return [];
-      const usedPercent = clampPercentage(window.usedPercent);
-      return [
-        {
-          usedPercent,
-          remainingPercent: clampPercentage(100 - usedPercent),
-          windowDurationMins:
-            window.windowDurationMins != null && Number.isFinite(window.windowDurationMins)
-              ? window.windowDurationMins
-              : null,
-          resetsAt: window.resetsAt,
-        },
-      ];
-    });
-  }
-
-  // Older Codex adapters stored the provider's only `primary` window in the
-  // fixed `fiveHour` field even when that window was weekly. Dynamic windows
-  // are authoritative above; for persisted single-window rows, preserve the
-  // provider's current weekly meaning instead of showing a false 5-hour label.
-  const hasLegacyCodexWeeklyWindow =
-    cliType === 'codex' && limits.fiveHour != null && limits.sevenDay == null;
-
-  const legacyWindows = [
-    {
-      value: limits.fiveHour,
-      windowDurationMins: hasLegacyCodexWeeklyWindow
-        ? SEVEN_DAY_WINDOW_MINS
-        : FIVE_HOUR_WINDOW_MINS,
-      resetsAt: limits.fiveHourResetAt,
-    },
-    {
-      value: limits.sevenDay,
-      windowDurationMins: SEVEN_DAY_WINDOW_MINS,
-      resetsAt: limits.sevenDayResetAt,
-    },
-  ];
-
-  return legacyWindows.flatMap((window) => {
-    const usedPercent = normalizeRateLimitUsedPercent(window.value, cliType);
+export function getAgentRateLimitWindows(limits: MachineRateLimitUsage): AgentRateLimitWindow[] {
+  return limits.windows.flatMap((window) => {
+    const usedPercent = normalizeRateLimitUsedPercent(window.usedPercent);
     if (usedPercent === null) return [];
     return [
       {
         usedPercent,
         remainingPercent: clampPercentage(100 - usedPercent),
-        windowDurationMins: window.windowDurationMins,
-        resetsAt: window.resetsAt,
+        windowDurationSeconds:
+          window.windowDurationSeconds != null && Number.isFinite(window.windowDurationSeconds)
+            ? window.windowDurationSeconds
+            : null,
+        resetsAtEpochSeconds: window.resetsAtEpochSeconds,
       },
     ];
   });
 }
 
-export function formatRateLimitWindowShortLabel(windowDurationMins: number | null): string {
-  if (windowDurationMins == null || !Number.isFinite(windowDurationMins)) return 'Usage';
-  if (windowDurationMins % (24 * 60) === 0) return `${windowDurationMins / (24 * 60)}d`;
-  if (windowDurationMins % 60 === 0) return `${windowDurationMins / 60}h`;
-  return `${windowDurationMins}m`;
+export function formatRateLimitWindowShortLabel(windowDurationSeconds: number | null): string {
+  if (windowDurationSeconds == null || !Number.isFinite(windowDurationSeconds)) return 'Usage';
+  if (windowDurationSeconds % (24 * 60 * 60) === 0) {
+    return `${windowDurationSeconds / (24 * 60 * 60)}d`;
+  }
+  if (windowDurationSeconds % (60 * 60) === 0) {
+    return `${windowDurationSeconds / (60 * 60)}h`;
+  }
+  return `${windowDurationSeconds / 60}m`;
 }
 
 export function getContextWindowUsageData(
@@ -162,7 +107,13 @@ export function canShowSubscriptionRateLimits({
   agentType: string;
   config?: Pick<AgentConfigMeta, 'brandId' | 'env'> | null;
 }): boolean {
-  if (cliType !== 'builtin' || (agentType !== 'claude' && agentType !== 'codex')) {
+  if (
+    cliType !== 'builtin' ||
+    (agentType !== 'claude' &&
+      agentType !== 'codex' &&
+      agentType !== 'grok' &&
+      agentType !== 'kimi')
+  ) {
     return false;
   }
   if (!config) return true;
@@ -190,14 +141,10 @@ export function getAgentRateLimitEntries(
   agentType: string
 ): AgentRateLimitEntry[] {
   return Object.entries(rateLimits ?? {})
-    .map(([key, limits]) => {
+    .flatMap(([key, value]) => {
       const parsed = parseRateLimitEntryKey(key);
-      return {
-        key,
-        limits,
-        cliType: parsed.cliType,
-        limitId: parsed.limitId,
-      };
+      const limits = normalizePersistedRateLimit(parsed.cliType, parsed.limitId, value);
+      return limits ? [{ key, limits, cliType: parsed.cliType, limitId: parsed.limitId }] : [];
     })
     .filter((entry) => entry.cliType === agentType);
 }

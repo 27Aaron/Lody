@@ -1,7 +1,12 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAtomValue } from 'jotai';
-import type { MachineAcpBinaryProgressMessage, ProviderSetupTask } from '@lody/shared';
+import {
+  machineSupportsProviderSetupProtocol,
+  type MachineAcpBinaryProgressMessage,
+  type MachineViewMeta,
+  type ProviderSetupTask,
+} from '@lody/shared';
 import { Loader2, RotateCcw, Trash2, XCircle } from 'lucide-react';
 
 import { AgentIcon } from '@/components/icons/agent-icon';
@@ -9,22 +14,33 @@ import { Button } from '@/ui/button';
 import { cn } from '@/lib/utils';
 import { activeWorkspaceRuntimeAtom } from '@/atoms/runtime';
 import { useMachineAcpBinaryProgress } from '@/hooks/use-machine-acp-binary-progress';
+import { useMachineOnlineStatus } from '@/hooks/use-machine-online-status';
 import { AcpAuthenticationPanel } from './acp-authentication-panel';
 import { labelForAgent } from './provider-row';
 
 export type ProviderSetupRowProps = {
   setup: ProviderSetupTask;
+  /** Undefined only while the target machine's meta has not loaded yet. */
+  machine: MachineViewMeta | undefined;
   onRetry: (setup: ProviderSetupTask) => Promise<void>;
   onDelete: (setup: ProviderSetupTask) => Promise<void>;
   className?: string;
 };
 
-export function ProviderSetupRow({ setup, onRetry, onDelete, className }: ProviderSetupRowProps) {
+export function ProviderSetupRow({
+  setup,
+  machine,
+  onRetry,
+  onDelete,
+  className,
+}: ProviderSetupRowProps) {
   const { t } = useTranslation();
   const [actionPending, setActionPending] = useState<'retry' | 'delete' | null>(null);
   const config = setup.config;
   const runtime = useAtomValue(activeWorkspaceRuntimeAtom);
   const runtimeProgress = useMachineAcpBinaryProgress(runtime, setup.machineId, config.agentType);
+  const machineOnline = useMachineOnlineStatus(setup.machineId) === 'online';
+  const supportsSetupProtocol = machineSupportsProviderSetupProtocol(machine);
   const active =
     setup.status === 'queued' ||
     setup.status === 'preparing-runtime' ||
@@ -34,6 +50,18 @@ export function ProviderSetupRow({ setup, onRetry, onDelete, className }: Provid
     const status = setup.status;
     switch (status) {
       case 'queued':
+        if (machine && !supportsSetupProtocol) {
+          return t(
+            'settings.agent.setup.unsupportedTarget',
+            'Update Lody on the target machine to finish this provider setup.'
+          );
+        }
+        if (!machineOnline) {
+          return t(
+            'settings.agent.setup.machineOffline',
+            'Waiting for the target machine to come online…'
+          );
+        }
         return t('settings.agent.setup.queued', 'Waiting for the target machine…');
       case 'preparing-runtime':
         return runtimeProgress

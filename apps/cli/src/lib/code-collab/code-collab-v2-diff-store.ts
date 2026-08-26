@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -23,8 +22,7 @@ const MIN_RETENTION_DAYS = 1;
 const MAX_RETENTION_DAYS = 365;
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const WORKER_FILENAME = path.join(MODULE_DIR, 'turn-diff-store-worker.js');
-const SOURCE_WORKER_FILENAME = path.join(MODULE_DIR, 'turn-diff-store-worker.ts');
-const require = createRequire(import.meta.url);
+const SOURCE_WORKER_FILENAME = path.join(MODULE_DIR, 'turn-diff-store-worker-entry.mjs');
 
 export type CodeCollabV2DiffStoreEvent = {
   readonly path: string;
@@ -264,10 +262,7 @@ function resolveWorkerOptions(options: {
     return { workerUrl: pathToFileURL(WORKER_FILENAME) };
   }
   if (process.env.VITEST && existsSync(SOURCE_WORKER_FILENAME)) {
-    return {
-      workerUrl: pathToFileURL(SOURCE_WORKER_FILENAME),
-      workerExecArgv: ['--import', require.resolve('tsx')],
-    };
+    return { workerUrl: pathToFileURL(SOURCE_WORKER_FILENAME) };
   }
   throw new Error(
     `Code Collab turn-diff worker is missing from the CLI bundle: ${WORKER_FILENAME}`

@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { getExternalAcpHistoryImportKey } from '@lody/shared';
+import { describe, expect, it, vi } from 'vitest';
+import { getExternalAcpHistoryImportKey, getSessionRoomId } from '@lody/shared';
 import type {
   ACPSessionId,
   ExternalAcpHistorySyncMeta,
@@ -16,6 +16,8 @@ import {
   compareCatalogItems,
   decideHistoryConflictResolution,
   decideHistoryRefresh,
+  getHistoryCatalogStatus,
+  LocalProjectHistorySyncService,
   selectLatestCatalogItems,
 } from '../src/lib/local-project-history-sync-service';
 
@@ -410,6 +412,156 @@ describe('buildExistingHistorySessionIndex', () => {
     );
 
     expect(index.get(importKey)?.sessionId).toBe('older-session');
+  });
+});
+
+describe('history import persistence', () => {
+  function createHarness(options: { failMetaWrite?: boolean; remoteSyncConfirmed?: boolean } = {}) {
+    let storedHistory: SessionHistoryInput[] = [];
+    let importedTurnHashes: string[] = [];
+    const calls: string[] = [];
+    const sessionDoc = {
+      getExternalHistoryCursor: vi.fn(async () => ({ importedTurnHashes })),
+      setExternalHistoryCursor: vi.fn(async (cursor: { importedTurnHashes: string[] }) => {
+        calls.push('cursor');
+        importedTurnHashes = cursor.importedTurnHashes;
+      }),
+      updateHistory: vi.fn(
+        async (update: (history: SessionHistoryInput[]) => SessionHistoryInput[]) => {
+          calls.push('history');
+          storedHistory = update(storedHistory);
+        }
+      ),
+      waitUntilSynced: vi.fn(async () => options.remoteSyncConfirmed ?? true),
+    };
+    const upsertDocMeta = options.failMetaWrite
+      ? vi.fn(async () => {
+          calls.push('meta');
+          throw new Error('meta write failed');
+        })
+      : vi.fn(async () => {
+          calls.push('meta');
+        });
+    const deleteDoc = vi.fn(async () => undefined);
+    const cleanSessionDoc = vi.fn(async () => undefined);
+    const manager = {
+      repo: { upsertDocMeta, deleteDoc },
+      getOrCreateSessionDoc: vi.fn(async () => sessionDoc),
+      cleanSessionDoc,
+    };
+    const logger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    const service = new LocalProjectHistorySyncService(
+      manager as never,
+      logger as never,
+      {
+        workspaceId: 'workspace-1' as never,
+        machineId,
+        userId: 'user-1',
+      },
+      provider
+    );
+    const importNewSession = (
+      service as unknown as {
+        importNewSession(args: {
+          info: { sessionId: string; title: string; updatedAt: string };
+          acpSessionId: ACPSessionId;
+          project: { kind: 'local'; localProjectId: LocalProjectId };
+          materialized: ReturnType<typeof materializedReplay>;
+        }): Promise<{ sessionId: SessionId; meta: SessionMeta }>;
+      }
+    ).importNewSession.bind(service);
+
+    return {
+      calls,
+      cleanSessionDoc,
+      deleteDoc,
+      importNewSession,
+      logger,
+      sessionDoc,
+      upsertDocMeta,
+      getImportedTurnHashes: () => importedTurnHashes,
+      getStoredHistory: () => storedHistory,
+    };
+  }
+
+  const importArgs = () => ({
+    info: {
+      sessionId: 'acp-1',
+      title: 'Imported conversation',
+      updatedAt: '2026-05-14T00:00:00.000Z',
+    },
+    acpSessionId: 'acp-1' as ACPSessionId,
+    project: { kind: 'local' as const, localProjectId },
+    materialized: materializedReplay(),
+  });
+
+  it('persists complete history before publishing a synced session meta', async () => {
+    const harness = createHarness();
+    const result = await harness.importNewSession(importArgs());
+
+    expect(harness.calls).toEqual(['history', 'cursor', 'meta']);
+    expect(harness.getStoredHistory()).toEqual(importArgs().materialized.history);
+    expect(harness.getImportedTurnHashes()).toEqual(['hash-1']);
+    expect(harness.upsertDocMeta).toHaveBeenCalledWith(
+      getSessionRoomId(result.sessionId),
+      expect.objectContaining({
+        externalHistory: expect.objectContaining({
+          status: 'synced',
+          replayDigest: 'digest-new',
+          importedTurnCount: 1,
+        }),
+      })
+    );
+    expect(harness.sessionDoc.waitUntilSynced).toHaveBeenCalledOnce();
+    expect(harness.cleanSessionDoc).toHaveBeenCalledWith(result.sessionId, {
+      preserveStatus: true,
+    });
+    expect(harness.deleteDoc).not.toHaveBeenCalled();
+  });
+
+  it('deletes the newly allocated session when persistence fails', async () => {
+    const harness = createHarness({ failMetaWrite: true });
+
+    await expect(harness.importNewSession(importArgs())).rejects.toThrow('meta write failed');
+
+    const allocatedSessionId = harness.cleanSessionDoc.mock.calls[0]?.[0] as SessionId;
+    expect(harness.deleteDoc).toHaveBeenCalledWith(getSessionRoomId(allocatedSessionId));
+    expect(harness.cleanSessionDoc).toHaveBeenCalledWith(allocatedSessionId, {
+      preserveStatus: true,
+    });
+  });
+
+  it('keeps a locally durable import when remote sync is not yet confirmed', async () => {
+    const harness = createHarness({ remoteSyncConfirmed: false });
+
+    const result = await harness.importNewSession(importArgs());
+
+    expect(harness.deleteDoc).not.toHaveBeenCalled();
+    expect(harness.cleanSessionDoc).toHaveBeenCalledWith(result.sessionId, {
+      preserveStatus: true,
+    });
+    expect(harness.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('remains locally durable')
+    );
+  });
+});
+
+describe('getHistoryCatalogStatus', () => {
+  it('keeps legacy metadata-only shells available for retry', () => {
+    expect(getHistoryCatalogStatus({ meta: sessionMeta() })).toBe('available');
+  });
+
+  it('marks fully synchronized imports as imported', () => {
+    expect(
+      getHistoryCatalogStatus({
+        meta: sessionMeta({ externalHistory: externalHistory({ status: 'synced' }) }),
+      })
+    ).toBe('imported');
   });
 });
 

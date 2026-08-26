@@ -268,6 +268,13 @@ export function TaskAgentRunConfigMenu({
   );
 
   const modelConfigSelector = ordered.modelSelectors[0] as AcpSelectConfigOptionSelector | undefined;
+  const extraSelectSelectors = useMemo(
+    () =>
+      ordered.otherSelectors.filter(
+        (selector): selector is AcpSelectConfigOptionSelector => selector.type === 'select'
+      ),
+    [ordered.otherSelectors]
+  );
   const modelPickerOptions = useMemo(
     () => (modelOptions.length > 0 ? modelOptions : (modelConfigSelector?.options ?? [])),
     [modelConfigSelector, modelOptions]
@@ -315,20 +322,28 @@ export function TaskAgentRunConfigMenu({
       )
     : false;
 
-  const modeConfigSelector = ordered.modeSelectors[0] as AcpSelectConfigOptionSelector | undefined;
+  const explicitPermissionSelector = ordered.permissionModeSelectors[0];
+  const modeConfigSelector = (explicitPermissionSelector ?? ordered.modeSelectors[0]) as
+    | AcpSelectConfigOptionSelector
+    | undefined;
   const permissionOptions = useMemo(
-    () => (modeOptions.length > 0 ? modeOptions : (modeConfigSelector?.options ?? [])),
-    [modeConfigSelector, modeOptions]
+    () =>
+      explicitPermissionSelector
+        ? explicitPermissionSelector.options
+        : modeOptions.length > 0
+          ? modeOptions
+          : (modeConfigSelector?.options ?? []),
+    [explicitPermissionSelector, modeConfigSelector, modeOptions]
   );
   const permissionValue =
-    modeOptions.length > 0
-      ? (value?.modeId ?? null)
-      : modeConfigSelector
+    explicitPermissionSelector || modeOptions.length === 0
+      ? modeConfigSelector
         ? ((resolveConfigOptionValue(
             modeConfigSelector,
             value?.configOptionValues?.[modeConfigSelector.configId]
           ) as string) ?? null)
-        : null;
+        : null
+      : (value?.modeId ?? null);
   const permissionLabel =
     permissionOptions.find((opt) => opt.value === permissionValue)?.label ?? null;
 
@@ -413,6 +428,9 @@ export function TaskAgentRunConfigMenu({
   // After agent + selector options settle, force permission mode to Auto when
   // available and the current mode is missing or invalid for this agent.
   useEffect(() => {
+    // Explicit permission config options are initialized and persisted through
+    // configOptionValues; modeId remains available for the interaction mode.
+    if (explicitPermissionSelector) return;
     if (!value?.agentConfigId || !selectedConfig || permissionOptions.length === 0) {
       return;
     }
@@ -427,7 +445,7 @@ export function TaskAgentRunConfigMenu({
       ...(value.modelId ? { modelId: value.modelId } : {}),
       ...(value.configOptionValues ? { configOptionValues: value.configOptionValues } : {}),
     });
-  }, [commit, permissionOptions, selectedConfig, value]);
+  }, [commit, explicitPermissionSelector, permissionOptions, selectedConfig, value]);
 
   const machineFilterLabel =
     machinesWithAgents.find((entry) => entry.machineId === machineFilterId)?.name ??
@@ -608,6 +626,37 @@ export function TaskAgentRunConfigMenu({
           </DropdownMenuSubContent>
         </DropdownMenuSub>
 
+        {extraSelectSelectors.map((selector) => {
+          const selectedValue =
+            (resolveConfigOptionValue(
+              selector,
+              value?.configOptionValues?.[selector.configId]
+            ) as string) ?? null;
+          const selectedLabel =
+            selector.options.find((option) => option.value === selectedValue)?.label ??
+            selectedValue;
+          return (
+            <DropdownMenuSub key={selector.configId}>
+              <ValueSubTrigger label={selector.label} value={selectedLabel} />
+              <DropdownMenuSubContent
+                className={tasksMenuClassName('max-w-80')}
+                style={tasksMenuSurfaceStyle}
+              >
+                {selector.options.map((option) => (
+                  <OptionItem
+                    key={option.value}
+                    label={option.label}
+                    description={option.description}
+                    selected={option.value === selectedValue}
+                    disabled={option.disabled || !value?.agentConfigId}
+                    onSelect={() => patchConfigOption(selector.configId, option.value)}
+                  />
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          );
+        })}
+
         {modelPickerOptions.length > 0 ? (
           <DropdownMenuSub>
             <ValueSubTrigger
@@ -699,7 +748,7 @@ export function TaskAgentRunConfigMenu({
                   disabled={opt.disabled || !value?.agentConfigId}
                   onSelect={() => {
                     if (!value?.agentConfigId) return;
-                    if (modeOptions.length > 0) {
+                    if (!explicitPermissionSelector && modeOptions.length > 0) {
                       commit({
                         agentConfigId: value.agentConfigId as AgentConfigId,
                         modeId: opt.value,

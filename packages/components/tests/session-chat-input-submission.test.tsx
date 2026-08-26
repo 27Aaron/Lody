@@ -3,9 +3,33 @@
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SessionMeta } from '@lody/shared';
+import type { AgentRole, AgentRoleId, SessionMeta } from '@lody/shared';
+
+const sessionAgentRoleState = vi.hoisted(() => ({
+  control: {
+    items: [],
+    selectedRoleId: null,
+    onSelect: () => undefined,
+  } as {
+    items: Array<{ role: AgentRole; availability: { kind: 'available' } }>;
+    selectedRoleId: AgentRoleId | null;
+    onSelect: (roleId: AgentRoleId | null) => void;
+  },
+}));
 
 vi.mock('@posthog/react', () => ({ usePostHog: () => null }));
+
+vi.mock('../src/components/mentions/mention-session-source', async (importOriginal) => ({
+  ...(await importOriginal()),
+  useSessionMentionItems: () => [],
+}));
+
+// Agent Roles read the visible-machine index, which needs the authenticated
+// Convex context; the same reason the session source above is stubbed.
+vi.mock('../src/components/mentions/mention-agent-role-source', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  useAgentRoleMentionItems: () => [],
+}));
 
 vi.mock('../src/components/chat/chat-composer', async () => {
   const React = await import('react');
@@ -17,6 +41,7 @@ vi.mock('../src/components/chat/chat-composer', async () => {
       onPromptChange: (value: string) => void;
       onPromptKeyDown?: React.KeyboardEventHandler<HTMLTextAreaElement>;
       primaryAction?: React.ReactNode;
+      footerSelector?: React.ReactNode;
     }) =>
       React.createElement(
         React.Fragment,
@@ -29,14 +54,22 @@ vi.mock('../src/components/chat/chat-composer', async () => {
             props.onPromptChange(event.target.value),
           onKeyDown: props.onPromptKeyDown,
         }),
-        props.primaryAction
+        props.primaryAction,
+        props.footerSelector
       ),
   };
 });
 
-vi.mock('../src/components/sessions/desktop-run-config-menu', () => ({
-  DesktopPermissionModeButton: () => null,
-  DesktopRunConfigMenu: () => null,
+vi.mock('../src/components/sessions/desktop-run-config-menu', async () => {
+  const React = await import('react');
+  return {
+    DesktopPermissionModeButton: () =>
+      React.createElement('div', { 'data-testid': 'desktop-permission-mode-button' }),
+    DesktopRunConfigMenu: () => null,
+  };
+});
+vi.mock('../src/hooks/use-session-agent-role', () => ({
+  useSessionAgentRole: () => sessionAgentRoleState.control,
 }));
 vi.mock('../src/components/mobile/mobile-session-run-config', () => ({
   MobileSessionRunConfig: () => null,
@@ -75,6 +108,11 @@ describe('SessionChatInputArea submission feedback', () => {
   let container: HTMLDivElement | null = null;
 
   beforeEach(async () => {
+    sessionAgentRoleState.control = {
+      items: [],
+      selectedRoleId: null,
+      onSelect: () => undefined,
+    };
     await initI18n('en');
     Object.defineProperty(window, 'matchMedia', {
       configurable: true,
@@ -89,6 +127,79 @@ describe('SessionChatInputArea submission feedback', () => {
         dispatchEvent: vi.fn(),
       })),
     });
+  });
+
+  const renderPermissionModeCase = async (runConfig: AgentRole['runConfig']) => {
+    const selectedRoleId = 'role-1' as AgentRoleId;
+    sessionAgentRoleState.control = {
+      items: [
+        {
+          role: {
+            v: 1,
+            id: selectedRoleId,
+            revision: 1,
+            name: 'Reviewer',
+            visibility: 'private',
+            ownerUserId: 'user-1',
+            machineId: 'machine-1',
+            agentConfigId: 'agent-1',
+            runConfig,
+            createdAt: 1,
+            updatedAt: 1,
+          } as AgentRole,
+          availability: { kind: 'available' },
+        },
+      ],
+      selectedRoleId,
+      onSelect: () => undefined,
+    };
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    await act(async () => {
+      root?.render(
+        createElement(SessionChatInputArea, {
+          session: {
+            id: 'session-role-permission',
+            userId: 'user-1',
+            machineId: 'machine-1',
+            agentConfigId: 'agent-1',
+            cliType: 'builtin',
+            agentType: 'codex',
+            status: { type: 'idle' },
+            isArchived: false,
+            createdAt: '2026-08-26T00:00:00.000Z',
+          } as SessionMeta,
+          sessionLocalProjectRootPath: null,
+          isMachineRemoved: false,
+          isAgentBusy: false,
+          isDark: false,
+          isEmptyConversation: false,
+          selectedModeId: 'ask',
+          selectedModelId: null,
+          modeOptions: [{ value: 'ask', label: 'Ask' }],
+          modelOptions: [],
+          onModeChange: () => undefined,
+          onModelChange: () => undefined,
+          onSendMessage: async () => true,
+          onStop: () => undefined,
+          onRemoveQueueItem: async () => undefined,
+        })
+      );
+    });
+  };
+
+  it('hides the desktop permission button when the selected Role pins permission', async () => {
+    await renderPermissionModeCase({ modeId: 'ask' });
+    expect(container.querySelector('[data-testid="desktop-permission-mode-button"]')).toBeNull();
+  });
+
+  it('keeps the desktop permission button when the selected Role does not pin it', async () => {
+    await renderPermissionModeCase({});
+    expect(
+      container.querySelector('[data-testid="desktop-permission-mode-button"]')
+    ).not.toBeNull();
   });
 
   afterEach(async () => {

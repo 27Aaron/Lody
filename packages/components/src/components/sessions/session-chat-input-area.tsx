@@ -8,11 +8,22 @@ import {
   forwardRef,
   useImperativeHandle,
   type ReactNode,
+  type MutableRefObject,
 } from 'react';
 import { useAtomValue } from 'jotai';
 import { ArrowUp, Loader2 } from 'lucide-react';
 import { Button } from '@/ui/button';
 import type { AcpSessionSelectOption } from '@/components/shared/acp-session-select';
+import { useSessionAgentRole } from '@/hooks/use-session-agent-role';
+import { buildAgentRoleFormValueFromRunConfig } from '@/lib/agent-role-form';
+import { doesAgentRolePinPermissionMode } from '@/lib/composer-agent-roles';
+import { resolvePermissionModeFace } from '@/lib/permission-mode-face';
+import {
+  AgentRoleEditorDialog,
+  openAgentRoleEditorForCreate,
+  type AgentRoleEditorState,
+} from '@/components/settings/agent-role-editor-dialog';
+import { useWorkspaceAgentRoles } from '@/hooks/use-workspace-agent-roles';
 import {
   DesktopPermissionModeButton,
   DesktopRunConfigMenu,
@@ -22,9 +33,21 @@ import {
   type ChatComposerFileItem,
   type ChatComposerImageItem,
 } from '@/components/chat/chat-composer';
+import type { CombinedMentionTextareaHandle } from '@/components/mentions/combined-mention-textarea';
+import type { AttachmentAddMenuMcp } from '@/components/chat/attachment-add-menu';
 import { MobileSessionRunConfig } from '@/components/mobile/mobile-session-run-config';
 import type { MentionProjectSource } from '@/components/mentions/mention-project-file-source';
-import { useMentionPromptExpansion } from '@/components/mentions/mention-expansion';
+import {
+  useMentionPromptExpansion,
+  type ExpandedMentionPrompt,
+  type MentionPromptExpansionArgs,
+} from '@/components/mentions/mention-expansion';
+import { reanchorMessageTextSpansForTrim } from '@lody/shared';
+import type { Mention as MentionRange } from '@/ui/mention/index';
+import {
+  toPersistedMentionRanges,
+  type PersistedMentionRange,
+} from '@/components/mentions/mention-persistence';
 import { useTranslation } from 'react-i18next';
 import { usePostHog } from '@posthog/react';
 import {
@@ -71,11 +94,7 @@ import {
 import { resolveEffectiveCodeCollabWorkspaceId } from '@/lib/code-collab-workspace-id';
 import { isImeComposingKeyboardEvent } from '@/lib/ime';
 import { toast } from 'sonner';
-import {
-  SESSION_IMAGE_ACCEPT,
-  uploadSessionImage,
-  validateSessionImageFile,
-} from '@/lib/session-image-upload';
+import { uploadSessionImage, validateSessionImageFile } from '@/lib/session-image-upload';
 import {
   computeSha256Hex,
   computeTextPreviewable,
@@ -96,10 +115,10 @@ import {
   getPastedTextDraftsAfterInsertion,
   insertPastedTextDraft,
   normalizePastedTextDraft,
-  restorePastedTextDraftsToValue,
   shouldCapturePastedTextDraft,
   type PastedTextDraft,
 } from '@/lib/pasted-text-draft';
+import { wrapPastedTextChipLabel } from '@/components/mentions/mention-chips';
 import { toIntlLocale } from '@/lib/intl-locale';
 import {
   canUseElectronLocalFileSend,
@@ -203,6 +222,31 @@ const getSessionPastedTextDrafts = (sessionId: SessionId): PastedTextDraft[] => 
   ...(sessionPastedTextDraftsCache.get(sessionId) ?? []),
 ];
 
+/**
+ * Mention ranges for the session's draft, kept beside its text.
+ *
+ * Same lifetime as the other draft caches — in memory, so it covers leaving the
+ * session and coming back, which is where the ranges were being lost. It does
+ * not survive a restart, but neither does the draft text here, so there is
+ * nothing to restore them onto.
+ */
+const sessionMentionRangesCache = new Map<SessionId, PersistedMentionRange[]>();
+
+const getSessionMentionRanges = (sessionId: SessionId): PersistedMentionRange[] => [
+  ...(sessionMentionRangesCache.get(sessionId) ?? []),
+];
+
+const setSessionMentionRanges = (
+  sessionId: SessionId,
+  ranges: readonly PersistedMentionRange[]
+): void => {
+  if (ranges.length === 0) {
+    sessionMentionRangesCache.delete(sessionId);
+  } else {
+    sessionMentionRangesCache.set(sessionId, [...ranges]);
+  }
+};
+
 const setSessionImageDrafts = (
   sessionId: SessionId,
   images: readonly PendingImage[]
@@ -242,6 +286,9 @@ export const clearSessionChatInputDrafts = (sessionId: SessionId): void => {
   sessionImageDraftsCache.delete(sessionId);
   sessionFileDraftsCache.delete(sessionId);
   sessionPastedTextDraftsCache.delete(sessionId);
+  // The ranges belong to the text that was just cleared. Left behind, they land
+  // on whatever the user types next at the old offsets.
+  sessionMentionRangesCache.delete(sessionId);
   revokeImagePreviewUrls(images);
   abortPendingFileUploads(files);
 };
@@ -324,6 +371,16 @@ export interface SessionChatInputAreaProps {
   modelOptions: AcpSessionSelectOption[];
   /** Subscription limits already resolved from this session's machine Flock data. */
   rateLimits?: MachineRateLimits;
+  /**
+   * Whether to offer the third-party Codex reset forecast, resolved by the
+   * container from `canShowCodexResetForecast` with the session's full
+   * `AgentConfigMeta`. It must be decided there, not here: this component only
+   * sees `cliType`/`agentType`, which cannot tell a first-party Codex provider
+   * from a Codex-compatible one pointed at another vendor via env or brand.
+   * Defaults to hidden, so a container that has not resolved its config yet
+   * never shows an OpenAI forecast beside someone else's quota.
+   */
+  showCodexResetForecast?: boolean;
   isContextCompacting?: boolean;
   /** Dynamic config option selectors from the agent's configOptions. */
   configOptionSelectors?: AcpConfigOptionSelector[];
@@ -339,6 +396,10 @@ export interface SessionChatInputAreaProps {
     onUpgrade?: () => void;
   } | null;
   queueDisplay?: ReactNode;
+  /** Per-turn MCP selection, rendered inside the composer's "+" menu. */
+  mcp?: AttachmentAddMenuMcp;
+  /** One-shot guard for a viewport resize caused by the composer auto-growing. */
+  skipNextViewportResizeAutoScrollRef?: MutableRefObject<boolean>;
   onModeChange: (value: string) => void;
   onModelChange: (value: string) => void;
   onConfigOptionChange?: (configId: string, value: AcpConfigOptionValue) => void;
@@ -370,6 +431,12 @@ export type SessionChatInputAreaHandle = {
   addVisualAnnotationReference: (reference: VisualAnnotationReferencePayload) => boolean;
   toggleVisualAnnotationReference: (reference: VisualAnnotationReferencePayload) => boolean;
   handleImageDrop: (files: File[]) => void;
+  /**
+   * Mention another conversation in this draft. Returns false when nothing was
+   * written (archived draft, unknown/own session, already mentioned), so the
+   * caller can leave the gesture unacknowledged instead of implying a change.
+   */
+  insertSessionMention: (sessionId: string) => boolean;
 };
 
 export const SessionChatInputArea = memo(
@@ -388,6 +455,7 @@ export const SessionChatInputArea = memo(
       modeOptions,
       modelOptions,
       rateLimits,
+      showCodexResetForecast = false,
       isContextCompacting = false,
       configOptionSelectors,
       configOptionValues,
@@ -395,6 +463,8 @@ export const SessionChatInputArea = memo(
       availableCommands,
       freeTurnLimitNotice,
       queueDisplay,
+      mcp,
+      skipNextViewportResizeAutoScrollRef,
       onModeChange,
       onModelChange,
       onConfigOptionChange,
@@ -448,7 +518,6 @@ export const SessionChatInputArea = memo(
     const isArchived = session.isArchived === true;
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const restoreFocusAfterRejectedMobileSendRef = useRef(false);
-    const fileInputRef = useRef<HTMLInputElement>(null);
     const attachmentInputRef = useRef<HTMLInputElement>(null);
     const activeSessionIdRef = useRef(session.id);
     activeSessionIdRef.current = session.id;
@@ -641,7 +710,38 @@ export const SessionChatInputArea = memo(
     // its actual state stays intact until the durable writer accepts it. A
     // rejected send simply reveals the preserved draft again.
     const [submissionPending, setSubmissionPending] = useState(false);
-    const expandSkillMentionsForPromptRef = useRef<(text: string) => string>((text) => text);
+    const expandPromptMentionsRef = useRef<
+      (args: MentionPromptExpansionArgs) => ExpandedMentionPrompt
+    >(({ text }) => ({ text }));
+    // Committed mention ranges, kept for the before-send rewrite. `@path` and
+    // `#123` survive into the sent text unchanged, so the range is the only
+    // record that the region was ever a mention.
+    /**
+     * A ref, not state, and the only copy the send path reads.
+     *
+     * It was state as well, which gave `sendMessage` a second source to close
+     * over and get wrong two ways: the closure did not list it as a dependency,
+     * so restoring a draft — where the ranges change but the text does not —
+     * refreshed nothing and sent the pre-restore ranges; and switching sessions
+     * reset the persisted seed without resetting it, so one session's ranges
+     * could ride along into another's message. A ref has neither failure: it is
+     * current by construction and costs `sendMessage` no re-creation, matching
+     * `expandPromptMentionsRef` beside it.
+     */
+    const mentionRangesRef = useRef<MentionRange[]>([]);
+    // Handle into the composer's mention machinery, for mentions that originate
+    // outside it (a sidebar session dropped on the conversation).
+    const mentionActionsRef = useRef<CombinedMentionTextareaHandle | null>(null);
+    const [persistedMentionRanges, setPersistedMentionRanges] = useState<PersistedMentionRange[]>(
+      () => getSessionMentionRanges(session.id)
+    );
+    const handleMentionRangesChange = useCallback(
+      (ranges: MentionRange[]) => {
+        mentionRangesRef.current = ranges;
+        setSessionMentionRanges(session.id, toPersistedMentionRanges(ranges));
+      },
+      [session.id]
+    );
 
     // Load new session's draft when session changes (during-render state adjustment)
     const [prevSessionId, setPrevSessionId] = useState(session.id);
@@ -653,6 +753,10 @@ export const SessionChatInputArea = memo(
       setPendingImages(getSessionImageDrafts(session.id));
       setPendingFiles(getSessionFileDrafts(session.id));
       setPastedTextDrafts(getSessionPastedTextDrafts(session.id));
+      setPersistedMentionRanges(getSessionMentionRanges(session.id));
+      // Cleared with the rest of the draft: the incoming session's own ranges
+      // arrive from its hydrators, and until they do there must be none.
+      mentionRangesRef.current = [];
       commentReferencesRef.current = [];
       setCommentReferences([]);
       visualAnnotationReferencesRef.current = [];
@@ -1252,25 +1356,6 @@ export const SessionChatInputArea = memo(
       ]
     );
 
-    const handleFileInputChange = useCallback(
-      (event: React.ChangeEvent<HTMLInputElement>) => {
-        const fileList = event.target.files;
-        if (!fileList) {
-          return;
-        }
-        handleAddFiles(Array.from(fileList), 'file_input');
-        event.target.value = '';
-      },
-      [handleAddFiles]
-    );
-
-    const handleImageAddClick = useCallback(() => {
-      if (isArchived) {
-        return;
-      }
-      fileInputRef.current?.click();
-    }, [isArchived]);
-
     const handleRemoveImage = useCallback(
       (localId: string) => {
         if (isArchived) {
@@ -1338,13 +1423,22 @@ export const SessionChatInputArea = memo(
 
     const handleAttachmentInputChange = useCallback(
       (event: React.ChangeEvent<HTMLInputElement>) => {
-        const fileList = event.target.files;
-        if (fileList) {
-          enqueueFileAttachments(Array.from(fileList));
+        const files = Array.from(event.target.files ?? []);
+        if (files.length > 0) {
+          const { images: selectedImages, attachments: selectedAttachments } =
+            splitImageAndFileAttachments(files);
+          const images = disableImageUpload ? [] : selectedImages;
+          const attachments = disableImageUpload ? files : selectedAttachments;
+          if (images.length > 0) {
+            handleAddFiles(images, 'file_input');
+          }
+          if (attachments.length > 0) {
+            enqueueFileAttachments(attachments);
+          }
         }
         event.target.value = '';
       },
-      [enqueueFileAttachments]
+      [disableImageUpload, enqueueFileAttachments, handleAddFiles]
     );
 
     const handleAttachmentAddClick = useCallback(() => {
@@ -1398,9 +1492,11 @@ export const SessionChatInputArea = memo(
         const result = insertPastedTextDraft({
           currentValue,
           pastedText: normalizedText,
-          displayText: t('composer.pastedTextInlineLabel', '[Pasted {{charCount}} chars]', {
-            charCount: numberFormatter.format(getPastedTextCharacterCount(normalizedText)),
-          }),
+          displayText: wrapPastedTextChipLabel(
+            t('composer.pastedTextInlineLabel', '[Pasted {{charCount}} chars]', {
+              charCount: numberFormatter.format(getPastedTextCharacterCount(normalizedText)),
+            })
+          ),
           selectionStart,
           selectionEnd,
         });
@@ -1505,6 +1601,16 @@ export const SessionChatInputArea = memo(
       [disableImageUpload, enqueueFileAttachments, handleAddFiles, isArchived]
     );
 
+    const insertSessionMention = useCallback(
+      (sessionId: string) => {
+        if (isArchived) {
+          return false;
+        }
+        return mentionActionsRef.current?.insertSessionMention(sessionId) ?? false;
+      },
+      [isArchived]
+    );
+
     useImperativeHandle(
       ref,
       () => ({
@@ -1517,6 +1623,7 @@ export const SessionChatInputArea = memo(
         addVisualAnnotationReference,
         toggleVisualAnnotationReference,
         handleImageDrop,
+        insertSessionMention,
       }),
       [
         setInputText,
@@ -1525,6 +1632,7 @@ export const SessionChatInputArea = memo(
         addVisualAnnotationReference,
         toggleVisualAnnotationReference,
         handleImageDrop,
+        insertSessionMention,
       ]
     );
 
@@ -1592,11 +1700,29 @@ export const SessionChatInputArea = memo(
           return;
         }
         const currentValue = textareaRef.current?.value ?? userInput;
-        const restoredPrompt = restorePastedTextDraftsToValue(currentValue, pastedTextDrafts);
-        const expandedPrompt = expandSkillMentionsForPromptRef.current(restoredPrompt);
-        const trimmedPrompt = expandedPrompt.trim();
+        // One pass: pasted placeholders, `$skill`, `@session:`, and the mentions
+        // that need no rewrite all resolve against the same original text, and
+        // the spans record where each landed.
+        const expandedPrompt = expandPromptMentionsRef.current({
+          text: currentValue,
+          mentions: mentionRangesRef.current,
+          pastedTextDrafts,
+        });
+        const trimmedPrompt = expandedPrompt.text.trim();
+        // The trim moves every character left; re-anchor before the offsets ship.
+        const trimmedSpans = reanchorMessageTextSpansForTrim(
+          expandedPrompt.text,
+          trimmedPrompt,
+          expandedPrompt.spans
+        );
         const textBlocks: SessionInputBlock[] = trimmedPrompt
-          ? [{ type: 'text', text: trimmedPrompt }]
+          ? [
+              {
+                type: 'text',
+                text: trimmedPrompt,
+                ...(trimmedSpans ? { spans: trimmedSpans } : {}),
+              },
+            ]
           : [];
         const uploadedImages = pendingImages
           .filter((image): image is PendingImage & { uploaded: SessionImagePayload } => {
@@ -1774,8 +1900,6 @@ export const SessionChatInputArea = memo(
       isArchived ||
       isExternalHistoryRefreshing ||
       Boolean(freeTurnLimitNotice && freeTurnLimitNotice.current >= freeTurnLimitNotice.limit);
-    const disableFileInput = isArchived || disableImageUpload;
-    const imageAddEnabled = !disableFileInput;
     const attachmentAddEnabled = !isArchived;
     const sessionLocalFileSource = useMemo(
       () =>
@@ -1893,13 +2017,12 @@ export const SessionChatInputArea = memo(
           : undefined,
       [isArchived, session.agentType, session.cliType, session.machineId]
     );
-    const expandSkillMentionsForPrompt = useMentionPromptExpansion({
+    const expandPromptMentions = useMentionPromptExpansion({
       source: isArchived ? undefined : mentionSource,
       skillAgent,
       promptValue: userInput,
-      currentSessionId: session.id,
     });
-    expandSkillMentionsForPromptRef.current = expandSkillMentionsForPrompt;
+    expandPromptMentionsRef.current = expandPromptMentions;
 
     const tone = isDark ? 'dark' : 'light';
     // For non-archived sessions, ChatComposer auto-resolves the placeholder from
@@ -1937,6 +2060,76 @@ export const SessionChatInputArea = memo(
       session.agentConfigId && session.machineId
         ? { agentId: session.agentConfigId, machineId: session.machineId }
         : null;
+    /* Role, in an EXISTING session. The agent is fixed here, so this offers
+       only Roles bound to an agent of the same TYPE and applies only their run
+       config — see `useSessionAgentRole`. The row is NOT gated on
+       `isEmptyConversation`: those values stay changeable every turn, so a Role
+       that packages them stays useful for the whole conversation. */
+    const [agentRoleEditor, setAgentRoleEditor] = useState<AgentRoleEditorState | null>(null);
+    const { roles: accessibleAgentRoles } = useWorkspaceAgentRoles();
+    const sessionAgentRole = useSessionAgentRole({
+      sessionId: session.id,
+      provenanceRoleId: session.agentRoleId,
+      agentType: session.agentType,
+      modelOptions,
+      selectedModelId,
+      onModelChange,
+      modeOptions,
+      selectedModeId,
+      onModeChange,
+      configOptionSelectors: configOptionSelectors ?? [],
+      configOptionValues,
+      onConfigOptionChange,
+    });
+    const agentRolesProp = useMemo(
+      () => ({
+        items: sessionAgentRole.items,
+        selectedRoleId: sessionAgentRole.selectedRoleId,
+        onSelect: sessionAgentRole.onSelect,
+        onCreate: () =>
+          setAgentRoleEditor(
+            openAgentRoleEditorForCreate(
+              buildAgentRoleFormValueFromRunConfig({
+                machineId: session.machineId,
+                agentConfigId: session.agentConfigId,
+                modeId: selectedModeId,
+                modelId: modelOptions.length > 0 ? selectedModelId : null,
+                configOptionValues,
+              })
+            )
+          ),
+      }),
+      [
+        configOptionValues,
+        modelOptions.length,
+        selectedModelId,
+        selectedModeId,
+        session.agentConfigId,
+        session.machineId,
+        sessionAgentRole,
+      ]
+    );
+    const sessionAgentRolePinsPermissionMode = useMemo(() => {
+      if (!sessionAgentRole.selectedRoleId) return false;
+      const selectedRole = sessionAgentRole.items.find(
+        (item) => item.role.id === sessionAgentRole.selectedRoleId
+      )?.role;
+      if (!selectedRole) return false;
+      const { source } = resolvePermissionModeFace({
+        modeOptions,
+        selectedModeId,
+        configOptionSelectors,
+        configOptionValues,
+      });
+      return doesAgentRolePinPermissionMode(selectedRole, source);
+    }, [
+      configOptionSelectors,
+      configOptionValues,
+      modeOptions,
+      selectedModeId,
+      sessionAgentRole.items,
+      sessionAgentRole.selectedRoleId,
+    ]);
     const mobileFooterSelectorNode = isMobile ? (
       <MobileSessionRunConfig
         agentSelection={mobileAgentSelection}
@@ -1953,6 +2146,7 @@ export const SessionChatInputArea = memo(
         configOptionValues={configOptionValues}
         onConfigOptionChange={onConfigOptionChange}
         fallbackAgent={{ cliType: session.cliType, agentType: session.agentType }}
+        agentRoles={agentRolesProp}
       />
     ) : null;
     const desktopAgentMachineIds = useMemo(
@@ -1983,15 +2177,20 @@ export const SessionChatInputArea = memo(
           configOptionSelectors={configOptionSelectors}
           configOptionValues={configOptionValues}
           onConfigOptionChange={onConfigOptionChange}
-        />
-        <DesktopPermissionModeButton
           modeOptions={modeOptions}
           selectedModeId={selectedModeId}
-          onModeChange={onModeChange}
-          configOptionSelectors={configOptionSelectors}
-          configOptionValues={configOptionValues}
-          onConfigOptionChange={onConfigOptionChange}
+          agentRoles={agentRolesProp}
         />
+        {sessionAgentRolePinsPermissionMode ? null : (
+          <DesktopPermissionModeButton
+            modeOptions={modeOptions}
+            selectedModeId={selectedModeId}
+            onModeChange={onModeChange}
+            configOptionSelectors={configOptionSelectors}
+            configOptionValues={configOptionValues}
+            onConfigOptionChange={onConfigOptionChange}
+          />
+        )}
       </>
     ) : null;
     const selectedModelLabel = modelOptions.find(
@@ -2018,6 +2217,7 @@ export const SessionChatInputArea = memo(
           modelId={selectedModelId}
           modelLabel={selectedModelLabel}
           isContextCompacting={isContextCompacting}
+          showCodexResetForecast={showCodexResetForecast}
           className={isMobile ? 'h-8 shrink-0' : 'shrink-0'}
         />
       </div>
@@ -2113,11 +2313,7 @@ export const SessionChatInputArea = memo(
         onPromptChange={handleInputChange}
         onPromptKeyDown={handleKeyDown}
         onPromptPaste={handlePaste}
-        onImageDrop={
-          !submissionPending && (imageAddEnabled || attachmentAddEnabled)
-            ? handleImageDrop
-            : undefined
-        }
+        onImageDrop={!submissionPending && attachmentAddEnabled ? handleImageDrop : undefined}
         // The dropzone accepts files AND images, so it must NOT inherit the
         // image-only disable (which trips at 8 pending images). Per-type count
         // limits are enforced inside handleImageDrop's handlers. Drops are only
@@ -2140,24 +2336,26 @@ export const SessionChatInputArea = memo(
         }
         pastedTextDrafts={submissionPending ? [] : pastedTextDrafts}
         onPastedTextDraftsChange={submissionPending ? undefined : handlePastedTextDraftsChange}
+        onMentionRangesChange={handleMentionRangesChange}
+        mentionActionsRef={mentionActionsRef}
+        persistedMentions={persistedMentionRanges}
+        // This composer switches sessions in place, so the draft's identity has
+        // to travel with its text — otherwise the previous session's ranges stay
+        // committed over the incoming draft.
+        draftKey={session.id}
         imageItems={submissionPending ? [] : imageItems}
-        imageAddDisabled={
+        attachmentAddDisabled={
           submissionPending ||
           isArchived ||
           isMachineRemoved ||
-          pendingImages.length >= SESSION_IMAGE_MAX_COUNT
+          (pendingFiles.length >= SESSION_FILE_MAX_COUNT &&
+            (disableImageUpload || pendingImages.length >= SESSION_IMAGE_MAX_COUNT))
         }
-        onImageAddClick={imageAddEnabled ? handleImageAddClick : undefined}
+        onAttachmentAddClick={attachmentAddEnabled ? handleAttachmentAddClick : undefined}
         onImageRemove={submissionPending || isArchived ? undefined : handleRemoveImage}
         onImageRetry={submissionPending || isArchived ? undefined : handleRetryImage}
         fileItems={submissionPending ? [] : fileItems}
-        fileAddDisabled={
-          submissionPending ||
-          isArchived ||
-          isMachineRemoved ||
-          pendingFiles.length >= SESSION_FILE_MAX_COUNT
-        }
-        onFileAddClick={attachmentAddEnabled ? handleAttachmentAddClick : undefined}
+        mcp={mcp}
         onFileRemove={submissionPending || isArchived ? undefined : handleRemoveFile}
         onFileRetry={submissionPending || isArchived ? undefined : handleRetryFile}
         footerSelector={footerSelectorNode}
@@ -2165,6 +2363,7 @@ export const SessionChatInputArea = memo(
         primaryAction={primaryActionNode}
         autoResize
         maxRows={11}
+        skipNextViewportResizeAutoScrollRef={skipNextViewportResizeAutoScrollRef}
         focusOnContainerClick
       />
     );
@@ -2175,21 +2374,25 @@ export const SessionChatInputArea = memo(
           protectFromEdgeBackZone: isMobile,
         })}
       >
+        {/* The Role editor is a Dialog, so it is hosted OUT here rather than
+            inside the run-config menu or the mobile drawer, where it would
+            unmount with them the moment it opened. Mounted only while OPEN:
+            it reads machine visibility, and the composer must stay renderable
+            in hosts that do not provide that context. */}
+        {agentRoleEditor ? (
+          <AgentRoleEditorDialog
+            editor={agentRoleEditor}
+            accessibleRoles={accessibleAgentRoles}
+            onChange={setAgentRoleEditor}
+            onClose={() => setAgentRoleEditor(null)}
+            source="session_composer"
+          />
+        ) : null}
         <ConversationColumn>
           <div aria-hidden="true" className="h-1" />
           {queueDisplay ? <div className="pb-2">{queueDisplay}</div> : null}
           {externalHistorySyncNode}
           {freeTurnLimitNoticeNode}
-          {!disableFileInput ? (
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept={SESSION_IMAGE_ACCEPT}
-              multiple
-              className="hidden"
-              onChange={handleFileInputChange}
-            />
-          ) : null}
           {attachmentAddEnabled ? (
             <input
               ref={attachmentInputRef}

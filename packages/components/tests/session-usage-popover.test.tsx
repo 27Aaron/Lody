@@ -26,20 +26,16 @@ vi.mock('react-i18next', () => ({
 
 const rateLimits: MachineRateLimits = {
   [getRateLimitEntryKey('codex', 'codex')]: {
-    schemaVersion: 2,
-    planName: 'ChatGPT Plus',
     limitId: 'codex',
+    scope: { providerId: 'codex' },
+    planName: 'ChatGPT Plus',
     windows: [
       {
         usedPercent: 29,
-        windowDurationMins: 7 * 24 * 60,
-        resetsAt: null,
+        windowDurationSeconds: 7 * 24 * 60 * 60,
+        resetsAtEpochSeconds: null,
       },
     ],
-    fiveHour: null,
-    sevenDay: 29,
-    fiveHourResetAt: null,
-    sevenDayResetAt: null,
   },
 };
 
@@ -101,6 +97,35 @@ describe('SessionUsagePopover', () => {
     await renderUsage({ rateLimits });
 
     expect(container.querySelector('button')).toBeNull();
+  });
+
+  it('shows a truthful unavailable state when the provider omits utilization', async () => {
+    const unavailableLimits: MachineRateLimits = {
+      [getRateLimitEntryKey('grok', 'grok')]: {
+        limitId: 'grok',
+        scope: { providerId: 'grok' },
+        planName: 'X Premium+',
+        limitName: 'Grok Build',
+        windows: [],
+      },
+    };
+    await renderUsage({
+      agentType: 'grok',
+      modelId: 'grok-4.5',
+      rateLimits: unavailableLimits,
+      contextWindowUsage: { size: 128_000, used: 32_000 },
+    });
+
+    const trigger = container.querySelector('button');
+    expect(trigger?.textContent).toBe('25%');
+    expect(trigger?.getAttribute('aria-label')).toBe('Open usage details, 25% used');
+
+    await act(async () => {
+      trigger?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(document.body.querySelector('[aria-label="Usage"]')?.textContent).toContain(
+      'The provider did not report usage for this plan'
+    );
   });
 
   it('hides the trigger when context data is invalid even if subscription usage exists', async () => {

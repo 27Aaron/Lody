@@ -102,6 +102,7 @@ export function useTaskRun() {
         modeId: request.agent.modeId,
         modelId: request.agent.modelId,
         configOptionValues: request.agent.configOptionValues,
+        taskToolsEnabled: true,
       });
       const pendingHistoryEntry = buildPendingUserHistoryEntry({
         userId,

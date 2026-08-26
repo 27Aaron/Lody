@@ -1,12 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import type { ProjectSkill, ProjectSkillGroup } from '@lody/shared';
+import { applyTextRewrites, type ProjectSkill, type ProjectSkillGroup } from '@lody/shared';
 import {
   buildSkillMentionItems,
-  expandSkillMentionsInText,
+  buildSkillMentionRewrites,
   getSkillMentionToken,
   hydrateSkillMentionsFromText,
+  mergeMentionSkillState,
   selectSkillMentionCandidates,
 } from '../src/components/mentions/mention-skill-source';
+
+/** What the send path does with these rewrites, so the test asserts that. */
+const expandInText = (
+  text: string,
+  items: Parameters<typeof buildSkillMentionRewrites>[1],
+  allowedDirs: ReadonlySet<string> | null
+) => applyTextRewrites(text, buildSkillMentionRewrites(text, items, allowedDirs)).text;
 
 function skill(overrides: Partial<ProjectSkill> & { relativePath: string }): ProjectSkill {
   return {
@@ -69,6 +77,26 @@ describe('getSkillMentionToken', () => {
     expect(
       getSkillMentionToken({ name: 'Deep Research', relativePath: '.agents/skills/deep/SKILL.md' })
     ).toBe('deep');
+  });
+});
+
+describe('mergeMentionSkillState', () => {
+  it('does not let an empty successful scope hide another scope failure', () => {
+    expect(
+      mergeMentionSkillState([
+        { status: 'ready' },
+        { status: 'error', error: 'Global skill scan failed' },
+      ])
+    ).toEqual({ status: 'error', error: 'Global skill scan failed' });
+  });
+
+  it('keeps loading and refreshing ahead of a settled scope error', () => {
+    expect(
+      mergeMentionSkillState([{ status: 'loading' }, { status: 'error', error: 'failed' }])
+    ).toEqual({ status: 'loading' });
+    expect(
+      mergeMentionSkillState([{ status: 'refreshing' }, { status: 'error', error: 'failed' }])
+    ).toEqual({ status: 'refreshing' });
   });
 });
 
@@ -181,17 +209,17 @@ describe('hydrateSkillMentionsFromText', () => {
   });
 });
 
-describe('expandSkillMentionsInText', () => {
+describe('buildSkillMentionRewrites', () => {
   const items = buildSkillMentionItems(GROUPS);
 
   it('expands project skill tokens to relative skill paths', () => {
-    expect(expandSkillMentionsInText('run $deep-research', items, null)).toBe(
+    expect(expandInText('run $deep-research', items, null)).toBe(
       'run use /deep-research [Skill Path](.agents/skills/deep-research/SKILL.md)'
     );
   });
 
   it('expands global skill tokens to absolute skill paths when present', () => {
-    const result = expandSkillMentionsInText(
+    const result = expandInText(
       'run $global-only',
       items,
       new Set(['~/.claude/skills'])
@@ -203,7 +231,7 @@ describe('expandSkillMentionsInText', () => {
   });
 
   it('uses the selected provider directories before resolving duplicate tokens', () => {
-    const result = expandSkillMentionsInText(
+    const result = expandInText(
       'run $code-review',
       items,
       new Set(['.claude/skills'])
@@ -215,7 +243,7 @@ describe('expandSkillMentionsInText', () => {
   it('does not expand an already annotated skill token again', () => {
     const text = 'run $deep-research [Skill Path](.agents/skills/deep-research/SKILL.md)';
 
-    expect(expandSkillMentionsInText(text, items, null)).toBe(text);
+    expect(expandInText(text, items, null)).toBe(text);
   });
 });
 
@@ -235,7 +263,7 @@ describe('system scope skills', () => {
 
   it('expands system skill tokens to their absolute SKILL.md path', () => {
     const items = buildSkillMentionItems([SYSTEM_GROUP]);
-    expect(expandSkillMentionsInText('run $imagegen', items, null)).toBe(
+    expect(expandInText('run $imagegen', items, null)).toBe(
       'run use /imagegen [Skill Path](/home/user/.codex/skills/.system/imagegen/SKILL.md)'
     );
   });

@@ -23,6 +23,11 @@ describe('classifyPermissionModeFace', () => {
       tone: 'warning',
       render: 'icon',
     });
+    expect(classifyPermissionModeFace('danger-full-access')).toEqual({
+      kind: 'full-access',
+      tone: 'warning',
+      render: 'icon',
+    });
     // Claude "Don't Ask" — skips the human approval prompt.
     expect(classifyPermissionModeFace('dontAsk')).toEqual({
       kind: 'deny',

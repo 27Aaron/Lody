@@ -95,6 +95,12 @@ describe('AcpAuthenticationManager', () => {
       command: '/test/codex',
       args: ['login', '--device-auth'],
     },
+    {
+      agentType: 'grok',
+      runtimeOverrides: { grokPath: '/test/grok' },
+      command: '/test/grok',
+      args: ['login', '--device-auth'],
+    },
   ])(
     'runs the official $agentType login flow',
     async ({ agentType, runtimeOverrides, command, args }) => {

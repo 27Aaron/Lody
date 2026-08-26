@@ -6,10 +6,12 @@ import {
   LOCAL_LORO_DATA_PLANE_MAX_FRAME_BYTES,
   LOCAL_LORO_DATA_PLANE_PROTOCOL_VERSION,
   type LocalLoroDataPlaneClientMessage,
-  type LocalLoroDataPlaneServer,
-  type LocalLoroDataPlaneServerConnection,
   type LocalLoroDataPlaneServerMessage,
 } from '@lody/shared';
+import type {
+  LocalLoroDataPlaneServer,
+  LocalLoroDataPlaneServerConnection,
+} from '@lody/shared/local-loro-data-plane-server';
 import { getLocalLoroDataPlaneSocketPath } from '@lody/shared/node/local-ipc';
 import type { Logger } from '@/utils/logger';
 import { formatErrorMessage } from '@/utils/format-error';
@@ -27,6 +29,8 @@ export interface LocalLoroDataPlaneSocketServerConfig {
   // Resolves the per-workspace sync engine. Returns null when the workspace has
   // no running runtime (the client gets an error and can retry after bootstrap).
   getWorkspaceServer: (workspaceId: string) => LocalLoroDataPlaneServer | null;
+  /** Override the protocol frame limit for focused transport tests. */
+  maxFrameBytes?: number;
 }
 
 let dataPlaneServer: net.Server | null = null;
@@ -99,7 +103,7 @@ async function startInner(config: LocalLoroDataPlaneSocketServerConfig): Promise
           .then(() => handleMessage(config, connection, touchedEngines, message))
           .catch((error) => logMessageHandlingError(config.logger, error));
       },
-      maxBufferBytes: LOCAL_LORO_DATA_PLANE_MAX_FRAME_BYTES,
+      maxBufferBytes: config.maxFrameBytes ?? LOCAL_LORO_DATA_PLANE_MAX_FRAME_BYTES,
       // Defense-in-depth only (compliant senders enforce the frame budget and
       // surface a terminal room error instead of writing): report and keep the
       // connection alive — destroying the socket would take down every room of
@@ -113,7 +117,9 @@ async function startInner(config: LocalLoroDataPlaneSocketServerConfig): Promise
         });
       },
     });
-    socket.on('data', (chunk) => splitLines(chunk.toString('utf8')));
+    // Hand the splitter raw bytes: it owns the stateful UTF-8 decode, so a
+    // multi-byte character straddling a socket chunk boundary survives.
+    socket.on('data', (chunk) => splitLines(chunk));
 
     // Dead-peer cleanup half of the idle watchdog (the relay pings often enough
     // that a healthy connection never trips this).

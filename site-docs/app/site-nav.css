@@ -51,6 +51,14 @@
   gap: 1.25rem;
 }
 
+@media (max-width: 1100px) {
+  .site-nav__right,
+  .site-nav__links,
+  .site-nav__actions {
+    gap: 0.9rem;
+  }
+}
+
 .site-nav__link {
   display: inline-flex;
   align-items: center;

@@ -1,5 +1,6 @@
 import type * as acp from '@agentclientprotocol/sdk';
 import type { AcpConfigOptionValue, SessionTurnInputConfig } from '@lody/shared';
+import { LODY_EXTENSION_METHODS, type LodySteeringCapability } from 'acp-extension-core';
 import { z } from 'zod';
 
 const BaseCapabilitySchema = z.object({
@@ -19,7 +20,8 @@ const AppliedParamsSchema = z.object({
 });
 
 export type AcknowledgedSteerCapability = {
-  provider: 'claudeCode' | 'codex';
+  transport: LodySteeringCapability['transport'];
+  promptMetaNamespace?: 'lody' | 'claudeCode';
   requestMethod?: string;
   appliedNotificationMethod: string;
   upstreamTurn: 'handoff' | 'same';
@@ -31,6 +33,31 @@ const normalizeMethod = (method: string): string => method.replace(/^_/, '');
 export function parseAcknowledgedSteerCapability(
   meta: Record<string, unknown> | null | undefined
 ): AcknowledgedSteerCapability | null {
+  const lody = meta?.lody;
+  const canonical =
+    typeof lody === 'object' && lody !== null
+      ? z
+          .object({
+            version: z.literal(1),
+            transport: z.enum(['request', 'prompt']),
+            upstreamTurn: z.enum(['same', 'handoff']),
+            configPolicy: z.enum(['active', 'apply']),
+          })
+          .safeParse((lody as Record<string, unknown>).steering)
+      : null;
+  if (canonical?.success) {
+    return {
+      transport: canonical.data.transport,
+      ...(canonical.data.transport === 'request'
+        ? { requestMethod: LODY_EXTENSION_METHODS.sessionSteer }
+        : { promptMetaNamespace: 'lody' as const }),
+      appliedNotificationMethod: normalizeMethod(LODY_EXTENSION_METHODS.sessionSteerApplied),
+      upstreamTurn: canonical.data.upstreamTurn,
+      configPolicy: canonical.data.configPolicy,
+    };
+  }
+
+  // One-release compatibility for runtimes predating Core v0.1.
   const codex = meta?.codex;
   const codexSteer =
     typeof codex === 'object' && codex !== null
@@ -38,7 +65,7 @@ export function parseAcknowledgedSteerCapability(
       : null;
   if (codexSteer?.success) {
     return {
-      provider: 'codex',
+      transport: 'request',
       requestMethod: codexSteer.data.method,
       appliedNotificationMethod: normalizeMethod(codexSteer.data.appliedNotification),
       upstreamTurn: 'same',
@@ -53,7 +80,8 @@ export function parseAcknowledgedSteerCapability(
       : null;
   if (claudeSteer?.success) {
     return {
-      provider: 'claudeCode',
+      transport: 'prompt',
+      promptMetaNamespace: 'claudeCode',
       appliedNotificationMethod: normalizeMethod(claudeSteer.data.appliedNotification),
       upstreamTurn: 'handoff',
       configPolicy: 'apply',
@@ -66,9 +94,13 @@ export function buildSteerRequestMeta(
   capability: AcknowledgedSteerCapability,
   steerId: string
 ): acp.PromptRequest['_meta'] | undefined {
-  return capability.provider === 'claudeCode'
-    ? { claudeCode: { steer: { id: steerId } } }
-    : undefined;
+  if (capability.promptMetaNamespace === 'lody') {
+    return { lody: { steer: { id: steerId } } };
+  }
+  if (capability.promptMetaNamespace === 'claudeCode') {
+    return { claudeCode: { steer: { id: steerId } } };
+  }
+  return undefined;
 }
 
 export function parseSteerAppliedParams(

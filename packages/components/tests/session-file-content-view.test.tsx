@@ -7,6 +7,7 @@ import {
   type CodeCollabV2OpenTextOk,
   type CodeCollabV2RefreshTextResponse,
   type CodeCollabV2SaveTextResponse,
+  type FilePreviewV3Response,
   getLodyMachinePresenceKey,
   getMachineRoomId,
   getServerNow,
@@ -16,7 +17,7 @@ import {
   type SessionId,
   type SessionMeta,
 } from '@lody/shared';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Provider, createStore } from 'jotai';
 import {
   SessionFileContentView,
@@ -33,6 +34,7 @@ import { lodyPresenceStatesAtom, lodyPresenceSyncStateAtom } from '../src/atoms/
 import { localProbeResultAtom } from '../src/atoms/local-probe';
 import { SaveTextConflictError } from '../src/hooks/use-code-collab-save-text';
 import { TooltipProvider } from '../src/ui/tooltip';
+import { writeTextToClipboard } from '../src/lib/clipboard';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -43,6 +45,10 @@ vi.mock('react-i18next', () => ({
       changeLanguage: () => Promise.resolve(),
     },
   }),
+}));
+
+vi.mock('../src/lib/clipboard', () => ({
+  writeTextToClipboard: vi.fn(async () => true),
 }));
 
 const monacoMockState = vi.hoisted(() => ({
@@ -83,6 +89,38 @@ vi.mock('../src/components/sessions/session-monaco-text-viewer', async () => {
   };
 });
 
+vi.mock('../src/components/sessions/managed-preview-surface', async () => {
+  const React = await import('react');
+  return {
+    ManagedPreviewSurface: (props: {
+      readonly viewerUrl: string;
+      readonly documentHtml?: string;
+      readonly command?: { readonly id: number };
+    }) =>
+      React.createElement('div', {
+        'data-testid': 'managed-html-preview',
+        'data-viewer-url': props.viewerUrl,
+        'data-document-html': props.documentHtml,
+        'data-command-id': props.command?.id,
+      }),
+  };
+});
+
+const installCredentiallessIframeSupportForTest = () => {
+  Object.defineProperty(HTMLIFrameElement.prototype, 'credentialless', {
+    configurable: true,
+    value: false,
+    writable: true,
+  });
+};
+
+beforeAll(installCredentiallessIframeSupportForTest);
+
+afterAll(() => {
+  delete (HTMLIFrameElement.prototype as HTMLIFrameElement & { credentialless?: boolean })
+    .credentialless;
+});
+
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 // jsdom does not implement object URLs; stub them for the image preview path.
@@ -113,6 +151,7 @@ afterEach(() => {
   monacoMockState.emitInitialContentChange = false;
   monacoMockState.onContentChange = undefined;
   monacoMockState.readOnly = undefined;
+  vi.mocked(writeTextToClipboard).mockClear();
   sharedCodeCollabTextState = createCodeCollabSessionFileProviderTextState();
   delete window.__LODY_ELECTRON__;
   delete window.api;
@@ -162,9 +201,7 @@ async function render(node: ReactNode, options: RenderOptions = {}): Promise<HTM
     });
   }
   await act(async () => {
-    root?.render(
-      createElement(Provider, { store }, createElement(TooltipProvider, null, node))
-    );
+    root?.render(createElement(Provider, { store }, createElement(TooltipProvider, null, node)));
   });
   return container;
 }
@@ -238,11 +275,39 @@ function codeCollabTextResult(
   };
 }
 
+function filePreviewResult(text: string, digest: CodeCollabV2FileDigest): FilePreviewV3Response {
+  return {
+    status: 'ok',
+    v: 3,
+    path: 'src/live.ts',
+    digest,
+    kind: 'text',
+    content: {
+      encoding: 'utf8-plain',
+      text,
+      rawBytes: new TextEncoder().encode(text).byteLength,
+    },
+    format: { eol: 'lf' },
+    sizeBytes: new TextEncoder().encode(text).byteLength,
+  };
+}
+
 function createCodeCollabRuntime(
   overrides: Partial<CodeCollabSessionFileProviderRuntime> = {}
 ): CodeCollabSessionFileProviderRuntime {
   return {
     sessionId: session.id,
+    previewFile: vi.fn(async (path: string, knownDigest?: string) =>
+      knownDigest === DIGEST_1
+        ? ({
+            status: 'unchanged',
+            v: 3,
+            path,
+            digest: DIGEST_1,
+            sizeBytes: 14,
+          } satisfies FilePreviewV3Response)
+        : filePreviewResult('let value = 1;', DIGEST_1)
+    ),
     openText: vi.fn(async () => codeCollabTextResult('ok', 'let value = 1;', DIGEST_1)),
     refreshText: vi.fn(async () => ({
       status: 'up_to_date',
@@ -384,9 +449,8 @@ describe('SessionFileContentView', () => {
       githubSession.id,
       'README.md'
     );
-    expect(view.querySelector('[data-testid="monaco-viewer"]')?.getAttribute('data-text')).toBe(
-      '# Local worktree'
-    );
+    expect(view.textContent).toContain('Local worktree');
+    expect(view.querySelector('[data-testid="monaco-viewer"]')).toBeNull();
     expect(view.textContent).not.toContain('Local project is unavailable');
   });
 
@@ -567,7 +631,8 @@ describe('SessionFileContentView', () => {
     );
     await flushMicrotasks();
 
-    expect(secondRuntime.openText).not.toHaveBeenCalled();
+    // A dirty editor must not be re-read at all; only the change check runs.
+    expect(secondRuntime.previewFile).not.toHaveBeenCalled();
     expect(secondRuntime.refreshText).toHaveBeenCalledWith('src/live.ts', DIGEST_1);
     expect(view.textContent).toContain('External change detected');
 
@@ -591,7 +656,7 @@ describe('SessionFileContentView', () => {
   it('refreshes clean provider text after provider rebuild', async () => {
     const firstRuntime = createCodeCollabRuntime();
     const secondRuntime = createCodeCollabRuntime({
-      refreshText: vi.fn(async () => codeCollabTextResult('updated', 'let value = 2;', DIGEST_2)),
+      previewFile: vi.fn(async () => filePreviewResult('let value = 2;', DIGEST_2)),
     });
     const firstProvider = createCodeCollabProvider(firstRuntime);
     const secondProvider = createCodeCollabProvider(secondRuntime);
@@ -614,7 +679,7 @@ describe('SessionFileContentView', () => {
     );
     await flushMicrotasks();
 
-    expect(secondRuntime.refreshText).toHaveBeenCalledWith('src/live.ts', DIGEST_1);
+    expect(secondRuntime.previewFile).toHaveBeenCalledWith('src/live.ts', DIGEST_1);
     expect(view.querySelector('[data-testid="monaco-viewer"]')?.getAttribute('data-text')).toBe(
       'let value = 2;'
     );
@@ -748,7 +813,7 @@ describe('SessionFileContentView', () => {
     expect(openFile).toHaveBeenCalledTimes(1);
   });
 
-  it('unsubscribes provider live text when a provider tab becomes inactive', async () => {
+  it('unsubscribes provider live text without discarding pending edits when a tab is inactive', async () => {
     const provider = createFakeSessionFileProvider({
       files: [
         {
@@ -765,6 +830,8 @@ describe('SessionFileContentView', () => {
     const unsubscribe = vi.fn();
     const subscribeText = vi.fn(() => unsubscribe);
     provider.subscribeText = subscribeText;
+    provider.updateLiveText = vi.fn(async () => undefined);
+    const saveText = vi.spyOn(provider, 'saveText');
 
     await render(
       createElement(SessionFileContentView, {
@@ -774,6 +841,7 @@ describe('SessionFileContentView', () => {
         fileId: 't:live',
         fileProvider: provider,
         fileProviderPending: false,
+        fileProviderRole: 'write',
         active: true,
       })
     );
@@ -781,23 +849,42 @@ describe('SessionFileContentView', () => {
 
     expect(subscribeText).toHaveBeenCalledTimes(1);
     expect(subscribeText).toHaveBeenCalledWith('t:live', expect.any(Function));
-
     await act(async () => {
-      root?.render(
-        createElement(SessionFileContentView, {
-          sessionId: session.id,
-          session,
-          filePath: 'src/live.ts',
-          fileId: 't:live',
-          fileProvider: provider,
-          fileProviderPending: false,
-          active: false,
-        })
-      );
+      monacoMockState.onContentChange?.('let value = 2;');
     });
+
+    await rerender(
+      createElement(SessionFileContentView, {
+        sessionId: session.id,
+        session,
+        filePath: 'src/live.ts',
+        fileId: 't:live',
+        fileProvider: provider,
+        fileProviderPending: false,
+        fileProviderRole: 'write',
+        active: false,
+      })
+    );
     await flushMicrotasks();
 
     expect(unsubscribe).toHaveBeenCalledTimes(1);
+
+    await rerender(
+      createElement(SessionFileContentView, {
+        sessionId: session.id,
+        session,
+        filePath: 'src/live.ts',
+        fileId: 't:live',
+        fileProvider: provider,
+        fileProviderPending: false,
+        fileProviderRole: 'write',
+        active: true,
+      })
+    );
+    await flushMicrotasks();
+    await clickSave(container as HTMLDivElement);
+
+    expect(saveText).toHaveBeenCalledWith('t:live', 'let value = 2;');
   });
 
   it('does not treat Monaco initial content events as provider edits', async () => {
@@ -891,6 +978,160 @@ describe('SessionFileContentView', () => {
     expect(monacoMockState.unmountCount).toBe(1);
   });
 
+  it('renders Markdown files by default and can switch to the source editor', async () => {
+    const markdown = '# Rendered by default';
+    const provider = createFakeSessionFileProvider({
+      files: [{ path: 'README.md', kind: 'text', sourceState: 'live-readonly' }],
+      snapshots: { 'README.md': { kind: 'text', text: markdown } },
+    });
+
+    const view = await render(
+      createElement(SessionFileContentView, {
+        sessionId: session.id,
+        session,
+        filePath: 'README.md',
+        fileProvider: provider,
+        fileProviderPending: false,
+      })
+    );
+    await flushMicrotasks();
+
+    expect(view.textContent).toContain('Rendered by default');
+    expect(view.querySelector('[data-testid="monaco-viewer"]')).toBeNull();
+
+    const previewEye = Array.from(view.querySelectorAll('button')).find(
+      (button) => button.getAttribute('aria-label') === 'Hide preview'
+    );
+    expect(previewEye).not.toBeUndefined();
+
+    await act(async () => {
+      previewEye?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await flushMicrotasks();
+
+    expect(view.querySelector('[data-testid="monaco-viewer"]')?.getAttribute('data-text')).toBe(
+      markdown
+    );
+    expect(view.querySelector('button[aria-label="Preview"]')).not.toBeNull();
+  });
+
+  it('copies the full Markdown source from the toolbar and external mobile request', async () => {
+    const markdown = '# Copy me\n\n- whole document';
+    const provider = createFakeSessionFileProvider({
+      files: [{ path: 'README.md', kind: 'text', sourceState: 'live-readonly' }],
+      snapshots: { 'README.md': { kind: 'text', text: markdown } },
+    });
+    const renderView = (copyMarkdownRequestSeq: number) =>
+      createElement(SessionFileContentView, {
+        sessionId: session.id,
+        session,
+        filePath: 'README.md',
+        fileProvider: provider,
+        fileProviderPending: false,
+        copyMarkdownRequestSeq,
+      });
+
+    const view = await render(renderView(0));
+    await flushMicrotasks();
+
+    expect(view.querySelector('[data-native-selection-allow]')).not.toBeNull();
+    await act(async () => {
+      view.querySelector<HTMLButtonElement>('button[aria-label="Copy full Markdown"]')?.click();
+    });
+    await flushMicrotasks();
+    expect(writeTextToClipboard).toHaveBeenLastCalledWith(markdown);
+
+    await rerender(renderView(1));
+    await flushMicrotasks();
+    expect(writeTextToClipboard).toHaveBeenCalledTimes(2);
+    expect(writeTextToClipboard).toHaveBeenLastCalledWith(markdown);
+  });
+
+  it('uses the native selectable text surface for Markdown source on mobile', async () => {
+    const markdown = '# Native selection\n\nLong press me.';
+    const provider = createFakeSessionFileProvider({
+      files: [{ path: 'README.md', kind: 'text', sourceState: 'live-readonly' }],
+      snapshots: { 'README.md': { kind: 'text', text: markdown } },
+    });
+
+    const view = await render(
+      createElement(SessionFileContentView, {
+        sessionId: session.id,
+        session,
+        filePath: 'README.md',
+        fileProvider: provider,
+        fileProviderPending: false,
+        preferNativeMarkdownSelection: true,
+      })
+    );
+    await flushMicrotasks();
+
+    await act(async () => {
+      view.querySelector<HTMLButtonElement>('button[aria-label="Hide preview"]')?.click();
+    });
+    await flushMicrotasks();
+
+    const source = view.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Markdown source"]'
+    );
+    expect(source?.value).toBe(markdown);
+    expect(source?.readOnly).toBe(true);
+    expect(source?.hasAttribute('data-native-selection-allow')).toBe(true);
+    expect(view.querySelector('[data-testid="monaco-viewer"]')).toBeNull();
+  });
+
+  it('copies unsaved Markdown edits from the mobile native source', async () => {
+    const provider = createFakeSessionFileProvider({
+      files: [
+        {
+          path: 'README.md',
+          fileId: 't:readme',
+          kind: 'text',
+          sourceState: 'live-collaborative',
+        },
+      ],
+      snapshots: { 'README.md': { kind: 'text', text: '# Original' } },
+    });
+    const view = await render(
+      createElement(SessionFileContentView, {
+        sessionId: session.id,
+        session,
+        filePath: 'README.md',
+        fileId: 't:readme',
+        fileProvider: provider,
+        fileProviderPending: false,
+        fileProviderRole: 'write',
+        preferNativeMarkdownSelection: true,
+      })
+    );
+    await flushMicrotasks();
+
+    await act(async () => {
+      view.querySelector<HTMLButtonElement>('button[aria-label="Hide preview"]')?.click();
+    });
+    const source = view.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Markdown source"]'
+    );
+    expect(source?.readOnly).toBe(false);
+
+    const editedMarkdown = '# Edited locally\n\nNot saved yet.';
+    await act(async () => {
+      const valueSetter = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value'
+      )?.set;
+      valueSetter?.call(source, editedMarkdown);
+      source?.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await flushMicrotasks();
+
+    await act(async () => {
+      view.querySelector<HTMLButtonElement>('button[aria-label="Copy full Markdown"]')?.click();
+    });
+    await flushMicrotasks();
+    expect(writeTextToClipboard).toHaveBeenLastCalledWith(editedMarkdown);
+  });
+
   it('renders SVG text files as an image by default with a preview eye toggle', async () => {
     const svg = '<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>';
     const provider = createFakeSessionFileProvider({
@@ -941,6 +1182,254 @@ describe('SessionFileContentView', () => {
     expect(view.querySelector('img')).not.toBeNull();
     expect(view.querySelector('[data-testid="monaco-viewer"]')).toBeNull();
     expect(previewEye()?.getAttribute('aria-label')).toBe('Hide preview');
+  });
+
+  it('opens HTML snapshots in an isolated srcdoc preview and switches back to source', async () => {
+    const provider = createFakeSessionFileProvider({
+      files: [{ path: 'output/result.HTM', kind: 'text', sourceState: 'live-readonly' }],
+      snapshots: {
+        'output/result.HTM': { kind: 'text', text: '<!doctype html><h1>Agent result</h1>' },
+      },
+    });
+    const renderView = (active = true) =>
+      createElement(SessionFileContentView, {
+        sessionId: session.id,
+        session,
+        filePath: 'output/result.HTM',
+        fileProvider: provider,
+        fileProviderPending: false,
+        active,
+      });
+
+    const view = await render(renderView());
+    await flushMicrotasks();
+    expect(view.querySelector('[data-testid="monaco-viewer"]')).not.toBeNull();
+    expect(view.querySelector('[data-testid="managed-html-preview"]')).toBeNull();
+
+    await act(async () => {
+      view
+        .querySelector<HTMLButtonElement>('button[aria-label="Preview HTML (runs scripts)"]')
+        ?.click();
+    });
+    await flushMicrotasks();
+
+    const managedPreview = view.querySelector('[data-testid="managed-html-preview"]');
+    expect(managedPreview?.getAttribute('data-viewer-url')).toBe(
+      'https://html-file-preview.invalid/file/relative?path=output%2Fresult.HTM'
+    );
+    expect(managedPreview?.getAttribute('data-document-html')).toContain('<h1>Agent result</h1>');
+    expect(managedPreview?.getAttribute('data-document-html')).toContain(
+      'data-lody-visual-annotation-runtime="true"'
+    );
+    expect(managedPreview?.getAttribute('data-document-html')).toContain(
+      'http-equiv="Content-Security-Policy"'
+    );
+
+    await act(async () => {
+      view.querySelector<HTMLButtonElement>('button[aria-label="Reload"]')?.click();
+    });
+    await flushMicrotasks();
+    expect(
+      view.querySelector('[data-testid="managed-html-preview"]')?.getAttribute('data-command-id')
+    ).toBe('1');
+
+    await rerender(renderView(false));
+    expect(view.querySelector('[data-testid="managed-html-preview"]')).toBeNull();
+    await rerender(renderView());
+    expect(view.querySelector('[data-testid="managed-html-preview"]')).not.toBeNull();
+    expect(
+      view.querySelector('[data-testid="managed-html-preview"]')?.getAttribute('data-command-id')
+    ).toBeNull();
+
+    await act(async () => {
+      view.querySelector<HTMLButtonElement>('button[aria-label="Hide preview"]')?.click();
+      await Promise.resolve();
+    });
+    await flushMicrotasks();
+
+    expect(view.querySelector('[data-testid="managed-html-preview"]')).toBeNull();
+    expect(view.querySelector('[data-testid="monaco-viewer"]')).not.toBeNull();
+  });
+
+  it('enters rendered HTML for an explicit attachment preview request', async () => {
+    const provider = createFakeSessionFileProvider({
+      files: [{ path: 'artifacts/result.html', kind: 'text', sourceState: 'live-readonly' }],
+      snapshots: {
+        'artifacts/result.html': { kind: 'text', text: '<!doctype html><h1>Artifact</h1>' },
+      },
+    });
+    const view = await render(
+      createElement(SessionFileContentView, {
+        sessionId: session.id,
+        session,
+        filePath: 'artifacts/result.html',
+        fileProvider: provider,
+        fileProviderPending: false,
+        htmlPreviewRequestSeq: 1,
+      })
+    );
+    await flushMicrotasks();
+
+    expect(view.querySelector('[data-testid="managed-html-preview"]')).not.toBeNull();
+    expect(view.querySelector('[data-testid="monaco-viewer"]')).toBeNull();
+  });
+
+  it('previews the latest editor text instead of the opened HTML snapshot', async () => {
+    const provider = createFakeSessionFileProvider({
+      files: [
+        {
+          path: 'result.html',
+          fileId: 't:result',
+          kind: 'text',
+          sourceState: 'live-collaborative',
+        },
+      ],
+      snapshots: { 'result.html': { kind: 'text', text: '<h1>Opened</h1>' } },
+    });
+    const saveText = vi.spyOn(provider, 'saveText');
+    const view = await render(
+      createElement(SessionFileContentView, {
+        sessionId: session.id,
+        session,
+        filePath: 'result.html',
+        fileId: 't:result',
+        fileProvider: provider,
+        fileProviderPending: false,
+        fileProviderRole: 'write',
+      })
+    );
+    await flushMicrotasks();
+
+    await act(async () => {
+      monacoMockState.onContentChange?.('<h1>Edited</h1>');
+    });
+    await act(async () => {
+      view
+        .querySelector<HTMLButtonElement>('button[aria-label="Preview HTML (runs scripts)"]')
+        ?.click();
+    });
+    await flushMicrotasks();
+
+    const documentHtml = view
+      .querySelector('[data-testid="managed-html-preview"]')
+      ?.getAttribute('data-document-html');
+    expect(documentHtml).toContain('<h1>Edited</h1>');
+    expect(documentHtml).not.toContain('<h1>Opened</h1>');
+
+    await clickSave(view);
+    await flushMicrotasks();
+    expect(saveText).toHaveBeenCalledWith('t:result', '<h1>Edited</h1>');
+
+    await act(async () => {
+      view.querySelector<HTMLButtonElement>('button[aria-label="Hide preview"]')?.click();
+    });
+    await flushMicrotasks();
+    expect(view.querySelector('[data-testid="monaco-viewer"]')?.getAttribute('data-text')).toBe(
+      '<h1>Edited</h1>'
+    );
+  });
+
+  it('returns to code mode when the keyed session target changes', async () => {
+    const provider = createFakeSessionFileProvider({
+      files: [{ path: 'result.html', kind: 'text', sourceState: 'live-readonly' }],
+      snapshots: { 'result.html': { kind: 'text', text: '<h1>Preview</h1>' } },
+    });
+    const nextSession = {
+      ...session,
+      id: 'session-file-content-view-next' as SessionId,
+    } satisfies SessionMeta;
+    const renderTarget = (target: SessionMeta) =>
+      createElement(SessionFileContentView, {
+        key: `${target.id}:html-tab`,
+        sessionId: target.id,
+        session: target,
+        filePath: 'result.html',
+        fileProvider: provider,
+        fileProviderPending: false,
+      });
+    const view = await render(renderTarget(session));
+    await flushMicrotasks();
+
+    await act(async () => {
+      view
+        .querySelector<HTMLButtonElement>('button[aria-label="Preview HTML (runs scripts)"]')
+        ?.click();
+    });
+    await flushMicrotasks();
+    expect(view.querySelector('[data-testid="managed-html-preview"]')).not.toBeNull();
+
+    await rerender(renderTarget(nextSession));
+    await flushMicrotasks();
+    expect(view.querySelector('[data-testid="managed-html-preview"]')).toBeNull();
+    expect(view.querySelector('button[aria-label="Preview HTML (runs scripts)"]')).not.toBeNull();
+  });
+
+  it('does not offer script execution without credentialless iframe support', async () => {
+    delete (HTMLIFrameElement.prototype as HTMLIFrameElement & { credentialless?: boolean })
+      .credentialless;
+    try {
+      const provider = createFakeSessionFileProvider({
+        files: [{ path: 'result.html', kind: 'text', sourceState: 'live-readonly' }],
+        snapshots: { 'result.html': { kind: 'text', text: '<h1>Preview</h1>' } },
+      });
+      const view = await render(
+        createElement(SessionFileContentView, {
+          sessionId: session.id,
+          session,
+          filePath: 'result.html',
+          fileProvider: provider,
+          fileProviderPending: false,
+        })
+      );
+      await flushMicrotasks();
+
+      expect(view.querySelector('[data-testid="monaco-viewer"]')).not.toBeNull();
+      expect(view.querySelector('button[aria-label="Preview HTML (runs scripts)"]')).toBeNull();
+    } finally {
+      installCredentiallessIframeSupportForTest();
+    }
+  });
+
+  it('does not execute a truncated HTML snapshot', async () => {
+    Object.defineProperty(window, '__LODY_ELECTRON__', {
+      configurable: true,
+      value: true,
+    });
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {
+        readSessionWorktreeFile: vi.fn(async () => ({
+          path: 'large.html',
+          content: '<script>window.partial = true',
+          truncated: true,
+        })),
+      },
+    });
+    const githubSession = {
+      ...session,
+      status: { type: 'idle' },
+      project: {
+        kind: 'github',
+        repoFullName: 'loro-dev/lody',
+        branch: 'main',
+      },
+    } satisfies SessionMeta;
+    const view = await render(
+      createElement(SessionFileContentView, {
+        sessionId: githubSession.id,
+        session: githubSession,
+        filePath: 'large.html',
+        fileProvider: null,
+        fileProviderPending: false,
+        active: true,
+      }),
+      { localMachine: true }
+    );
+    await flushMicrotasks();
+
+    expect(view.querySelector('[data-testid="monaco-viewer"]')).not.toBeNull();
+    expect(view.querySelector('button[aria-label="Preview HTML (runs scripts)"]')).toBeNull();
+    expect(view.querySelector('[data-testid="managed-html-preview"]')).toBeNull();
   });
 
   it('does not show the preview eye toggle for non-previewable text files', async () => {

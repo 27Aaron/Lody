@@ -21,11 +21,16 @@ import {
 } from '../src/hooks/use-code-collab-session-file-provider';
 import { sessionMetaCacheAtom } from '../src/atoms/doc-meta';
 import { runtimeAtom, type WorkspaceRuntime } from '../src/atoms/runtime';
+import {
+  createCodeCollabFileIndexCache,
+  type CodeCollabFileIndexCache,
+} from '../src/lib/code-collab-file-index-cache';
 
 let root: Root | null = null;
 let container: HTMLDivElement | null = null;
+const fileIndexCaches: CodeCollabFileIndexCache[] = [];
 
-afterEach(() => {
+afterEach(async () => {
   if (root && container) {
     act(() => {
       root?.unmount();
@@ -34,6 +39,7 @@ afterEach(() => {
   root = null;
   container?.remove();
   container = null;
+  await Promise.all(fileIndexCaches.splice(0).map((cache) => cache.dispose()));
 });
 
 const makeSyncedFlockRoom = (firstSyncedWithRemote: Promise<void> = Promise.resolve()) => {
@@ -57,13 +63,45 @@ const makeSyncedFlockRoom = (firstSyncedWithRemote: Promise<void> = Promise.reso
   };
 };
 
-const createRuntime = (overrides: Record<string, unknown>): WorkspaceRuntime =>
-  ({
+const createRuntime = (overrides: Record<string, unknown>): WorkspaceRuntime => {
+  const runtime = {
     workspaceId: 'workspace-1',
     workspaceSlug: 'workspace',
     prepareSessionTarget: vi.fn(async () => 'cloud' as const),
     ...overrides,
-  }) as unknown as WorkspaceRuntime;
+  } as unknown as WorkspaceRuntime;
+  const fileIndexHandles = new Map<
+    string,
+    Promise<Awaited<ReturnType<WorkspaceRuntime['repo']['openFlockDoc']>>>
+  >();
+  const getFileIndexHandle = (
+    flockDocId: string
+  ): Promise<Awaited<ReturnType<WorkspaceRuntime['repo']['openFlockDoc']>>> => {
+    let handlePromise = fileIndexHandles.get(flockDocId);
+    if (!handlePromise) {
+      handlePromise = runtime.repo.openFlockDoc(flockDocId);
+      fileIndexHandles.set(flockDocId, handlePromise);
+      void handlePromise.catch(() => {
+        if (fileIndexHandles.get(flockDocId) === handlePromise) {
+          fileIndexHandles.delete(flockDocId);
+        }
+      });
+    }
+    return handlePromise;
+  };
+  const cache = createCodeCollabFileIndexCache({
+    acquireFlockDoc: async (flockDocId) => ({
+      flock: (await getFileIndexHandle(flockDocId)).flock,
+      release: async () => undefined,
+    }),
+    joinFlockDocRoom: async (flockDocId) => (await getFileIndexHandle(flockDocId)).joinRoom(),
+    unloadFlockDoc: async (flockDocId) => {
+      fileIndexHandles.delete(flockDocId);
+    },
+  });
+  fileIndexCaches.push(cache);
+  return { ...runtime, codeCollabFileIndexCache: cache };
+};
 
 describe('readCodeCollabFileIndexFromFlock', () => {
   it('reads path-keyed file index rows and skips invalid rows', () => {
@@ -136,6 +174,134 @@ describe('materializeCodeCollabV2FileIndexForFileProvider', () => {
 });
 
 describe('useCodeCollabSessionFileProvider', () => {
+  it('uses the local IPC snapshot before subscribing to Flock updates', async () => {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const store = createStore();
+    const sessionId = 'session-local-file-index' as SessionId;
+    const machineId = 'machine-local' as MachineId;
+    let fileIndexListener:
+      | ((batch: { events: readonly { key: readonly unknown[]; value?: unknown }[] }) => void)
+      | null = null;
+    const fileIndexFlock = {
+      scan: vi.fn(() => []),
+      subscribe: vi.fn((listener) => {
+        fileIndexListener = listener;
+        return vi.fn();
+      }),
+    };
+    const firstSyncedWithRemote = new Promise<void>(() => undefined);
+    const joinFileIndexRoom = vi.fn(async () => makeSyncedFlockRoom(firstSyncedWithRemote));
+    const requestLocalCodeCollabFileIndex = vi.fn(async () => ({
+      status: 'ok' as const,
+      ownerSessionId: sessionId,
+      fileIndex: {
+        'src/local.ts': { kind: 'file' as const, change: { diff: [2, 1] as [number, number] } },
+      },
+      updatedAtMs: 123,
+    }));
+    const openFlockDoc = vi.fn(async (flockDocId: string) => {
+      if (flockDocId !== 'workspace-1:fi:session-local-file-index') {
+        throw new Error(`Unexpected Flock doc: ${flockDocId}`);
+      }
+      return {
+        flock: fileIndexFlock,
+        joinRoom: joinFileIndexRoom,
+      };
+    });
+    const prepareSessionTarget = vi.fn(async () => 'local' as const);
+    store.set(
+      runtimeAtom,
+      createRuntime({
+        prepareSessionTarget,
+        repo: { openFlockDoc },
+        requestLocalCodeCollabFileIndex,
+      })
+    );
+    store.set(sessionMetaCacheAtom, {
+      [getSessionRoomId(sessionId)]: {
+        id: sessionId,
+        machineId,
+        userId: 'user-1',
+      } as SessionMeta,
+    });
+
+    const updates: UseCodeCollabSessionFileProviderResult[] = [];
+    render(
+      createElement(
+        Provider,
+        { store },
+        createElement(ProviderHarness, {
+          sessionId,
+          machineId,
+          onUpdate: (result) => updates.push(result),
+        })
+      )
+    );
+
+    await flushMicrotasks(8);
+
+    expect(prepareSessionTarget).toHaveBeenCalledWith(sessionId, machineId);
+    expect(requestLocalCodeCollabFileIndex).toHaveBeenCalledWith(
+      machineId,
+      { sessionId },
+      { ownerSessionId: sessionId }
+    );
+    expect(openFlockDoc).toHaveBeenCalledWith('workspace-1:fi:session-local-file-index');
+    expect(joinFileIndexRoom).toHaveBeenCalledTimes(1);
+    expect(fileIndexListener).not.toBeNull();
+    await expect(updates.at(-1)?.provider?.listFiles()).resolves.toEqual([
+      expect.objectContaining({ path: 'src/local.ts' }),
+    ]);
+    await expect(updates.at(-1)?.provider?.listChangedFiles()).resolves.toMatchObject({
+      status: 'ready',
+      files: [expect.objectContaining({ path: 'src/local.ts', add: 2, del: 1 })],
+    });
+
+    await act(async () => {
+      // Joining an old local Flock can momentarily import rows from before the
+      // CLI's fresh IPC scan. The background CLI reconcile must later restore
+      // the authoritative state through the same event subscription.
+      fileIndexListener?.({
+        events: [
+          {
+            key: ['src/stale.ts'],
+            value: { kind: 'text', change: { diff: [1, 0] as [number, number] } },
+          },
+        ],
+      });
+    });
+    await flushMicrotasks(8);
+
+    await expect(updates.at(-1)?.provider?.listFiles()).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: 'src/local.ts' }),
+        expect.objectContaining({ path: 'src/stale.ts' }),
+      ])
+    );
+    await expect(updates.at(-1)?.provider?.listChangedFiles()).resolves.toMatchObject({
+      status: 'ready',
+      files: expect.arrayContaining([
+        expect.objectContaining({ path: 'src/local.ts', add: 2, del: 1 }),
+        expect.objectContaining({ path: 'src/stale.ts', add: 1, del: 0 }),
+      ]),
+    });
+
+    await act(async () => {
+      fileIndexListener?.({
+        events: [{ key: ['src/stale.ts'] }],
+      });
+    });
+    await flushMicrotasks(8);
+
+    await expect(updates.at(-1)?.provider?.listFiles()).resolves.toEqual([
+      expect.objectContaining({ path: 'src/local.ts' }),
+    ]);
+    await expect(updates.at(-1)?.provider?.listChangedFiles()).resolves.toMatchObject({
+      status: 'ready',
+      files: [expect.objectContaining({ path: 'src/local.ts', add: 2, del: 1 })],
+    });
+  });
+
   it('publishes the remote file index after a read-only Flock catchup', async () => {
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     const store = createStore();
@@ -575,13 +741,11 @@ describe('useCodeCollabSessionFileProvider', () => {
       subscribe: vi.fn(() => vi.fn()),
     };
     let resolveOpenFlockDoc:
-      | ((
-          value: {
-            flock: typeof fakeFlock;
-            syncOnce: () => Promise<void>;
-            joinRoom: () => Promise<ReturnType<typeof makeSyncedFlockRoom>>;
-          }
-        ) => void)
+      | ((value: {
+          flock: typeof fakeFlock;
+          syncOnce: () => Promise<void>;
+          joinRoom: () => Promise<ReturnType<typeof makeSyncedFlockRoom>>;
+        }) => void)
       | null = null;
     const syncOnce = vi.fn(async () => {
       remoteVisible = true;
@@ -797,6 +961,72 @@ describe('useCodeCollabSessionFileProvider', () => {
       .map((update) => update.provider)
       .filter((provider): provider is NonNullable<typeof provider> => provider !== null);
     expect(new Set(providers).size).toBe(1);
+  });
+
+  it('stops exposing the old file index while the same workspace runtime is replaced', async () => {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const store = createStore();
+    const sessionId = 'session-runtime-replaced' as SessionId;
+    const machineId = 'machine-runtime-replaced' as MachineId;
+    const makeFlock = (path: string) => ({
+      scan: vi.fn(() => [{ key: [path], value: { kind: 'text' } }]),
+      version: vi.fn(() => ({
+        'test-peer': { physicalTime: 1, logicalCounter: 0 },
+      })),
+      subscribe: vi.fn(() => vi.fn()),
+    });
+    const makeHandle = (path: string) => ({
+      flock: makeFlock(path),
+      syncOnce: vi.fn(),
+      joinRoom: vi.fn(async () => makeSyncedFlockRoom()),
+    });
+    const firstRuntime = createRuntime({
+      repo: { openFlockDoc: vi.fn(async () => makeHandle('old.ts')) },
+    });
+    let resolveSecondHandle!: (handle: ReturnType<typeof makeHandle>) => void;
+    const secondHandle = new Promise<ReturnType<typeof makeHandle>>((resolve) => {
+      resolveSecondHandle = resolve;
+    });
+    const secondRuntime = createRuntime({
+      repo: { openFlockDoc: vi.fn(async () => await secondHandle) },
+    });
+    store.set(runtimeAtom, firstRuntime);
+    store.set(sessionMetaCacheAtom, {
+      [getSessionRoomId(sessionId)]: {
+        id: sessionId,
+        machineId,
+        userId: 'user-1',
+      } as SessionMeta,
+    });
+
+    const updates: UseCodeCollabSessionFileProviderResult[] = [];
+    render(
+      createElement(
+        Provider,
+        { store },
+        createElement(ProviderHarness, {
+          sessionId,
+          machineId,
+          onUpdate: (result) => updates.push(result),
+        })
+      )
+    );
+    await flushMicrotasks();
+    await expect(updates.at(-1)?.provider?.listFiles()).resolves.toEqual([
+      expect.objectContaining({ path: 'old.ts' }),
+    ]);
+
+    act(() => {
+      store.set(runtimeAtom, secondRuntime);
+    });
+    await flushMicrotasks(2);
+    expect(updates.at(-1)).toMatchObject({ status: 'loading', provider: null });
+
+    resolveSecondHandle(makeHandle('new.ts'));
+    await flushMicrotasks();
+    await expect(updates.at(-1)?.provider?.listFiles()).resolves.toEqual([
+      expect.objectContaining({ path: 'new.ts' }),
+    ]);
   });
 });
 

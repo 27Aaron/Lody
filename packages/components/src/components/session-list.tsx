@@ -40,7 +40,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from 'react';
-import { useAtom } from 'jotai';
+import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import { useTranslation } from 'react-i18next';
 import { TooltipProvider } from '@/ui/tooltip';
 import {
@@ -59,11 +59,25 @@ import type {
   SessionPullRequestCiState,
   SessionPullRequestReadiness,
 } from '@lody/shared';
-import { ONLY_CHATS_KEY, sidebarShowFullListAtom } from '@/atoms/focus-layer';
+import {
+  ONLY_CHATS_KEY,
+  sidebarCollapsedOpenedBySessionsAtom,
+  sidebarShowFullListAtom,
+  toggleSidebarCollapsedOpenedBySessionAtom,
+} from '@/atoms/focus-layer';
+import {
+  buildOpenedBySessionTree,
+  countOpenedByTreeRoots,
+  hasOpenedByTreeNesting,
+  normalizeSessionRowId,
+  pinnedFirstRootRank,
+  type OpenedBySessionTreeNode,
+} from '@/lib/session-opened-by-tree';
+import { startSessionMentionDrag } from '@/lib/session-mention-drag';
 import { SwipeActionRow } from '@/components/shared/swipe-action-row';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { useStableNow } from '@/hooks/use-stable-now';
-import { formatCompactRelativeTime } from '@/lib/format-relative-time';
+import { formatCompactRelativeTime, type RelativeTimeValue } from '@/lib/format-relative-time';
 import {
   GitHubOwnerIcon,
   SessionPrIcon,
@@ -72,6 +86,9 @@ import {
   SidebarRowArchiveButton,
   SidebarRowEndSlot,
   SessionMergeablePill,
+  SessionOpenedByTreeRow,
+  SessionRowOpenedByMenuItems,
+  buildSessionRowOpenedByTreeSlot,
 } from '@/components/sidebar-row-shared';
 import { SessionInfoHoverCard } from '@/components/session-info-hover-card';
 import type { SessionSharingState } from '@/lib/session-sharing';
@@ -90,6 +107,25 @@ export type SessionListRowOwner = {
 export type SessionListRow = {
   sessionId: string;
   title: string;
+  /**
+   * PRECISE opener: the Session that created/opened this one
+   * (`SessionMeta.openedBySessionId`). Presentation-only provenance; it is NOT
+   * `parentSessionId` and must never be treated as one. Drives "Go to Opener
+   * Session", so it keeps pointing at the exact opener even when that opener is
+   * a child Tab with no sidebar row. Navigation pairs it with
+   * `openedByRowSessionId` to open the root route and restore this exact Tab.
+   * See `@/lib/session-opened-by-tree`.
+   */
+  openedBySessionId?: string | null;
+  /**
+   * Sidebar row this one nests under — the opener's ROOT Session when the
+   * opener is a child Tab (child Tabs have no sidebar row), otherwise the opener
+   * itself. This is the route half of child-Tab navigation as well as the
+   * nesting target; it never replaces the precise provenance id. Resolved by
+   * `buildSidebarOpenerRowResolver` in `sessions/session-list-rows.ts`.
+   * Falls back to `openedBySessionId` when the caller did not resolve it.
+   */
+  openedByRowSessionId?: string | null;
   /** Machine the session runs on; the sidebar resolves it to `machineName`. */
   machineId?: MachineId;
   /** Resolved machine display name, surfaced in the desktop hover info card. */
@@ -146,6 +182,8 @@ export type SessionListProps = {
   className?: string;
   onSelect?: (sessionId: string) => void;
   onSelectSession?: (sessionId: string) => void;
+  /** Navigate to a root Session while restoring the precise child Tab. */
+  onNavigateSessionTab?: (sessionId: string, tabSessionId: string) => void;
   onToggleRepoCollapsed?: (repoFullName: string) => void;
   onToggleChatsCollapsed?: () => void;
   onArchiveSession?: (sessionId: string) => void;
@@ -190,11 +228,58 @@ export type SessionRowGroup = {
 
 export const MAX_VISIBLE_SESSIONS = 5;
 
+/** Tree accessors shared by the renderer and the keyboard navigation model. */
+export const SESSION_ROW_OPENED_BY_TREE_ACCESSORS = {
+  getId: (session: SessionListRow) => session.sessionId,
+  getOpenedBySessionId: (session: SessionListRow) =>
+    session.openedByRowSessionId ?? session.openedBySessionId ?? null,
+} as const;
+
+/**
+ * Group ranking key. Matches `sortSessionRowsByLatestMessage` (pinned first,
+ * then latest activity) so the tree's root ranking cannot undo that order.
+ */
+function sessionRowRootRank(session: SessionListRow): number {
+  return pinnedFirstRootRank(getSortKey(session), session.isPinned);
+}
+
+/** Stable identity for a collapsed group's (absent) rows. */
+const EMPTY_TREE_NODES: OpenedBySessionTreeNode<SessionListRow>[] = [];
+
+/**
+ * Rows a group renders, in render order, with their "opened by" tree geometry.
+ * The preview cap counts TOP-LEVEL rows only, so a collapsed preview never
+ * splits an opener from the Sessions it opened.
+ */
+export function getVisibleSessionGroupTree(
+  group: SessionRowGroup,
+  whetherShowFullList: boolean,
+  collapsedOpenedBySessionIds?: Record<string, boolean>
+): OpenedBySessionTreeNode<SessionListRow>[] {
+  return buildOpenedBySessionTree(group.sessions, {
+    ...SESSION_ROW_OPENED_BY_TREE_ACCESSORS,
+    isCollapsed: (openerId) => collapsedOpenedBySessionIds?.[openerId] === true,
+    rootRank: sessionRowRootRank,
+    ...(whetherShowFullList ? {} : { maxRoots: MAX_VISIBLE_SESSIONS }),
+  });
+}
+
 export function getVisibleSessionGroupRows(
   group: SessionRowGroup,
-  whetherShowFullList: boolean
+  whetherShowFullList: boolean,
+  collapsedOpenedBySessionIds?: Record<string, boolean>
 ): SessionListRow[] {
-  return whetherShowFullList ? group.sessions : group.sessions.slice(0, MAX_VISIBLE_SESSIONS);
+  return getVisibleSessionGroupTree(group, whetherShowFullList, collapsedOpenedBySessionIds).map(
+    (node) => node.item
+  );
+}
+
+/** True when the group has more TOP-LEVEL rows than the compact preview shows. */
+export function sessionGroupOverflowsPreview(group: SessionRowGroup): boolean {
+  return (
+    countOpenedByTreeRoots(group.sessions, SESSION_ROW_OPENED_BY_TREE_ACCESSORS) >
+    MAX_VISIBLE_SESSIONS
+  );
 }
 
 function SessionListSkeleton({ className }: { className?: string }) {
@@ -358,7 +443,17 @@ function reconcileShowFullListByGroups(
 // session is a worktree by construction — so an inline icon on every row in
 // the GitHub group is redundant noise. Local-project sessions get the icon
 // elsewhere in LocalProjectSessionItem, where it's a meaningful distinction.
-function SessionRowTime({ relativeTime, className }: { relativeTime: string; className?: string }) {
+function SessionRowTime({
+  latestMessageAt,
+  className,
+}: {
+  latestMessageAt: RelativeTimeValue;
+  className?: string;
+}) {
+  // Self-ticking on the shared minute timer: a tick re-renders only this label
+  // instead of every row that used to receive `now` from the list root.
+  const now = useStableNow();
+  const relativeTime = formatCompactRelativeTime(latestMessageAt, now);
   return (
     <span className={cn('inline-flex items-center justify-end gap-1', className)}>
       <span className="select-none tabular-nums">{relativeTime}</span>
@@ -366,13 +461,48 @@ function SessionRowTime({ relativeTime, className }: { relativeTime: string; cla
   );
 }
 
+/**
+ * Shallow-compares two props objects while ignoring `ignoredKeys`. Used by the
+ * selection-scoped `memo` comparators below.
+ */
+export function shallowEqualExceptKeys<P extends object>(
+  prev: P,
+  next: P,
+  ignoredKeys: ReadonlySet<string>
+): boolean {
+  const keys = new Set([...Object.keys(prev), ...Object.keys(next)]);
+  for (const key of keys) {
+    if (ignoredKeys.has(key)) continue;
+    if (!Object.is(prev[key as keyof P], next[key as keyof P])) return false;
+  }
+  return true;
+}
+
+const SELECTION_PROP_KEYS: ReadonlySet<string> = new Set(['selectedSessionId']);
+
+/**
+ * `memo` equality for sidebar session groups: a `selectedSessionId` change only
+ * re-renders the group(s) containing the previously or newly selected row —
+ * a session switch no longer re-renders every group in the list. All other
+ * props fall back to identity comparison.
+ */
+function sessionGroupPropsEqual<
+  P extends { selectedSessionId?: string | null; group: SessionRowGroup },
+>(prev: P, next: P): boolean {
+  if (!shallowEqualExceptKeys(prev, next, SELECTION_PROP_KEYS)) return false;
+  if (prev.selectedSessionId === next.selectedSessionId) return true;
+  const contains = (id: string | null | undefined) =>
+    id != null && next.group.sessions.some((session) => session.sessionId === id);
+  return !contains(prev.selectedSessionId) && !contains(next.selectedSessionId);
+}
+
 type SessionGroupSectionProps = {
   group: SessionRowGroup;
-  now: Date;
   selectedSessionId?: string | null;
   activeGroupKey?: string | null;
   whetherShowFullList: boolean;
   onSelectSession?: (sessionId: string) => void;
+  onNavigateSessionTab?: (sessionId: string, tabSessionId: string) => void;
   onToggleRepoCollapsed?: (repoFullName: string) => void;
   onToggleChatsCollapsed?: () => void;
   onArchiveSession?: (sessionId: string) => void;
@@ -384,6 +514,9 @@ type SessionGroupSectionProps = {
   onNavigateToNewSession?: (repoFullName?: string) => void;
   onOpenPullRequest?: (request: SessionListPullRequestOpen) => void;
   onToggleFullList?: (groupKey: string) => void;
+  /** Opener session ids whose opened Sessions are hidden. */
+  collapsedOpenedBySessionIds: Record<string, boolean>;
+  onToggleOpenedBySessions?: (openerSessionId: string) => void;
   getSessionHref?: (sessionId: string) => string | undefined;
   dragHandle?: ReactNode;
   archiveTooltipLabel: string;
@@ -412,15 +545,16 @@ export type ContextMenuLabels = {
   registerDeviceToShare: string;
   loadingSharing: string;
   copyBranch: string;
+  goToOpenerSession: string;
 };
 
 const SessionGroupSection = memo(function SessionGroupSection({
   group,
-  now,
   selectedSessionId,
   activeGroupKey,
   whetherShowFullList,
   onSelectSession,
+  onNavigateSessionTab,
   onToggleRepoCollapsed,
   onToggleChatsCollapsed,
   onArchiveSession,
@@ -432,6 +566,8 @@ const SessionGroupSection = memo(function SessionGroupSection({
   onNavigateToNewSession,
   onOpenPullRequest,
   onToggleFullList,
+  collapsedOpenedBySessionIds,
+  onToggleOpenedBySessions,
   getSessionHref,
   dragHandle,
   archiveTooltipLabel,
@@ -471,10 +607,31 @@ const SessionGroupSection = memo(function SessionGroupSection({
 
   const isSelectable = typeof onSelectSession === 'function';
   // whetherShowFullList keeps each group in a compact preview by default (latest N),
-  // and only reveals the full list after the user explicitly expands it.
-  const canToggleFullList = group.sessions.length > MAX_VISIBLE_SESSIONS;
-  const visibleSessions = getVisibleSessionGroupRows(group, whetherShowFullList);
-  const shouldShowExpandCollapse = canToggleFullList;
+  // and only reveals the full list after the user explicitly expands it. The cap
+  // counts TOP-LEVEL rows, so an opener never gets separated from the Sessions
+  // it opened.
+  //
+  // `group` is a fresh object on every sidebar data change (live status, new
+  // message), so without a memo these O(n) resolutions would re-run at
+  // agent-activity frequency just to show five rows. A collapsed group renders
+  // nothing, so it skips them entirely.
+  const { canToggleFullList, visibleNodes, showTreeGutter } = useMemo(() => {
+    if (group.collapsed) {
+      return { canToggleFullList: false, visibleNodes: EMPTY_TREE_NODES, showTreeGutter: false };
+    }
+    const nodes = getVisibleSessionGroupTree(
+      group,
+      whetherShowFullList,
+      collapsedOpenedBySessionIds
+    );
+    return {
+      canToggleFullList: sessionGroupOverflowsPreview(group),
+      visibleNodes: nodes,
+      // Only a group that actually contains an MCP-opened Session enables the
+      // tree wrapper. Within it, unrelated top-level rows keep flat geometry.
+      showTreeGutter: hasOpenedByTreeNesting(nodes),
+    };
+  }, [collapsedOpenedBySessionIds, group, whetherShowFullList]);
   const toggleListLabel = whetherShowFullList
     ? t('sessions.showLess', 'Show less')
     : t('sessions.showAll', 'Show all ({{count}})', { count: group.sessions.length });
@@ -493,9 +650,7 @@ const SessionGroupSection = memo(function SessionGroupSection({
   const headerTypographyClass =
     group.kind === 'repo' ? 'text-xs font-semibold' : 'text-[13px] font-medium';
   const headerToggleHoverClass =
-    group.kind === 'repo'
-      ? 'hover:text-sidebar-hover-foreground'
-      : 'hover:text-sidebar-foreground';
+    group.kind === 'repo' ? 'hover:text-sidebar-hover-foreground' : 'hover:text-sidebar-foreground';
 
   return (
     <div
@@ -629,397 +784,435 @@ const SessionGroupSection = memo(function SessionGroupSection({
 
       {!group.collapsed && (
         <div className="flex flex-col gap-px">
-          {visibleSessions.length > 0 &&
-            visibleSessions.map((session) => {
-              const isSelected = session.sessionId === selectedSessionId;
-              const showSelectedState = isSelected && !isMobile;
-              const relativeTime = formatCompactRelativeTime(session.latestMessageAt, now);
-              const prUrl = normalizePrUrl(session.prUrl);
-              const prNumber =
-                typeof session.prNumber === 'number' && Number.isFinite(session.prNumber)
-                  ? session.prNumber
-                  : prUrl
-                    ? parseGitHubPrNumber(prUrl)
-                    : null;
-              const prStatus = session.prStatus ?? 'open';
-              const hasPr = Boolean(prUrl);
-              const hasChanges = session.addedLines !== 0 || session.deletedLines !== 0;
-              // A merged/closed PR can leave a stale "clean/mergeable" record
-              // in `pullRequestState` (the webhook sets status='merged' but
-              // can't clear that field, and the poller stops observing terminal
-              // PRs). Gate the pill on the PR still being live.
-              const isMergeable =
-                hasPr &&
-                session.prReadiness === 'y' &&
-                prStatus !== 'merged' &&
-                prStatus !== 'closed';
-              const showMergeablePill = isMergeable && !isSelected;
-              const canArchive = typeof onArchiveSession === 'function';
-              const showInlineArchive = canArchive && !isMobile;
-              const isChatSession = group.kind === 'chat';
-              // Copy URL stays available for private sessions (the link still
-              // works for the owner); sharing is a separate menu item shown only
-              // while the conversation isn't team-visible.
-              const shareMenuState = !session.sharing
-                ? null
-                : session.sharing.visibility === 'unknown'
-                  ? 'loading'
-                  : session.sharing.visibility === 'team'
-                    ? null
-                    : session.sharing.privateReason === 'machine-not-registered'
-                      ? 'unregistered'
-                      : session.sharing.canManage
-                        ? 'share'
-                        : 'owner-only';
-              // Stretched-link pattern: a transparent absolute `<a>` overlays the row so
-              // browsers can handle middle/Cmd-click natively (open in new tab). Plain left
-              // click is intercepted via preventDefault and routed through onSelectSession for
-              // SPA navigation; modified clicks fall through untouched.
-              //
-              // Rejected alternatives:
-              //   - Wrap row content directly in `<a>`: nested interactive elements (the
-              //     archive button, PR badge, branch-name copy) break the no-`<a>`-in-`<a>`
-              //     rule and make accessibility/right-click fragile.
-              //   - `pointer-events: none` on `<a>` + handlers on parent: kills native middle-
-              //     click new-tab behavior, since the browser only triggers it when the click
-              //     event actually reaches the anchor.
-              //
-              // The overlay sits at z-10; tooltip-bearing or otherwise interactive children
-              // (archive button wrapper, PR badge, BranchName, OwnerAvatar) escape above it
-              // with `relative z-20` so their hover/click events still fire. Any new
-              // interactive child added inside an anchored row needs the same treatment.
-              const sessionHref = isSelectable ? getSessionHref?.(session.sessionId) : undefined;
-              const useAnchor = typeof sessionHref === 'string' && sessionHref.length > 0;
-              const renderTitle = (extraClassName?: string) => (
-                <span className={cn('truncate', extraClassName)}>{session.title}</span>
-              );
-              const handleAnchorClick = useAnchor
-                ? (event: ReactMouseEvent<HTMLAnchorElement>) => {
-                    if (
-                      event.metaKey ||
-                      event.ctrlKey ||
-                      event.shiftKey ||
-                      event.altKey ||
-                      event.button !== 0
-                    ) {
-                      return;
-                    }
-                    event.preventDefault();
-                    onSelectSession?.(session.sessionId);
+          {visibleNodes.map((node) => {
+            const session = node.item;
+            const openerSessionId = normalizeSessionRowId(session.openedBySessionId);
+            const openerRootSessionId =
+              normalizeSessionRowId(session.openedByRowSessionId) ?? openerSessionId;
+            const isSelected = session.sessionId === selectedSessionId;
+            const showSelectedState = isSelected && !isMobile;
+            const prUrl = normalizePrUrl(session.prUrl);
+            const prNumber =
+              typeof session.prNumber === 'number' && Number.isFinite(session.prNumber)
+                ? session.prNumber
+                : prUrl
+                  ? parseGitHubPrNumber(prUrl)
+                  : null;
+            const prStatus = session.prStatus ?? 'open';
+            const hasPr = Boolean(prUrl);
+            const hasChanges = session.addedLines !== 0 || session.deletedLines !== 0;
+            // A merged/closed PR can leave a stale "clean/mergeable" record
+            // in `pullRequestState` (the webhook sets status='merged' but
+            // can't clear that field, and the poller stops observing terminal
+            // PRs). Gate the pill on the PR still being live.
+            const isMergeable =
+              hasPr &&
+              session.prReadiness === 'y' &&
+              prStatus !== 'merged' &&
+              prStatus !== 'closed';
+            const showMergeablePill = isMergeable && !isSelected;
+            const canArchive = typeof onArchiveSession === 'function';
+            const showInlineArchive = canArchive && !isMobile;
+            const isChatSession = group.kind === 'chat';
+            // Copy URL stays available for private sessions (the link still
+            // works for the owner); sharing is a separate menu item shown only
+            // while the conversation isn't team-visible.
+            const shareMenuState = !session.sharing
+              ? null
+              : session.sharing.visibility === 'unknown'
+                ? 'loading'
+                : session.sharing.visibility === 'team'
+                  ? null
+                  : session.sharing.privateReason === 'machine-not-registered'
+                    ? 'unregistered'
+                    : session.sharing.canManage
+                      ? 'share'
+                      : 'owner-only';
+            // Stretched-link pattern: a transparent absolute `<a>` overlays the row so
+            // browsers can handle middle/Cmd-click natively (open in new tab). Plain left
+            // click is intercepted via preventDefault and routed through onSelectSession for
+            // SPA navigation; modified clicks fall through untouched.
+            //
+            // Rejected alternatives:
+            //   - Wrap row content directly in `<a>`: nested interactive elements (the
+            //     archive button, PR badge, branch-name copy) break the no-`<a>`-in-`<a>`
+            //     rule and make accessibility/right-click fragile.
+            //   - `pointer-events: none` on `<a>` + handlers on parent: kills native middle-
+            //     click new-tab behavior, since the browser only triggers it when the click
+            //     event actually reaches the anchor.
+            //
+            // The overlay sits at z-10; tooltip-bearing or otherwise interactive children
+            // (archive button wrapper, PR badge, BranchName, OwnerAvatar) escape above it
+            // with `relative z-20` so their hover/click events still fire. Any new
+            // interactive child added inside an anchored row needs the same treatment.
+            const sessionHref = isSelectable ? getSessionHref?.(session.sessionId) : undefined;
+            const useAnchor = typeof sessionHref === 'string' && sessionHref.length > 0;
+            const renderTitle = (extraClassName?: string) => (
+              <span className={cn('truncate', extraClassName)}>{session.title}</span>
+            );
+            const handleAnchorClick = useAnchor
+              ? (event: ReactMouseEvent<HTMLAnchorElement>) => {
+                  if (
+                    event.metaKey ||
+                    event.ctrlKey ||
+                    event.shiftKey ||
+                    event.altKey ||
+                    event.button !== 0
+                  ) {
+                    return;
                   }
-                : undefined;
-              // Mobile keeps swipe-to-archive as the only row gesture; the context
-              // menu (and its ⋯ button) is desktop-only. Computed before the row so
-              // the leading slot can show the ⋯ affordance.
-              const hasMenuActions =
-                !isMobile &&
-                Boolean(
-                  onRenameSession ||
-                  onTogglePinSession ||
-                  onArchiveSession ||
-                  onCopySessionUrl ||
-                  shareMenuState ||
-                  session.branchName ||
-                  (onOpenPullRequest && prUrl)
-                );
-              const row = (
-                <div
-                  key={session.sessionId}
-                  role={!useAnchor && isSelectable ? 'button' : undefined}
-                  tabIndex={!useAnchor && isSelectable ? 0 : undefined}
-                  aria-disabled={!isSelectable ? true : undefined}
-                  data-sidebar-session-id={session.sessionId}
-                  className={cn(
-                    'group relative w-full rounded-md text-left',
-                    // Both chat and repo rows are a single line now; the repo row's
-                    // low-signal metadata (time / repo / branch / PR) moves to the
-                    // desktop hover info card so both organize modes read equally compact.
-                    'px-2 py-1',
-                    'border border-transparent bg-transparent',
-                    !showSelectedState &&
-                      isSelectable &&
-                      !isMobile &&
-                      'hover:bg-sidebar-hover hover:text-sidebar-hover-foreground',
-                    showSelectedState &&
-                      'border-sidebar-foreground/10 bg-sidebar-foreground/10 text-sidebar-foreground hover:bg-sidebar-foreground/10',
-                    // Keyboard-only focus ring. Plain :focus-within also matches
-                    // after a mouse click (the overlay <a> keeps focus), which
-                    // left a permanent inset ring on the selected row that read
-                    // as a misplaced border.
-                    useAnchor &&
-                      'has-[a:focus-visible]:outline-hidden has-[a:focus-visible]:ring-1 has-[a:focus-visible]:ring-inset has-[a:focus-visible]:ring-sidebar-ring/40',
-                    !isSelectable && 'cursor-default',
-                    isSelectable && 'cursor-pointer'
-                  )}
-                  onClick={
-                    useAnchor
-                      ? undefined
-                      : () => {
-                          if (!isSelectable) return;
+                  event.preventDefault();
+                  onSelectSession?.(session.sessionId);
+                }
+              : undefined;
+            // Mobile keeps swipe-to-archive as the only row gesture; the context
+            // menu (and its ⋯ button) is desktop-only. Computed before the row so
+            // the leading slot can show the ⋯ affordance.
+            const canGoToOpener = Boolean(openerSessionId && isSelectable);
+            const openedByTreeSlot = buildSessionRowOpenedByTreeSlot(
+              node,
+              t,
+              onToggleOpenedBySessions
+                ? () => onToggleOpenedBySessions(session.sessionId)
+                : undefined
+            );
+            const openedByOpener = openedByTreeSlot?.kind === 'opener' ? openedByTreeSlot : null;
+            const canToggleOpenedSessions = openedByOpener !== null;
+            const hasStandardMenuActions = Boolean(
+              onRenameSession ||
+              onTogglePinSession ||
+              onArchiveSession ||
+              onCopySessionUrl ||
+              shareMenuState ||
+              session.branchName ||
+              canGoToOpener ||
+              (onOpenPullRequest && prUrl)
+            );
+            const hasMenuActions = !isMobile && (hasStandardMenuActions || canToggleOpenedSessions);
+            const row = (
+              <div
+                key={session.sessionId}
+                role={!useAnchor && isSelectable ? 'button' : undefined}
+                tabIndex={!useAnchor && isSelectable ? 0 : undefined}
+                aria-disabled={!isSelectable ? true : undefined}
+                data-sidebar-session-id={session.sessionId}
+                // Drag a conversation onto a chat surface to mention it there.
+                draggable
+                onDragStart={(event) =>
+                  startSessionMentionDrag(event, {
+                    sessionId: session.sessionId,
+                    title: session.title,
+                  })
+                }
+                className={cn(
+                  'group relative w-full rounded-md text-left',
+                  // Both chat and repo rows are a single line now; the repo row's
+                  // low-signal metadata (time / repo / branch / PR) moves to the
+                  // desktop hover info card so both organize modes read equally compact.
+                  'px-2 py-1',
+                  'border border-transparent bg-transparent',
+                  !showSelectedState &&
+                    isSelectable &&
+                    !isMobile &&
+                    'hover:bg-sidebar-hover hover:text-sidebar-hover-foreground',
+                  showSelectedState &&
+                    'border-sidebar-foreground/10 bg-sidebar-foreground/10 text-sidebar-foreground hover:bg-sidebar-foreground/10',
+                  // Keyboard-only focus ring. Plain :focus-within also matches
+                  // after a mouse click (the overlay <a> keeps focus), which
+                  // left a permanent inset ring on the selected row that read
+                  // as a misplaced border.
+                  useAnchor &&
+                    'has-[a:focus-visible]:outline-hidden has-[a:focus-visible]:ring-1 has-[a:focus-visible]:ring-inset has-[a:focus-visible]:ring-sidebar-ring/40',
+                  !isSelectable && 'cursor-default',
+                  isSelectable && 'cursor-pointer'
+                )}
+                onClick={
+                  useAnchor
+                    ? undefined
+                    : () => {
+                        if (!isSelectable) return;
+                        onSelectSession?.(session.sessionId);
+                      }
+                }
+                onKeyDown={
+                  useAnchor
+                    ? undefined
+                    : (e) => {
+                        if (!isSelectable) return;
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
                           onSelectSession?.(session.sessionId);
                         }
-                  }
-                  onKeyDown={
-                    useAnchor
-                      ? undefined
-                      : (e) => {
-                          if (!isSelectable) return;
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            e.preventDefault();
-                            onSelectSession?.(session.sessionId);
-                          }
-                        }
-                  }
-                >
-                  {useAnchor && sessionHref ? (
-                    <a
-                      href={sessionHref}
-                      aria-label={session.title}
-                      className="absolute inset-0 z-10 rounded-md focus:outline-hidden focus-visible:shadow-none"
-                      onClick={handleAnchorClick}
-                    />
-                  ) : null}
-                  <div className="flex min-w-0 items-center gap-1.5">
-                    <SessionRowLeadingSlot
-                      isWaitingPermission={session.isWaitingPermission}
-                      isWorking={session.isWorking}
-                      hasUnreadMessages={session.hasUnreadMessages}
-                      showMenuButton={hasMenuActions}
-                      menuLabel={moreActionsLabel}
-                    />
-                    <div
-                      className={cn(
-                        'min-w-0 flex-1 flex items-center gap-1 truncate text-sm',
-                        showSelectedState
-                          ? 'text-sidebar-selection-foreground'
-                          : 'text-sidebar-foreground dark:text-sidebar-foreground/75'
-                      )}
-                      // Double-click to rename is scoped to the title only, so it can't
-                      // be triggered by double-clicking the Archive confirm button.
-                      onDoubleClick={(e) => {
-                        if (typeof onRenameSession !== 'function') return;
-                        e.preventDefault();
-                        e.stopPropagation();
-                        beginRename(session.sessionId, session.title);
-                      }}
-                    >
-                      <SessionRowAuthorAvatar author={session.owner} />
-                      {session.isPinned ? (
-                        <Pin
-                          aria-hidden="true"
-                          className="h-3 w-3 shrink-0 text-sidebar-foreground-muted/80"
-                        />
-                      ) : null}
-                      {renderTitle()}
-                    </div>
-                    {/* Keep PR at the right edge, with All Changes totals immediately before it. */}
-                    <SidebarRowEndSlot
-                      restIcon={
-                        isChatSession ? (
-                          <span className={cn('flex items-center gap-1.5', useAnchor && 'z-20')}>
-                            <SessionRowTime
-                              relativeTime={relativeTime}
-                              className="text-xs text-muted-foreground"
-                            />
-                          </span>
-                        ) : hasPr || hasChanges || showMergeablePill || isMobile ? (
-                          <span
-                            className={cn(
-                              'flex select-none items-center gap-1.5 text-[11px] tabular-nums text-sidebar-foreground-muted/80',
-                              useAnchor && 'z-20'
-                            )}
-                          >
-                            {isMobile ? (
-                              <SessionRowTime
-                                relativeTime={relativeTime}
-                                className="text-muted-foreground"
-                              />
-                            ) : null}
-                            {showMergeablePill ? (
-                              <SessionMergeablePill />
-                            ) : hasChanges && !isMergeable ? (
-                              <span className="flex items-center gap-1">
-                                <span className="text-code-added">+{session.addedLines}</span>
-                                <span className="text-code-removed">-{session.deletedLines}</span>
-                              </span>
-                            ) : null}
-                            {hasPr ? (
-                              <SessionPrIcon prStatus={prStatus} prCiState={session.prCiState} />
-                            ) : null}
-                          </span>
-                        ) : undefined
                       }
-                      archive={
-                        showInlineArchive ? (
-                          <SidebarRowArchiveButton
-                            label={archiveTooltipLabel}
-                            confirmLabel={archiveConfirmLabel}
-                            onConfirm={() => onArchiveSession?.(session.sessionId)}
-                          />
-                        ) : undefined
-                      }
-                    />
+                }
+              >
+                {useAnchor && sessionHref ? (
+                  <a
+                    href={sessionHref}
+                    aria-label={session.title}
+                    // The overlay anchor covers the row, so it is what a drag
+                    // starts on; left draggable it would drag its link instead.
+                    draggable={false}
+                    className="absolute inset-0 z-10 rounded-md focus:outline-hidden focus-visible:shadow-none"
+                    onClick={handleAnchorClick}
+                  />
+                ) : null}
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <SessionRowLeadingSlot
+                    isWaitingPermission={session.isWaitingPermission}
+                    isWorking={session.isWorking}
+                    hasUnreadMessages={session.hasUnreadMessages}
+                    showMenuButton={hasMenuActions}
+                    menuLabel={moreActionsLabel}
+                    openedByTree={openedByTreeSlot}
+                  />
+                  <div
+                    className={cn(
+                      'min-w-0 flex-1 flex items-center gap-1 truncate text-sm',
+                      showSelectedState
+                        ? 'text-sidebar-selection-foreground'
+                        : 'text-sidebar-foreground dark:text-sidebar-foreground/75'
+                    )}
+                    // Double-click to rename is scoped to the title only, so it can't
+                    // be triggered by double-clicking the Archive confirm button.
+                    onDoubleClick={(e) => {
+                      if (typeof onRenameSession !== 'function') return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      beginRename(session.sessionId, session.title);
+                    }}
+                  >
+                    <SessionRowAuthorAvatar author={session.owner} />
+                    {session.isPinned ? (
+                      <Pin
+                        aria-hidden="true"
+                        className="h-3 w-3 shrink-0 text-sidebar-foreground-muted/80"
+                      />
+                    ) : null}
+                    {renderTitle()}
                   </div>
-                </div>
-              );
-              // Desktop repo rows get a hover info card wrapping the whole row/menu.
-              const showInfoCard = !isMobile;
-              const menuRow = hasMenuActions ? (
-                <ContextMenu key={session.sessionId}>
-                  <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
-                  <ContextMenuContent className="min-w-[180px]">
-                    {onOpenPullRequest && prUrl ? (
-                      <>
-                        <ContextMenuItem
-                          onSelect={() => {
-                            onOpenPullRequest({
-                              sessionId: session.sessionId,
-                              repoFullName: group.repoFullName,
-                              prUrl,
-                              prNumber,
-                            });
-                          }}
+                  {/* Keep PR at the right edge, with All Changes totals immediately before it. */}
+                  <SidebarRowEndSlot
+                    restIcon={
+                      isChatSession ? (
+                        <span className={cn('flex items-center gap-1.5', useAnchor && 'z-20')}>
+                          <SessionRowTime
+                            latestMessageAt={session.latestMessageAt}
+                            className="text-xs text-muted-foreground"
+                          />
+                        </span>
+                      ) : hasPr || hasChanges || showMergeablePill || isMobile ? (
+                        <span
+                          className={cn(
+                            'flex select-none items-center gap-1.5 text-[11px] tabular-nums text-sidebar-foreground-muted/80',
+                            useAnchor && 'z-20'
+                          )}
                         >
-                          <GitPullRequest />
-                          {contextMenuLabels.openPr}
-                        </ContextMenuItem>
-                        {onRenameSession ||
-                        onTogglePinSession ||
-                        onArchiveSession ||
-                        onCopySessionUrl ||
-                        session.branchName ? (
-                          <ContextMenuSeparator />
-                        ) : null}
-                      </>
-                    ) : null}
-                    {onRenameSession ? (
+                          {isMobile ? (
+                            <SessionRowTime
+                              latestMessageAt={session.latestMessageAt}
+                              className="text-muted-foreground"
+                            />
+                          ) : null}
+                          {showMergeablePill ? (
+                            <SessionMergeablePill />
+                          ) : hasChanges && !isMergeable ? (
+                            <span className="flex items-center gap-1">
+                              <span className="text-code-added">+{session.addedLines}</span>
+                              <span className="text-code-removed">-{session.deletedLines}</span>
+                            </span>
+                          ) : null}
+                          {hasPr ? (
+                            <SessionPrIcon prStatus={prStatus} prCiState={session.prCiState} />
+                          ) : null}
+                        </span>
+                      ) : undefined
+                    }
+                    archive={
+                      showInlineArchive ? (
+                        <SidebarRowArchiveButton
+                          label={archiveTooltipLabel}
+                          confirmLabel={archiveConfirmLabel}
+                          onConfirm={() => onArchiveSession?.(session.sessionId)}
+                        />
+                      ) : undefined
+                    }
+                  />
+                </div>
+              </div>
+            );
+            // Desktop repo rows get a hover info card wrapping the whole row/menu.
+            const showInfoCard = !isMobile;
+            const menuRow = hasMenuActions ? (
+              <ContextMenu key={session.sessionId}>
+                <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+                <ContextMenuContent className="min-w-[180px]">
+                  <SessionRowOpenedByMenuItems
+                    opener={openedByOpener}
+                    separateToggle={hasStandardMenuActions}
+                    goToOpener={
+                      canGoToOpener && openerSessionId
+                        ? () => {
+                            if (onNavigateSessionTab && openerRootSessionId) {
+                              onNavigateSessionTab(openerRootSessionId, openerSessionId);
+                              return;
+                            }
+                            onSelectSession?.(openerSessionId);
+                          }
+                        : undefined
+                    }
+                    goToOpenerLabel={contextMenuLabels.goToOpenerSession}
+                  />
+                  {onOpenPullRequest && prUrl ? (
+                    <>
                       <ContextMenuItem
                         onSelect={() => {
-                          beginRename(session.sessionId, session.title);
-                        }}
-                      >
-                        <Pencil />
-                        {contextMenuLabels.rename}
-                      </ContextMenuItem>
-                    ) : null}
-                    {onTogglePinSession ? (
-                      <ContextMenuItem
-                        onSelect={() => {
-                          onTogglePinSession(session.sessionId, !session.isPinned);
-                        }}
-                      >
-                        {session.isPinned ? <PinOff /> : <Pin />}
-                        {session.isPinned ? contextMenuLabels.unpin : contextMenuLabels.pin}
-                      </ContextMenuItem>
-                    ) : null}
-                    {onArchiveSession ? (
-                      <ContextMenuItem
-                        onSelect={() => {
-                          onArchiveSession(session.sessionId);
-                        }}
-                      >
-                        <Archive />
-                        {contextMenuLabels.archive}
-                      </ContextMenuItem>
-                    ) : null}
-                    {(onRenameSession || onTogglePinSession || onArchiveSession) &&
-                    (onCopySessionUrl || session.branchName) ? (
-                      <ContextMenuSeparator />
-                    ) : null}
-                    {onCopySessionUrl ? (
-                      <ContextMenuItem
-                        onSelect={() => {
-                          onCopySessionUrl(session.sessionId);
-                        }}
-                      >
-                        <Link2 />
-                        {contextMenuLabels.copyUrl}
-                      </ContextMenuItem>
-                    ) : null}
-                    {shareMenuState ? (
-                      <ContextMenuItem
-                        disabled={shareMenuState !== 'share'}
-                        onSelect={() => {
-                          onShareSessionWithTeam?.(session.sessionId);
-                        }}
-                      >
-                        {shareMenuState === 'share' ? (
-                          <Users />
-                        ) : shareMenuState === 'loading' ? (
-                          <Loader2 className="animate-spin" />
-                        ) : (
-                          <LockKeyhole />
-                        )}
-                        {shareMenuState === 'share'
-                          ? contextMenuLabels.shareWithTeam
-                          : shareMenuState === 'unregistered'
-                            ? contextMenuLabels.registerDeviceToShare
-                            : shareMenuState === 'owner-only'
-                              ? contextMenuLabels.onlyOwnerCanShare
-                              : contextMenuLabels.loadingSharing}
-                      </ContextMenuItem>
-                    ) : null}
-                    {session.branchName ? (
-                      <ContextMenuItem
-                        onSelect={() => {
-                          void navigator.clipboard.writeText(session.branchName).catch(() => {});
-                        }}
-                      >
-                        <GitBranch />
-                        {contextMenuLabels.copyBranch}
-                      </ContextMenuItem>
-                    ) : null}
-                  </ContextMenuContent>
-                </ContextMenu>
-              ) : (
-                row
-              );
-
-              // The hover info card (right side) carries the time / repo / branch / PR /
-              // diff pulled out of the now single-line row. It is a hoverable card, so the
-              // branch is copyable and the PR opens on click.
-              const desktopRow = showInfoCard ? (
-                <SessionInfoHoverCard
-                  key={session.sessionId}
-                  kind={isChatSession ? 'chat' : 'github'}
-                  author={session.owner ?? undefined}
-                  title={session.title}
-                  isWorktree={session.isWorktree}
-                  latestMessageAt={session.latestMessageAt}
-                  now={now}
-                  repoFullName={group.repoFullName}
-                  machineName={session.machineName}
-                  branchName={session.branchName}
-                  prStatus={hasPr ? prStatus : undefined}
-                  prCiState={session.prCiState}
-                  prNumber={prNumber}
-                  prUrl={prUrl}
-                  onOpenPullRequest={
-                    onOpenPullRequest && prUrl
-                      ? () =>
                           onOpenPullRequest({
                             sessionId: session.sessionId,
                             repoFullName: group.repoFullName,
                             prUrl,
                             prNumber,
-                          })
-                      : undefined
-                  }
-                  addedLines={hasChanges ? session.addedLines : undefined}
-                  deletedLines={hasChanges ? session.deletedLines : undefined}
-                  sharing={session.sharing}
-                >
-                  {menuRow}
-                </SessionInfoHoverCard>
+                          });
+                        }}
+                      >
+                        <GitPullRequest />
+                        {contextMenuLabels.openPr}
+                      </ContextMenuItem>
+                      {onRenameSession ||
+                      onTogglePinSession ||
+                      onArchiveSession ||
+                      onCopySessionUrl ||
+                      session.branchName ? (
+                        <ContextMenuSeparator />
+                      ) : null}
+                    </>
+                  ) : null}
+                  {onRenameSession ? (
+                    <ContextMenuItem
+                      onSelect={() => {
+                        beginRename(session.sessionId, session.title);
+                      }}
+                    >
+                      <Pencil />
+                      {contextMenuLabels.rename}
+                    </ContextMenuItem>
+                  ) : null}
+                  {onTogglePinSession ? (
+                    <ContextMenuItem
+                      onSelect={() => {
+                        onTogglePinSession(session.sessionId, !session.isPinned);
+                      }}
+                    >
+                      {session.isPinned ? <PinOff /> : <Pin />}
+                      {session.isPinned ? contextMenuLabels.unpin : contextMenuLabels.pin}
+                    </ContextMenuItem>
+                  ) : null}
+                  {onArchiveSession ? (
+                    <ContextMenuItem
+                      onSelect={() => {
+                        onArchiveSession(session.sessionId);
+                      }}
+                    >
+                      <Archive />
+                      {contextMenuLabels.archive}
+                    </ContextMenuItem>
+                  ) : null}
+                  {(onRenameSession || onTogglePinSession || onArchiveSession) &&
+                  (onCopySessionUrl || session.branchName) ? (
+                    <ContextMenuSeparator />
+                  ) : null}
+                  {onCopySessionUrl ? (
+                    <ContextMenuItem
+                      onSelect={() => {
+                        onCopySessionUrl(session.sessionId);
+                      }}
+                    >
+                      <Link2 />
+                      {contextMenuLabels.copyUrl}
+                    </ContextMenuItem>
+                  ) : null}
+                  {shareMenuState ? (
+                    <ContextMenuItem
+                      disabled={shareMenuState !== 'share'}
+                      onSelect={() => {
+                        onShareSessionWithTeam?.(session.sessionId);
+                      }}
+                    >
+                      {shareMenuState === 'share' ? (
+                        <Users />
+                      ) : shareMenuState === 'loading' ? (
+                        <Loader2 className="animate-spin" />
+                      ) : (
+                        <LockKeyhole />
+                      )}
+                      {shareMenuState === 'share'
+                        ? contextMenuLabels.shareWithTeam
+                        : shareMenuState === 'unregistered'
+                          ? contextMenuLabels.registerDeviceToShare
+                          : shareMenuState === 'owner-only'
+                            ? contextMenuLabels.onlyOwnerCanShare
+                            : contextMenuLabels.loadingSharing}
+                    </ContextMenuItem>
+                  ) : null}
+                  {session.branchName ? (
+                    <ContextMenuItem
+                      onSelect={() => {
+                        void navigator.clipboard.writeText(session.branchName).catch(() => {});
+                      }}
+                    >
+                      <GitBranch />
+                      {contextMenuLabels.copyBranch}
+                    </ContextMenuItem>
+                  ) : null}
+                </ContextMenuContent>
+              </ContextMenu>
+            ) : (
+              row
+            );
+
+            // The hover info card (right side) carries the time / repo / branch / PR /
+            // diff pulled out of the now single-line row. It is a hoverable card, so the
+            // branch is copyable and the PR opens on click.
+            const desktopRow = showInfoCard ? (
+              <SessionInfoHoverCard
+                key={session.sessionId}
+                kind={isChatSession ? 'chat' : 'github'}
+                author={session.owner ?? undefined}
+                title={session.title}
+                isWorktree={session.isWorktree}
+                latestMessageAt={session.latestMessageAt}
+                repoFullName={group.repoFullName}
+                machineName={session.machineName}
+                branchName={session.branchName}
+                prStatus={hasPr ? prStatus : undefined}
+                prCiState={session.prCiState}
+                prNumber={prNumber}
+                prUrl={prUrl}
+                onOpenPullRequest={
+                  onOpenPullRequest && prUrl
+                    ? () =>
+                        onOpenPullRequest({
+                          sessionId: session.sessionId,
+                          repoFullName: group.repoFullName,
+                          prUrl,
+                          prNumber,
+                        })
+                    : undefined
+                }
+                addedLines={hasChanges ? session.addedLines : undefined}
+                deletedLines={hasChanges ? session.deletedLines : undefined}
+                sharing={session.sharing}
+              >
+                {menuRow}
+              </SessionInfoHoverCard>
+            ) : (
+              menuRow
+            );
+
+            const rowContent =
+              !canArchive || !isMobile ? (
+                desktopRow
               ) : (
-                menuRow
-              );
-
-              if (!canArchive || !isMobile) {
-                return desktopRow;
-              }
-
-              return (
                 <SwipeActionRow
                   key={session.sessionId}
                   enabled={isMobile}
@@ -1041,8 +1234,18 @@ const SessionGroupSection = memo(function SessionGroupSection({
                   {menuRow}
                 </SwipeActionRow>
               );
-            })}
-          {shouldShowExpandCollapse && (
+
+            return (
+              <SessionOpenedByTreeRow
+                key={session.sessionId}
+                depth={node.depth}
+                gutter={showTreeGutter}
+              >
+                {rowContent}
+              </SessionOpenedByTreeRow>
+            );
+          })}
+          {canToggleFullList && (
             <button
               type="button"
               data-sidebar-show-more={group.key}
@@ -1068,9 +1271,9 @@ const SessionGroupSection = memo(function SessionGroupSection({
       />
     </div>
   );
-});
+}, sessionGroupPropsEqual);
 
-function SortableRepoGroupSection({
+const SortableRepoGroupSection = memo(function SortableRepoGroupSection({
   group,
   canReorderRepos,
   ...props
@@ -1138,7 +1341,7 @@ function SortableRepoGroupSection({
       />
     </div>
   );
-}
+}, sessionGroupPropsEqual);
 
 export const SessionList = memo(function SessionList({
   sessions,
@@ -1150,6 +1353,7 @@ export const SessionList = memo(function SessionList({
   className,
   onSelect,
   onSelectSession,
+  onNavigateSessionTab,
   onToggleRepoCollapsed,
   onToggleChatsCollapsed,
   onArchiveSession,
@@ -1184,6 +1388,7 @@ export const SessionList = memo(function SessionList({
       ),
       loadingSharing: t('sessions.sharing.loadingAction', 'Checking sharing…'),
       copyBranch: t('sessions.contextMenu.copyBranch', 'Copy Current Branch'),
+      goToOpenerSession: t('sessions.contextMenu.goToOpenerSession', 'Go to Opener Session'),
     }),
     [t]
   );
@@ -1193,9 +1398,10 @@ export const SessionList = memo(function SessionList({
     () => buildGroups(sessions, repos, chatsCollapsed, chatsGroupLabel),
     [sessions, repos, chatsCollapsed, chatsGroupLabel]
   );
-  const now = useStableNow();
   const [whetherShowFullListByGroup, setWhetherShowFullListByGroup] =
     useAtom(sidebarShowFullListAtom);
+  const collapsedOpenedBySessionIds = useAtomValue(sidebarCollapsedOpenedBySessionsAtom);
+  const handleToggleOpenedBySessions = useSetAtom(toggleSidebarCollapsedOpenedBySessionAtom);
   const handleSelect = onSelect ?? onSelectSession;
   const repoIds = useMemo(
     () => groups.filter((group) => group.kind === 'repo').map((group) => group.key),
@@ -1292,11 +1498,11 @@ export const SessionList = memo(function SessionList({
                     group={group as SessionRowGroup & { kind: 'repo'; repoFullName: string }}
                     canReorderRepos={canReorderRepos}
                     headerAction={groupHeaderAction}
-                    now={now}
                     selectedSessionId={selectedSessionId}
                     activeGroupKey={activeGroupKey}
                     whetherShowFullList={whetherShowFullList}
                     onSelectSession={handleSelect}
+                    onNavigateSessionTab={onNavigateSessionTab}
                     onToggleRepoCollapsed={onToggleRepoCollapsed}
                     onToggleChatsCollapsed={onToggleChatsCollapsed}
                     onArchiveSession={onArchiveSession}
@@ -1308,6 +1514,8 @@ export const SessionList = memo(function SessionList({
                     onNavigateToNewSession={onNavigateToNewSession}
                     onOpenPullRequest={onOpenPullRequest}
                     onToggleFullList={handleToggleFullList}
+                    collapsedOpenedBySessionIds={collapsedOpenedBySessionIds}
+                    onToggleOpenedBySessions={handleToggleOpenedBySessions}
                     getSessionHref={getSessionHref}
                     archiveTooltipLabel={archiveTooltipLabel}
                     archiveActionLabel={archiveActionLabel}
@@ -1323,11 +1531,11 @@ export const SessionList = memo(function SessionList({
                   key={group.key}
                   group={group}
                   headerAction={groupHeaderAction}
-                  now={now}
                   selectedSessionId={selectedSessionId}
                   activeGroupKey={activeGroupKey}
                   whetherShowFullList={whetherShowFullList}
                   onSelectSession={handleSelect}
+                  onNavigateSessionTab={onNavigateSessionTab}
                   onToggleRepoCollapsed={onToggleRepoCollapsed}
                   onToggleChatsCollapsed={onToggleChatsCollapsed}
                   onArchiveSession={onArchiveSession}
@@ -1339,6 +1547,8 @@ export const SessionList = memo(function SessionList({
                   onNavigateToNewSession={onNavigateToNewSession}
                   onOpenPullRequest={onOpenPullRequest}
                   onToggleFullList={handleToggleFullList}
+                  collapsedOpenedBySessionIds={collapsedOpenedBySessionIds}
+                  onToggleOpenedBySessions={handleToggleOpenedBySessions}
                   getSessionHref={getSessionHref}
                   archiveTooltipLabel={archiveTooltipLabel}
                   archiveActionLabel={archiveActionLabel}
