@@ -16,6 +16,8 @@ import { Button } from '@/ui/button';
 import type { AcpSessionSelectOption } from '@/components/shared/acp-session-select';
 import { useSessionAgentRole } from '@/hooks/use-session-agent-role';
 import { buildAgentRoleFormValueFromRunConfig } from '@/lib/agent-role-form';
+import { doesAgentRolePinPermissionMode } from '@/lib/composer-agent-roles';
+import { resolvePermissionModeFace } from '@/lib/permission-mode-face';
 import {
   AgentRoleEditorDialog,
   openAgentRoleEditorForCreate,
@@ -2107,6 +2109,27 @@ export const SessionChatInputArea = memo(
         sessionAgentRole,
       ]
     );
+    const sessionAgentRolePinsPermissionMode = useMemo(() => {
+      if (!sessionAgentRole.selectedRoleId) return false;
+      const selectedRole = sessionAgentRole.items.find(
+        (item) => item.role.id === sessionAgentRole.selectedRoleId
+      )?.role;
+      if (!selectedRole) return false;
+      const { source } = resolvePermissionModeFace({
+        modeOptions,
+        selectedModeId,
+        configOptionSelectors,
+        configOptionValues,
+      });
+      return doesAgentRolePinPermissionMode(selectedRole, source);
+    }, [
+      configOptionSelectors,
+      configOptionValues,
+      modeOptions,
+      selectedModeId,
+      sessionAgentRole.items,
+      sessionAgentRole.selectedRoleId,
+    ]);
     const mobileFooterSelectorNode = isMobile ? (
       <MobileSessionRunConfig
         agentSelection={mobileAgentSelection}
@@ -2158,14 +2181,16 @@ export const SessionChatInputArea = memo(
           selectedModeId={selectedModeId}
           agentRoles={agentRolesProp}
         />
-        <DesktopPermissionModeButton
-          modeOptions={modeOptions}
-          selectedModeId={selectedModeId}
-          onModeChange={onModeChange}
-          configOptionSelectors={configOptionSelectors}
-          configOptionValues={configOptionValues}
-          onConfigOptionChange={onConfigOptionChange}
-        />
+        {sessionAgentRolePinsPermissionMode ? null : (
+          <DesktopPermissionModeButton
+            modeOptions={modeOptions}
+            selectedModeId={selectedModeId}
+            onModeChange={onModeChange}
+            configOptionSelectors={configOptionSelectors}
+            configOptionValues={configOptionValues}
+            onConfigOptionChange={onConfigOptionChange}
+          />
+        )}
       </>
     ) : null;
     const selectedModelLabel = modelOptions.find(
