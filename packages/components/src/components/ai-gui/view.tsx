@@ -2638,13 +2638,19 @@ const UserMessageRowView = ({
                 unbreakable line, the content grows to its `sm:max-w-[800px]` cap, and being
                 right-aligned (`justify-end`) it overflows the column on the left. Chromium
                 honors overflow-wrap here so it doesn't repro there — hence "only sometimes". */}
-            <div className="relative w-fit min-w-0 max-w-full">
+            <div
+              className={cn(
+                'relative min-w-0 max-w-full',
+                isEditing ? 'w-full' : 'w-fit'
+              )}
+            >
               {showSendingSpinner && (
                 <Loader2 className="absolute bottom-[13px] right-full mr-1.5 h-4 w-4 animate-spin text-muted-foreground" />
               )}
               <div
                 className={cn(
-                  'w-fit min-w-0 max-w-full text-foreground',
+                  'min-w-0 max-w-full text-foreground',
+                  isEditing ? 'w-full' : 'w-fit',
                   hasWideContent ? 'min-w-[480px]' : '',
                   'sm:max-w-[800px]'
                 )}
