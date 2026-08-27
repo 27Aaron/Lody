@@ -317,7 +317,7 @@ describe('LocalTerminalPanel', () => {
     vi.stubGlobal('__LODY_PLATFORM__', { os: 'win32' });
     __resetPlatformCacheForTests();
     const channel = createChannel();
-    vi.mocked(channel.readClipboardText).mockReturnValue('clipboard input');
+    vi.mocked(channel.readClipboardText).mockResolvedValue('clipboard input');
 
     await act(async () => {
       root?.render(<LocalTerminalPanel channel={channel} terminalId="terminal-1" />);
@@ -413,6 +413,7 @@ describe('LocalTerminalPanel', () => {
 
     expect(terminal.customKeyEventHandler?.(pasteEvent)).toBe(false);
     expect(pasteEvent.defaultPrevented).toBe(true);
+    await Promise.resolve();
     expect(terminal.pasted).toEqual(['clipboard input']);
     expect(channel.input).not.toHaveBeenCalled();
   });
@@ -421,7 +422,7 @@ describe('LocalTerminalPanel', () => {
     vi.stubGlobal('__LODY_PLATFORM__', { os: 'win32' });
     __resetPlatformCacheForTests();
     const channel = createChannel();
-    vi.mocked(channel.readClipboardText).mockReturnValue('shift paste');
+    vi.mocked(channel.readClipboardText).mockResolvedValue('shift paste');
 
     await act(async () => {
       root?.render(<LocalTerminalPanel channel={channel} terminalId="terminal-1" />);
@@ -438,6 +439,7 @@ describe('LocalTerminalPanel', () => {
     });
 
     expect(terminal.customKeyEventHandler?.(pasteEvent)).toBe(false);
+    await Promise.resolve();
     expect(terminal.pasted).toEqual(['shift paste']);
   });
 
@@ -445,7 +447,7 @@ describe('LocalTerminalPanel', () => {
     vi.stubGlobal('__LODY_PLATFORM__', { os: 'darwin' });
     __resetPlatformCacheForTests();
     const channel = createChannel();
-    vi.mocked(channel.readClipboardText).mockReturnValue('mac paste');
+    vi.mocked(channel.readClipboardText).mockResolvedValue('mac paste');
 
     await act(async () => {
       root?.render(<LocalTerminalPanel channel={channel} terminalId="terminal-1" />);
@@ -460,6 +462,7 @@ describe('LocalTerminalPanel', () => {
       cancelable: true,
     });
     expect(terminal.customKeyEventHandler?.(cmdPaste)).toBe(false);
+    await Promise.resolve();
     expect(terminal.pasted).toEqual(['mac paste']);
 
     const ctrlPaste = new KeyboardEvent('keydown', {

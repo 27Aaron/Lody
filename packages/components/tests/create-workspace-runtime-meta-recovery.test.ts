@@ -141,6 +141,17 @@ const expectNoPresenceStopAfterStart = () => {
   ).toBe(false);
 };
 
+const enableElectronLocalDataPlane = (): void => {
+  Object.assign(window, {
+    __LODY_ELECTRON__: true,
+    ipc: {
+      invoke: vi.fn(async (channel: string) => channel === 'loro.isConnected'),
+      on: vi.fn(() => () => {}),
+      send: vi.fn(),
+    },
+  });
+};
+
 vi.mock('loro-repo', () => ({
   LoroRepo: {
     create: vi.fn(async () => ({
@@ -508,18 +519,7 @@ describe('createWorkspaceRuntime meta recovery lifecycle', () => {
 
   it('uses the Electron local data plane without attaching Loro Streams', async () => {
     mocks.joinMetaRoom.mockResolvedValueOnce(createMetaSub(Promise.resolve()));
-    Object.assign(window, {
-      __LODY_ELECTRON__: true,
-      api: {
-        loroDataPlane: {
-          send: vi.fn(),
-          subscribe: vi.fn(),
-          isConnected: vi.fn(async () => true),
-          onEvent: vi.fn(() => () => {}),
-          onStatus: vi.fn(() => () => {}),
-        },
-      },
-    });
+    enableElectronLocalDataPlane();
 
     const runtime = await createWorkspaceRuntime({
       workspaceSlug: 'workspace',
@@ -539,18 +539,7 @@ describe('createWorkspaceRuntime meta recovery lifecycle', () => {
 
   it('hot-attaches one cloud plane on auth without touching the local plane', async () => {
     mocks.joinMetaRoom.mockResolvedValueOnce(createMetaSub(Promise.resolve()));
-    Object.assign(window, {
-      __LODY_ELECTRON__: true,
-      api: {
-        loroDataPlane: {
-          send: vi.fn(),
-          subscribe: vi.fn(),
-          isConnected: vi.fn(async () => true),
-          onEvent: vi.fn(() => () => {}),
-          onStatus: vi.fn(() => () => {}),
-        },
-      },
-    });
+    enableElectronLocalDataPlane();
 
     const runtime = await createWorkspaceRuntime({
       workspaceSlug: 'workspace',
@@ -590,18 +579,7 @@ describe('createWorkspaceRuntime meta recovery lifecycle', () => {
 
   it('waits for an in-flight cloud member attach before destroying the runtime', async () => {
     mocks.joinMetaRoom.mockResolvedValueOnce(createMetaSub(Promise.resolve()));
-    Object.assign(window, {
-      __LODY_ELECTRON__: true,
-      api: {
-        loroDataPlane: {
-          send: vi.fn(),
-          subscribe: vi.fn(),
-          isConnected: vi.fn(async () => true),
-          onEvent: vi.fn(() => () => {}),
-          onStatus: vi.fn(() => () => {}),
-        },
-      },
-    });
+    enableElectronLocalDataPlane();
     let resolveConnect: (() => void) | null = null;
     mocks.streamsConnect.mockImplementationOnce(
       async () =>
@@ -630,18 +608,7 @@ describe('createWorkspaceRuntime meta recovery lifecycle', () => {
 
   it('attaches the cloud plane after an offline Electron startup comes online', async () => {
     mocks.joinMetaRoom.mockResolvedValueOnce(createMetaSub(Promise.resolve()));
-    Object.assign(window, {
-      __LODY_ELECTRON__: true,
-      api: {
-        loroDataPlane: {
-          send: vi.fn(),
-          subscribe: vi.fn(),
-          isConnected: vi.fn(async () => true),
-          onEvent: vi.fn(() => () => {}),
-          onStatus: vi.fn(() => () => {}),
-        },
-      },
-    });
+    enableElectronLocalDataPlane();
     Object.assign(navigator, { onLine: false });
 
     const runtime = await createWorkspaceRuntime({
@@ -668,18 +635,7 @@ describe('createWorkspaceRuntime meta recovery lifecycle', () => {
     // pending renderer-authored ops sat local-only. The repair loop must
     // discover it via repo.transportRooms('cloud') and reconnect that plane.
     mocks.joinMetaRoom.mockResolvedValueOnce(createMetaSub(Promise.resolve()));
-    Object.assign(window, {
-      __LODY_ELECTRON__: true,
-      api: {
-        loroDataPlane: {
-          send: vi.fn(),
-          subscribe: vi.fn(),
-          isConnected: vi.fn(async () => true),
-          onEvent: vi.fn(() => () => {}),
-          onStatus: vi.fn(() => () => {}),
-        },
-      },
-    });
+    enableElectronLocalDataPlane();
     Object.assign(navigator, { onLine: true });
 
     const runtime = await createWorkspaceRuntime({
