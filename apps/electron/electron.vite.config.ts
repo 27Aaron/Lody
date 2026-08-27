@@ -12,6 +12,11 @@ import {
 } from '../../packages/components/vite-wasm-workarounds'
 import { injectPreviewPublicBaseDomain } from '../../scripts/preview-public-base-domain.mjs'
 import { mermaidLazyBoundaryGuardPlugin } from '../../packages/components/vite-mermaid-lazy-boundary-guard'
+import {
+  isMermaidRuntimeDependency,
+  rendererBundleAliasPlugin,
+  rendererBundleAliases
+} from '../../packages/components/vite-renderer-bundle-aliases'
 import { emojibaseAssetsPlugin } from '../../packages/components/vite-emojibase-assets'
 
 function getGitCommitHash(): string {
@@ -71,19 +76,6 @@ function previewPublicBaseDomainHtmlPlugin(baseDomain: string): Plugin {
   }
 }
 
-function isMermaidRuntimeDependency(id: string): boolean {
-  const normalizedId = id.replaceAll('\\', '/')
-  return (
-    normalizedId.includes('/node_modules/mermaid/') ||
-    normalizedId.includes('/node_modules/@mermaid-js/') ||
-    normalizedId.includes('/node_modules/cytoscape') ||
-    normalizedId.includes('/node_modules/dagre') ||
-    normalizedId.includes('/node_modules/khroma/') ||
-    normalizedId.includes('/node_modules/roughjs/') ||
-    normalizedId.includes('/node_modules/@upsetjs/venn.js/')
-  )
-}
-
 export default defineConfig(({ mode }) => {
   const buildMode = mode || OSS_BUILD_MODE
   if (buildMode !== OSS_BUILD_MODE) {
@@ -141,6 +133,7 @@ export default defineConfig(({ mode }) => {
           // browser entry, which sync-compiles WASM (and trips the guard in
           // loroCrdtWasmUrlWorkaround). Force the bundler entry like web/mobile.
           ...loroCrdtBundlerAlias(),
+          ...rendererBundleAliases(),
           {
             find: '@renderer',
             replacement: resolve(__dirname, 'src/renderer/src')
@@ -163,6 +156,8 @@ export default defineConfig(({ mode }) => {
         exclude: ['@loro-dev/streams-crdt', '@loro-dev/streams-crdt/zstd']
       },
       build: {
+        minify: true,
+        cssMinify: true,
         sourcemap: false,
         rollupOptions: {
           // Build both the main app (`index.html`) and the standalone recovery
@@ -177,10 +172,9 @@ export default defineConfig(({ mode }) => {
           output: {
             onlyExplicitManualChunks: true,
             manualChunks(id) {
-              // Keep Mermaid's large, lazy runtime in the same guarded chunk as
-              // the web build. Rejected: letting Rollup freely hoist these deps
-              // can mix diagram-only parser/runtime code into ordinary renderer
-              // chunks, making a Mermaid load failure poison unrelated UI.
+              // Keep beautiful-mermaid (and elkjs) in the same guarded chunk.
+              // Rejected: letting Rollup freely hoist these deps can mix
+              // diagram-only runtime into ordinary renderer chunks.
               if (isMermaidRuntimeDependency(id)) {
                 return 'mermaid-deps'
               }
@@ -199,6 +193,7 @@ export default defineConfig(({ mode }) => {
         // The desktop app must work with no network, so the emoji picker's
         // dataset ships in the bundle instead of being fetched from a CDN.
         emojibaseAssetsPlugin(),
+        rendererBundleAliasPlugin(),
         mermaidLazyBoundaryGuardPlugin()
       ]
     }

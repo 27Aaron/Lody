@@ -7,6 +7,7 @@ import tsconfigPaths from 'vite-tsconfig-paths';
 import topLevelAwait from 'vite-plugin-top-level-await';
 import wasm from 'vite-plugin-wasm';
 import { loroCrdtBundlerAlias, loroCrdtWasmUrlWorkaround } from './vite-wasm-workarounds';
+import { rendererBundleAliasPlugin, rendererBundleAliases } from './vite-renderer-bundle-aliases';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -28,6 +29,7 @@ export default defineConfig(async () => {
           }),
         ]),
     loroCrdtWasmUrlWorkaround(),
+    rendererBundleAliasPlugin(),
     react(),
     tsconfigPaths(),
     wasm(),
@@ -44,7 +46,7 @@ export default defineConfig(async () => {
     resolve: {
       // Keep Storybook prod builds off loro-crdt's sync-WASM browser entry
       // (loroCrdtWasmUrlWorkaround fails the build if it sneaks back in).
-      alias: loroCrdtBundlerAlias(),
+      alias: [...loroCrdtBundlerAlias(), ...rendererBundleAliases()],
     },
     esbuild: {
       keepNames: true,
